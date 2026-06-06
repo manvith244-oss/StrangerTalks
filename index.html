@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>StrangerTalks</title>
+<style>
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI";
+    background: radial-gradient(circle at top, #dbeafe, #eff6ff);
+}
+.container {
+    max-width: 500px;
+    margin: auto;
+    padding: 40px 20px;
+}
+.brand {
+    text-align: center;
+    font-size: 22px;
+    font-weight: 600;
+    color: #2563eb;
+    margin-bottom: 10px;
+}
+.headerText {
+    text-align: center;
+    margin-bottom: 25px;
+}
+.headerText .main {
+    font-size: 22px;
+    font-weight: 500;
+    margin-bottom: 8px;
+}
+.headerText .sub {
+    font-size: 15px;
+    color: #374151;
+}
+.option {
+    background: white;
+    border-radius: 18px;
+    padding: 16px;
+    margin-bottom: 12px;
+    cursor: pointer;
+}
+.option.selected {
+    background: #e0edff;
+}
+.continue {
+    width: 100%;
+    padding: 14px;
+    border-radius: 20px;
+    border: none;
+    background: #2563eb;
+    color: white;
+    display: none;
+}
+.topBar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+.backBtn {
+    cursor: pointer;
+    color: #2563eb;
+}
+#chatBox {
+    height: 350px;
+    overflow-y: auto;
+    background: white;
+    border-radius: 20px;
+    padding: 15px;
+}
+.msg {
+    display: flex;
+    margin: 10px 0;
+}
+.msg.you { justify-content: flex-end; }
+.bubble {
+    max-width: 70%;
+    padding: 10px;
+    border-radius: 16px;
+}
+.you .bubble {
+    background: #2563eb;
+    color: white;
+}
+.stranger .bubble {
+    background: #f3f4f6;
+}
+.inputArea {
+    display: flex;
+    margin-top: 10px;
+    gap: 10px;
+}
+input {
+    flex: 1;
+    padding: 10px;
+    border-radius: 20px;
+    border: 1px solid #ddd;
+}
+button {
+    padding: 10px 14px;
+    border-radius: 20px;
+    border: none;
+    background: #2563eb;
+    color: white;
+}
+</style>
+</head>
+<body>
+<div class="container" id="app"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const socket = io();
+let currentIntent = "";
+const CONFIG = {
+    options: [
+        {title:"Just talk", desc:"No expectations. Just be."},
+        {title:"Explore", desc:"Let the conversation decide."},
+        {title:"Keep it light", desc:"Easy, fun, no overthinking."},
+        {title:"Something real", desc:"Talk about what matters."}
+    ]
+};
+function renderHome() {
+    document.getElementById("app").innerHTML = `
+        <div class="brand">StrangerTalks</div>
+        <div class="headerText">
+            <div class="main">Pause for a second.</div>
+            <div class="sub">What kind of conversation do you feel like having?</div>
+        </div>
+        ${CONFIG.options.map(opt => `
+            <div class="option" onclick="selectOption(this)">
+                <b>${opt.title}</b><br>
+                <small>${opt.desc}</small>
+            </div>
+        `).join("")}
+        <button id="continueBtn" class="continue" onclick="startChat()">Continue</button>
+    `;
+}
+function selectOption(el) {
+    document.querySelectorAll(".option").forEach(o => o.classList.remove("selected"));
+    el.classList.add("selected");
+    document.getElementById("continueBtn").style.display = "block";
+}
+function startChat() {
+    const selected = document.querySelector(".option.selected");
+    if (!selected) return;
+    currentIntent = selected.innerText.trim();
+    document.getElementById("app").innerHTML = `
+        <div style="text-align:center;margin-top:120px;">Finding someone...</div>
+    `;
+    socket.emit("joinQueue", currentIntent);
+}
+function loadChat() {
+    document.getElementById("app").innerHTML = `
+        <div class="topBar">
+            <div class="backBtn" onclick="location.reload()">← Back</div>
+            <div class="brand">StrangerTalks</div>
+        </div>
+        <div id="chatBox"></div>
+        <div class="inputArea">
+            <input id="msgInput" placeholder="Say something...">
+            <button onclick="sendMessage()">Send</button>
+        </div>
+        <div style="text-align:center;margin-top:10px;">
+            <button onclick="skip()">Skip</button>
+        </div>
+    `;
+}
+function sendMessage() {
+    const input = document.getElementById("msgInput");
+    const msg = input.value.trim();
+    if (!msg) return;
+    addUser(msg);
+    socket.emit("sendMessage", msg);
+    input.value = "";
+}
+function addUser(text) {
+    const box = document.getElementById("chatBox");
+    box.innerHTML += `<div class="msg you"><div class="bubble">${text}</div></div>`;
+    box.scrollTop = box.scrollHeight;
+}
+function addStranger(text) {
+    const box = document.getElementById("chatBox");
+    box.innerHTML += `<div class="msg stranger"><div class="bubble">${text}</div></div>`;
+    box.scrollTop = box.scrollHeight;
+}
+function skip() {
+    socket.emit("skip", currentIntent);
+    document.getElementById("chatBox").innerHTML = "";
+}
+socket.on("matched", () => loadChat());
+socket.on("receiveMessage", (msg) => addStranger(msg));
+socket.on("strangerLeft", () => {
+    addStranger("Stranger left. Finding someone new...");
+});
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") sendMessage();
+    if (e.key === "Escape") skip();
+});
+renderHome();
+</script>
+</body>
+</html>
