@@ -1,203 +1,376 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<title>StrangerTalks</title>
-<style>
-body {
-    margin: 0;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI";
-    background: radial-gradient(circle at top, #dbeafe, #eff6ff);
-}
-.container {
-    max-width: 500px;
-    margin: auto;
-    padding: 40px 20px;
-}
-.brand {
-    text-align: center;
-    font-size: 22px;
-    font-weight: 600;
-    color: #2563eb;
-    margin-bottom: 10px;
-}
-.headerText {
-    text-align: center;
-    margin-bottom: 25px;
-}
-.headerText .main {
-    font-size: 22px;
-    font-weight: 500;
-    margin-bottom: 8px;
-}
-.headerText .sub {
-    font-size: 15px;
-    color: #374151;
-}
-.option {
-    background: white;
-    border-radius: 18px;
-    padding: 16px;
-    margin-bottom: 12px;
-    cursor: pointer;
-}
-.option.selected {
-    background: #e0edff;
-}
-.continue {
-    width: 100%;
-    padding: 14px;
-    border-radius: 20px;
-    border: none;
-    background: #2563eb;
-    color: white;
-    display: none;
-}
-.topBar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-}
-.backBtn {
-    cursor: pointer;
-    color: #2563eb;
-}
-#chatBox {
-    height: 350px;
-    overflow-y: auto;
-    background: white;
-    border-radius: 20px;
-    padding: 15px;
-}
-.msg {
-    display: flex;
-    margin: 10px 0;
-}
-.msg.you { justify-content: flex-end; }
-.bubble {
-    max-width: 70%;
-    padding: 10px;
-    border-radius: 16px;
-}
-.you .bubble {
-    background: #2563eb;
-    color: white;
-}
-.stranger .bubble {
-    background: #f3f4f6;
-}
-.inputArea {
-    display: flex;
-    margin-top: 10px;
-    gap: 10px;
-}
-input {
-    flex: 1;
-    padding: 10px;
-    border-radius: 20px;
-    border: 1px solid #ddd;
-}
-button {
-    padding: 10px 14px;
-    border-radius: 20px;
-    border: none;
-    background: #2563eb;
-    color: white;
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>StrangerTalks</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: radial-gradient(circle at top center, #0f172a, #030712);
+        }
+        #chatBox::-webkit-scrollbar, #historyBox::-webkit-scrollbar { width: 4px; }
+        #chatBox::-webkit-scrollbar-thumb, #historyBox::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 4px; }
+    </style>
 </head>
-<body>
-<div class="container" id="app"></div>
-<script src="/socket.io/socket.io.js"></script>
-<script>
-const socket = io();
-let currentIntent = "";
-const CONFIG = {
-    options: [
-        {title:"Just talk", desc:"No expectations. Just be."},
-        {title:"Explore", desc:"Let the conversation decide."},
-        {title:"Keep it light", desc:"Easy, fun, no overthinking."},
-        {title:"Something real", desc:"Talk about what matters."}
-    ]
-};
-function renderHome() {
-    document.getElementById("app").innerHTML = `
-        <div class="brand">StrangerTalks</div>
-        <div class="headerText">
-            <div class="main">Pause for a second.</div>
-            <div class="sub">What kind of conversation do you feel like having?</div>
-        </div>
-        ${CONFIG.options.map(opt => `
-            <div class="option" onclick="selectOption(this)">
-                <b>${opt.title}</b><br>
-                <small>${opt.desc}</small>
+<body class="text-gray-100 min-h-screen flex flex-col justify-between overflow-x-hidden select-none antialiased" onclick="closeAllOpenMenus(event)">
+
+    <div id="app" class="w-full max-w-6xl mx-auto px-4 md:px-8 flex-1 flex flex-col justify-between py-4 md:py-6"></div>
+
+    <div id="historyModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+        <div class="bg-gray-900 border border-gray-800 rounded-2xl w-full max-w-lg p-6 flex flex-col max-h-[80vh]">
+            <div class="flex justify-between items-center pb-4 border-b border-gray-800">
+                <h3 class="text-base font-bold text-white tracking-tight">📜 Saved Conversations</h3>
+                <button onclick="toggleHistoryModal(false)" class="text-xs text-gray-400 hover:text-white">Close</button>
             </div>
-        `).join("")}
-        <button id="continueBtn" class="continue" onclick="startChat()">Continue</button>
-    `;
-}
-function selectOption(el) {
-    document.querySelectorAll(".option").forEach(o => o.classList.remove("selected"));
-    el.classList.add("selected");
-    document.getElementById("continueBtn").style.display = "block";
-}
-function startChat() {
-    const selected = document.querySelector(".option.selected");
-    if (!selected) return;
-    currentIntent = selected.innerText.trim();
-    document.getElementById("app").innerHTML = `
-        <div style="text-align:center;margin-top:120px;">Finding someone...</div>
-    `;
-    socket.emit("joinQueue", currentIntent);
-}
-function loadChat() {
-    document.getElementById("app").innerHTML = `
-        <div class="topBar">
-            <div class="backBtn" onclick="location.reload()">← Back</div>
-            <div class="brand">StrangerTalks</div>
+            <div id="modalHistoryBox" class="flex-1 overflow-y-auto space-y-3 py-4 pr-1 text-sm"></div>
+            <div class="pt-3 border-t border-gray-800 flex justify-between items-center">
+                <button onclick="clearAllHistory()" class="text-xs text-rose-500 hover:underline">Delete All Logs</button>
+                <span class="text-[10px] text-gray-500 font-mono">Stored locally</span>
+            </div>
         </div>
-        <div id="chatBox"></div>
-        <div class="inputArea">
-            <input id="msgInput" placeholder="Say something...">
-            <button onclick="sendMessage()">Send</button>
-        </div>
-        <div style="text-align:center;margin-top:10px;">
-            <button onclick="skip()">Skip</button>
-        </div>
-    `;
-}
-function sendMessage() {
-    const input = document.getElementById("msgInput");
-    const msg = input.value.trim();
-    if (!msg) return;
-    addUser(msg);
-    socket.emit("sendMessage", msg);
-    input.value = "";
-}
-function addUser(text) {
-    const box = document.getElementById("chatBox");
-    box.innerHTML += `<div class="msg you"><div class="bubble">${text}</div></div>`;
-    box.scrollTop = box.scrollHeight;
-}
-function addStranger(text) {
-    const box = document.getElementById("chatBox");
-    box.innerHTML += `<div class="msg stranger"><div class="bubble">${text}</div></div>`;
-    box.scrollTop = box.scrollHeight;
-}
-function skip() {
-    socket.emit("skip", currentIntent);
-    document.getElementById("chatBox").innerHTML = "";
-}
-socket.on("matched", () => loadChat());
-socket.on("receiveMessage", (msg) => addStranger(msg));
-socket.on("strangerLeft", () => {
-    addStranger("Stranger left. Finding someone new...");
-});
-document.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") sendMessage();
-    if (e.key === "Escape") skip();
-});
-renderHome();
-</script>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+    const socket = io();
+    let currentIntent = "";
+    let activeChatRoomId = ""; 
+    let activeChatLog = [];
+    let currentLoadedHistoryPool = []; 
+    let typingTimeout;
+    
+    let targetedReplyId = null; 
+    let editingMessageId = null;
+
+    const CONFIG = {
+        options: [
+            { title: "Just talk", desc: "No expectations. Just be.", emoji: "☕" },
+            { title: "Explore", desc: "Let the conversation decide.", emoji: "🌌" },
+            { title: "Keep it light", desc: "Easy, fun, no overthinking.", emoji: "✨" },
+            { title: "Something real", desc: "Talk about what matters.", emoji: "🔥" }
+        ]
+    };
+
+    function saveChatToHistory() {
+        if (activeChatLog.length === 0) return;
+        const savedChats = JSON.parse(localStorage.getItem("st_history") || "[]");
+        
+        if (savedChats.some(c => c.roomId === activeChatRoomId)) return;
+
+        const entry = {
+            id: Date.now(),
+            roomId: activeChatRoomId,
+            intent: currentIntent,
+            timestamp: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}),
+            date: new Date().toLocaleDateString([], {month: 'short', day: 'numeric'}),
+            messages: activeChatLog.filter(m => !m.deleted)
+        };
+        savedChats.unshift(entry);
+        localStorage.setItem("st_history", JSON.stringify(savedChats.slice(0, 15))); 
+        activeChatLog = [];
+    }
+
+    function toggleHistoryModal(show) {
+        const modal = document.getElementById("historyModal");
+        const box = document.getElementById("modalHistoryBox");
+        if (show) {
+            currentLoadedHistoryPool = JSON.parse(localStorage.getItem("st_history") || "[]");
+            if (currentLoadedHistoryPool.length === 0) {
+                box.innerHTML = `<div class="text-center text-gray-500 py-8 text-xs">No saved conversations.</div>`;
+            } else {
+                box.innerHTML = currentLoadedHistoryPool.map((chat, idx) => `
+                    <div onclick="executeHistoryReentryTrigger(${idx})" 
+                         class="p-3.5 rounded-xl bg-gray-950/60 border border-gray-800 hover:border-blue-500/50 transition-all duration-200 cursor-pointer text-left space-y-2 group">
+                        <div class="flex justify-between items-center text-xs">
+                            <span class="font-bold text-blue-400 font-mono uppercase tracking-wide group-hover:text-blue-300">⚡ ${chat.intent} (Click to Reconnect)</span>
+                            <span class="text-gray-500">${chat.date} • ${chat.timestamp}</span>
+                        </div>
+                        <div class="space-y-1 max-h-24 overflow-y-auto bg-black/20 p-2 rounded-lg font-mono text-[11px] text-gray-400">
+                            ${chat.messages.map(m => `<div><span class="font-bold">${m.sender}:</span> ${m.text}</div>`).join("")}
+                        </div>
+                    </div>
+                `).join("");
+            }
+            modal.classList.remove("hidden");
+        } else { modal.classList.add("hidden"); }
+    }
+
+    function executeHistoryReentryTrigger(index) {
+        const chat = currentLoadedHistoryPool[index];
+        if (!chat) return;
+
+        toggleHistoryModal(false);
+        currentIntent = chat.intent;
+        activeChatRoomId = chat.roomId;
+        activeChatLog = chat.messages;
+
+        loadChat();
+        hideIcebreakersGlobal();
+
+        const box = document.getElementById("chatBox");
+        box.innerHTML = `
+            <div class="text-center text-[11px] text-amber-400 my-1 tracking-wide py-1 px-3 border border-amber-950/40 rounded-full w-fit mx-auto bg-amber-950/10 animate-pulse">
+                📡 Attempting Reconnection Link... Waiting for stranger to click this log room.
+            </div>
+        `;
+
+        chat.messages.forEach(m => {
+            if (m.sender === "You") {
+                box.innerHTML += `
+                    <div class="flex items-center justify-end w-full group relative" id="${m.id}">
+                        <div id="content_${m.id}" class="max-w-[72%] bg-blue-600/80 text-white text-sm px-4 py-2.5 rounded-2xl rounded-tr-none shadow-md break-words text-left opacity-60">
+                            <div id="text_${m.id}">${m.text}</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                box.innerHTML += `
+                    <div class="flex items-center justify-start w-full group relative" id="${m.id}">
+                        <div id="content_${m.id}" class="max-w-[72%] bg-gray-900 text-gray-400 text-sm px-4 py-2.5 rounded-2xl rounded-tl-none border border-gray-800/50 break-words text-left opacity-60">
+                            <div id="text_${m.id}">${m.text}</div>
+                        </div>
+                    </div>
+                `;
+            }
+        });
+        box.scrollTop = box.scrollHeight;
+        socket.emit('rejoinRoom', chat.roomId);
+    }
+
+    function clearAllHistory() { localStorage.removeItem("st_history"); toggleHistoryModal(false); renderHome(); }
+
+    function renderHome() {
+        const savedChats = JSON.parse(localStorage.getItem("st_history") || "[]");
+        document.getElementById("app").innerHTML = `
+            <header class="w-full flex justify-between items-center pb-4 border-b border-gray-900">
+                <h1 class="text-xl font-bold tracking-tight bg-gradient-to-r from-white to-gray-500 bg-clip-text text-transparent">strangertalks<span class="text-blue-500">.</span></h1>
+                <div class="flex items-center gap-3">
+                    <button onclick="toggleHistoryModal(true)" class="text-xs font-semibold px-3 py-1.5 rounded-full bg-gray-900/40 border border-gray-800 text-gray-300 hover:text-white transition-all flex items-center gap-1">
+                        📜 Past Chats ${savedChats.length > 0 ? `<span class="bg-blue-600 text-white rounded-full w-4 h-4 inline-flex items-center justify-center text-[9px] font-bold">${savedChats.length}</span>` : ''}
+                    </button>
+                    <div class="flex items-center gap-2 bg-gray-900/40 px-3 py-1.5 rounded-full border border-gray-800">
+                        <div class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
+                        <span class="text-xs font-medium text-emerald-400">Live Match</span>
+                    </div>
+                </div>
+            </header>
+
+            <main class="w-full flex-1 flex flex-col lg:flex-row items-center justify-center gap-8 lg:gap-16 py-8">
+                <div class="w-full lg:w-1/2 flex flex-col text-center lg:text-left space-y-3 max-w-md lg:max-w-none">
+                    <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight text-white leading-tight">Skip the surface.<br class="hidden lg:inline" /><span class="bg-gradient-to-r from-blue-400 to-indigo-500 bg-clip-text text-transparent">Choose your vibe.</span></h2>
+                    <p class="text-gray-400 text-sm md:text-base max-w-sm mx-auto lg:mx-0">Zero authentication. Zero historical logging. Instant human messaging aligned to your current mindset.</p>
+                </div>
+                <div class="w-full lg:w-1/2 max-w-md grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                    ${CONFIG.options.map((opt) => `
+                        <button onclick="startChat('${opt.title}')" class="group relative flex flex-col justify-between p-5 rounded-2xl bg-gray-900/30 border border-gray-800/60 hover:border-blue-500/40 transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] text-left overflow-hidden">
+                            <div class="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity"></div>
+                            <div>
+                                <span class="text-xl mb-2 block">${opt.emoji}</span>
+                                <h3 class="font-bold text-sm text-gray-200 group-hover:text-blue-400 transition-colors">${opt.title}</h3>
+                                <p class="text-xs text-gray-400 mt-1 leading-relaxed">${opt.desc}</p>
+                            </div>
+                        </button>
+                    `).join("")}
+                </div>
+            </main>
+        `;
+    }
+
+    function startChat(intentTitle) {
+        currentIntent = intentTitle;
+        activeChatLog = []; 
+        document.getElementById("app").innerHTML = `
+            <div class="w-full flex-1 flex flex-col items-center justify-center text-center">
+                <div class="relative w-20 h-20 mb-6 flex items-center justify-center"><div class="absolute inset-0 rounded-full border-2 border-blue-500/20 animate-ping opacity-75"></div><div class="absolute inset-2 rounded-full border border-blue-500/40 animate-pulse"></div><div class="w-4 h-4 rounded-full bg-blue-500"></div></div>
+                <h3 class="text-lg font-semibold text-white">Analyzing Behavioral Waves...</h3>
+                <p class="text-xs text-gray-500 mt-1.5">Sifting queue for a <span class="text-blue-400 font-medium">70% conversational pacing match</span></p>
+                <button onclick="location.reload()" class="mt-8 px-5 py-2 rounded-full text-xs font-medium bg-gray-900 border border-gray-800 text-gray-400 hover:text-white transition-colors">Cancel Search</button>
+            </div>
+        `;
+        socket.emit("joinQueue", currentIntent);
+    }
+
+    function loadChat() {
+        socket.emit('getIcebreakers', currentIntent, (icebreakers) => {
+            document.getElementById("app").innerHTML = `
+                <div class="w-full max-w-3xl mx-auto flex-1 flex flex-col h-[88vh]">
+                    <div class="flex justify-between items-center pb-3 border-b border-gray-800 mb-2">
+                        <button class="text-xs font-semibold text-gray-400 hover:text-blue-400 transition-colors" onclick="handleDisconnectExit()">← Leave & Save</button>
+                        <span class="text-[10px] bg-blue-500/10 border border-blue-500/30 text-blue-400 font-mono font-bold tracking-wider uppercase px-2.5 py-1 rounded-full">Vibe: ${currentIntent}</span>
+                        <span id="typingIndicator" class="text-[10px] text-emerald-400 font-bold italic hidden animate-pulse">Typing...</span>
+                    </div>
+
+                    <div id="chatBox" class="flex-1 overflow-y-auto space-y-4 pr-1 mb-3 flex flex-col bg-gray-950/20 rounded-2xl border border-gray-900/60 p-4 shadow-inner"></div>
+
+                    <div id="replyPreviewBox" class="bg-blue-950/20 border border-blue-900/40 p-2.5 rounded-xl mb-2 hidden flex justify-between items-center">
+                        <div class="text-xs text-blue-300 truncate"><span class="font-bold text-blue-400">Replying to:</span> <span id="replyPreviewText"></span></div>
+                        <button onclick="cancelReplyState()" class="text-gray-500 hover:text-white text-xs px-1">✕</button>
+                    </div>
+
+                    <div id="icebreakerArea" class="w-full flex flex-col gap-2 mb-3">
+                        <span class="text-[10px] text-gray-500 font-bold uppercase tracking-wider px-1">💡 Icebreakers:</span>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-2 w-full">
+                            ${icebreakers.map(prompt => `<button onclick="sendIcebreaker(this)" class="text-left md:text-center text-xs bg-blue-950/10 hover:bg-blue-600 border border-blue-900/30 text-blue-300 px-4 py-3 rounded-xl transition-all break-words h-full shadow-sm">"${prompt}"</button>`).join("")}
+                        </div>
+                    </div>
+
+                    <div class="space-y-3">
+                        <div class="flex gap-2.5 items-center">
+                            <input id="msgInput" type="text" autocomplete="off" placeholder="Type an encrypted message..." oninput="emitTypingEvent()"
+                                class="flex-1 bg-gray-900/60 text-sm text-white font-sans placeholder-gray-500 px-4 py-3.5 rounded-xl border border-gray-800 focus:outline-none focus:border-blue-500/80 focus:ring-1 focus:ring-blue-500/30 transition-all">
+                            <button id="sendBtn" onclick="sendMessage()" class="bg-blue-600 hover:bg-blue-500 text-white font-semibold text-sm px-5 py-3.5 rounded-xl active:scale-95 transition-all">Send</button>
+                        </div>
+                        <button id="skipBtn" onclick="skip()" class="w-full py-2.5 rounded-xl text-xs font-bold bg-gray-900/30 hover:bg-rose-950/20 border border-gray-800 border-rose-900/30 text-gray-400 hover:text-rose-400 transition-all">Skip Stranger (Esc)</button>
+                    </div>
+                </div>
+            `;
+            document.getElementById("msgInput").focus();
+        });
+    }
+
+    function toggleMessageMenu(event, msgId) {
+        event.stopPropagation();
+        const el = document.getElementById(`menu_${msgId}`);
+        if (!el) return;
+        const state = el.classList.contains("hidden");
+        closeAllOpenMenus();
+        if (state) el.classList.remove("hidden");
+    }
+
+    function closeAllOpenMenus() { document.querySelectorAll("[id^='menu_']").forEach(el => el.classList.add("hidden")); }
+    function initReplyAction(msgId, text) { targetedReplyId = msgId; document.getElementById("replyPreviewText").innerText = text; document.getElementById("replyPreviewBox").classList.remove("hidden"); document.getElementById("msgInput").focus(); }
+    function initEditAction(msgId, currentText) { editingMessageId = msgId; const input = document.getElementById("msgInput"); input.value = currentText; input.classList.add("border-amber-500"); document.getElementById("sendBtn").innerText = "Edit"; input.focus(); }
+    function initDeleteAction(msgId) { socket.emit("deleteMessage", msgId); executeLocalDOMDelete(msgId); }
+
+    function executeLocalDOMDelete(msgId) {
+        const contentNode = document.getElementById(`content_${msgId}`);
+        if (contentNode) contentNode.innerHTML = `<span class="text-xs text-gray-500 italic">🚫 Message deleted</span>`;
+        const log = activeChatLog.find(m => m.id === msgId);
+        if (log) log.deleted = true;
+    }
+
+    function cancelReplyState() { targetedReplyId = null; document.getElementById("replyPreviewBox").classList.add("hidden"); }
+    function cancelEditState() { editingMessageId = null; const input = document.getElementById("msgInput"); input.value = ""; input.classList.remove("border-amber-500"); document.getElementById("sendBtn").innerText = "Send"; }
+
+    // --- TIMERS & EMITTERS ---
+    function emitTypingEvent() { socket.emit("typing", true); clearTimeout(typingTimeout); typingTimeout = setTimeout(() => { socket.emit("typing", false); }, 1200); }
+    function sendIcebreaker(btnElement) { const promptText = btnElement.innerText.replace(/^"|"$/g, ''); executeMessageSendPipeline(promptText); }
+
+    function sendMessage() {
+        const input = document.getElementById("msgInput");
+        const text = input.value.trim();
+        if (!text) return;
+        if (editingMessageId) {
+            socket.emit("editMessage", { id: editingMessageId, text });
+            document.getElementById(`text_${editingMessageId}`).innerText = text + " (edited)";
+            cancelEditState();
+        } else { executeMessageSendPipeline(text); }
+    }
+
+    function executeMessageSendPipeline(text) {
+        const input = document.getElementById("msgInput");
+        const msgId = "msg_" + Date.now();
+        const payload = { id: msgId, text: text, replyToId: targetedReplyId, replyToText: targetedReplyId ? document.getElementById(`text_${targetedReplyId}`).innerText : null };
+        addUserMessageBubbleToDOM(payload);
+        socket.emit("sendMessage", payload);
+        input.value = "";
+        hideIcebreakersGlobal();
+        cancelReplyState();
+        input.focus();
+    }
+
+    function addUserMessageBubbleToDOM(payload) {
+        const box = document.getElementById("chatBox");
+        activeChatLog.push({ id: payload.id, sender: "You", text: payload.text });
+        let replyMarkup = payload.replyToId ? `<div class="text-[10px] text-blue-200/60 bg-black/20 px-2 py-1 rounded-md mb-1 italic truncate">↩️ ${payload.replyToText}</div>` : "";
+        box.innerHTML += `
+            <div class="flex items-center justify-end w-full relative" id="${payload.id}">
+                <button onclick="toggleMessageMenu(event, '${payload.id}')" class="text-gray-600 hover:text-white px-2 text-sm">⋮</button>
+                <div id="menu_${payload.id}" class="hidden absolute right-6 bottom-4 bg-gray-900 border border-gray-800 py-1 w-32 rounded-xl shadow-xl z-30 text-xs">
+                    <button onclick="initReplyAction('${payload.id}', '${payload.text}')" class="w-full text-left px-3 py-1.5 text-gray-300 hover:bg-gray-800">Reply</button>
+                    <button onclick="initEditAction('${payload.id}', '${payload.text}')" class="w-full text-left px-3 py-1.5 text-gray-300 hover:bg-gray-800">Edit</button>
+                    <button onclick="initDeleteAction('${payload.id}')" class="w-full text-left px-3 py-1.5 text-rose-400 hover:bg-gray-800">Delete</button>
+                </div>
+                <div id="content_${payload.id}" class="max-w-[72%] bg-blue-600 text-white text-sm px-4 py-2.5 rounded-2xl rounded-tr-none shadow-md break-words">
+                    ${replyMarkup}<div id="text_${payload.id}">${payload.text}</div>
+                </div>
+            </div>
+        `;
+        box.scrollTop = box.scrollHeight;
+    }
+
+    function addStrangerMessageBubbleToDOM(payload) {
+        const box = document.getElementById("chatBox");
+        activeChatLog.push({ id: payload.id, sender: "Stranger", text: payload.text });
+        let replyMarkup = payload.replyToId ? `<div class="text-[10px] text-gray-500 bg-black/10 px-2 py-1 rounded-md mb-1 italic truncate">↩️ ${payload.replyToText}</div>` : "";
+        box.innerHTML += `
+            <div class="flex items-center justify-start w-full relative" id="${payload.id}">
+                <div id="content_${payload.id}" class="max-w-[72%] bg-gray-900 text-gray-200 text-sm px-4 py-2.5 rounded-2xl rounded-tl-none border border-gray-800/50 break-words">
+                    ${replyMarkup}<div id="text_${payload.id}">${payload.text}</div>
+                </div>
+                <button onclick="toggleMessageMenu(event, '${payload.id}')" class="text-gray-600 hover:text-white px-2 text-sm">⋮</button>
+                <div id="menu_${payload.id}" class="hidden absolute left-6 bottom-4 bg-gray-900 border border-gray-800 py-1 w-24 rounded-xl shadow-xl z-30 text-xs">
+                    <button onclick="initReplyAction('${payload.id}', '${payload.text}')" class="w-full text-left px-3 py-1.5 text-gray-300 hover:bg-gray-800">Reply</button>
+                </div>
+            </div>
+        `;
+        box.scrollTop = box.scrollHeight;
+    }
+
+    function hideIcebreakersGlobal() { const area = document.getElementById("icebreakerArea"); if (area) area.style.display = "none"; }
+    function skip() { saveChatToHistory(); socket.emit("skip", currentIntent); }
+    function handleDisconnectExit() { saveChatToHistory(); location.reload(); }
+
+    // --- SOCKET EVENT MAPS ---
+    socket.on("matched", (roomId) => { activeChatRoomId = roomId; loadChat(); });
+    socket.on("receiveMessage", (msgObj) => addStrangerMessageBubbleToDOM(msgObj));
+    socket.on("firstMessageSent", () => hideIcebreakersGlobal());
+
+    socket.on("strangerRejoinedRoom", () => {
+        const box = document.getElementById("chatBox");
+        box.innerHTML += `
+            <div class="text-center text-[11px] text-emerald-400 my-1 tracking-wide py-1 px-3 border border-emerald-950/40 rounded-full w-fit mx-auto bg-emerald-950/10">
+                ⚡ Connection restored. Stranger rejoined the space!
+            </div>
+        `;
+        document.querySelectorAll("[id^='content_']").forEach(el => el.classList.remove("opacity-60"));
+        box.scrollTop = box.scrollHeight;
+    });
+
+    socket.on("strangerEditedMessage", (payload) => {
+        const target = document.getElementById(`text_${payload.id}`);
+        if (target) target.innerText = payload.text + " (edited)";
+    });
+
+    socket.on("strangerDeletedMessage", (msgId) => executeLocalDOMDelete(msgId));
+    socket.on("strangerTyping", (isTyping) => { const ind = document.getElementById("typingIndicator"); if (ind) { isTyping ? ind.classList.remove("hidden") : ind.classList.add("hidden"); } });
+
+    socket.on("strangerLeft", () => {
+        saveChatToHistory();
+        const input = document.getElementById("msgInput");
+        if (input) { input.disabled = true; input.placeholder = "Conversation disconnected by system tracker."; }
+        const skipBtn = document.getElementById("skipBtn");
+        if (skipBtn) { skipBtn.innerText = "Find Someone New"; skipBtn.classList.remove("hover:bg-rose-950/20"); skipBtn.classList.add("bg-blue-600", "text-white"); }
+        const box = document.getElementById("chatBox");
+        if (box) {
+            box.innerHTML += `<div class="text-center text-[11px] text-rose-400 font-medium my-2 bg-rose-950/10 border border-rose-950/40 px-4 py-2 rounded-xl w-fit mx-auto animate-pulse">⚠️ Partner left the line. You can review the log or exit using the buttons above.</div>`;
+            box.scrollTop = box.scrollHeight;
+        }
+    });
+
+    socket.on("requeue", (intent) => startChat(intent));
+
+    document.addEventListener("keydown", (e) => {
+        const input = document.getElementById("msgInput");
+        if (e.key === "Enter" && document.activeElement === input) sendMessage();
+        if (e.key === "Escape") { if (editingMessageId) cancelEditState(); else skip(); }
+    });
+
+    // Fire landing interface
+    renderHome();
+    </script>
 </body>
 </html>
