@@ -1048,6 +1048,9 @@ labels.
   match, Conversation, completion, local Memory Space, Relationships, and privacy settings.
 * 🧪 Anonymous bootstrap, signed socket connection, queue/match/conversation/message actions,
   typing, completion, report, block, and relationship consent are wired to the verified channels.
+* ✅ Browser queue entry sends only the canonical `door_type`; `ParticipantChannelTest`,
+  `TextMvpIntegrationTest`, and `door_mapping_test.mjs` verify the socket-to-match path without
+  client identity or unmeasured profile inputs.
 * 🧪 Semantic controls, visible focus, screen-reader status, reduced motion, scalable text, safe
   `textContent` message insertion, and no participant UUID display are implemented.
 * ⬜ Automated browser end-to-end coverage remains open.
@@ -1232,6 +1235,23 @@ feature and is explicitly not part of V1.
 
 This is the permanent register. Future technical-debt items belong here.
 
+## Reserved `typing_cadence` matchmaking input
+
+**Status:** KNOWN — NOT FIXED
+
+**What it is:** The volatile queue entry still contains `keystroke_cadence` for compatibility with
+older internal callers, but browser queue entry stores it as `nil` and strict same-Door V1 matching
+never reads it. Typing indicators are an unrelated ephemeral Conversation feature.
+
+**Why deferred:** A cadence metric cannot be known before a Conversation. A future metric may only
+be calculated from real observed interaction behavior using server-calculated or otherwise
+trustworthy measured data—not a guessed browser value. Its definition, privacy impact, minimum
+sample size, and matching influence require a separate approved design.
+
+**Fixed looks like:** Approve and test an evidence-based server measurement and privacy contract, or
+remove/rename the reserved field and compatibility parameters. Until then it remains `nil` and has
+no effect on compatibility, ordering, eligibility, timeouts, or matching.
+
 ## `learning_version` lifecycle ownership
 
 **Status:** KNOWN — NOT FIXED
@@ -1320,6 +1340,15 @@ dependency/security audit output, run the named full test suite, and complete th
 
 # Error Log — Level B Delivery Slice
 
+## Legacy composite-score assertion after locking Door-only V1 matching
+
+**Observed:** The first cadence-contract focused run failed because `MatchmakingEngineTest` still
+expected the legacy composite compatibility value `0.9`; warnings-as-errors also found a private
+helper separating `join_queue/5` clauses.
+
+**Resolution:** The clauses were grouped, and the assertion now verifies the real binary same-Door
+compatibility score `1.0`. The rerun passed 28 focused ExUnit tests and 3 frontend Node tests.
+
 ## Safety review helper name collided with Ecto query macro
 
 **Observed:** The first Macro-slice 1 warnings-as-errors compile treated a private `update/2` helper
@@ -1380,7 +1409,7 @@ Verified:
 * Automated test execution stable across repeated runs.
 
 ```text
-95 tests, 0 failures
+110 tests, 0 failures
 
 ```
 

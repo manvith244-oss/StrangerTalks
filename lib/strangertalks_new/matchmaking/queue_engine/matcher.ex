@@ -53,6 +53,10 @@ defmodule StrangertalksNew.QueueEngine.Matcher do
   end
 
   # Tempo Calibration: 10-point bonus for < 50ms difference
+  # Reserved cadence is unknown in V1; legacy scorer callers must treat it as neutral, not numeric.
+  defp score_tempo(nil, _rate_b), do: 0
+  defp score_tempo(_rate_a, nil), do: 0
+
   defp score_tempo(rate_a, rate_b) do
     if abs(rate_a - rate_b) < 50, do: 10, else: 0
   end

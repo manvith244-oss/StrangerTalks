@@ -4,6 +4,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngineTest do
   import ExUnit.CaptureLog
 
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
+  alias StrangertalksNew.QueueEngine.Matcher
   alias StrangertalksNew.QueueEngine.QueueState
 
   setup do
@@ -27,17 +28,30 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngineTest do
       assert {:error, :unsupported_schema} =
                MatchmakingEngine.join_queue(12345, "EXPLORE", "en", 7, 120)
     end
+
+    test "legacy scorer treats unknown cadence as neutral instead of crashing" do
+      participant = %{
+        language: "en",
+        intent_vibe_vector: %{"primary_intent" => "EXPLORE", "vibe_dimensions" => %{}},
+        media_mask: 1,
+        typing_rate: nil
+      }
+
+      assert is_integer(Matcher.compute_match_score(participant, participant))
+    end
   end
 
   describe "Dynamic Matrix Pipeline Verification" do
-    test "Test Case 1: Asserts that mismatched languages drop score to 0 and block pairing" do
-      p1 = Ecto.UUID.generate()
-      p2 = Ecto.UUID.generate()
+    test "same-Door V1 matching ignores reserved language, media, and cadence inputs" do
+      {:ok, participant_1} = StrangertalksNew.Participants.create_participant(%{})
+      {:ok, participant_2} = StrangertalksNew.Participants.create_participant(%{})
+      p1 = participant_1.participant_id
+      p2 = participant_2.participant_id
 
-      MatchmakingEngine.join_queue(p1, :EXPLORE, "en", 7, 120.0)
-      MatchmakingEngine.join_queue(p2, :EXPLORE, "es", 7, 120.0)
+      MatchmakingEngine.join_queue(p1, :EXPLORE, "en", 1, 5.0)
+      MatchmakingEngine.join_queue(p2, :EXPLORE, "es", 7, 900.0)
 
-      assert {:ok, []} = MatchmakingEngine.evaluate_pending_matches()
+      assert {:ok, [_match_id]} = MatchmakingEngine.evaluate_pending_matches()
     end
 
     test "matching doors persist a match and pending conversation before removing both participants" do
@@ -69,7 +83,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngineTest do
       assert match.door_type == :EXPLORE
       assert match.match_status == :CREATED
       assert match.match_strategy == :COMPATIBILITY
-      assert Decimal.to_float(match.compatibility_score) == 0.9
+      assert Decimal.to_float(match.compatibility_score) == 1.0
       assert match.compatibility_version == "compatibility_v1"
       assert match.queue_duration_seconds >= 45
       assert match.conversation_duration_seconds == 0

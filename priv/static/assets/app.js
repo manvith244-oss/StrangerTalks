@@ -1,5 +1,5 @@
 import {Socket} from "/vendor/phoenix.mjs"
-import {DOORS, backendDoorFor} from "./door_mapping.mjs"
+import {DOORS, queuePayloadFor} from "./door_mapping.mjs"
 import {clearRecords, decryptBackup, deleteRecord, encryptBackup, getRecord, importRecords, listRecords, putRecord} from "./local_data.mjs"
 
 const identityKey = "strangertalks.identity.v1"
@@ -78,7 +78,7 @@ DOORS.forEach((door) => { const button = document.createElement("button"); butto
 
 document.addEventListener("click", (event) => { const target = event.target.closest("[data-go]"); if (target) show(target.dataset.go) })
 $("#begin").addEventListener("click", () => show("doors"))
-$("#join-queue").addEventListener("click", async () => { const door_type = backendDoorFor(app.selectedDoor); if (!door_type) return announce("Choose a valid Door."); try { await push(app.participant, "queue:join", {door_type, language: navigator.language?.split("-")[0] || "en", media_capability: 0, typing_cadence: 0.0}); show("queue") } catch { announce("Could not join the queue.") } })
+$("#join-queue").addEventListener("click", async () => { const payload = queuePayloadFor(app.selectedDoor); if (!payload) return announce("Choose a valid Door."); try { await push(app.participant, "queue:join", payload); show("queue") } catch { announce("Could not join the queue.") } })
 $("#leave-queue").addEventListener("click", async () => { await push(app.participant, "queue:leave"); show("doors") })
 $("#message-form").addEventListener("submit", async (event) => { event.preventDefault(); const input = $("#message-input"); const content = input.value.trim(); if (!content) return; const message_id = crypto.randomUUID(); renderMessage({message_id, content, status: "sending"}, true); input.value = ""; try { const result = await push(app.conversation, "message:send", {message_id, content}); updateMessageStatus(result) } catch { updateMessageStatus({message_id, status: "failed"}) } })
 $("#message-input").addEventListener("input", () => { push(app.conversation, "typing:start").catch(() => {}); clearTimeout(app.typingTimer); app.typingTimer = setTimeout(() => push(app.conversation, "typing:stop").catch(() => {}), 1500) })

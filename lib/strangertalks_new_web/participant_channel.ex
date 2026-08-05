@@ -25,30 +25,15 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
   @impl true
   def handle_in(
         event,
-        %{
-          "door_type" => door_type,
-          "language" => language,
-          "media_capability" => media_capability,
-          "typing_cadence" => typing_cadence
-        },
+        %{"door_type" => door_type},
         socket
       )
-      when event in ["join_queue", "queue:join"] and is_binary(door_type) and is_binary(language) and
-             is_integer(media_capability) and
-             is_float(typing_cadence) do
+      when event in ["join_queue", "queue:join"] and is_binary(door_type) do
     participant_id = socket.assigns.participant_id
 
     with {:ok, door} <- door_from_string(door_type),
-         :not_queued <-
-           queue_entry_status(participant_id, door, language, media_capability, typing_cadence),
-         {:ok, _result} <-
-           MatchmakingEngine.join_queue(
-             participant_id,
-             door,
-             language,
-             media_capability,
-             typing_cadence
-           ) do
+         :not_queued <- queue_entry_status(participant_id, door),
+         {:ok, _result} <- MatchmakingEngine.join_queue(participant_id, door, nil, nil, nil) do
       send(self(), :evaluate_pending_matches)
       push(socket, "queue:status", %{status: "queued"})
       {:reply, {:ok, %{status: "queued"}}, socket}
@@ -139,18 +124,13 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
     end
   end
 
-  defp queue_entry_status(participant_id, door, language, media_capability, typing_cadence) do
+  defp queue_entry_status(participant_id, door) do
     Agent.get(QueueState, fn state ->
       case Map.get(state, participant_id) do
         nil ->
           :not_queued
 
-        %{
-          door_selection: ^door,
-          language_tag: ^language,
-          media_bitmask: ^media_capability,
-          keystroke_cadence: ^typing_cadence
-        } ->
+        %{door_selection: ^door} ->
           :same_entry
 
         _entry ->

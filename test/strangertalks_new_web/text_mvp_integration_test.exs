@@ -149,11 +149,5 @@ defmodule StrangertalksNewWeb.TextMvpIntegrationTest do
     socket
   end
 
-  defp queue_payload,
-    do: %{
-      "door_type" => "EXPLORE",
-      "language" => "en",
-      "media_capability" => 0,
-      "typing_cadence" => 0.0
-    }
+  defp queue_payload, do: %{"door_type" => "EXPLORE"}
 end

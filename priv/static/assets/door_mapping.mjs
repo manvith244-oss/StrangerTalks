@@ -9,3 +9,8 @@ export const DOORS = Object.freeze([
 export function backendDoorFor(label) {
   return DOORS.find((door) => door.label === label)?.value ?? null
 }
+
+export function queuePayloadFor(label) {
+  const door_type = backendDoorFor(label)
+  return door_type ? {door_type} : null
+}

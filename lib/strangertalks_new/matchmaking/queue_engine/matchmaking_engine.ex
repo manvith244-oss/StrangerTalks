@@ -13,7 +13,6 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.Participant
   alias StrangertalksNew.QueueEngine.QueueState
-  alias StrangertalksNew.QueueEngine.Matcher
   alias StrangertalksNew.Repo
 
   @pubsub_topic "strangertalks:matchmaking"
@@ -28,11 +27,44 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   def join_queue(participant_id, door_type, preferred_language, media_overlap, keystroke_profile)
       when is_binary(participant_id) and is_atom(door_type) and is_binary(preferred_language) and
              is_integer(media_overlap) and is_float(keystroke_profile) do
+    put_queue_entry(
+      participant_id,
+      door_type,
+      preferred_language,
+      media_overlap,
+      keystroke_profile
+    )
+  end
+
+  def join_queue(participant_id, door_type, preferred_language, media_overlap, keystroke_profile)
+      when is_binary(participant_id) and is_atom(door_type) and
+             (is_binary(preferred_language) or is_nil(preferred_language)) and
+             (is_integer(media_overlap) or is_nil(media_overlap)) and
+             (is_number(keystroke_profile) or is_nil(keystroke_profile)) do
+    put_queue_entry(
+      participant_id,
+      door_type,
+      preferred_language,
+      media_overlap,
+      keystroke_profile
+    )
+  end
+
+  def join_queue(_id, _door, _lang, _media, _key), do: {:error, :unsupported_schema}
+
+  defp put_queue_entry(
+         participant_id,
+         door_type,
+         preferred_language,
+         media_overlap,
+         keystroke_profile
+       ) do
     entry_payload = %{
       participant_id: participant_id,
       door_selection: door_type,
       language_tag: preferred_language,
       media_bitmask: media_overlap,
+      # Reserved for a future evidence-based interaction metric. Unknown and unused in V1 matchmaking.
       keystroke_cadence: keystroke_profile,
       queue_entry_time: DateTime.utc_now(),
       attempt_count: 1
@@ -53,8 +85,6 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
         {:error, :queue_instantiation_failed}
     end
   end
-
-  def join_queue(_id, _door, _lang, _media, _key), do: {:error, :unsupported_schema}
 
   @doc """
   Removes a participant from volatile memory, leaving zero data trails behind.
@@ -199,17 +229,10 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   defp find_viable_partner(p1, [p2 | rest], threshold) do
     if p1.door_selection == p2.door_selection and
          not MatchingRules.check_safety_veto?(p1.participant_id, p2.participant_id) do
-      # Map raw profile data points into the structured entities required by the Matcher utility
-      mapped_p1 = transform_payload(p1)
-      mapped_p2 = transform_payload(p2)
-
-      score = Matcher.compute_match_score(mapped_p1, mapped_p2)
-
-      if score >= threshold do
-        {:match, p2, score}
-      else
-        find_viable_partner(p1, rest, threshold)
-      end
+      # V1 compatibility is the verified binary fact that both participants selected the same Door.
+      # Reserved profile inputs do not affect eligibility, ordering, or score.
+      _unused_threshold = threshold
+      {:match, p2, 100}
     else
       find_viable_partner(p1, rest, threshold)
     end
@@ -302,17 +325,5 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
       {:invalid_participants, missing_participant_ids}
     end
-  end
-
-  defp transform_payload(p) do
-    %{
-      language: p.language_tag,
-      intent_vibe_vector: %{
-        "primary_intent" => to_string(p.door_selection),
-        "vibe_dimensions" => %{}
-      },
-      media_mask: p.media_bitmask,
-      typing_rate: p.keystroke_cadence
-    }
   end
 end

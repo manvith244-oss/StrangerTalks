@@ -143,6 +143,48 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     assert Repo.get!(Conversation, conversation_id)
   end
 
+  test "door-only queue entries keep cadence nil and client cadence cannot affect V1 matching" do
+    participant_a = participant_fixture()
+    participant_b = participant_fixture()
+    socket_a = joined_socket(participant_a)
+    socket_b = joined_socket(participant_b)
+
+    ref =
+      push(socket_a, "queue:join", %{
+        "door_type" => "SOMETHING_REAL",
+        "typing_cadence" => 1.25,
+        "participant_id" => participant_b.participant_id
+      })
+
+    assert_reply ref, :ok, %{status: "queued"}
+    assert queue_entry(participant_a.participant_id).keystroke_cadence == nil
+
+    ref =
+      push(socket_b, "queue:join", %{"door_type" => "SOMETHING_REAL", "typing_cadence" => 999.75})
+
+    assert_reply ref, :ok, %{status: "queued"}
+    assert_push "match_found", %{status: "matched"}
+    assert_push "match_found", %{status: "matched"}
+    assert Repo.aggregate(Matching, :count) == 1
+  end
+
+  test "missing cadence does not crash queue timeout evaluation" do
+    participant = participant_fixture()
+    socket = joined_socket(participant)
+    ref = push(socket, "queue:join", %{"door_type" => "JUST_TALK"})
+    assert_reply ref, :ok, %{status: "queued"}
+
+    Agent.update(QueueState, fn state ->
+      update_in(
+        state[participant.participant_id].queue_entry_time,
+        &DateTime.add(&1, -91, :second)
+      )
+    end)
+
+    assert {:ok, []} = MatchmakingEngine.evaluate_pending_matches()
+    refute queue_entry(participant.participant_id)
+  end
+
   test "different doors remain queued and receive no match notification" do
     participant_a = participant_fixture()
     participant_b = participant_fixture()
@@ -548,12 +590,7 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
   end
 
   defp queue_params(door_type) do
-    %{
-      "door_type" => door_type,
-      "language" => "en",
-      "media_capability" => 7,
-      "typing_cadence" => 120.0
-    }
+    %{"door_type" => door_type}
   end
 
   defp queue_entry(participant_id), do: Map.get(queue_state(), participant_id)
