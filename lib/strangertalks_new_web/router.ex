@@ -5,6 +5,10 @@ defmodule StrangertalksNewWeb.Router do
     plug :accepts, ["json"]
   end
 
+  scope "/", StrangertalksNewWeb do
+    get "/", PageController, :home
+  end
+
   scope "/api", StrangertalksNewWeb do
     pipe_through :api
 

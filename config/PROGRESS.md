@@ -1031,6 +1031,27 @@ See **Product-Capability Milestone — Phase 3 / Phase 5** above.
 
 # Phase 6 — Frontend
 
+The V1 presentation aliases are locked and centralized in `door_mapping.mjs`:
+
+| User-facing Door | Canonical backend value |
+| --- | --- |
+| Deep Talk | `SOMETHING_REAL` |
+| Vent | `JUST_TALK` |
+| Distract | `KEEP_IT_LIGHT` |
+| Advice | `EXPLORE` |
+
+Only labels are displayed and only canonical values enter `queue:join`; the matcher continues exact
+backend-value comparison. `door_mapping_test.mjs` proves all four mappings and rejects unmapped
+labels.
+
+* 🧪 Responsive plain HTML/CSS/JavaScript screens implemented for landing, Door selection, queue,
+  match, Conversation, completion, local Memory Space, Relationships, and privacy settings.
+* 🧪 Anonymous bootstrap, signed socket connection, queue/match/conversation/message actions,
+  typing, completion, report, block, and relationship consent are wired to the verified channels.
+* 🧪 Semantic controls, visible focus, screen-reader status, reduced motion, scalable text, safe
+  `textContent` message insertion, and no participant UUID display are implemented.
+* ⬜ Automated browser end-to-end coverage remains open.
+
 * ⬜ Store user-owned data primarily in IndexedDB rather than `localStorage`.
 * ⬜ Let users view and delete their local data.
 * ⬜ Export an encrypted local backup file.

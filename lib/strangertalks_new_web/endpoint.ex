@@ -15,6 +15,12 @@ defmodule StrangertalksNewWeb.Endpoint do
     websocket: true,
     longpoll: false
 
+  plug Plug.Static,
+    at: "/vendor",
+    from: {:phoenix, "priv/static"},
+    gzip: false,
+    only: ~w(phoenix.mjs)
+
   # socket "/live", Phoenix.LiveView.Socket,
   #   websocket: [connect_info: [session: @session_options]],
   #   longpoll: [connect_info: [session: @session_options]]
