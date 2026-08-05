@@ -982,6 +982,12 @@ duplicate pair creation.
 * 🧪 PARTIALLY VERIFIED: Report creation is client-reachable, but automatic SafetyEvent creation is
   intentionally absent because Report and SafetyEvent category vocabularies differ and SafetyEvent
   requires an unassessed severity. Mapping and severity policy require an explicit decision.
+* ✅ VERIFIED — `ParticipantChannelTest`: `conversation:block` derives the blocker from the signed
+  socket and the blocked participant from the persisted Conversation, ignores spoofed payload IDs,
+  creates one directional `boundary_blocks` row idempotently, sends no special notification to the
+  blocked participant, and prevents the pair from matching again in either direction. Blocking does
+  not create or delete a Report or safety-evidence record. Verified by the 24-test focused command
+  and `mix precommit`: 95 tests, 0 failures.
 
 ---
 
@@ -1253,7 +1259,7 @@ Verified:
 * Automated test execution stable across repeated runs.
 
 ```text
-94 tests, 0 failures
+95 tests, 0 failures
 
 ```
 

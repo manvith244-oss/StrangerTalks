@@ -8,6 +8,7 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNew.Message
   alias StrangertalksNew.Matching
+  alias StrangertalksNew.MatchingRules.BoundaryBlock
   alias StrangertalksNew.Report
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.Participants
@@ -345,6 +346,40 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     invalid_ref = push(socket, "conversation:report", %{"category" => "NOT_REAL"})
     assert_reply invalid_ref, :error, %{reason: "invalid_report_category"}
     assert Repo.aggregate(Report, :count, :report_id) == 1
+  end
+
+  test "verified block is private, idempotent, and prevents rematching in either direction" do
+    {conversation, participant_a, participant_b} = matched_conversation_fixture()
+    socket = joined_conversation_socket(participant_a, conversation)
+
+    ref =
+      push(socket, "conversation:block", %{
+        "blocker_id" => participant_b.participant_id,
+        "blocked_id" => participant_a.participant_id
+      })
+
+    assert_reply ref, :ok, %{status: "blocked"}
+
+    block = Repo.one!(BoundaryBlock)
+    assert block.blocker_user_id == participant_a.participant_id
+    assert block.blocked_user_id == participant_b.participant_id
+    assert block.source_surface == "CONVERSATION"
+    assert block.active_status == true
+    refute_push "participant_blocked", _payload, 50
+
+    duplicate_ref = push(socket, "conversation:block", %{})
+    assert_reply duplicate_ref, :ok, %{status: "blocked"}
+    assert Repo.aggregate(BoundaryBlock, :count, :blocker_user_id) == 1
+
+    {:ok, _} =
+      MatchmakingEngine.join_queue(participant_b.participant_id, :EXPLORE, "en", 7, 120.0)
+
+    {:ok, _} =
+      MatchmakingEngine.join_queue(participant_a.participant_id, :EXPLORE, "en", 7, 120.0)
+
+    assert {:ok, []} = MatchmakingEngine.evaluate_pending_matches()
+    assert Repo.aggregate(Matching, :count, :match_id) == 1
+    assert map_size(queue_state()) == 2
   end
 
   defp participant_fixture do

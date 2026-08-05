@@ -3,6 +3,7 @@ defmodule StrangertalksNewWeb.ConversationChannel do
 
   alias StrangertalksNew.Conversations
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
+  alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.Reports
 
   @impl true
@@ -105,6 +106,16 @@ defmodule StrangertalksNewWeb.ConversationChannel do
 
   def handle_in("conversation:report", _params, socket) do
     {:reply, {:error, %{reason: "invalid_report_payload"}}, socket}
+  end
+
+  def handle_in("conversation:block", _params, socket) do
+    case MatchingRules.block_conversation_participant(
+           conversation_id(socket),
+           socket.assigns.participant_id
+         ) do
+      {:ok, _block} -> {:reply, {:ok, %{status: "blocked"}}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: client_reason(reason)}}, socket}
+    end
   end
 
   @impl true

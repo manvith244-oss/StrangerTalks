@@ -10,6 +10,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   alias Ecto.Multi
   alias StrangertalksNew.Conversation
   alias StrangertalksNew.Matching
+  alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.Participant
   alias StrangertalksNew.QueueEngine.QueueState
   alias StrangertalksNew.QueueEngine.Matcher
@@ -196,7 +197,8 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   defp find_viable_partner(_p1, [], _threshold), do: :no_match
 
   defp find_viable_partner(p1, [p2 | rest], threshold) do
-    if p1.door_selection == p2.door_selection do
+    if p1.door_selection == p2.door_selection and
+         not MatchingRules.check_safety_veto?(p1.participant_id, p2.participant_id) do
       # Map raw profile data points into the structured entities required by the Matcher utility
       mapped_p1 = transform_payload(p1)
       mapped_p2 = transform_payload(p2)

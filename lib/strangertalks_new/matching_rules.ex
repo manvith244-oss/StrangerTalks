@@ -6,6 +6,7 @@ defmodule StrangertalksNew.MatchingRules do
   """
   import Ecto.Query, warn: false
   alias StrangertalksNew.Repo
+  alias StrangertalksNew.Conversation
   alias StrangertalksNew.MatchingRules.{Participant, QueueState, BoundaryBlock}
 
   def create_participant(attrs \\ %{}) do
@@ -55,5 +56,24 @@ defmodule StrangertalksNew.MatchingRules do
         select: count(b.blocker_user_id)
 
     Repo.one(query) > 0
+  end
+
+  def block_conversation_participant(conversation_id, blocker_id) do
+    case Repo.get(Conversation, conversation_id) do
+      nil ->
+        {:error, :conversation_not_found}
+
+      conversation ->
+        if blocker_id in [conversation.participant_a_id, conversation.participant_b_id] do
+          blocked_id =
+            if blocker_id == conversation.participant_a_id,
+              do: conversation.participant_b_id,
+              else: conversation.participant_a_id
+
+          enforce_block(blocker_id, blocked_id, "CONVERSATION")
+        else
+          {:error, :not_conversation_member}
+        end
+    end
   end
 end
