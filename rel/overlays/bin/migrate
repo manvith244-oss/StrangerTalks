@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+cd -P -- "$(dirname -- "$0")"
+exec ./strangertalks_new eval StrangertalksNew.Release.migrate

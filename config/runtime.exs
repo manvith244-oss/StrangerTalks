@@ -53,7 +53,23 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  host =
+    System.get_env("PHX_HOST") ||
+      raise """
+      environment variable PHX_HOST is missing.
+      Set it to the public hostname for this release.
+      """
+
+  log_level =
+    case System.get_env("LOG_LEVEL", "info") do
+      "debug" -> :debug
+      "info" -> :info
+      "warning" -> :warning
+      "error" -> :error
+      invalid -> raise "environment variable LOG_LEVEL has unsupported value: #{invalid}"
+    end
+
+  config :logger, level: log_level
 
   config :strangertalks_new, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 

@@ -1098,6 +1098,41 @@ consent, pending SafetyReview creation, rematch blocking, and zero PostgreSQL Me
 
 # Phase 9 — Deployment and Operations
 
+## Local single-node deployment artifacts
+
+* 🛠 Production release configuration and environment validation implemented. A local
+  `MIX_ENV=prod mix release --overwrite` completed successfully on Elixir 1.17.3 / OTP 27.
+* 🛠 `Dockerfile` and `.dockerignore` implement a non-root, multi-stage release image. Docker is not
+  installed in the verification environment, so an actual image build remains unverified.
+* ✅ `GET /health/live` proves the endpoint responds; `GET /health/ready` checks PostgreSQL with a
+  generic response. Verified by `HealthControllerTest`.
+* ⬜ Actual hosting, domain, SSL certificate, production PostgreSQL, monitoring vendor, backup
+  storage, deployment pipeline, and production deployment remain open.
+
+Required production variables are `DATABASE_URL`, `SECRET_KEY_BASE`, and `PHX_HOST`; `PORT`,
+`POOL_SIZE`, and `LOG_LEVEL` are environment-driven optional settings with explicit defaults or
+allowed values. Secrets are not committed.
+
+Run migrations from a built release with:
+
+```text
+bin/migrate
+```
+
+Deployment requires an operator-owned PostgreSQL backup and restore procedure before migration or
+upgrade. This repository does not provide or claim remote backup storage. Restore must be rehearsed
+against a separate database before deployment.
+
+Free-tier limits are provider-specific and must be checked before choosing hosting. The deployment
+must budget for BEAM/release memory, PostgreSQL connection-pool memory, database storage, logs, and
+temporary in-memory ConversationServer buffers (up to 262,144 content bytes and 50 pending messages
+per active ConversationServer). Exceeding a provider's memory or storage allowance may terminate
+the single instance or reject writes; no automatic horizontal scaling is implemented.
+
+This architecture is deliberately single-node: queue state, typing, presence, delivery buffers,
+acknowledgement metadata, and reconnection timers live in one BEAM instance. A restart loses that
+temporary state, and multiple application nodes would not share or lock it safely.
+
 The following retention and cleanup policies must be defined before deployment; acknowledging the
 work here is not a completed design:
 

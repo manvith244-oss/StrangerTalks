@@ -7,6 +7,8 @@ defmodule StrangertalksNewWeb.Router do
 
   scope "/", StrangertalksNewWeb do
     get "/", PageController, :home
+    get "/health/live", HealthController, :live
+    get "/health/ready", HealthController, :ready
   end
 
   scope "/api", StrangertalksNewWeb do
