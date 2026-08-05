@@ -1,5 +1,9 @@
 # StrangerTalks Engineering Progress
 
+> **Governing completion rule:** An item may only be marked ✅ when it is backed by a
+> specific, named test or recorded command output. Code existing or compiling by itself is
+> never sufficient evidence of completion.
+>
 > This document records the completion status of each engineering vertical slice.
 > A slice is considered complete only after:
 > 1. Migration (if applicable)
@@ -112,7 +116,8 @@ July 2026
 
 ## Tests
 
-Status: 4 / 4 Passed
+Status: Passed in `MatchmakingEngineTest`; broader verification: `mix precommit` — 73 tests,
+0 failures.
 
 Verified:
 
@@ -120,6 +125,11 @@ Verified:
 * Required field validation
 * Enum validation
 * Nullable UUID validation
+* Queue Engine compatibility matching persists Match and pending Conversation records atomically.
+* Door mismatch and missing-participant queue handling are covered.
+* Compatibility scores are normalized from 0–100 to 0.0–1.0 and tagged `compatibility_v1`.
+* `MatchmakingEngineTest` verifies that Match and Conversation persistence occurs in one
+  `Ecto.Multi` transaction before queue removal.
 
 ## Runtime Verification
 
@@ -160,7 +170,8 @@ July 2026
 
 ## Tests
 
-Status: Passed
+Status: Passed in `MatchmakingEngineTest`; broader verification: `mix precommit` — 73 tests,
+0 failures.
 
 Verified:
 
@@ -169,6 +180,7 @@ Verified:
 * Enum validation
 * Nullable UUID validation
 * Reserved UUID placeholder validation
+* Matchmaking creates a database-backed Conversation in `PENDING` status after a compatible pair is found.
 
 ## Runtime Verification
 
@@ -178,6 +190,7 @@ Verified in iex against the real PostgreSQL database:
 * Created a real Match record.
 * Created a real Conversation linked to the Match and both Participants.
 * Successfully inserted all canonical Conversation fields.
+* This verification does not include WebSocket/channel integration or message delivery.
 * Successfully retrieved the Conversation by ID.
 * Foreign key constraints verified.
 * Database CHECK constraints verified.
@@ -763,6 +776,42 @@ July 2026
 
 # Current Progress
 
+## Participant Identity and Security
+
+Status: ✅ **Identity-to-match path built and verified by `mix precommit`: 73 tests, 0 failures**
+
+What exists today:
+
+* ✅ `ParticipantControllerTest`: `POST /api/participants` creates an anonymous Participant and
+  returns only its UUID and a signed `Phoenix.Token`.
+* ✅ `ParticipantChannelTest`: socket connection verifies the signed token, confirms that the
+  Participant still exists in PostgreSQL, and assigns the verified participant UUID.
+* ✅ `ParticipantChannelTest`: participant-bound topics reject a socket attempting to join a
+  different participant's topic.
+* ✅ `ParticipantChannelTest`: a verified participant can enter the queue, compatible participants
+  persist one Match and Conversation, and both receive the limited match notification.
+
+This is signed-token **identification, not authentication**. There is no account, password, device
+proof, or recovery mechanism.
+
+Open items:
+
+* ⬜ Rate limiting for `POST /api/participants`.
+* ⬜ A defined multi-tab/session policy.
+* ⬜ Token refresh and rotation. Neither exists today.
+
+## Product-Capability Milestone — Phase 3 / Phase 5
+
+Real client → verified identity → queue → match → conversation → completion/cleanup.
+
+* ✅ **Identity → match**, backed by `ParticipantControllerTest`, `ParticipantChannelTest`, and the
+  recorded `mix precommit` result of 73 tests, 0 failures.
+* ⬜ **Conversation → completion/cleanup** through a real client.
+
+Backend logic working internally is not the same as a usable product capability. A capability is
+usable only when a real client can reach the full path and that path is tested end-to-end. This
+milestone therefore cross-references Phase 3 backend services and Phase 5 client integration.
+
 | Vertical Slice | Status |
 | --- | --- |
 | Participant | ✅ Complete |
@@ -800,6 +849,194 @@ July 2026
 | ↳ *Relationship Creation* | ⬜ Pending |
 | ↳ *Conversation Completion Flow* | ⬜ Pending |
 
+## Safety
+
+* ⬜ User-controlled evidence submission: a reporting user deliberately chooses the messages and
+  metadata to upload; ordinary conversations must not be retained secretly “just in case.”
+
+---
+
+# Phase 4 — AI & Intelligence
+
+* ⬜ Conversation-content learning is opt-in only.
+* ⬜ Any opted-in content must be minimized and separated from participant identity.
+* ⬜ Prefer anonymous aggregated operational signals over raw private messages.
+
+---
+
+# Phase 5 — Real Client Integration
+
+See **Product-Capability Milestone — Phase 3 / Phase 5** above.
+
+* ✅ Verified identity → queue → persisted Match and Conversation → match notification, backed by
+  `ParticipantControllerTest` and `ParticipantChannelTest`.
+* ⬜ Conversation use → completion → cleanup through a real client.
+
+---
+
+# Phase 6 — Frontend
+
+* ⬜ Store user-owned data primarily in IndexedDB rather than `localStorage`.
+* ⬜ Let users view and delete their local data.
+* ⬜ Export an encrypted local backup file.
+* ⬜ Import an encrypted backup on another device.
+
+---
+
+# Phase 9 — Deployment and Operations
+
+The following retention and cleanup policies must be defined before deployment; acknowledging the
+work here is not a completed design:
+
+* ⬜ Queue-entry expiry and stale-participant cleanup.
+* ⬜ Inactive `ConversationServer` process expiry and termination.
+* ⬜ Temporary delivery-buffer expiry, acknowledgement cleanup, and undelivered-message handling.
+* ⬜ Resolve the dependency vulnerabilities recorded in the Technical Debt Register.
+
+---
+
+# Data Ownership and Minimal Server Storage
+
+## Core principle
+
+StrangerTalks should permanently retain as little personal data as possible, while temporarily
+retaining the minimum data required to deliver messages reliably and keep users from feeling lost.
+This is not “zero data” — the honest framing is “minimal, purpose-limited, short-lived server data.”
+There is an important difference between permanently storing conversation history and temporarily
+holding a message so it can actually reach the other participant — e.g. if Participant A sends a
+message while Participant B has a weak connection, the server must be able to hold that message
+briefly so delivery still succeeds. A “no storage” policy that breaks basic message delivery is not
+the goal.
+
+## Server-side data policy
+
+Store only what is operationally necessary — anonymous participant ID and token-related identity
+data, temporary queue state, match/conversation identifiers needed for the live session, minimal
+safety/abuse-control records, minimal anonymous system metrics. No permanent raw chat history by
+default. Queue entries, inactive conversation processes, and other short-lived records need defined
+expiry/cleanup rules.
+
+## Temporary Message Delivery Storage
+
+The server may temporarily retain messages for delivery, retry, reconnection, and acknowledgement
+during an active conversation. The future real-time messaging design must support:
+
+* A unique client- or server-generated `message_id`.
+* Temporary server-side buffering when the receiver is disconnected or has network problems.
+* Delivery acknowledgement from the receiving client.
+* Retry until acknowledged or expired.
+* Duplicate-delivery protection via the message ID.
+* Explicit states: `sending`, `sent_to_server`, `delivered`, `failed`, and `expired`.
+* Deletion of the temporary server copy after successful acknowledgement.
+* A strict expiry period for undelivered messages. The exact period is not decided here and is a
+  required decision before message delivery is implemented.
+* Sender notification if a message could not be delivered before expiry.
+* Reconnection support within a limited grace period.
+* No use of temporary message content for analytics, AI training, or unrelated processing.
+* No silent conversion of temporary delivery storage into permanent chat history.
+
+## Two storage layers
+
+**In-memory delivery buffer** — held in the `ConversationServer` process, for short connection
+interruptions during an active conversation. Cheap, fits single-server V1. Lost if the process or
+server crashes.
+
+**Short-lived durable delivery queue** — a possible future database-backed delivery record, only if
+messages need to survive a server restart or a longer disconnect. Not designed or implemented now —
+explicit future reliability decision. If ever built, it must have: strict TTL/expiry, automatic
+deletion, no permanent-history purpose, minimal metadata, deletion after acknowledgement, and clear
+storage limits respecting the ₹0 infrastructure constraint.
+
+## User-owned data
+
+Stored primarily on-device, with IndexedDB preferred over `localStorage`:
+
+* Saved memories.
+* Conversation summaries the user chooses to keep.
+* Reconnection information.
+* Relationship history.
+* Preferences and local settings.
+* Personal notes.
+
+The user can view/delete local data, export an encrypted backup file, and import it on another
+device. Locally stored sensitive content is encrypted where practical. There is no fake “recovery”
+promise — if browser data and backup are both gone, that data, and possibly the anonymous identity,
+is genuinely gone.
+
+## Safety exception
+
+Reporting is the deliberate exception to no-permanent-storage. The user deliberately submits
+evidence; only selected messages/metadata are uploaded; evidence has a defined retention period;
+there is no secret “just in case” storage of normal conversations.
+
+## Analytics and learning
+
+No raw private messages are used for training by default. Prefer anonymous aggregated signals:
+queue time, match success, conversation duration, skips, reports, and voluntary feedback. Any use
+of conversation content for learning requires explicit opt-in, must be minimized, and must be
+separated from participant identity. Do not call something “anonymous” unless identifying metadata
+has actually been removed or protected. Optional encrypted cross-device sync is a possible future
+feature and is explicitly not part of V1.
+
+---
+
+# Technical Debt Register
+
+This is the permanent register. Future technical-debt items belong here.
+
+## `learning_version` lifecycle ownership
+
+**Status:** KNOWN — NOT FIXED
+
+**What it is:** `learning_version` exists on Match and Conversation records, but match creation leaves
+it `nil`; no implemented learning-version processing owns or assigns it yet.
+
+**Why deferred:** The field only becomes meaningful once the later learning/analytics lifecycle is
+designed and implemented. Match persistence must not invent a placeholder value.
+
+**Fixed looks like:** A named learning-processing component defines the version semantics, writes the
+field at the correct lifecycle point, and has tests proving creation, update, and compatibility
+behavior.
+
+## `ConversationRoom.muted_senders` cleanup
+
+**Status:** KNOWN — NOT FIXED
+
+**What it is:** Expired entries in `ConversationRoom`'s `muted_senders` map are never removed. A
+long-running room encountering many unique senders could accumulate an ever-growing map.
+
+**Why deferred:** A cleanup policy and its timing/behavior have not been designed or tested; the
+existing muting behavior was intentionally left unchanged.
+
+**Fixed looks like:** Expired entries are removed by a bounded cleanup policy, with tests covering
+expiry, repeated senders, and long-running rooms without changing the 50-message protection.
+
+## Dependency vulnerabilities
+
+**Status:** KNOWN — NOT ADDRESSED
+
+The locked dependency versions were reported with these applicable advisories:
+
+| Dependency | Locked version | CVE(s) | Severity |
+| --- | --- | --- | --- |
+| Bandit | 1.12.0 | CVE-2026-65623 | High |
+| Mint | 1.9.0 | CVE-2026-59249, CVE-2026-59246 | Medium |
+| Mint | 1.9.0 | CVE-2026-58229, CVE-2026-56810 | High |
+| Phoenix | 1.8.8 | CVE-2026-56812 | Medium |
+| Plug | 1.20.2 | CVE-2026-56813 | Low |
+| Plug | 1.20.2 | CVE-2026-56814 | Medium |
+| Postgrex | 0.22.2 | CVE-2026-58225 | Low |
+
+**What it is:** The dependency-resolution output identified known vulnerabilities in the versions
+locked for the HTTP server/client, web framework, request processing, and PostgreSQL driver.
+
+**Why deferred:** This roadmap-only change does not alter dependencies. Each upgrade still needs
+compatibility review and the complete verification suite.
+
+**Fixed looks like:** Upgrade or otherwise mitigate every applicable advisory, record clean
+dependency/security audit output, run the named full test suite, and complete that work before Phase
+9 deployment.
+
 ---
 
 # Test Infrastructure
@@ -818,10 +1055,10 @@ Verified:
 * Automated test execution stable across repeated runs.
 
 ```text
-60 tests, 0 failures
+73 tests, 0 failures
 
 ```
 
 ---
 
-*Last Updated: July 2026*
+*Last Updated: August 2026*
