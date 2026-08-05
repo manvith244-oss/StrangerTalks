@@ -21,6 +21,7 @@ defmodule StrangertalksNew.Report do
       values: [:NO_ACTION, :WARNING, :COOLDOWN, :PERMANENT_BAN]
 
     field :reporter_context, :string
+    field :deduplication_key, :string
 
     belongs_to :reporting_participant, StrangertalksNew.Participant,
       foreign_key: :reporting_participant_id,
@@ -52,7 +53,8 @@ defmodule StrangertalksNew.Report do
       :report_category,
       :report_status,
       :resolution_outcome,
-      :reporter_context
+      :reporter_context,
+      :deduplication_key
     ])
     |> validate_required([
       :created_at,
@@ -68,6 +70,7 @@ defmodule StrangertalksNew.Report do
     |> foreign_key_constraint(:reported_participant_id)
     |> foreign_key_constraint(:conversation_id)
     |> foreign_key_constraint(:reported_message_id)
+    |> unique_constraint(:deduplication_key)
   end
 
   defp validate_self_reporting(changeset) do

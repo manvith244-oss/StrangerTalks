@@ -5,6 +5,7 @@ defmodule StrangertalksNewWeb.ConversationChannel do
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.Reports
+  alias StrangertalksNew.Relationships
 
   @impl true
   def join("conversation:" <> conversation_id, _params, socket) do
@@ -114,6 +115,16 @@ defmodule StrangertalksNewWeb.ConversationChannel do
            socket.assigns.participant_id
          ) do
       {:ok, _block} -> {:reply, {:ok, %{status: "blocked"}}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: client_reason(reason)}}, socket}
+    end
+  end
+
+  def handle_in("relationship:consent", _params, socket) do
+    case Relationships.consent_to_relationship(
+           conversation_id(socket),
+           socket.assigns.participant_id
+         ) do
+      {:ok, result} -> {:reply, {:ok, result}, socket}
       {:error, reason} -> {:reply, {:error, %{reason: client_reason(reason)}}, socket}
     end
   end

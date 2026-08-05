@@ -3,6 +3,8 @@ defmodule StrangertalksNew.Reports do
   alias StrangertalksNew.Repo
   alias StrangertalksNew.Report
   alias StrangertalksNew.Conversation
+  alias StrangertalksNew.SafetyReview
+  alias Ecto.Multi
 
   @categories %{
     "SPAM" => :SPAM,
@@ -34,24 +36,17 @@ defmodule StrangertalksNew.Reports do
          {:ok, report_category} <- category_from_string(category) do
       reported_id = other_participant(conversation, reporter_id)
 
-      case existing_report(conversation_id, reporter_id, reported_id, report_category, evidence) do
-        %Report{} = report ->
-          {:ok, report}
+      deduplication_key =
+        deduplication_key(conversation_id, reporter_id, reported_id, category, evidence)
 
-        nil ->
-          now = DateTime.utc_now()
-
-          create_report(%{
-            created_at: now,
-            updated_at: now,
-            reporting_participant_id: reporter_id,
-            reported_participant_id: reported_id,
-            conversation_id: conversation_id,
-            report_category: report_category,
-            report_status: :SUBMITTED,
-            reporter_context: evidence
-          })
-      end
+      create_report_and_review(
+        conversation_id,
+        reporter_id,
+        reported_id,
+        report_category,
+        evidence,
+        deduplication_key
+      )
     else
       nil -> {:error, :conversation_not_found}
       false -> {:error, :not_conversation_member}
@@ -75,22 +70,57 @@ defmodule StrangertalksNew.Reports do
       else: conversation.participant_a_id
   end
 
-  defp existing_report(conversation_id, reporter_id, reported_id, category, evidence) do
-    base_query =
-      from report in Report,
-        where:
-          report.conversation_id == ^conversation_id and
-            report.reporting_participant_id == ^reporter_id and
-            report.reported_participant_id == ^reported_id and
-            report.report_category == ^category
+  defp create_report_and_review(
+         conversation_id,
+         reporter_id,
+         reported_id,
+         category,
+         evidence,
+         key
+       ) do
+    now = DateTime.utc_now()
 
-    evidence_query =
-      if is_nil(evidence) do
-        from report in base_query, where: is_nil(report.reporter_context)
-      else
-        from report in base_query, where: report.reporter_context == ^evidence
-      end
+    Multi.new()
+    |> Multi.insert(
+      :report_attempt,
+      Report.changeset(%Report{}, %{
+        created_at: now,
+        updated_at: now,
+        reporting_participant_id: reporter_id,
+        reported_participant_id: reported_id,
+        conversation_id: conversation_id,
+        report_category: category,
+        report_status: :SUBMITTED,
+        reporter_context: evidence,
+        deduplication_key: key
+      }),
+      on_conflict: :nothing,
+      conflict_target: [:deduplication_key]
+    )
+    |> Multi.run(:report, fn repo, _ -> {:ok, repo.get_by!(Report, deduplication_key: key)} end)
+    |> Multi.run(:review_attempt, fn repo, %{report: report} ->
+      SafetyReview.changeset(%SafetyReview{}, %{
+        report_id: report.report_id,
+        status: :PENDING,
+        created_at: now,
+        updated_at: now
+      })
+      |> repo.insert(on_conflict: :nothing, conflict_target: [:report_id])
+    end)
+    |> Multi.run(:review, fn repo, %{report: report} ->
+      {:ok, repo.get_by!(SafetyReview, report_id: report.report_id)}
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{report: report}} -> {:ok, report}
+      {:error, _operation, reason, _changes} -> {:error, reason}
+    end
+  end
 
-    Repo.one(from report in evidence_query, limit: 1)
+  defp deduplication_key(conversation_id, reporter_id, reported_id, category, evidence) do
+    [conversation_id, reporter_id, reported_id, category, evidence || ""]
+    |> Enum.join(<<0>>)
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
   end
 end

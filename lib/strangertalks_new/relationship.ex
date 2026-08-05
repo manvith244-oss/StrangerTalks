@@ -37,7 +37,7 @@ defmodule StrangertalksNew.Relationship do
     field :participant_b_closed, :boolean, default: false
     field :participant_a_blocked, :boolean, default: false
     field :participant_b_blocked, :boolean, default: false
-    field :learning_processed, :boolean, default: false
+    field :learning_processed, :boolean
 
     field :relationship_name, :string
     field :participant_custom_name, :string
@@ -136,6 +136,9 @@ defmodule StrangertalksNew.Relationship do
       :atmosphere_history,
       :relationship_summary
     ])
+    |> unique_constraint([:participant_a_id, :participant_b_id],
+      name: :relationships_canonical_pair_index
+    )
     |> validate_required([
       :created_at,
       :updated_at,
@@ -154,18 +157,11 @@ defmodule StrangertalksNew.Relationship do
       :participant_b_closed,
       :participant_a_blocked,
       :participant_b_blocked,
-      :learning_processed,
       :conversation_count,
       :memory_count,
       :reconnection_count,
       :shared_memory_count,
-      :private_note_count,
-      :reconnection_priority,
-      :relationship_strength_score,
-      :continuation_probability,
-      :relationship_temperature,
-      :atmosphere_history,
-      :relationship_summary
+      :private_note_count
     ])
   end
 end

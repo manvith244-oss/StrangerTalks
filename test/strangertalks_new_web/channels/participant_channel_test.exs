@@ -10,6 +10,7 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
   alias StrangertalksNew.Matching
   alias StrangertalksNew.MatchingRules.BoundaryBlock
   alias StrangertalksNew.Report
+  alias StrangertalksNew.Relationship
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.Participants
   alias StrangertalksNew.QueueEngine.QueueState
@@ -380,6 +381,42 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     assert {:ok, []} = MatchmakingEngine.evaluate_pending_matches()
     assert Repo.aggregate(Matching, :count, :match_id) == 1
     assert map_size(queue_state()) == 2
+  end
+
+  test "mutual relationship consent derives identity and notifies both participant topics safely" do
+    {conversation, participant_a, participant_b} = matched_conversation_fixture()
+    participant_socket_a = joined_socket(participant_a)
+    _participant_socket_b = joined_socket(participant_b)
+    conversation_socket_a = joined_conversation_socket(participant_a, conversation)
+    conversation_socket_b = joined_conversation_socket(participant_b, conversation)
+
+    end_ref = push(conversation_socket_a, "conversation:end", %{})
+    assert_reply end_ref, :ok, %{status: "ended"}
+    assert_push "conversation:ended", _
+    assert_push "conversation:ended", _
+
+    first_ref =
+      push(conversation_socket_a, "relationship:consent", %{
+        "participant_id" => participant_b.participant_id
+      })
+
+    assert_reply first_ref, :ok, %{status: "waiting_for_mutual_consent"}
+    refute_push "relationship:created", _, 50
+
+    second_ref =
+      push(conversation_socket_b, "relationship:consent", %{
+        "participant_id" => participant_a.participant_id
+      })
+
+    assert_reply second_ref, :ok, %{status: "created", relationship_id: relationship_id}
+    assert_push "relationship:created", payload_a
+    assert_push "relationship:created", payload_b
+    assert payload_a == %{status: "created", relationship_id: relationship_id}
+    assert payload_b == payload_a
+    refute participant_a.participant_id in Map.values(payload_a)
+    refute participant_b.participant_id in Map.values(payload_a)
+    assert Repo.aggregate(Relationship, :count) == 1
+    assert participant_socket_a.channel_pid
   end
 
   defp participant_fixture do

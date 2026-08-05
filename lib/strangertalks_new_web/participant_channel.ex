@@ -91,6 +91,17 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
     {:noreply, socket}
   end
 
+  def handle_info(
+        {:relationship_created, relationship_id, participant_a_id, participant_b_id},
+        socket
+      ) do
+    if socket.assigns.participant_id in [participant_a_id, participant_b_id] do
+      push(socket, "relationship:created", %{status: "created", relationship_id: relationship_id})
+    end
+
+    {:noreply, socket}
+  end
+
   def handle_info(_message, socket), do: {:noreply, socket}
 
   @impl true

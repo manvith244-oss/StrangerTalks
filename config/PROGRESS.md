@@ -929,7 +929,8 @@ milestone therefore cross-references Phase 3 backend services and Phase 5 client
 | Matchmaking Engine | ✅ Complete |
 | Queue Timeout Logic | ✅ Complete |
 | Conversation Lifecycle | ✅ Complete |
-| Memory Generation | ✅ Complete |
+| Memory persistence | 🧪 Schema/context verified |
+| User-owned Memory Generation | ⬜ Deferred to Frontend/AI |
 
 ---
 
@@ -944,8 +945,9 @@ milestone therefore cross-references Phase 3 backend services and Phase 5 client
 | ↳ *Queue Timeout Logic* | ✅ Complete |
 | **Conversation Lifecycle** | 🟨 **In Progress** |
 | ↳ *Conversation Lifecycle* | ✅ Complete |
-| ↳ *Memory Generation* | ✅ Complete |
-| ↳ *Relationship Creation* | ⚠ BLOCKED — DECISION REQUIRED |
+| ↳ *Memory persistence* | 🧪 VERIFIED — `MemoriesTest` |
+| ↳ *User-owned Memory Generation* | ⬜ Deferred to Frontend/AI |
+| ↳ *Relationship Creation* | ✅ VERIFIED — `RelationshipConsentSafetyReviewTest`, `ParticipantChannelTest` |
 | ↳ *Conversation Completion Flow* | ✅ VERIFIED — `ParticipantChannelTest` |
 
 ## Conversation Completion Flow
@@ -956,21 +958,14 @@ both sides. The server clears pending raw message content, persists `ENDED`,
 then sends one participant-safe completion event to active tabs. Duplicate completion requests are
 idempotent. Completion does not automatically create a Relationship, Memory, Report, or rating.
 
-## Relationship Creation Blocker
+## Relationship Creation
 
-**Status:** ⚠ BLOCKED — DECISION REQUIRED
-
-The existing `relationships` table cannot represent the locked mutual-consent flow honestly. The
-first participant's consent needs durable storage before the second consent arrives, but creating a
-Relationship at that point would violate the rule that a Relationship exists only after both people
-consent. The table has no pending-consent status, and no separate consent table exists. It also
-requires uncalculated scores and JSON summaries, which would force invented values.
-
-**Required decision:** Add a narrowly scoped relationship-consents table keyed by Conversation and
-participant, or explicitly approve a pending Relationship representation with an appropriate status.
-Whichever model is chosen must uniquely store one consent per participant, create the Relationship
-transactionally after the second consent, allow uncalculated metrics to remain `nil`, and prevent
-duplicate pair creation.
+`relationship:consent` derives identity from the verified socket. A unique Conversation/participant
+consent row records the first private consent; the second consent transactionally creates one
+canonically ordered Relationship. Database uniqueness protects both consent and unordered-pair
+identity, while unbuilt scores, learning fields, and JSON outputs remain `nil`. Abandoned and
+safety-ended Conversations are ineligible. Verified by `RelationshipConsentSafetyReviewTest` and
+`ParticipantChannelTest`.
 
 ## Safety
 
@@ -989,20 +984,13 @@ duplicate pair creation.
   not create or delete a Report or safety-evidence record. Verified by the 24-test focused command
   and `mix precommit`: 95 tests, 0 failures.
 
-## Safety Review Pipeline Blocker
+## Safety Review Pipeline
 
-**Status:** ⚠ BLOCKED — DECISION REQUIRED
-
-The existing `SafetyEvent` storage schema cannot create an honest, idempotent pending review from a
-Report. `severity_level` is required, but no approved mapping or trusted reviewer input defines it.
-Report categories and SafetyEvent categories are not the same (`THREATS`/`THREAT`, and no
-SafetyEvent equivalent for `MALICIOUS_LINKS`). SafetyEvent also has no `report_id`, so a review event
-cannot be uniquely linked to its source Report or protected from duplicate report processing.
-
-**Required decision/migration:** Define a canonical category mapping, define who assesses severity,
-and add a nullable/required-as-decided Report foreign key with a uniqueness rule appropriate for one
-pending review per Report. Until then, Reports remain `SUBMITTED`; no AI judgment, automatic ban,
-invented score, hidden message capture, or moderator workflow is claimed.
+Every new deliberate Report is transactionally paired with one `PENDING` SafetyReview. SHA-256
+deduplication and database uniqueness make identical submissions converge on one pair. Severity is
+unassessed (`nil`) until a trusted internal transition resolves the review; no SafetyEvent, block,
+ban, AI decision, or moderator interface is created automatically. Verified by
+`RelationshipConsentSafetyReviewTest`.
 
 ---
 
@@ -1221,6 +1209,14 @@ dependency/security audit output, run the named full test suite, and complete th
 ---
 
 # Error Log — Level B Delivery Slice
+
+## Safety review helper name collided with Ecto query macro
+
+**Observed:** The first Macro-slice 1 warnings-as-errors compile treated a private `update/2` helper
+as `Ecto.Query.update/2` because the context imports Ecto query macros.
+
+**Resolution:** The helper was renamed to `update_review/2`; the migration then ran successfully in
+the test environment and the focused tests passed.
 
 ## Application supervision versus legacy lifecycle tests
 
