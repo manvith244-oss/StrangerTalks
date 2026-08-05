@@ -904,7 +904,8 @@ Real client → verified identity → queue → match → conversation → compl
 
 * ✅ **Identity → match**, backed by `ParticipantControllerTest`, `ParticipantChannelTest`, and the
   recorded `mix precommit` result of 73 tests, 0 failures.
-* ⬜ **Conversation → completion/cleanup** through a real client.
+* ✅ **Conversation → completion/cleanup**, backed by the authorized `conversation:end` path in
+  `ParticipantChannelTest` and `mix precommit`: 93 tests, 0 failures.
 
 Backend logic working internally is not the same as a usable product capability. A capability is
 usable only when a real client can reach the full path and that path is tested end-to-end. This
@@ -945,7 +946,15 @@ milestone therefore cross-references Phase 3 backend services and Phase 5 client
 | ↳ *Conversation Lifecycle* | ✅ Complete |
 | ↳ *Memory Generation* | ✅ Complete |
 | ↳ *Relationship Creation* | ⬜ Pending |
-| ↳ *Conversation Completion Flow* | ⬜ Pending |
+| ↳ *Conversation Completion Flow* | ✅ VERIFIED — `ParticipantChannelTest` |
+
+## Conversation Completion Flow
+
+An authenticated member may send `conversation:end`. One participant ends the Conversation for
+both sides. The server clears pending raw message content, persists `ENDED`,
+`conversation_completed`, `NATURAL_END`, the verified initiator, and `ended_at` before stopping, and
+then sends one participant-safe completion event to active tabs. Duplicate completion requests are
+idempotent. Completion does not automatically create a Relationship, Memory, Report, or rating.
 
 ## Safety
 
@@ -1222,7 +1231,7 @@ Verified:
 * Automated test execution stable across repeated runs.
 
 ```text
-92 tests, 0 failures
+93 tests, 0 failures
 
 ```
 

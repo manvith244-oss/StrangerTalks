@@ -70,6 +70,16 @@ defmodule StrangertalksNewWeb.ConversationChannel do
     {:reply, {:error, %{reason: "invalid_message_payload"}}, socket}
   end
 
+  def handle_in("conversation:end", _params, socket) do
+    case ConversationServer.complete_conversation(
+           conversation_id(socket),
+           socket.assigns.participant_id
+         ) do
+      {:ok, result} -> {:reply, {:ok, result}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: client_reason(reason)}}, socket}
+    end
+  end
+
   @impl true
   def handle_info({:conversation_message, payload}, socket) do
     push(socket, "message:new", payload)
@@ -78,6 +88,11 @@ defmodule StrangertalksNewWeb.ConversationChannel do
 
   def handle_info({:conversation_message_status, payload}, socket) do
     push(socket, "message:status", payload)
+    {:noreply, socket}
+  end
+
+  def handle_info({:conversation_completed, payload}, socket) do
+    push(socket, "conversation:ended", payload)
     {:noreply, socket}
   end
 
@@ -103,5 +118,7 @@ defmodule StrangertalksNewWeb.ConversationChannel do
   defp client_reason(:not_message_recipient), do: "not_message_recipient"
   defp client_reason(:unknown_message), do: "unknown_message"
   defp client_reason(:conversation_terminating), do: "conversation_terminating"
+  defp client_reason(:not_conversation_member), do: "not_conversation_member"
+  defp client_reason(:conversation_inactive), do: "conversation_inactive"
   defp client_reason(_reason), do: "conversation_unavailable"
 end

@@ -77,6 +77,16 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     safe_call(conversation_id, {:acknowledge_message, participant_id, message_id})
   end
 
+  def complete_conversation(conversation_id, participant_id) do
+    case safe_call(conversation_id, {:complete_conversation, participant_id}) do
+      {:error, :conversation_unavailable} ->
+        completed_conversation_result(conversation_id, participant_id)
+
+      result ->
+        result
+    end
+  end
+
   def trigger_safety_terminate(conversation_id) do
     with {:ok, pid} <- lookup(conversation_id) do
       GenServer.cast(pid, :safety_intervention)
@@ -178,6 +188,39 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
 
   def handle_call(:inspect_state, _from, state) do
     {:reply, {:ok, state}, state}
+  end
+
+  def handle_call({:complete_conversation, participant_id}, _from, state) do
+    cond do
+      not member?(state, participant_id) ->
+        {:reply, {:error, :not_conversation_member}, state}
+
+      terminating?(state) ->
+        {:reply, terminal_completion_result(state), state}
+
+      active_conversation?(state) ->
+        state =
+          prepare_terminal_transition(
+            state,
+            :ENDED,
+            "participant_completed",
+            "PARTICIPANT_COMPLETED",
+            %{
+              conversation_completed: true,
+              ending_type: :NATURAL_END,
+              ending_initiator: participant_id
+            },
+            %{status: "ended", reason: "participant_completed"}
+          )
+
+        case persist_terminal_intent(state) do
+          {:ok, state} -> {:stop, :normal, {:ok, %{status: "ended"}}, state}
+          {:error, state} -> {:reply, {:ok, %{status: "ending"}}, state}
+        end
+
+      true ->
+        {:reply, {:error, :conversation_inactive}, state}
+    end
   end
 
   defp acknowledge_pending_message(state, participant_id, message_id) do
@@ -419,38 +462,64 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   end
 
   defp begin_terminal_transition(state, target_status, failure_reason, event_reason) do
+    state =
+      prepare_terminal_transition(state, target_status, failure_reason, event_reason, %{}, nil)
+
+    case persist_terminal_intent(state) do
+      {:ok, state} -> {:stop, :normal, state}
+      {:error, state} -> {:noreply, state}
+    end
+  end
+
+  defp prepare_terminal_transition(
+         state,
+         target_status,
+         failure_reason,
+         event_reason,
+         persistence_attrs,
+         client_payload
+       ) do
     ended_at = DateTime.utc_now()
 
-    state =
-      state
-      |> fail_all_pending(failure_reason)
-      |> Map.put(:lifecycle_status, :TERMINATING)
-      |> Map.put(:terminal_intent, %{
-        target_status: target_status,
-        ended_at: ended_at,
-        termination_reason: event_reason,
-        retry_ref: nil,
-        retry_token: nil
-      })
-
-    attempt_terminal_persistence(state)
+    state
+    |> fail_all_pending(failure_reason)
+    |> Map.put(:lifecycle_status, :TERMINATING)
+    |> Map.put(:terminal_intent, %{
+      target_status: target_status,
+      ended_at: ended_at,
+      termination_reason: event_reason,
+      persistence_attrs: persistence_attrs,
+      client_payload: client_payload,
+      retry_ref: nil,
+      retry_token: nil
+    })
   end
 
   defp attempt_terminal_persistence(state) do
+    case persist_terminal_intent(state) do
+      {:ok, state} -> {:stop, :normal, state}
+      {:error, state} -> {:noreply, state}
+    end
+  end
+
+  defp persist_terminal_intent(state) do
     intent = state.terminal_intent
 
     case persist_conversation_status(
            state.conversation,
            intent.target_status,
-           intent.ended_at
+           intent.ended_at,
+           intent.persistence_attrs
          ) do
       {:ok, conversation} ->
+        notify_terminal_clients(state, intent.client_payload)
+
         dispatch_bus_payload("conversation.ended", %{
           "conversation_id" => conversation.conversation_id,
           "reason" => intent.termination_reason
         })
 
-        {:stop, :normal,
+        {:ok,
          %{
            state
            | conversation: conversation,
@@ -465,7 +534,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
           database_error: inspect(reason)
         )
 
-        {:noreply, schedule_terminal_persistence_retry(state)}
+        {:error, schedule_terminal_persistence_retry(state)}
     end
   end
 
@@ -639,9 +708,10 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     end
   end
 
-  defp persist_conversation_status(conversation, status, ended_at) do
+  defp persist_conversation_status(conversation, status, ended_at, extra_attrs \\ %{}) do
     attrs = %{conversation_status: status}
     attrs = if ended_at, do: Map.put(attrs, :ended_at, ended_at), else: attrs
+    attrs = Map.merge(attrs, extra_attrs)
 
     try do
       conversation
@@ -669,6 +739,36 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   end
 
   defp terminating?(state), do: state.lifecycle_status == :TERMINATING
+
+  defp terminal_completion_result(%{
+         terminal_intent: %{termination_reason: "PARTICIPANT_COMPLETED"}
+       }),
+       do: {:ok, %{status: "ending"}}
+
+  defp terminal_completion_result(_state), do: {:error, :conversation_terminating}
+
+  defp completed_conversation_result(conversation_id, participant_id) do
+    case Repo.get(Conversation, conversation_id) do
+      %Conversation{conversation_status: :ENDED, conversation_completed: true} = conversation ->
+        if participant_id in [conversation.participant_a_id, conversation.participant_b_id] do
+          {:ok, %{status: "ended"}}
+        else
+          {:error, :not_conversation_member}
+        end
+
+      _conversation ->
+        {:error, :conversation_unavailable}
+    end
+  end
+
+  defp notify_terminal_clients(_state, nil), do: :ok
+
+  defp notify_terminal_clients(state, payload) do
+    state.participant_channels
+    |> Map.values()
+    |> Enum.flat_map(&MapSet.to_list/1)
+    |> Enum.each(&send(&1, {:conversation_completed, payload}))
+  end
 
   defp connected?(state, participant_id) do
     case Map.fetch(state.participant_channels, participant_id) do

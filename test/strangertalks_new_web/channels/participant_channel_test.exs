@@ -267,6 +267,51 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     assert_reply ref, :error, %{reason: "invalid_message_id"}
   end
 
+  test "authorized conversation completion ends both sides idempotently and clears pending content" do
+    {conversation, participant_a, participant_b} = matched_conversation_fixture()
+    socket_a = joined_conversation_socket(participant_a, conversation)
+    _socket_b = joined_conversation_socket(participant_b, conversation)
+    message_id = Ecto.UUID.generate()
+
+    send_ref =
+      push(socket_a, "message:send", %{"message_id" => message_id, "content" => "pending"})
+
+    assert_reply send_ref, :ok, %{message_id: ^message_id}
+    assert_push "message:new", %{message_id: ^message_id}
+
+    end_ref =
+      push(socket_a, "conversation:end", %{"participant_id" => participant_b.participant_id})
+
+    assert_reply end_ref, :ok, %{status: "ended"}
+
+    assert_push "conversation:ended", payload_a
+    assert_push "conversation:ended", payload_b
+    assert payload_a == %{status: "ended", reason: "participant_completed"}
+    assert payload_b == payload_a
+    refute participant_a.participant_id in Map.values(payload_a)
+    refute participant_b.participant_id in Map.values(payload_a)
+
+    persisted = Repo.get!(Conversation, conversation.conversation_id)
+    assert persisted.conversation_status == :ENDED
+    assert persisted.conversation_completed == true
+    assert persisted.ending_type == :NATURAL_END
+    assert persisted.ending_initiator == participant_a.participant_id
+    assert persisted.ended_at
+
+    duplicate_ref = push(socket_a, "conversation:end", %{})
+    assert_reply duplicate_ref, :ok, %{status: "ended"}
+
+    rejected_send_ref =
+      push(socket_a, "message:send", %{
+        "message_id" => Ecto.UUID.generate(),
+        "content" => "too late"
+      })
+
+    assert_reply rejected_send_ref, :error, %{reason: "conversation_unavailable"}
+    assert Repo.aggregate(Message, :count, :message_id) == 0
+    assert {:error, :not_started} = ConversationServer.lookup(conversation.conversation_id)
+  end
+
   defp participant_fixture do
     {:ok, participant} = Participants.create_participant(%{})
     participant
