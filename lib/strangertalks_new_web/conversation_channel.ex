@@ -3,6 +3,7 @@ defmodule StrangertalksNewWeb.ConversationChannel do
 
   alias StrangertalksNew.Conversations
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
+  alias StrangertalksNew.Reports
 
   @impl true
   def join("conversation:" <> conversation_id, _params, socket) do
@@ -80,6 +81,32 @@ defmodule StrangertalksNewWeb.ConversationChannel do
     end
   end
 
+  def handle_in(
+        "conversation:report",
+        %{"category" => category} = params,
+        socket
+      )
+      when is_binary(category) do
+    evidence = Map.get(params, "evidence")
+
+    case Reports.submit_conversation_report(
+           conversation_id(socket),
+           socket.assigns.participant_id,
+           category,
+           evidence
+         ) do
+      {:ok, report} ->
+        {:reply, {:ok, %{report_id: report.report_id, status: "submitted"}}, socket}
+
+      {:error, reason} ->
+        {:reply, {:error, %{reason: client_reason(reason)}}, socket}
+    end
+  end
+
+  def handle_in("conversation:report", _params, socket) do
+    {:reply, {:error, %{reason: "invalid_report_payload"}}, socket}
+  end
+
   @impl true
   def handle_info({:conversation_message, payload}, socket) do
     push(socket, "message:new", payload)
@@ -120,5 +147,7 @@ defmodule StrangertalksNewWeb.ConversationChannel do
   defp client_reason(:conversation_terminating), do: "conversation_terminating"
   defp client_reason(:not_conversation_member), do: "not_conversation_member"
   defp client_reason(:conversation_inactive), do: "conversation_inactive"
+  defp client_reason(:invalid_report_category), do: "invalid_report_category"
+  defp client_reason(:invalid_report_payload), do: "invalid_report_payload"
   defp client_reason(_reason), do: "conversation_unavailable"
 end

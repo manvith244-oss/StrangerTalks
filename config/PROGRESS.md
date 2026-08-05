@@ -974,8 +974,14 @@ duplicate pair creation.
 
 ## Safety
 
-* ⬜ User-controlled evidence submission: a reporting user deliberately chooses the messages and
-  metadata to upload; ordinary conversations must not be retained secretly “just in case.”
+* ✅ VERIFIED — `ParticipantChannelTest`: a verified Conversation member can deliberately submit a
+  canonical report category and optional evidence text. Reporter and target identities are derived
+  from the signed socket and persisted Conversation; payload IDs cannot override them. Identical
+  submissions are idempotent. No normal message buffer or Conversation history is stored. Verified
+  by the 19-test focused command and `mix precommit`: 94 tests, 0 failures.
+* 🧪 PARTIALLY VERIFIED: Report creation is client-reachable, but automatic SafetyEvent creation is
+  intentionally absent because Report and SafetyEvent category vocabularies differ and SafetyEvent
+  requires an unassessed severity. Mapping and severity policy require an explicit decision.
 
 ---
 
@@ -1247,7 +1253,7 @@ Verified:
 * Automated test execution stable across repeated runs.
 
 ```text
-93 tests, 0 failures
+94 tests, 0 failures
 
 ```
 

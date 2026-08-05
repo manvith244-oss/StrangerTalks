@@ -8,6 +8,7 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNew.Message
   alias StrangertalksNew.Matching
+  alias StrangertalksNew.Report
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.Participants
   alias StrangertalksNew.QueueEngine.QueueState
@@ -310,6 +311,40 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     assert_reply rejected_send_ref, :error, %{reason: "conversation_unavailable"}
     assert Repo.aggregate(Message, :count, :message_id) == 0
     assert {:error, :not_started} = ConversationServer.lookup(conversation.conversation_id)
+  end
+
+  test "verified member deliberately reports the other participant with only submitted evidence" do
+    {conversation, participant_a, participant_b} = matched_conversation_fixture()
+    socket = joined_conversation_socket(participant_a, conversation)
+
+    payload = %{
+      "category" => "HARASSMENT",
+      "evidence" => "The exact text I chose to submit.",
+      "reporting_participant_id" => participant_b.participant_id,
+      "reported_participant_id" => participant_a.participant_id,
+      "conversation_history" => ["must", "not", "be", "stored"]
+    }
+
+    ref = push(socket, "conversation:report", payload)
+    assert_reply ref, :ok, %{report_id: report_id, status: "submitted"}
+
+    report = Repo.get!(Report, report_id)
+    assert report.reporting_participant_id == participant_a.participant_id
+    assert report.reported_participant_id == participant_b.participant_id
+    assert report.conversation_id == conversation.conversation_id
+    assert report.report_category == :HARASSMENT
+    assert report.report_status == :SUBMITTED
+    assert report.reporter_context == "The exact text I chose to submit."
+    assert is_nil(report.reported_message_id)
+    assert Repo.aggregate(Message, :count, :message_id) == 0
+
+    duplicate_ref = push(socket, "conversation:report", payload)
+    assert_reply duplicate_ref, :ok, %{report_id: ^report_id, status: "submitted"}
+    assert Repo.aggregate(Report, :count, :report_id) == 1
+
+    invalid_ref = push(socket, "conversation:report", %{"category" => "NOT_REAL"})
+    assert_reply invalid_ref, :error, %{reason: "invalid_report_category"}
+    assert Repo.aggregate(Report, :count, :report_id) == 1
   end
 
   defp participant_fixture do
