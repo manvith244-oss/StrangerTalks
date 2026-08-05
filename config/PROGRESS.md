@@ -1044,8 +1044,8 @@ Only labels are displayed and only canonical values enter `queue:join`; the matc
 backend-value comparison. `door_mapping_test.mjs` proves all four mappings and rejects unmapped
 labels.
 
-* 🧪 Responsive plain HTML/CSS/JavaScript screens implemented for landing, Door selection, queue,
-  match, Conversation, completion, local Memory Space, Relationships, and privacy settings.
+* 🧪 Responsive plain HTML/CSS/JavaScript screens implemented for Talk/Door selection, queue,
+  match, Conversation, completion, Chats, historical local copies, Memory Space, Bonds, and You.
 * 🧪 Anonymous bootstrap, signed socket connection, queue/match/conversation/message actions,
   typing, completion, report, block, and relationship consent are wired to the verified channels.
 * ✅ Browser queue entry sends only the canonical `door_type`; `ParticipantChannelTest`,
@@ -1065,6 +1065,36 @@ labels.
   Verified by `local_data_test.mjs`: encryption round trip/wrong-passphrase rejection, validation,
   and deterministic merge behavior.
 * ⬜ Cloud synchronization is deliberately not implemented.
+
+## Current Slice Specification — Explicit local Conversation retention
+
+Displayed messages are cached in IndexedDB during an active Conversation under a
+`local_conversation` whose status is `temporary`; temporary does not mean retained. When the
+Conversation ends, no choice is made automatically. The user must choose exactly one outcome:
+
+* **Keep this Conversation:** retain its `local_message` records, mark it `kept`, and list it under
+  Chats → Kept on this device.
+* **Save only a summary:** require and persist the summary before deleting transcript records, mark
+  it `summary_only`, and omit it from kept Chats.
+* **Let it fade:** delete transcript and associated summary, mark it `faded`, preserve separately
+  created Memories, and return to Talk.
+
+Historical copies have no composer, typing indicator, or presence state. They support local Memory
+creation, summary editing, deletion, and return to Chats. Deleting kept history never silently
+deletes separate Memories; associated summaries require a separate confirmation. Guest copy states:
+“Saved only on this device unless you export an encrypted backup.”
+
+Talk, Chats, Bonds, and You are the four top-level destinations. Talk opens Door selection directly.
+Active Chats contain only connected, reconnecting, or recovery-window Conversations; kept Chats
+contain only `kept` records. Each Conversation receives a deterministic, non-UUID-visible abstract
+signature seed rendered only as a restrained non-circular ribbon, and a linked Bond reuses it when
+that linkage is locally known.
+
+Verified by 13 passing Node tests, including pure behavior in `local_data_test.mjs`: temporary caching without promotion, Keep,
+summary-only deletion ordering, Fade, kept-only listing, delete-one/delete-all boundaries,
+Memory preservation, and stable/distinct signature seeds. `PageControllerTest` verifies the privacy
+copy, four-tab navigation, and absence of live controls from historical markup. Automated browser
+end-to-end coverage remains open.
 
 ---
 
@@ -1409,7 +1439,7 @@ Verified:
 * Automated test execution stable across repeated runs.
 
 ```text
-110 tests, 0 failures
+111 tests, 0 failures
 
 ```
 

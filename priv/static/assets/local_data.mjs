@@ -2,6 +2,91 @@ const DB_NAME = "strangertalks-local-v1"
 const STORE = "records"
 const BACKUP_VERSION = 1
 
+export function signatureSeedFor(conversationId) {
+  let hash = 2166136261
+  for (const character of conversationId) {
+    hash ^= character.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `sig-${(hash >>> 0).toString(16).padStart(8, "0")}`
+}
+
+export function temporaryConversation({conversation_id, door_type, display_door, started_at}) {
+  return {
+    id: `conversation:${conversation_id}`,
+    type: "local_conversation",
+    value: {
+      conversation_id,
+      door_type,
+      display_door,
+      abstract_signature_seed: signatureSeedFor(conversation_id),
+      status: "temporary",
+      connection_state: "connected",
+      started_at,
+      ended_at: null,
+      summary_id: null
+    },
+    updated_at: started_at
+  }
+}
+
+export function localMessage({conversation_id, message_id, content, mine, delivery_status, sent_at}) {
+  return {
+    id: `message:${conversation_id}:${message_id}`,
+    type: "local_message",
+    value: {conversation_id, message_id, content, mine, delivery_status, sent_at},
+    updated_at: sent_at
+  }
+}
+
+export function chooseConversationRetention(records, conversationId, choice, {summaryText, now} = {}) {
+  const timestamp = now || new Date().toISOString()
+  const conversationIdKey = `conversation:${conversationId}`
+  const conversation = records.find(({id}) => id === conversationIdKey)
+  if (!conversation) throw new Error("conversation_not_found")
+  if (!new Set(["kept", "summary_only", "faded"]).has(choice)) throw new Error("invalid_retention_choice")
+  if (choice === "summary_only" && !summaryText?.trim()) throw new Error("summary_required")
+
+  const summaryId = `summary:${conversationId}`
+  let next = records.filter((record) => record.id !== conversationIdKey)
+  if (choice !== "kept") next = next.filter((record) => !(record.type === "local_message" && record.value.conversation_id === conversationId))
+  if (choice === "faded") next = next.filter(({id}) => id !== summaryId)
+  if (choice === "summary_only") {
+    next = next.filter(({id}) => id !== summaryId)
+    next.push({id: summaryId, type: "summary", value: {conversation_id: conversationId, text: summaryText.trim()}, updated_at: timestamp})
+  }
+  next.push({...conversation, value: {...conversation.value, status: choice, connection_state: "ended", ended_at: conversation.value.ended_at || timestamp, summary_id: choice === "summary_only" ? summaryId : choice === "faded" ? null : conversation.value.summary_id}, updated_at: timestamp})
+  return next
+}
+
+export function keptConversations(records) {
+  return records.filter((record) => record.type === "local_conversation" && record.value.status === "kept")
+}
+
+export function activeConversations(records) {
+  return records.filter((record) => record.type === "local_conversation" && record.value.status === "temporary" && ["connected", "reconnecting", "recovery"].includes(record.value.connection_state))
+}
+
+export function deleteKeptConversation(records, conversationId, {deleteSummary = false} = {}) {
+  const summaryId = `summary:${conversationId}`
+  return records.filter((record) => {
+    if (record.id === `conversation:${conversationId}`) return false
+    if (record.type === "local_message" && record.value.conversation_id === conversationId) return false
+    if (deleteSummary && record.id === summaryId) return false
+    return true
+  })
+}
+
+export function deleteAllKeptConversations(records, {deleteSummaries = false} = {}) {
+  const keptIds = new Set(keptConversations(records).map((record) => record.value.conversation_id))
+  return records.filter((record) => {
+    if (record.type === "local_conversation" && keptIds.has(record.value.conversation_id)) return false
+    if (record.type === "local_message" && keptIds.has(record.value.conversation_id)) return false
+    if (deleteSummaries && record.type === "summary" && keptIds.has(record.value.conversation_id)) return false
+    return true
+  })
+}
+
 export function mergeRecords(current, imported) {
   const merged = new Map(current.map((record) => [record.id, record]))
   for (const record of imported) {
@@ -43,6 +128,7 @@ export async function putRecord(record) { if (!validRecord(record)) throw new Er
 export async function deleteRecord(id) { return request("readwrite", (store) => store.delete(id)) }
 export async function clearRecords() { return request("readwrite", (store) => store.clear()) }
 export async function importRecords(imported) { const merged = mergeRecords(await listRecords(), imported); await clearRecords(); for (const record of merged) await putRecord(record); return merged }
+export async function replaceRecords(records) { await clearRecords(); for (const record of records) await putRecord(record); return records }
 
 function validRecord(record) { return record && typeof record.id === "string" && typeof record.type === "string" && !Number.isNaN(Date.parse(record.updated_at)) }
 async function deriveKey(passphrase, salt, usages) { const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]); return crypto.subtle.deriveKey({name: "PBKDF2", hash: "SHA-256", salt, iterations: 210000}, material, {name: "AES-GCM", length: 256}, false, usages) }
