@@ -15,8 +15,12 @@ defmodule StrangertalksNew.Memory do
     field :memory_type, Ecto.Enum, values: [:QUOTE, :REFLECTION, :MOMENT, :SHARED_MEMORY]
     field :door_type, Ecto.Enum, values: [:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL]
     field :visibility_type, Ecto.Enum, values: [:PRIVATE, :SHARED], default: :PRIVATE
-    field :memory_category, Ecto.Enum, values: [:ADVICE, :REFLECTION, :DISCOVERY, :COMFORT, :HUMOR, :CONNECTION, :OTHER]
-    field :deletion_reason, Ecto.Enum, values: [:PARTICIPANT_REQUEST, :RELATIONSHIP_REMOVED, :PRIVACY_REQUEST, :SYSTEM_RETENTION]
+
+    field :memory_category, Ecto.Enum,
+      values: [:ADVICE, :REFLECTION, :DISCOVERY, :COMFORT, :HUMOR, :CONNECTION, :OTHER]
+
+    field :deletion_reason, Ecto.Enum,
+      values: [:PARTICIPANT_REQUEST, :RELATIONSHIP_REMOVED, :PRIVACY_REQUEST, :SYSTEM_RETENTION]
 
     field :title, :string
     field :memory_content, :string
@@ -57,7 +61,7 @@ defmodule StrangertalksNew.Memory do
       foreign_key: :match_id,
       references: :match_id
 
-    belongs_to :source_message, StrangertalksNew.Schemas.ParticipantMessage,
+    belongs_to :source_message, StrangertalksNew.Message,
       foreign_key: :source_message_id,
       references: :message_id
   end
@@ -116,7 +120,8 @@ defmodule StrangertalksNew.Memory do
 
   defp validate_score_range(changeset) do
     validate_change(changeset, :memory_significance_score, fn :memory_significance_score, score ->
-      if Decimal.compare(score, Decimal.new("0.0")) != :lt and Decimal.compare(score, Decimal.new("1.0")) != :gt do
+      if Decimal.compare(score, Decimal.new("0.0")) != :lt and
+           Decimal.compare(score, Decimal.new("1.0")) != :gt do
         []
       else
         [memory_significance_score: "must be between 0.0 and 1.0"]
@@ -126,6 +131,7 @@ defmodule StrangertalksNew.Memory do
 
   defp put_manual_timestamps(changeset) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
     changeset
     |> put_change(:created_at, now)
     |> put_change(:updated_at, now)
