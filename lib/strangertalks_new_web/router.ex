@@ -7,6 +7,8 @@ defmodule StrangertalksNewWeb.Router do
 
   scope "/api", StrangertalksNewWeb do
     pipe_through :api
+
+    post "/participants", ParticipantController, :create
   end
 
   # Enable Swoosh mailbox preview in development
