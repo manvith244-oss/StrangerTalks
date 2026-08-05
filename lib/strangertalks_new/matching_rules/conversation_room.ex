@@ -43,7 +43,7 @@ defmodule StrangertalksNew.MatchingRules.ConversationRoom do
 
       length(state.history) >= @max_message_count ->
         # Limit hit: Trigger the 10-second mute circuit breaker (Section 1)
-        Logger.warning("Process heap buffer limit hit. Muting sender: #{sender_id}")
+        Logger.warning("Conversation message buffer limit hit. Muting sender: #{sender_id}")
         updated_mutes = Map.put(state.muted_senders, sender_id, now + @circuit_breaker_window_ms)
         {:reply, {:error, :buffer_overflow_imminent}, %{state | muted_senders: updated_mutes}}
 

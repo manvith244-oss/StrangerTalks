@@ -41,8 +41,7 @@ defmodule StrangertalksNew.MessagesTest do
         report_generated: false,
         block_generated: false,
         safety_review_required: false,
-        learning_processed: false,
-        learning_version: "v1"
+        learning_processed: false
       })
 
     {:ok, conversation} =
@@ -84,7 +83,6 @@ defmodule StrangertalksNew.MessagesTest do
         # decimal
         safety_score: Decimal.new("1.0000"),
         learning_processed: false,
-        learning_version: "v1",
         duration_seconds: 0,
         time_to_first_message_seconds: 0,
         time_to_first_reply_seconds: 0,

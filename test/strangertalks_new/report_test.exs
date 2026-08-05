@@ -43,8 +43,7 @@ defmodule StrangertalksNew.ReportTest do
         report_generated: false,
         block_generated: false,
         safety_review_required: false,
-        learning_processed: false,
-        learning_version: "v1"
+        learning_processed: false
       })
 
     {:ok, conversation} =
@@ -78,7 +77,6 @@ defmodule StrangertalksNew.ReportTest do
         safety_flagged: false,
         safety_score: "0.0000",
         learning_processed: false,
-        learning_version: "v1",
         duration_seconds: 0,
         time_to_first_message_seconds: 0,
         time_to_first_reply_seconds: 0,

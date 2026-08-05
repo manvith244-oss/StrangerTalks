@@ -39,8 +39,6 @@ defmodule StrangertalksNew.ConversationTest do
         block_generated: false,
         safety_review_required: false,
         learning_processed: false,
-        learning_version: "v1",
-        # ✅ added to fix "can't be blank"
         reconnected_later: false
       })
 
@@ -83,7 +81,6 @@ defmodule StrangertalksNew.ConversationTest do
       # decimal
       safety_score: Decimal.new("0.0000"),
       learning_processed: false,
-      learning_version: "1.0.0",
       duration_seconds: 0,
       time_to_first_message_seconds: 0,
       time_to_first_reply_seconds: 0,

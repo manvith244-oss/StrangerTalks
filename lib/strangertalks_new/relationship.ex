@@ -155,7 +155,6 @@ defmodule StrangertalksNew.Relationship do
       :participant_a_blocked,
       :participant_b_blocked,
       :learning_processed,
-      :learning_version,
       :conversation_count,
       :memory_count,
       :reconnection_count,

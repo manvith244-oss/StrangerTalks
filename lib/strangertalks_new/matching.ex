@@ -32,6 +32,7 @@ defmodule StrangertalksNew.Matching do
     field :transition_experience_id, :binary_id
 
     field :compatibility_score, :decimal
+    field :compatibility_version, :string
     field :opportunity_score, :decimal
     field :scarcity_adjustment, :decimal
     field :conversation_temperature, :decimal
@@ -76,12 +77,6 @@ defmodule StrangertalksNew.Matching do
     :participant_a_id,
     :participant_b_id,
     :compatibility_score,
-    :opportunity_score,
-    :scarcity_adjustment,
-    :conversation_temperature,
-    :mutual_participation_score,
-    :conversation_health_score,
-    :match_quality_score,
     :queue_entry_time,
     :match_found_time,
     :queue_duration_seconds,
@@ -94,12 +89,19 @@ defmodule StrangertalksNew.Matching do
     :report_generated,
     :block_generated,
     :safety_review_required,
-    :learning_processed,
-    :learning_version
+    :learning_processed
   ]
 
   @optional_fields [
     :failure_reason,
+    :compatibility_version,
+    :opportunity_score,
+    :scarcity_adjustment,
+    :conversation_temperature,
+    :mutual_participation_score,
+    :conversation_health_score,
+    :match_quality_score,
+    :learning_version,
     :queue_id,
     :atmosphere_id,
     :icebreaker_id,

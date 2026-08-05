@@ -164,7 +164,7 @@ defmodule StrangertalksNew.Queue.ParticipantServer do
         dispatch_payload("queue.waiting", %{
           "participant_id" => state.participant_id,
           "elapsed_seconds" => elapsed_seconds,
-          "active_decay_threshold" => Decimal.to_float(current_threshold),
+          "active_decay_threshold" => current_threshold,
           "ambient_queue_health" => "HEALTHY"
         })
 
@@ -218,7 +218,7 @@ defmodule StrangertalksNew.Queue.ParticipantServer do
       "participant_id" => state.participant_id,
       "relaxed_tier" => tier,
       "allowed_cross_doors" => ["EXPLORE", "SOMETHING_REAL"],
-      "new_decay_threshold" => Decimal.to_float(threshold)
+      "new_decay_threshold" => threshold
     })
   end
 

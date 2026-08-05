@@ -11,7 +11,7 @@ defmodule StrangertalksNew.Conversation do
 
     # ✅ Added :COMPLETED to allowed values
     field :conversation_status, Ecto.Enum,
-      values: [:ACTIVE, :PAUSED, :ENDED, :ABANDONED, :FAILED, :COMPLETED]
+      values: [:PENDING, :ACTIVE, :PAUSED, :ENDED, :ABANDONED, :FAILED, :COMPLETED]
 
     field :door_type, Ecto.Enum, values: [:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL]
 
@@ -83,36 +83,36 @@ defmodule StrangertalksNew.Conversation do
     :door_type,
     :message_count,
     :voice_note_count,
-    :average_response_time,
-    :participation_balance_score,
-    :message_exchange_rate,
-    :conversation_depth_score,
-    :conversation_temperature,
     :bridge_shown,
     :bridge_used,
     :bridge_ignored,
-    :bridge_effectiveness_score,
     :conversation_completed,
     :memory_created,
     :relationship_created,
     :reconnected_later,
-    :conversation_success_score,
     :memory_count,
     :relationship_created_at_end,
     :report_count,
     :block_count,
     :safety_flagged,
-    :safety_score,
     :learning_processed,
-    :learning_version,
-    :duration_seconds,
-    :time_to_first_message_seconds,
-    :time_to_first_reply_seconds,
-    :longest_silence_seconds
+    :duration_seconds
   ]
 
   @optional_fields [
     :ended_at,
+    :average_response_time,
+    :participation_balance_score,
+    :message_exchange_rate,
+    :conversation_depth_score,
+    :conversation_temperature,
+    :bridge_effectiveness_score,
+    :conversation_success_score,
+    :safety_score,
+    :time_to_first_message_seconds,
+    :time_to_first_reply_seconds,
+    :longest_silence_seconds,
+    :learning_version,
     :ending_type,
     :ending_initiator,
     :atmosphere_id,

@@ -5,8 +5,15 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   implements dynamic score-decay evaluations, and enforces safety blockades.
   """
 
+  require Logger
+
+  alias Ecto.Multi
+  alias StrangertalksNew.Conversation
+  alias StrangertalksNew.Matching
+  alias StrangertalksNew.Participant
   alias StrangertalksNew.QueueEngine.QueueState
   alias StrangertalksNew.QueueEngine.Matcher
+  alias StrangertalksNew.Repo
 
   @pubsub_topic "strangertalks:matchmaking"
   @max_wait_ceiling_seconds 90
@@ -89,6 +96,9 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   Runs the candidate evaluation pipeline. Iterates over active pools, calculates 
   linear decay thresholds, enforces safety parameters, and forms matches.
   """
+  # V1 constraint: matching is serialized in this process, so one pairing and persistence
+  # operation completes before the next begins. Concurrent or multi-worker matching will
+  # require explicit participant reservation or database-level locking.
   def evaluate_pending_matches do
     state = Agent.get(QueueState, fn state -> state end)
     participants = Map.values(state)
@@ -140,21 +150,42 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
       case find_viable_partner(p1, rest, current_threshold) do
         {:match, p2, score} ->
-          # Atomic structural eviction sequence to prevent concurrent double-matching anomalies
-          leave_queue(p1.participant_id)
-          leave_queue(p2.participant_id)
+          case persist_match_and_conversation(p1, p2, score) do
+            {:ok, match, conversation} ->
+              leave_queue(p1.participant_id)
+              leave_queue(p2.participant_id)
 
-          match_id = Ecto.UUID.generate()
+              Phoenix.PubSub.broadcast(
+                StrangertalksNew.PubSub,
+                @pubsub_topic,
+                {:match_event, :match_created, match.match_id, conversation.conversation_id,
+                 p1.participant_id, p2.participant_id, score}
+              )
 
-          Phoenix.PubSub.broadcast(
-            StrangertalksNew.PubSub,
-            @pubsub_topic,
-            {:match_event, :match_created, match_id, p1.participant_id, p2.participant_id, score}
-          )
+              remaining_pool =
+                Enum.reject(rest, fn participant ->
+                  participant.participant_id == p2.participant_id
+                end)
 
-          # Filter out the newly paired candidate from the remaining collection loop
-          remaining_pool = Enum.reject(rest, fn p -> p.participant_id == p2.participant_id end)
-          process_matching_pool(remaining_pool, [match_id | matched_acc])
+              process_matching_pool(remaining_pool, [match.match_id | matched_acc])
+
+            {:invalid_participants, missing_participant_ids} ->
+              Enum.each(missing_participant_ids, &leave_queue/1)
+
+              remaining_pool =
+                Enum.reject(rest, fn participant ->
+                  participant.participant_id in missing_participant_ids
+                end)
+
+              if p1.participant_id in missing_participant_ids do
+                process_matching_pool(remaining_pool, matched_acc)
+              else
+                process_matching_pool([p1 | remaining_pool], matched_acc)
+              end
+
+            {:error, _reason} ->
+              process_matching_pool(rest, matched_acc)
+          end
 
         :no_match ->
           process_matching_pool(rest, matched_acc)
@@ -165,16 +196,109 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   defp find_viable_partner(_p1, [], _threshold), do: :no_match
 
   defp find_viable_partner(p1, [p2 | rest], threshold) do
-    # Map raw profile data points into the structured entities required by the Matcher utility
-    mapped_p1 = transform_payload(p1)
-    mapped_p2 = transform_payload(p2)
+    if p1.door_selection == p2.door_selection do
+      # Map raw profile data points into the structured entities required by the Matcher utility
+      mapped_p1 = transform_payload(p1)
+      mapped_p2 = transform_payload(p2)
 
-    score = Matcher.compute_match_score(mapped_p1, mapped_p2)
+      score = Matcher.compute_match_score(mapped_p1, mapped_p2)
 
-    if score >= threshold do
-      {:match, p2, score}
+      if score >= threshold do
+        {:match, p2, score}
+      else
+        find_viable_partner(p1, rest, threshold)
+      end
     else
       find_viable_partner(p1, rest, threshold)
+    end
+  end
+
+  defp persist_match_and_conversation(p1, p2, score) do
+    missing_participant_ids =
+      [p1.participant_id, p2.participant_id]
+      |> Enum.reject(&Repo.get(Participant, &1))
+
+    if missing_participant_ids == [] do
+      match_found_time = DateTime.utc_now()
+      queue_entry_time = Enum.min_by([p1.queue_entry_time, p2.queue_entry_time], & &1, DateTime)
+      queue_duration_seconds = DateTime.diff(match_found_time, queue_entry_time, :second)
+
+      match_attrs = %{
+        participant_a_id: p1.participant_id,
+        participant_b_id: p2.participant_id,
+        door_type: p1.door_selection,
+        compatibility_score: score / 100,
+        compatibility_version: "compatibility_v1",
+        match_status: :CREATED,
+        match_strategy: :COMPATIBILITY,
+        queue_entry_time: queue_entry_time,
+        match_found_time: match_found_time,
+        queue_duration_seconds: queue_duration_seconds,
+        conversation_duration_seconds: 0,
+        conversation_started: false,
+        conversation_completed: false,
+        memory_created: false,
+        relationship_created: false,
+        reconnected_later: false,
+        report_generated: false,
+        block_generated: false,
+        safety_review_required: false,
+        learning_processed: false,
+        created_at: match_found_time
+      }
+
+      Multi.new()
+      |> Multi.insert(:match, Matching.changeset(%Matching{}, match_attrs))
+      |> Multi.insert(:conversation, fn %{match: match} ->
+        Conversation.changeset(%Conversation{}, %{
+          match_id: match.match_id,
+          participant_a_id: p1.participant_id,
+          participant_b_id: p2.participant_id,
+          door_type: p1.door_selection,
+          conversation_status: :PENDING,
+          bridge_shown: false,
+          bridge_used: false,
+          bridge_ignored: false,
+          conversation_completed: false,
+          memory_created: false,
+          relationship_created: false,
+          reconnected_later: false,
+          relationship_created_at_end: false,
+          safety_flagged: false,
+          learning_processed: false,
+          message_count: 0,
+          voice_note_count: 0,
+          memory_count: 0,
+          report_count: 0,
+          block_count: 0,
+          duration_seconds: 0,
+          created_at: match_found_time
+        })
+      end)
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{match: match, conversation: conversation}} ->
+          {:ok, match, conversation}
+
+        {:error, operation, reason, _changes} ->
+          Logger.error("matchmaking persistence transaction failed",
+            operation: operation,
+            participant_a_id: p1.participant_id,
+            participant_b_id: p2.participant_id,
+            reason: inspect(reason)
+          )
+
+          {:error, reason}
+      end
+    else
+      Enum.each(missing_participant_ids, fn participant_id ->
+        Logger.error("matchmaking participant record missing: #{participant_id}",
+          participant_id: participant_id,
+          context: "match_persistence"
+        )
+      end)
+
+      {:invalid_participants, missing_participant_ids}
     end
   end
 

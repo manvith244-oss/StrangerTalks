@@ -35,8 +35,7 @@ defmodule StrangertalksNew.MatchingTest do
     report_generated: false,
     block_generated: false,
     safety_review_required: false,
-    learning_processed: false,
-    learning_version: "v1"
+    learning_processed: false
   }
 
   test "changeset with valid attributes is valid" do

@@ -59,5 +59,64 @@ defmodule StrangertalksNew.Queue.ParticipantServerTest do
       assert :ok = ParticipantServer.handle_reconnect(p_id)
       assert_receive {:queue_event, :"participant.returned", %{"event" => "participant.returned"}}
     end
+
+    test "emits the initial integer decay threshold and remains alive", %{params: params} do
+      child_spec = %{
+        id: ParticipantServer,
+        start: {ParticipantServer, :start_link, [params]},
+        restart: :temporary
+      }
+
+      {:ok, pid} = start_supervised(child_spec)
+
+      send(pid, {:timeout, make_ref(), :evaluate_tick})
+
+      assert_receive {:queue_event, :"queue.waiting",
+                      %{
+                        "payload" => %{
+                          "active_decay_threshold" => 70,
+                          "elapsed_seconds" => elapsed_seconds
+                        }
+                      }}
+
+      assert elapsed_seconds <= 30
+      _ = :sys.get_state(pid)
+    end
+
+    test "emits integer waiting and relaxed thresholds after sixty seconds", %{params: params} do
+      child_spec = %{
+        id: ParticipantServer,
+        start: {ParticipantServer, :start_link, [params]},
+        restart: :temporary
+      }
+
+      {:ok, pid} = start_supervised(child_spec)
+
+      :sys.replace_state(pid, fn state ->
+        %{state | start_time_ms: state.start_time_ms - 61_000}
+      end)
+
+      send(pid, {:timeout, make_ref(), :evaluate_tick})
+
+      assert_receive {:queue_event, :"queue.waiting",
+                      %{
+                        "payload" => %{
+                          "active_decay_threshold" => 55,
+                          "elapsed_seconds" => elapsed_seconds
+                        }
+                      }}
+
+      assert elapsed_seconds >= 60
+
+      assert_receive {:queue_event, :"queue.constraints_relaxed",
+                      %{
+                        "payload" => %{
+                          "new_decay_threshold" => 55,
+                          "relaxed_tier" => 1
+                        }
+                      }}
+
+      _ = :sys.get_state(pid)
+    end
   end
 end
