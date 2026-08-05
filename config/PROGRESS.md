@@ -1052,10 +1052,16 @@ labels.
   `textContent` message insertion, and no participant UUID display are implemented.
 * ⬜ Automated browser end-to-end coverage remains open.
 
-* ⬜ Store user-owned data primarily in IndexedDB rather than `localStorage`.
-* ⬜ Let users view and delete their local data.
-* ⬜ Export an encrypted local backup file.
-* ⬜ Import an encrypted backup on another device.
+* ✅ IndexedDB stores anonymous identity, settings, rendered local history, private notes, manually
+  saved summaries, and locally known Relationships; no structured data uses `localStorage`.
+* ✅ Users can inspect local record counts, delete individual saved notes/summaries, or delete all
+  browser-owned data.
+* ✅ Browser Web Crypto exports versioned PBKDF2-SHA256/AES-GCM backups with random salt and IV;
+  passphrases are never stored and no recovery promise is made.
+* ✅ Import validates the envelope and merges by stable record ID, with newer `updated_at` winning.
+  Verified by `local_data_test.mjs`: encryption round trip/wrong-passphrase rejection, validation,
+  and deterministic merge behavior.
+* ⬜ Cloud synchronization is deliberately not implemented.
 
 ---
 
