@@ -4,6 +4,14 @@
 > specific, named test or recorded command output. Code existing or compiling by itself is
 > never sufficient evidence of completion.
 >
+> **Canonical-document consolidation:** The repository currently contains only
+> `config/PROGRESS.md` as a canonical engineering record. Current-slice specifications,
+> architecture updates, progress tracking, and technical debt are temporarily maintained as
+> clearly labelled sections in this file. Reconstructing the standalone Engineering Constitution,
+> Architecture Reference, Current Slice Specification, and Error Log is required as a dedicated
+> documentation-governance task. Their absence must not be silently treated as intentional
+> architecture.
+>
 > This document records the completion status of each engineering vertical slice.
 > A slice is considered complete only after:
 > 1. Migration (if applicable)
@@ -1010,6 +1018,23 @@ existing muting behavior was intentionally left unchanged.
 
 **Fixed looks like:** Expired entries are removed by a bounded cleanup policy, with tests covering
 expiry, repeated senders, and long-running rooms without changing the 50-message protection.
+
+## Missing standalone canonical engineering documents
+
+**Status:** KNOWN — NOT FIXED
+
+**Priority:** Complete before deployment and before another major architectural phase begins.
+
+**What it is:** Four documents listed by the Master Roadmap — the Engineering Constitution,
+Architecture Reference, Current Slice Specification, and Error Log — are absent from the repository
+and its Git history.
+
+**Why deferred:** Reconstructing them during message-delivery implementation would expand scope and
+risk invented or inconsistent canonical rules.
+
+**Fixed looks like:** Separate, version-controlled documents are created from verified existing
+policy and code evidence, cross-referenced from the Master Roadmap, with no duplicated or
+contradictory status sections.
 
 ## Dependency vulnerabilities
 
