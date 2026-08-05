@@ -1065,6 +1065,37 @@ labels.
 
 ---
 
+# Phase 8 — Integration and Quality
+
+| Quality area | Evidence-backed status |
+| --- | --- |
+| Unit Tests | ✅ Verified — named ExUnit and Node test files |
+| Schema Tests | ✅ Verified — migrations plus schema/context suites |
+| Runtime Verification | ✅ Verified — `mix precommit` |
+| Channel Testing | ✅ Verified — `ParticipantChannelTest`, `ConversationDeliveryTest` |
+| Integration Testing | ✅ Server path verified — `TextMvpIntegrationTest` |
+| Browser End-to-End Testing | ⬜ Open — no automated browser E2E exists |
+| Load Testing | ⬜ Open |
+| Performance Testing | ⬜ Open |
+| Security Testing | ⬜ Open |
+
+`TextMvpIntegrationTest` proves bootstrap identity, verified sockets, strict same-Door matching, one
+Match/Conversation, safe notifications, active Conversation, acknowledged live delivery,
+disconnect buffering, ordered replay with original IDs, normal completion, two-party Relationship
+consent, pending SafetyReview creation, rematch blocking, and zero PostgreSQL Message history.
+
+## Manual browser checklist (not automated evidence)
+
+* Open `/` at desktop and narrow mobile widths; verify focus visibility and keyboard-only use.
+* Bootstrap an anonymous identity, choose each visible Door, and confirm its documented backend
+  queue value in development tools.
+* Match two browser sessions, exchange and acknowledge messages, then reconnect one session.
+* Verify typing/presence text, completion, private consent, report, and block controls.
+* Save/delete local notes and summaries; export, decrypt/import, and merge an encrypted backup.
+* Clear all local data and verify the warning and new anonymous identity behavior.
+
+---
+
 # Phase 9 — Deployment and Operations
 
 The following retention and cleanup policies must be defined before deployment; acknowledging the
