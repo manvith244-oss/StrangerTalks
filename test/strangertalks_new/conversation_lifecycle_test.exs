@@ -1,6 +1,6 @@
 # filepath: test/strangertalks_new/conversation_lifecycle_test.exs
 defmodule StrangertalksNew.ConversationLifecycle.ConversationLifecycleTest do
-  use StrangertalksNew.DataCase, async: true
+  use StrangertalksNew.DataCase, async: false
 
   alias StrangertalksNew.ConversationLifecycle.Conversations
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
@@ -57,7 +57,6 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationLifecycleTest do
           block_generated: false,
           safety_review_required: false,
           learning_processed: false,
-          learning_version: "1",
           created_at: now
         },
         attrs
@@ -71,17 +70,40 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationLifecycleTest do
   # --- Test Lifecycle Setup ---
 
   setup do
-    start_supervised!({Registry, keys: :unique, name: StrangertalksNew.DistributedRegistry})
     Phoenix.PubSub.subscribe(StrangertalksNew.PubSub, @pubsub_topic)
-
-    c_id = Ecto.UUID.generate()
 
     p_a = participant_fixture()
     p_b = participant_fixture()
     match = match_fixture(p_a.participant_id, p_b.participant_id)
 
+    {:ok, conversation} =
+      Conversations.create_conversation(%{
+        match_id: match.match_id,
+        participant_a_id: p_a.participant_id,
+        participant_b_id: p_b.participant_id,
+        conversation_status: :ACTIVE,
+        door_type: :SOMETHING_REAL,
+        message_count: 0,
+        voice_note_count: 0,
+        bridge_shown: false,
+        bridge_used: false,
+        bridge_ignored: false,
+        conversation_completed: false,
+        memory_created: false,
+        relationship_created: false,
+        reconnected_later: false,
+        memory_count: 0,
+        relationship_created_at_end: false,
+        report_count: 0,
+        block_count: 0,
+        safety_flagged: false,
+        learning_processed: false,
+        duration_seconds: 0,
+        created_at: DateTime.utc_now()
+      })
+
     {:ok,
-     conversation_id: c_id,
+     conversation_id: conversation.conversation_id,
      participant_a: p_a.participant_id,
      participant_b: p_b.participant_id,
      match_id: match.match_id}
@@ -91,12 +113,13 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationLifecycleTest do
     test "successfully inserts conversation parameters with verified strategies", %{
       conversation_id: c_id,
       participant_a: p_id_a,
-      participant_b: p_id_b,
-      match_id: m_id
+      participant_b: p_id_b
     } do
+      second_match = match_fixture(p_id_a, p_id_b)
+
       attrs = %{
         conversation_id: c_id,
-        match_id: m_id,
+        match_id: second_match.match_id,
         participant_a_id: p_id_a,
         participant_b_id: p_id_b,
         match_strategy_used: :COMPATIBILITY,
@@ -125,7 +148,6 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationLifecycleTest do
         safety_flagged: false,
         safety_score: Decimal.new("1.0"),
         learning_processed: false,
-        learning_version: "1",
         duration_seconds: 0,
         time_to_first_message_seconds: 0,
         time_to_first_reply_seconds: 0,
@@ -143,7 +165,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationLifecycleTest do
 
   describe "In-Memory Memory Ceiling & Buffer Restrictions" do
     test "activates circuit breaker block when message payload allocation breaches 256KB constraint limit",
-         %{conversation_id: c_id} do
+         %{conversation_id: c_id, participant_a: sender_id} do
       child_spec = %{
         id: ConversationServer,
         start: {ConversationServer, :start_link, [%{conversation_id: c_id}]},
@@ -153,10 +175,14 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationLifecycleTest do
       start_supervised!(child_spec)
 
       overflow_payload = String.duplicate("A", 262_145)
-      sender_id = Ecto.UUID.generate()
 
-      assert {:error, :buffer_overflow_imminent} =
-               ConversationServer.append_message(c_id, sender_id, overflow_payload)
+      assert {:error, :message_too_large} =
+               ConversationServer.append_message(
+                 c_id,
+                 sender_id,
+                 Ecto.UUID.generate(),
+                 overflow_payload
+               )
     end
   end
 

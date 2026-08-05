@@ -5,6 +5,8 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
   @endpoint StrangertalksNewWeb.Endpoint
 
   alias StrangertalksNew.Conversation
+  alias StrangertalksNew.ConversationLifecycle.ConversationServer
+  alias StrangertalksNew.Message
   alias StrangertalksNew.Matching
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.Participants
@@ -153,6 +155,118 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
     refute queue_entry(participant.participant_id)
   end
+
+  test "conversation channel authorizes members, rejects non-members and unknown conversations" do
+    {conversation, participant_a, _participant_b} = matched_conversation_fixture()
+
+    assert {:ok, %{status: "joined", conversation_id: conversation_id}, _socket} =
+             participant_a
+             |> connected_socket()
+             |> subscribe_and_join(
+               StrangertalksNewWeb.ConversationChannel,
+               "conversation:#{conversation.conversation_id}"
+             )
+
+    assert conversation_id == conversation.conversation_id
+
+    outsider = participant_fixture()
+
+    assert {:error, %{reason: "not_conversation_member"}} =
+             outsider
+             |> connected_socket()
+             |> subscribe_and_join(
+               StrangertalksNewWeb.ConversationChannel,
+               "conversation:#{conversation.conversation_id}"
+             )
+
+    assert {:error, %{reason: "conversation_not_found"}} =
+             participant_a
+             |> connected_socket()
+             |> subscribe_and_join(
+               StrangertalksNewWeb.ConversationChannel,
+               "conversation:#{Ecto.UUID.generate()}"
+             )
+  end
+
+  test "conversation joins reuse one server, track tabs, and activate when both participants join" do
+    {conversation, participant_a, participant_b} = matched_conversation_fixture()
+    socket_a_1 = joined_conversation_socket(participant_a, conversation)
+    socket_a_2 = joined_conversation_socket(participant_a, conversation)
+    _socket_b = joined_conversation_socket(participant_b, conversation)
+
+    assert {:ok, pid} = ConversationServer.lookup(conversation.conversation_id)
+    assert {:ok, ^pid} = ConversationServer.ensure_started(conversation.conversation_id)
+    assert {:ok, state} = ConversationServer.inspect_state(conversation.conversation_id)
+    assert MapSet.size(state.participant_channels[participant_a.participant_id]) == 2
+    assert Repo.get!(Conversation, conversation.conversation_id).conversation_status == :ACTIVE
+
+    Process.flag(:trap_exit, true)
+    monitor = Process.monitor(socket_a_1.channel_pid)
+    ref = leave(socket_a_1)
+    assert_reply ref, :ok
+    assert_receive {:DOWN, ^monitor, :process, _pid, _reason}
+    _ = :sys.get_state(pid)
+    assert {:ok, state} = ConversationServer.inspect_state(conversation.conversation_id)
+    assert MapSet.size(state.participant_channels[participant_a.participant_id]) == 1
+    refute Map.has_key?(state.recovery_timers, participant_a.participant_id)
+    assert socket_a_2.channel_pid != socket_a_1.channel_pid
+  end
+
+  test "authorized channel message delivery and acknowledgement use safe payloads and no database row" do
+    {conversation, participant_a, participant_b} = matched_conversation_fixture()
+    sender_socket = joined_conversation_socket(participant_a, conversation)
+    recipient_socket = joined_conversation_socket(participant_b, conversation)
+    message_id = Ecto.UUID.generate()
+
+    ref =
+      push(sender_socket, "message:send", %{
+        "message_id" => message_id,
+        "content" => "hello",
+        "sender_id" => participant_b.participant_id,
+        "recipient_id" => participant_a.participant_id
+      })
+
+    assert_reply ref, :ok, %{message_id: ^message_id, sequence: 1, status: "sent_to_server"}
+    assert_push "message:status", %{message_id: ^message_id, status: "sent_to_server"}
+
+    assert_push "message:new", payload
+    assert payload.message_id == message_id
+    assert payload.sequence == 1
+    assert payload.content == "hello"
+    assert Map.keys(payload) |> Enum.sort() == [:content, :message_id, :sent_at, :sequence]
+    refute participant_a.participant_id in Map.values(payload)
+    refute participant_b.participant_id in Map.values(payload)
+
+    sender_ack_ref = push(sender_socket, "message:ack", %{"message_id" => message_id})
+    assert_reply sender_ack_ref, :error, %{reason: "sender_cannot_acknowledge"}
+
+    ack_ref = push(recipient_socket, "message:ack", %{"message_id" => message_id})
+    assert_reply ack_ref, :ok, %{message_id: ^message_id, status: "delivered"}
+    assert_push "message:status", %{message_id: ^message_id, status: "delivered"}
+
+    duplicate_ack_ref = push(recipient_socket, "message:ack", %{"message_id" => message_id})
+    assert_reply duplicate_ack_ref, :ok, %{message_id: ^message_id, status: "delivered"}
+    assert Repo.aggregate(Message, :count, :message_id) == 0
+
+    assert {:ok, server_state} = ConversationServer.inspect_state(conversation.conversation_id)
+    assert server_state.pending == %{}
+    assert server_state.pending_count == 0
+    assert server_state.pending_bytes == 0
+    assert Map.has_key?(server_state.completed, message_id)
+    refute Map.has_key?(server_state.completed[message_id], :content)
+  end
+
+  test "conversation channel rejects missing and malformed client message IDs" do
+    {conversation, participant_a, _participant_b} = matched_conversation_fixture()
+    socket = joined_conversation_socket(participant_a, conversation)
+
+    ref = push(socket, "message:send", %{"content" => "missing"})
+    assert_reply ref, :error, %{reason: "invalid_message_payload"}
+
+    ref = push(socket, "message:send", %{"message_id" => "bad", "content" => "malformed"})
+    assert_reply ref, :error, %{reason: "invalid_message_id"}
+  end
+
   defp participant_fixture do
     {:ok, participant} = Participants.create_participant(%{})
     participant
@@ -175,6 +289,34 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
 
     socket
   end
+
+  defp joined_conversation_socket(participant, conversation) do
+    {:ok, _, socket} =
+      participant
+      |> connected_socket()
+      |> subscribe_and_join(
+        StrangertalksNewWeb.ConversationChannel,
+        "conversation:#{conversation.conversation_id}"
+      )
+
+    socket
+  end
+
+  defp matched_conversation_fixture do
+    participant_a = participant_fixture()
+    participant_b = participant_fixture()
+
+    {:ok, _result} =
+      MatchmakingEngine.join_queue(participant_a.participant_id, :EXPLORE, "en", 7, 120.0)
+
+    {:ok, _result} =
+      MatchmakingEngine.join_queue(participant_b.participant_id, :EXPLORE, "en", 7, 120.0)
+
+    {:ok, [_match_id]} = MatchmakingEngine.evaluate_pending_matches()
+    conversation = Repo.one!(Conversation)
+    {conversation, participant_a, participant_b}
+  end
+
   defp queue_params(door_type) do
     %{
       "door_type" => door_type,

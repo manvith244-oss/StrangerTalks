@@ -12,6 +12,9 @@ defmodule StrangertalksNew.Application do
       StrangertalksNew.Repo,
       {DNSCluster, query: Application.get_env(:strangertalks_new, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: StrangertalksNew.PubSub},
+      {Registry, keys: :unique, name: StrangertalksNew.DistributedRegistry},
+      {DynamicSupervisor,
+       strategy: :one_for_one, name: StrangertalksNew.ConversationDynamicSupervisor},
 
       # Queue Engine Processes (Must boot before the Web Endpoint)
       StrangertalksNew.QueueEngine.QueueState,

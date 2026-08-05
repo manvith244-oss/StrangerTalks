@@ -5,6 +5,7 @@ defmodule StrangertalksNewWeb.UserSocket do
   alias StrangertalksNewWeb.ParticipantToken
 
   channel "participant:*", StrangertalksNewWeb.ParticipantChannel
+  channel "conversation:*", StrangertalksNewWeb.ConversationChannel
 
   @impl true
   def connect(%{"token" => token}, socket, _connect_info) when is_binary(token) do
