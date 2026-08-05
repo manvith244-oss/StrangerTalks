@@ -945,7 +945,7 @@ milestone therefore cross-references Phase 3 backend services and Phase 5 client
 | **Conversation Lifecycle** | 🟨 **In Progress** |
 | ↳ *Conversation Lifecycle* | ✅ Complete |
 | ↳ *Memory Generation* | ✅ Complete |
-| ↳ *Relationship Creation* | ⬜ Pending |
+| ↳ *Relationship Creation* | ⚠ BLOCKED — DECISION REQUIRED |
 | ↳ *Conversation Completion Flow* | ✅ VERIFIED — `ParticipantChannelTest` |
 
 ## Conversation Completion Flow
@@ -955,6 +955,22 @@ both sides. The server clears pending raw message content, persists `ENDED`,
 `conversation_completed`, `NATURAL_END`, the verified initiator, and `ended_at` before stopping, and
 then sends one participant-safe completion event to active tabs. Duplicate completion requests are
 idempotent. Completion does not automatically create a Relationship, Memory, Report, or rating.
+
+## Relationship Creation Blocker
+
+**Status:** ⚠ BLOCKED — DECISION REQUIRED
+
+The existing `relationships` table cannot represent the locked mutual-consent flow honestly. The
+first participant's consent needs durable storage before the second consent arrives, but creating a
+Relationship at that point would violate the rule that a Relationship exists only after both people
+consent. The table has no pending-consent status, and no separate consent table exists. It also
+requires uncalculated scores and JSON summaries, which would force invented values.
+
+**Required decision:** Add a narrowly scoped relationship-consents table keyed by Conversation and
+participant, or explicitly approve a pending Relationship representation with an appropriate status.
+Whichever model is chosen must uniquely store one consent per participant, create the Relationship
+transactionally after the second consent, allow uncalculated metrics to remain `nil`, and prevent
+duplicate pair creation.
 
 ## Safety
 
