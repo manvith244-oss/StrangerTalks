@@ -989,6 +989,21 @@ duplicate pair creation.
   not create or delete a Report or safety-evidence record. Verified by the 24-test focused command
   and `mix precommit`: 95 tests, 0 failures.
 
+## Safety Review Pipeline Blocker
+
+**Status:** ⚠ BLOCKED — DECISION REQUIRED
+
+The existing `SafetyEvent` storage schema cannot create an honest, idempotent pending review from a
+Report. `severity_level` is required, but no approved mapping or trusted reviewer input defines it.
+Report categories and SafetyEvent categories are not the same (`THREATS`/`THREAT`, and no
+SafetyEvent equivalent for `MALICIOUS_LINKS`). SafetyEvent also has no `report_id`, so a review event
+cannot be uniquely linked to its source Report or protected from duplicate report processing.
+
+**Required decision/migration:** Define a canonical category mapping, define who assesses severity,
+and add a nullable/required-as-decided Report foreign key with a uniqueness rule appropriate for one
+pending review per Report. Until then, Reports remain `SUBMITTED`; no AI judgment, automatic ban,
+invented score, hidden message capture, or moderator workflow is claimed.
+
 ---
 
 # Phase 4 — AI & Intelligence
