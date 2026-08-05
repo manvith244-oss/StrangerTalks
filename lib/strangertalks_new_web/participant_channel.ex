@@ -24,7 +24,7 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
 
   @impl true
   def handle_in(
-        "join_queue",
+        event,
         %{
           "door_type" => door_type,
           "language" => language,
@@ -33,7 +33,8 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
         },
         socket
       )
-      when is_binary(door_type) and is_binary(language) and is_integer(media_capability) and
+      when event in ["join_queue", "queue:join"] and is_binary(door_type) and is_binary(language) and
+             is_integer(media_capability) and
              is_float(typing_cadence) do
     participant_id = socket.assigns.participant_id
 
@@ -49,6 +50,7 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
              typing_cadence
            ) do
       send(self(), :evaluate_pending_matches)
+      push(socket, "queue:status", %{status: "queued"})
       {:reply, {:ok, %{status: "queued"}}, socket}
     else
       :same_entry ->
@@ -69,6 +71,16 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
     {:reply, {:error, %{reason: "invalid_queue_parameters"}}, socket}
   end
 
+  def handle_in("queue:join", _params, socket) do
+    {:reply, {:error, %{reason: "invalid_queue_parameters"}}, socket}
+  end
+
+  def handle_in("queue:leave", _params, socket) do
+    :ok = MatchmakingEngine.leave_queue(socket.assigns.participant_id)
+    push(socket, "queue:status", %{status: "left"})
+    {:reply, {:ok, %{status: "left"}}, socket}
+  end
+
   def handle_in("create", _params, socket) do
     {:reply, {:error, %{reason: "unsupported_event"}}, socket}
   end
@@ -86,6 +98,15 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
       ) do
     if socket.assigns.participant_id in [participant_a_id, participant_b_id] do
       push(socket, "match_found", %{conversation_id: conversation_id, status: "matched"})
+      push(socket, "queue:status", %{status: "matched"})
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:queue_event, :queue_timeout, participant_id}, socket) do
+    if socket.assigns.participant_id == participant_id do
+      push(socket, "queue:status", %{status: "timed_out"})
     end
 
     {:noreply, socket}

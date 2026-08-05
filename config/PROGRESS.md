@@ -828,6 +828,10 @@ Socket contract:
 * Server → recipient tabs: `message:new`, `%{message_id, sequence, content, sent_at}`.
 * Server → sender tabs: `message:status`, `%{message_id, status}` plus an optional safe `reason`.
 * Client → server: `message:ack`, `%{message_id}`.
+* Client → server: `typing:start` and `typing:stop`; server → recipient tabs:
+  `typing:status`, `%{typing}`. Typing expires after five seconds and is never buffered or persisted.
+* Server → Conversation channels: `conversation:presence`, `%{status}` where status is `connected`,
+  `reconnecting`, or `disconnected`. Presence describes channel connectivity only.
 
 Server-visible states are `sent_to_server`, `delivered`, `failed`, and `expired`; `sending` remains
 client-only. No payload exposes either participant UUID. The server assigns a monotonic in-memory
@@ -838,6 +842,10 @@ delivery. Pending content and completed-ID metadata are lost if ConversationServ
 instance dies. A retry with the same ID may restore an undelivered message; a crash after receipt but
 before acknowledgement may cause redelivery. Crash-surviving delivery requires a future Level C
 design.
+
+Phoenix's built-in socket heartbeat provides transport liveness. It is not a custom application
+heartbeat. Heartbeat is transport liveness, presence is channel membership, and `delivered` means
+explicit recipient-client acknowledgement; none means that a human read a message.
 
 When both participants have a channel, `PENDING` transitions idempotently to `ACTIVE`. When recovery
 expires, pending messages fail and their content is cleared before terminal persistence begins. The
@@ -1008,7 +1016,16 @@ See **Product-Capability Milestone — Phase 3 / Phase 5** above.
 
 * ✅ Verified identity → queue → persisted Match and Conversation → match notification, backed by
   `ParticipantControllerTest` and `ParticipantChannelTest`.
-* ⬜ Conversation use → completion → cleanup through a real client.
+* ✅ Phoenix Channels — `ParticipantChannelTest`.
+* ✅ Queue Synchronization — safe `queue:status`, idempotent `queue:leave`, and disconnect cleanup in
+  `ParticipantChannelTest`.
+* ✅ Match Events and Conversation Events — `ParticipantChannelTest`.
+* ✅ Typing Indicators — expiry, refresh, and stale-generation rejection in `ParticipantChannelTest`.
+* 🧪 Delivery acknowledgement — `ConversationDeliveryTest` and `ParticipantChannelTest`.
+* ✅ Disconnect Recovery and Reconnection Logic — ordered replay in `ConversationDeliveryTest`.
+* 🧪 Presence Tracking — multiple-tab connectivity in `ParticipantChannelTest`.
+* ⬜ Read receipts — deliberately deferred.
+* ⬜ Browser client integration remains open until Macro-slice 3.
 
 ---
 

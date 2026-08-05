@@ -98,6 +98,26 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     assert map_size(queue_state()) == 1
   end
 
+  test "queue colon events publish safe status and leave idempotently" do
+    participant = participant_fixture()
+    socket = joined_socket(participant)
+
+    ref = push(socket, "queue:join", queue_params("JUST_TALK"))
+    assert_reply ref, :ok, %{status: "queued"}
+    assert_push "queue:status", %{status: "queued"}
+    assert queue_entry(participant.participant_id)
+
+    for _ <- 1..2 do
+      ref = push(socket, "queue:leave", %{"participant_id" => Ecto.UUID.generate()})
+      assert_reply ref, :ok, %{status: "left"}
+      assert_push "queue:status", payload
+      assert payload == %{status: "left"}
+      refute participant.participant_id in Map.values(payload)
+    end
+
+    refute queue_entry(participant.participant_id)
+  end
+
   test "compatible participants persist one match and conversation and both receive safe notifications" do
     participant_a = participant_fixture()
     participant_b = participant_fixture()
@@ -213,6 +233,64 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     assert MapSet.size(state.participant_channels[participant_a.participant_id]) == 1
     refute Map.has_key?(state.recovery_timers, participant_a.participant_id)
     assert socket_a_2.channel_pid != socket_a_1.channel_pid
+  end
+
+  test "conversation presence tracks multiple tabs without exposing participant IDs" do
+    Process.flag(:trap_exit, true)
+    {conversation, participant_a, participant_b} = matched_conversation_fixture()
+    socket_a_1 = joined_conversation_socket(participant_a, conversation)
+    assert_push "conversation:presence", initial_presence
+    assert initial_presence.status in ["disconnected", "reconnecting"]
+    socket_a_2 = joined_conversation_socket(participant_a, conversation)
+    assert_push "conversation:presence", %{status: "reconnecting"}
+    socket_b = joined_conversation_socket(participant_b, conversation)
+
+    assert_push "conversation:presence", %{status: "connected"}
+    assert_push "conversation:presence", %{status: "connected"}
+    assert_push "conversation:presence", %{status: "connected"}
+
+    ref = leave(socket_a_1)
+    assert_reply ref, :ok
+    refute_push "conversation:presence", %{status: "reconnecting"}, 50
+
+    monitor = Process.monitor(socket_a_2.channel_pid)
+    ref = leave(socket_a_2)
+    assert_reply ref, :ok
+    assert_receive {:DOWN, ^monitor, :process, _, _}
+    assert_push "conversation:presence", payload
+    assert payload == %{status: "reconnecting"}
+    refute participant_a.participant_id in Map.values(payload)
+    refute participant_b.participant_id in Map.values(payload)
+    assert socket_b.channel_pid
+  end
+
+  test "typing is recipient-only, ephemeral, refreshable, and ignores stale expiry" do
+    {conversation, participant_a, participant_b} = matched_conversation_fixture()
+    sender = joined_conversation_socket(participant_a, conversation)
+    _recipient = joined_conversation_socket(participant_b, conversation)
+    assert {:ok, server} = ConversationServer.lookup(conversation.conversation_id)
+
+    ref = push(sender, "typing:start", %{"participant_id" => participant_b.participant_id})
+    assert_reply ref, :ok
+    assert_push "typing:status", %{typing: true}
+    refute_push "typing:status", %{typing: true}, 50
+    {:ok, first_state} = ConversationServer.inspect_state(conversation.conversation_id)
+    first_token = first_state.typing_timers[participant_a.participant_id].token
+
+    ref = push(sender, "typing:start", %{})
+    assert_reply ref, :ok
+    assert_push "typing:status", %{typing: true}
+    {:ok, second_state} = ConversationServer.inspect_state(conversation.conversation_id)
+    second_token = second_state.typing_timers[participant_a.participant_id].token
+    refute first_token == second_token
+
+    send(server, {:typing_expired, participant_a.participant_id, first_token})
+    _ = :sys.get_state(server)
+    refute_push "typing:status", %{typing: false}, 50
+
+    send(server, {:typing_expired, participant_a.participant_id, second_token})
+    assert_push "typing:status", %{typing: false}
+    assert Repo.aggregate(Message, :count, :message_id) == 0
   end
 
   test "authorized channel message delivery and acknowledgement use safe payloads and no database row" do

@@ -129,6 +129,20 @@ defmodule StrangertalksNewWeb.ConversationChannel do
     end
   end
 
+  def handle_in("typing:start", _params, socket) do
+    case ConversationServer.start_typing(conversation_id(socket), socket.assigns.participant_id) do
+      :ok -> {:reply, :ok, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: client_reason(reason)}}, socket}
+    end
+  end
+
+  def handle_in("typing:stop", _params, socket) do
+    case ConversationServer.stop_typing(conversation_id(socket), socket.assigns.participant_id) do
+      :ok -> {:reply, :ok, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: client_reason(reason)}}, socket}
+    end
+  end
+
   @impl true
   def handle_info({:conversation_message, payload}, socket) do
     push(socket, "message:new", payload)
@@ -142,6 +156,16 @@ defmodule StrangertalksNewWeb.ConversationChannel do
 
   def handle_info({:conversation_completed, payload}, socket) do
     push(socket, "conversation:ended", payload)
+    {:noreply, socket}
+  end
+
+  def handle_info({:conversation_presence, payload}, socket) do
+    push(socket, "conversation:presence", payload)
+    {:noreply, socket}
+  end
+
+  def handle_info({:typing_status, payload}, socket) do
+    push(socket, "typing:status", payload)
     {:noreply, socket}
   end
 

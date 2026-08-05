@@ -20,6 +20,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   @max_buffer_bytes 262_144
   @max_buffer_messages 50
   @max_message_bytes 16_384
+  @typing_expiry_ms 5_000
 
   def child_spec(%{conversation_id: conversation_id} = args) do
     %{
@@ -77,6 +78,12 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     safe_call(conversation_id, {:acknowledge_message, participant_id, message_id})
   end
 
+  def start_typing(conversation_id, participant_id),
+    do: safe_call(conversation_id, {:typing, :start, participant_id})
+
+  def stop_typing(conversation_id, participant_id),
+    do: safe_call(conversation_id, {:typing, :stop, participant_id})
+
   def complete_conversation(conversation_id, participant_id) do
     case safe_call(conversation_id, {:complete_conversation, participant_id}) do
       {:error, :conversation_unavailable} ->
@@ -116,6 +123,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
            participant_channels: participant_channels,
            monitor_refs: %{},
            recovery_timers: %{},
+           typing_timers: %{},
            pending: %{},
            completed: %{},
            pending_count: 0,
@@ -132,8 +140,17 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     state = prune_completed(state)
 
     if member?(state, participant_id) and active_conversation?(state) do
+      was_connected = connected?(state, participant_id)
       state = add_channel(state, participant_id, channel_pid)
       state = cancel_recovery_timer(state, participant_id)
+      state = send_presence_snapshot(state, participant_id, channel_pid)
+
+      state =
+        if was_connected,
+          do: state,
+          else:
+            notify_other(state, participant_id, {:conversation_presence, %{status: "connected"}})
+
       state = ensure_absent_participant_timers(state)
 
       case maybe_activate_conversation(state) do
@@ -152,6 +169,12 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   def handle_call({:unregister_channel, participant_id, channel_pid}, _from, state) do
     if member?(state, participant_id) do
       state = remove_channel(state, participant_id, channel_pid)
+
+      state =
+        if connected?(state, participant_id),
+          do: state,
+          else: participant_disconnected(state, participant_id)
+
       {:reply, :ok, maybe_start_recovery_timer(state, participant_id)}
     else
       {:reply, :ok, state}
@@ -223,6 +246,23 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     end
   end
 
+  def handle_call({:typing, action, participant_id}, _from, state) do
+    if member?(state, participant_id) and active_conversation?(state) do
+      case action do
+        :start ->
+          state = schedule_typing_expiry(state, participant_id)
+          notify_other(state, participant_id, {:typing_status, %{typing: true}})
+          {:reply, :ok, state}
+
+        :stop ->
+          state = clear_typing(state, participant_id, true)
+          {:reply, :ok, state}
+      end
+    else
+      {:reply, {:error, :unauthorized_or_inactive_conversation}, state}
+    end
+  end
+
   defp acknowledge_pending_message(state, participant_id, message_id) do
     case Map.get(state.pending, message_id) do
       %{sender_id: ^participant_id} ->
@@ -284,6 +324,8 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   def handle_info({:recovery_grace_expired, participant_id, timer_token}, state) do
     case Map.get(state.recovery_timers, participant_id) do
       %{token: ^timer_token} ->
+        notify_other(state, participant_id, {:conversation_presence, %{status: "disconnected"}})
+
         begin_terminal_transition(
           state,
           :ABANDONED,
@@ -304,6 +346,12 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       {{^pid, participant_id}, monitor_refs} ->
         state = %{state | monitor_refs: monitor_refs}
         state = remove_channel_without_demonitor(state, participant_id, pid)
+
+        state =
+          if connected?(state, participant_id),
+            do: state,
+            else: participant_disconnected(state, participant_id)
+
         {:noreply, maybe_start_recovery_timer(state, participant_id)}
     end
   end
@@ -312,6 +360,13 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     case state.terminal_intent do
       %{retry_token: ^retry_token} -> attempt_terminal_persistence(clear_terminal_retry(state))
       _missing_or_stale -> {:noreply, state}
+    end
+  end
+
+  def handle_info({:typing_expired, participant_id, token}, state) do
+    case Map.get(state.typing_timers, participant_id) do
+      %{token: ^token} -> {:noreply, clear_typing(state, participant_id, true)}
+      _ -> {:noreply, state}
     end
   end
 
@@ -692,6 +747,59 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       {%{timer_ref: timer_ref}, timers} ->
         cancel_timer(timer_ref)
         %{state | recovery_timers: timers}
+    end
+  end
+
+  defp participant_disconnected(state, participant_id) do
+    state
+    |> clear_typing(participant_id, true)
+    |> notify_other(participant_id, {:conversation_presence, %{status: "reconnecting"}})
+  end
+
+  defp send_presence_snapshot(state, participant_id, channel_pid) do
+    other_id = other_participant(state, participant_id)
+
+    status =
+      cond do
+        connected?(state, other_id) -> "connected"
+        Map.has_key?(state.recovery_timers, other_id) -> "reconnecting"
+        true -> "disconnected"
+      end
+
+    send(channel_pid, {:conversation_presence, %{status: status}})
+    state
+  end
+
+  defp notify_other(state, participant_id, message) do
+    state.participant_channels
+    |> Map.fetch!(other_participant(state, participant_id))
+    |> Enum.each(&send(&1, message))
+
+    state
+  end
+
+  defp schedule_typing_expiry(state, participant_id) do
+    state = clear_typing(state, participant_id, false)
+    token = make_ref()
+
+    timer_ref =
+      Process.send_after(self(), {:typing_expired, participant_id, token}, @typing_expiry_ms)
+
+    put_in(state.typing_timers[participant_id], %{token: token, timer_ref: timer_ref})
+  end
+
+  defp clear_typing(state, participant_id, notify?) do
+    case Map.pop(state.typing_timers, participant_id) do
+      {nil, _} ->
+        state
+
+      {%{timer_ref: timer_ref}, timers} ->
+        cancel_timer(timer_ref)
+        state = %{state | typing_timers: timers}
+
+        if notify?,
+          do: notify_other(state, participant_id, {:typing_status, %{typing: false}}),
+          else: state
     end
   end
 
