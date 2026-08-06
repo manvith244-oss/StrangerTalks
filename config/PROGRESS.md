@@ -1096,13 +1096,23 @@ Memory preservation, and stable/distinct signature seeds. `PageControllerTest` v
 copy, four-tab navigation, and absence of live controls from historical markup. Automated browser
 end-to-end coverage remains open.
 
-Manual browser testing confirmed that the Keep path displays a retained Conversation under Chats.
-The same pass found the fixed bottom navigation overlapping lower Door cards and kept-Conversation
-content on Talk and Chats. The shared top-level shell now reserves navigation height, mobile safe-area
-inset, and normal content spacing so controls remain reachable, and the top-level terminology is
-consistently Chats. The complete manual retention checklist is still unfinished, and automated
-browser end-to-end coverage remains open. Fade, summary-only, refresh persistence, delete-one,
-delete-all, Bond preservation, and offline/reconnect recovery have not yet been manually verified.
+### Manual browser evidence
+
+Two-browser manual verification confirmed:
+
+* Keep preserves the full local transcript, and the retained Conversation appears under Chats.
+* Open local copy displays that transcript with the local-copy privacy explanation and without a
+  composer or Send button.
+* Let it fade removes the transcript, and it remains removed after browser refresh.
+* Save only a summary preserves the summary, removes the full transcript, and does not restore raw
+  messages after browser refresh.
+* Delete one local Conversation removes its transcript while a separately created Memory survives.
+* A mutual Bond survives Keep, Fade, and local Conversation deletion.
+* Bottom navigation no longer obstructs the tested Talk, Chats, and historical-view controls.
+* The refined abstract signature is visible and no longer resembles a progress bar.
+
+Delete-all behavior remains covered by automated tests but has not been manually verified.
+Automated browser end-to-end coverage also remains open.
 
 ---
 
