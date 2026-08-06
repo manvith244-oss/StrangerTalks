@@ -24,8 +24,9 @@ defmodule StrangertalksNew.AccountSync do
              |> Map.put("revision", base_revision + 1)
              |> Map.put("updated_at", now_iso()),
            :ok <- validate_size(next),
-           {:ok, file_id} <- upload(access_token, current.file_id, next),
-           :ok <- cache(account_id, file_id, next) do
+           {:ok, file_id} <- upload(access_token, current.file_id, next) do
+        best_effort_cache(account_id, file_id, next)
+
         {:ok,
          %{
            status: "synced",
@@ -81,7 +82,7 @@ defmodule StrangertalksNew.AccountSync do
     with {:ok, access_token} <- access_token(account_id),
          {:ok, current} <- current_snapshot(account_id, access_token) do
       if current.file_id do
-        :ok = cache(account_id, current.file_id, current.envelope)
+        best_effort_cache(account_id, current.file_id, current.envelope)
 
         {:ok,
          %{
@@ -101,12 +102,22 @@ defmodule StrangertalksNew.AccountSync do
     provider = StrangertalksNew.GoogleContinuity.provider()
     cached = Repo.get(AccountSyncState, account_id)
 
-    with {:cached, file_id} when is_binary(file_id) <- {:cached, cached && cached.drive_file_id},
-         {:ok, envelope} <- provider.download_sync_file(access_token, file_id),
-         :ok <- validate_envelope(envelope) do
-      {:ok, %{file_id: file_id, revision: envelope["revision"], envelope: envelope}}
-    else
-      _ -> locate_snapshot(provider, access_token)
+    case cached && cached.drive_file_id do
+      file_id when is_binary(file_id) ->
+        case provider.download_sync_file(access_token, file_id) do
+          {:ok, envelope} ->
+            validated_snapshot(file_id, envelope)
+
+          {:error, :sync_file_not_found} ->
+            Repo.delete_all(from(s in AccountSyncState, where: s.account_id == ^account_id))
+            locate_snapshot(provider, access_token)
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+
+      _ ->
+        locate_snapshot(provider, access_token)
     end
   end
 
@@ -118,8 +129,8 @@ defmodule StrangertalksNew.AccountSync do
 
         %{"id" => file_id} ->
           with {:ok, envelope} <- provider.download_sync_file(access_token, file_id),
-               :ok <- validate_envelope(envelope) do
-            {:ok, %{file_id: file_id, revision: envelope["revision"], envelope: envelope}}
+               result <- validated_snapshot(file_id, envelope) do
+            result
           end
       end
     end
@@ -182,6 +193,28 @@ defmodule StrangertalksNew.AccountSync do
          ) do
       {:ok, _} -> :ok
       {:error, _} -> {:error, :metadata_cache_failed}
+    end
+  end
+
+  defp best_effort_cache(account_id, file_id, envelope) do
+    case cache(account_id, file_id, envelope) do
+      :ok ->
+        :ok
+
+      {:error, _} ->
+        require Logger
+        Logger.warning("Google Drive sync metadata cache update failed")
+        :ok
+    end
+  end
+
+  defp validated_snapshot(file_id, envelope) do
+    with :ok <- validate_envelope(envelope),
+         :ok <- validate_size(envelope) do
+      {:ok, %{file_id: file_id, revision: envelope["revision"], envelope: envelope}}
+    else
+      {:error, :sync_too_large} -> {:error, :sync_payload_too_large}
+      _ -> {:error, :invalid_sync_data}
     end
   end
 

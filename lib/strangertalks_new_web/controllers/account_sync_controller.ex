@@ -78,6 +78,22 @@ defmodule StrangertalksNewWeb.AccountSyncController do
     do:
       conn |> put_status(:request_entity_too_large) |> json(%{error: %{reason: "sync_too_large"}})
 
+  defp error(conn, :sync_payload_too_large),
+    do:
+      conn
+      |> put_status(:request_entity_too_large)
+      |> json(%{error: %{reason: "sync_payload_too_large"}})
+
+  defp error(conn, :temporary_sync_failure),
+    do:
+      conn
+      |> put_status(:service_unavailable)
+      |> json(%{error: %{reason: "temporary_sync_failure"}})
+
+  defp error(conn, :invalid_sync_data),
+    do:
+      conn |> put_status(:unprocessable_entity) |> json(%{error: %{reason: "invalid_sync_data"}})
+
   defp error(conn, :google_reauthorization_required),
     do:
       conn

@@ -1708,4 +1708,11 @@ token plus same-origin checks. The V1 single-node rate limiter hashes identifier
 prunes during requests, and fails closed at 10,000 active keys. Provider/browser integration and
 multi-node distributed limiting remain deployment work; guest mode remains independent.
 
+Google Drive sync now distinguishes verified absence from transient, authorization, ambiguous, and
+invalid-data failures. Only a verified absence may create the canonical appDataFolder file. Download
+streaming rejects declared or received encrypted bodies above 10 MiB, metadata caching is explicitly
+best-effort after an authoritative Drive success, and same-account operations remain serialized by
+the V1 account lock. The lock is still single-node and requires distributed replacement before a
+multi-node deployment.
+
 *Last Updated: August 2026*

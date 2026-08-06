@@ -21,16 +21,28 @@ defmodule StrangertalksNew.AccountSyncTest do
     def find_sync_file("temporary-access") do
       state = state()
 
-      case state[:file] do
-        nil -> {:ok, nil}
-        %{id: id} -> {:ok, %{"id" => id}}
+      case state[:find_result] do
+        {:error, reason} ->
+          {:error, reason}
+
+        _ ->
+          case state[:file] do
+            nil -> {:ok, nil}
+            %{id: id} -> {:ok, %{"id" => id}}
+          end
       end
     end
 
     def download_sync_file("temporary-access", file_id) do
-      case state()[:file] do
-        %{id: ^file_id, envelope: envelope} -> {:ok, envelope}
-        _ -> {:error, :sync_file_not_found}
+      case state()[:download_result] do
+        {:error, reason} ->
+          {:error, reason}
+
+        _ ->
+          case state()[:file] do
+            %{id: ^file_id, envelope: envelope} -> {:ok, envelope}
+            _ -> {:error, :sync_file_not_found}
+          end
       end
     end
 
@@ -136,6 +148,76 @@ defmodule StrangertalksNew.AccountSyncTest do
              )
 
     assert is_nil(FakeDrive.state()[:file])
+  end
+
+  test "cached transient errors never fall through to search or duplicate creation", %{
+    account: account
+  } do
+    assert {:ok, _} = AccountSync.put(account.account_id, 0, envelope(0, "first"))
+
+    Application.put_env(
+      :strangertalks_new,
+      :fake_drive_state,
+      Map.merge(FakeDrive.state(), %{
+        download_result: {:error, :temporary_sync_failure},
+        find_result: {:error, :should_not_search}
+      })
+    )
+
+    assert {:error, :temporary_sync_failure} = AccountSync.get(account.account_id)
+    assert FakeDrive.state().file.envelope["revision"] == 1
+  end
+
+  test "cached 404 clears stale metadata and recovers only through canonical search", %{
+    account: account
+  } do
+    assert {:ok, _} = AccountSync.put(account.account_id, 0, envelope(0, "first"))
+    state = FakeDrive.state()
+
+    Application.put_env(
+      :strangertalks_new,
+      :fake_drive_state,
+      Map.put(state, :download_result, {:error, :sync_file_not_found})
+    )
+
+    assert {:error, :sync_file_not_found} = AccountSync.get(account.account_id)
+    assert is_nil(Repo.get(AccountSyncState, account.account_id))
+  end
+
+  test "invalid encrypted Drive data fails safely and never creates another file", %{
+    account: account
+  } do
+    assert {:ok, _} = AccountSync.put(account.account_id, 0, envelope(0, "first"))
+    state = FakeDrive.state()
+
+    Application.put_env(:strangertalks_new, :fake_drive_state, %{
+      state
+      | file: %{state.file | envelope: %{"unexpected" => true}}
+    })
+
+    assert {:error, :invalid_sync_data} = AccountSync.get(account.account_id)
+    assert FakeDrive.state().file.id == "app-data-only-file"
+  end
+
+  test "same-account concurrent puts serialize and stale writer conflicts", %{account: account} do
+    parent = self()
+
+    tasks =
+      for value <- ["one", "two"] do
+        Task.async(fn ->
+          send(parent, {:ready, self()})
+
+          receive do
+            :go -> AccountSync.put(account.account_id, 0, envelope(0, value))
+          end
+        end)
+      end
+
+    for _ <- tasks, do: assert_receive({:ready, _})
+    Enum.each(tasks, &send(&1.pid, :go))
+    results = Enum.map(tasks, &Task.await(&1, 5_000))
+    assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    assert Enum.count(results, &(&1 == {:error, :sync_conflict})) == 1
   end
 
   defp linked_account do

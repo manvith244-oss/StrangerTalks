@@ -7,6 +7,7 @@ defmodule StrangertalksNew.GoogleContinuity.GoogleProvider do
   @drive_api "https://www.googleapis.com/drive/v3/files"
   @drive_upload "https://www.googleapis.com/upload/drive/v3/files"
   @sync_name "strangertalks-sync-v1.enc.json"
+  @max_download_bytes 10 * 1024 * 1024
   @clock_skew_seconds 60
 
   @impl true
@@ -135,19 +136,62 @@ defmodule StrangertalksNew.GoogleContinuity.GoogleProvider do
       {:ok, %{status: 200, body: %{"files" => files}}} when length(files) > 1 ->
         {:error, :ambiguous_sync_files}
 
+      {:ok, %{status: status}} when status in [401, 403] ->
+        {:error, :google_reauthorization_required}
+
+      {:ok, %{status: status}} when status == 429 or status >= 500 ->
+        {:error, :temporary_sync_failure}
+
       _ ->
-        {:error, :drive_unavailable}
+        {:error, :temporary_sync_failure}
     end
   end
 
   @impl true
   def download_sync_file(access_token, file_id) do
-    case Req.get("#{@drive_api}/#{URI.encode_www_form(file_id)}?alt=media",
-           headers: auth(access_token)
+    case bounded_get(
+           "#{@drive_api}/#{URI.encode_www_form(file_id)}?alt=media",
+           auth(access_token)
          ) do
-      {:ok, %{status: 200, body: body}} when is_map(body) -> {:ok, body}
-      {:ok, %{status: 404}} -> {:error, :sync_file_not_found}
-      _ -> {:error, :drive_unavailable}
+      {:ok, %{status: 200, body: body}} ->
+        decode_envelope(body)
+
+      {:ok, %{status: 404}} ->
+        {:error, :sync_file_not_found}
+
+      {:ok, %{status: status}} when status in [401, 403] ->
+        {:error, :google_reauthorization_required}
+
+      {:ok, %{status: 429}} ->
+        {:error, :temporary_sync_failure}
+
+      {:ok, %{status: status}} when status >= 500 ->
+        {:error, :temporary_sync_failure}
+
+      {:error, :sync_payload_too_large} ->
+        {:error, :sync_payload_too_large}
+
+      _ ->
+        {:error, :temporary_sync_failure}
+    end
+  end
+
+  @doc false
+  def bounded_body(chunks, content_length \\ nil) do
+    if is_integer(content_length) and content_length > @max_download_bytes do
+      {:error, :sync_payload_too_large}
+    else
+      Enum.reduce_while(chunks, {:ok, [], 0}, fn chunk, {:ok, body, size} ->
+        next = size + byte_size(chunk)
+
+        if next > @max_download_bytes,
+          do: {:halt, {:error, :sync_payload_too_large}},
+          else: {:cont, {:ok, [body, chunk], next}}
+      end)
+      |> case do
+        {:ok, body, _size} -> {:ok, IO.iodata_to_binary(body)}
+        error -> error
+      end
     end
   end
 
@@ -178,7 +222,17 @@ defmodule StrangertalksNew.GoogleContinuity.GoogleProvider do
            ) do
       {:ok, file_id}
     else
-      _ -> {:error, :drive_unavailable}
+      {:ok, %{status: status}} when status in [401, 403] ->
+        {:error, :google_reauthorization_required}
+
+      {:ok, %{status: 429}} ->
+        {:error, :temporary_sync_failure}
+
+      {:ok, %{status: status}} when status >= 500 ->
+        {:error, :temporary_sync_failure}
+
+      _ ->
+        {:error, :temporary_sync_failure}
     end
   end
 
@@ -209,6 +263,39 @@ defmodule StrangertalksNew.GoogleContinuity.GoogleProvider do
   defp valid_audience?(%{"aud" => audiences}, _expected) when is_list(audiences), do: false
   defp valid_audience?(%{"aud" => audience}, expected), do: audience == expected
   defp auth(token), do: [{"authorization", "Bearer #{token}"}]
+
+  defp bounded_get(url, headers) do
+    into = fn {:data, data}, {request, response} ->
+      content_length = header(response.headers, "content-length")
+      received = response.private[:strangertalks_received_bytes] || 0
+      next = received + byte_size(data)
+
+      if (is_binary(content_length) and String.to_integer(content_length) > @max_download_bytes) or
+           next > @max_download_bytes do
+        response = put_in(response.private[:strangertalks_oversized], true)
+        {:halt, {request, response}}
+      else
+        response = %{response | body: [response.body, data]}
+        response = put_in(response.private[:strangertalks_received_bytes], next)
+        {:cont, {request, response}}
+      end
+    end
+
+    case Req.get(url, headers: headers, into: into, decode_body: false) do
+      {:ok, %{private: %{strangertalks_oversized: true}}} -> {:error, :sync_payload_too_large}
+      {:ok, response} -> {:ok, %{response | body: IO.iodata_to_binary(response.body)}}
+      error -> error
+    end
+  rescue
+    ArgumentError -> {:error, :temporary_sync_failure}
+  end
+
+  defp decode_envelope(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, envelope} when is_map(envelope) -> {:ok, envelope}
+      _ -> {:error, :invalid_sync_data}
+    end
+  end
 
   defp header(headers, name) do
     headers
