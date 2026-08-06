@@ -123,4 +123,24 @@ defmodule StrangertalksNewWeb.PageControllerTest do
     assert javascript =~ "URL.revokeObjectURL"
     assert javascript =~ "navigator.mediaDevices.getUserMedia"
   end
+
+  test "Bonds offer private mutual reconnection without social-presence disclosure", %{conn: conn} do
+    body = conn |> get("/") |> html_response(200)
+    javascript = File.read!(Application.app_dir(:strangertalks_new, "priv/static/assets/app.js"))
+    [_, bonds] = Regex.run(~r/(<section data-screen="relationships".*?<\/section>)/s, body)
+
+    assert bonds =~ "visible only to you"
+    assert javascript =~ "Reconnect privately"
+    assert javascript =~ "What kind of Conversation do you need right now?"
+    assert javascript =~ "Available to reconnect for 15 minutes."
+    assert javascript =~ "They will never know unless they choose the same."
+    assert javascript =~ ~s("bond:reconnect_status")
+    assert javascript =~ ~s("bond:reconnect_cancel")
+    assert javascript =~ ~s("bond:reconnect_start")
+    refute javascript =~ "Request sent"
+    refute javascript =~ "Waiting for them"
+    refute bonds =~ "online"
+    refute bonds =~ "last seen"
+    refute bonds =~ "participant_id"
+  end
 end

@@ -74,6 +74,11 @@ test("previous text-only backup envelope versions remain importable", async () =
   assert.deepEqual(await decryptBackup({...envelope, version: 1}, "passphrase"), [record])
 })
 
+test("private Bond reconnection display state is excluded from kept-history backup", async () => {
+  const state = {id: "bond-reconnect:bond-a", type: "bond_reconnect_state", value: {relationship_id: "bond-a", status: "waiting_for_mutual_availability", door_type: "EXPLORE", expires_at: endedAt}, updated_at: startedAt}
+  assert.equal((await decryptBackup(await encryptBackup([state], "passphrase"), "passphrase")).length, 0)
+})
+
 test("active messages cache under a temporary conversation without promoting it", () => {
   assert.equal(conversation.value.status, "temporary")
   assert.equal(message.type, "local_message")

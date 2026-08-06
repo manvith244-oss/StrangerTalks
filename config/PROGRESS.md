@@ -1187,6 +1187,17 @@ block/queue/active-Conversation rejection, safe multi-tab notification, unchange
 identity, and absence of automatic Message or safety records. Browser interaction and real
 two-browser verification remain incomplete. Automated browser end-to-end coverage remains open.
 
+The Bonds screen now presents locally known abstract Bonds with original Door/date display and a
+private reconnect action. It uses the existing canonical Door aliases, restores only the current
+participant’s server-authoritative availability, shows a calm relative expiry, and supports private
+Door change and cancellation. A mutual match reuses the existing `match_found` and Conversation join
+path; the Bond is not removed or duplicated. Browser display cache contains only the participant’s own
+state and is excluded from encrypted kept-history backup.
+
+Manual two-browser verification remains required for first availability, non-disclosure, mutual
+same-Door transition, different-Door privacy, cancel, expiry, and refresh restoration. Automated
+browser end-to-end coverage remains open.
+
 ---
 
 # Phase 8 — Integration and Quality

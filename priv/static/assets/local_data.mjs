@@ -141,7 +141,7 @@ export async function replaceRecords(records) { await clearRecords(); for (const
 function validRecord(record) { return record && typeof record.id === "string" && typeof record.type === "string" && !Number.isNaN(Date.parse(record.updated_at)) }
 async function serializeBackupRecords(records) {
   const keptIds = new Set(keptConversations(records).map(({value}) => value.conversation_id))
-  const selected = records.filter((record) => record.type !== "local_voice_note" || keptIds.has(record.value.conversation_id))
+  const selected = records.filter((record) => record.type !== "bond_reconnect_state" && (record.type !== "local_voice_note" || keptIds.has(record.value.conversation_id)))
   return Promise.all(selected.map(async (record) => {
     if (record.type !== "local_voice_note") return record
     const bytes = await binaryBytes(record.value.blob)

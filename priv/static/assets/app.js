@@ -11,9 +11,10 @@ import {
   chronologicalTimeline, selectVoiceMediaType, stopMediaTracks, validVoiceBlob,
   warningAcknowledged
 } from "./voice_notes.mjs"
+import {reconnectDisplayState, reconnectStateRecord, remainingAvailabilitySeconds} from "./bond_reconnect.mjs"
 
 const identityKey = "strangertalks.identity.v1"
-const app = {identity: null, socket: null, participant: null, conversation: null, conversationId: null, selectedDoor: null, rendered: new Set(), typingTimer: null, historyConversationId: null, timelinePinned: true, voice: {mediaType: null, recorder: null, stream: null, chunks: [], startedAt: 0, timer: null, stopTimer: null, discard: false, blob: null, objectUrl: null, voiceNoteId: null, durationMs: 0}, voiceUrls: new Map()}
+const app = {identity: null, socket: null, participant: null, participantJoined: false, conversation: null, conversationId: null, selectedDoor: null, rendered: new Set(), typingTimer: null, historyConversationId: null, timelinePinned: true, voice: {mediaType: null, recorder: null, stream: null, chunks: [], startedAt: 0, timer: null, stopTimer: null, discard: false, blob: null, objectUrl: null, voiceNoteId: null, durationMs: 0}, voiceUrls: new Map()}
 const $ = (selector) => document.querySelector(selector)
 const now = () => new Date().toISOString()
 
@@ -50,7 +51,7 @@ function connectSocket() {
   app.participant.on("queue:status", ({status}) => { announce(`Queue status: ${status}`); if (status === "timed_out") show("doors") })
   app.participant.on("match_found", ({conversation_id}) => { app.conversationId = conversation_id; show("match"); joinConversation(conversation_id) })
   app.participant.on("relationship:created", ({relationship_id}) => { rememberRelationship(relationship_id); $("#consent-status").textContent = "Bond created."; announce("Mutual Bond created.") })
-  app.participant.join().receive("ok", resumeLocalConversation).receive("error", recoverIdentity)
+  app.participant.join().receive("ok", async () => { app.participantJoined = true; await resumeLocalConversation(); if (document.querySelector('[data-screen="relationships"]').classList.contains("active")) renderLocalViews() }).receive("error", recoverIdentity)
 }
 
 async function resumeLocalConversation() {
@@ -169,7 +170,7 @@ function updateVoiceNoteStatus({voice_note_id, status}) {
 
 async function rememberRelationship(id) {
   const conversation = await getRecord(`conversation:${app.conversationId}`)
-  await putRecord({id: `relationship:${id}`, type: "relationship", value: {relationship_id: id, status: "created", conversation_id: app.conversationId, abstract_signature_seed: conversation?.value.abstract_signature_seed || null}, updated_at: now()})
+  await putRecord({id: `relationship:${id}`, type: "relationship", value: {relationship_id: id, status: "created", conversation_id: app.conversationId, abstract_signature_seed: conversation?.value.abstract_signature_seed || null, origin_door_type: conversation?.value.door_type || null, origin_door_label: conversation?.value.display_door || null, formed_at: conversation?.value.ended_at || now(), private_nickname: null}, updated_at: now()})
   renderLocalViews()
 }
 
@@ -334,8 +335,51 @@ async function renderLocalViews() {
   const records = await listRecords(); renderRecordList($("#memory-list"), records.filter(({type}) => type === "memory" || type === "summary"))
   const relationships = records.filter(({type}) => type === "relationship"); const container = $("#relationship-list"); container.replaceChildren()
   if (!relationships.length) container.textContent = "No Bonds saved on this device."
-  relationships.forEach((record) => { const article = document.createElement("article"); if (record.value.abstract_signature_seed) article.append(signatureRibbon(record.value.abstract_signature_seed)); const text = document.createElement("p"); text.textContent = "Mutual Bond saved on this device."; article.append(text); container.append(article) })
+  relationships.forEach((record) => {
+    const article = document.createElement("article"); article.className = "bond-card"
+    if (record.value.abstract_signature_seed) article.append(signatureRibbon(record.value.abstract_signature_seed))
+    const title = document.createElement("h3"); title.textContent = record.value.private_nickname || "Private Bond"
+    const details = document.createElement("p"); details.textContent = `${record.value.origin_door_label || "Conversation"} · ${new Date(record.value.formed_at || record.updated_at).toLocaleDateString()}`
+    const reconnect = document.createElement("div"); reconnect.className = "bond-reconnect"; reconnect.dataset.relationshipId = record.value.relationship_id
+    article.append(title, details, reconnect); container.append(article)
+    renderReconnectState(reconnect, {relationship_id: record.value.relationship_id, status: "idle"})
+    if (app.participantJoined) restoreReconnectStatus(record.value.relationship_id, reconnect)
+  })
 }
+
+async function restoreReconnectStatus(relationshipId, container) {
+  try {
+    const result = await push(app.participant, "bond:reconnect_status", {relationship_id: relationshipId})
+    const state = reconnectDisplayState(result, relationshipId)
+    await putRecord(reconnectStateRecord(state, now())); renderReconnectState(container, state)
+  } catch { renderReconnectState(container, {relationship_id: relationshipId, status: "idle"}) }
+}
+
+function renderReconnectState(container, state) {
+  container.replaceChildren()
+  if (state.status !== "waiting_for_mutual_availability" || remainingAvailabilitySeconds(state.expires_at) === 0) {
+    const button = document.createElement("button"); button.textContent = "Reconnect privately"; button.addEventListener("click", () => renderReconnectDoors(container, state.relationship_id)); container.append(button); return
+  }
+  const heading = document.createElement("strong"); heading.textContent = "Available to reconnect for 15 minutes."
+  const privacy = document.createElement("p"); privacy.textContent = "They will never know unless they choose the same."
+  const selected = document.createElement("p"); selected.textContent = `Selected Door: ${DOORS.find(({value}) => value === state.door_type)?.label || state.door_type}`
+  const countdown = document.createElement("time"); countdown.dataset.expiresAt = state.expires_at; countdown.textContent = availabilityCopy(state.expires_at)
+  const change = document.createElement("button"); change.textContent = "Change Door"; change.addEventListener("click", () => renderReconnectDoors(container, state.relationship_id))
+  const cancel = document.createElement("button"); cancel.textContent = "Cancel"; cancel.addEventListener("click", async () => { await push(app.participant, "bond:reconnect_cancel", {relationship_id: state.relationship_id}); const idle = {relationship_id: state.relationship_id, status: "idle"}; await putRecord(reconnectStateRecord(idle, now())); renderReconnectState(container, idle) })
+  container.append(heading, privacy, selected, countdown, change, cancel)
+}
+
+function renderReconnectDoors(container, relationshipId) {
+  container.replaceChildren()
+  const prompt = document.createElement("p"); prompt.textContent = "What kind of Conversation do you need right now?"; container.append(prompt)
+  DOORS.forEach((door) => { const button = document.createElement("button"); button.textContent = door.label; button.addEventListener("click", async () => { try { const result = await push(app.participant, "bond:reconnect_start", {relationship_id: relationshipId, door_type: door.value}); const state = reconnectDisplayState(result, relationshipId); await putRecord(reconnectStateRecord(state, now())); if (state.status === "waiting_for_mutual_availability") renderReconnectState(container, state) } catch { announce("Private reconnection is unavailable right now.") } }); container.append(button) })
+}
+
+function availabilityCopy(expiresAt) {
+  const seconds = remainingAvailabilitySeconds(expiresAt); return seconds ? `${Math.ceil(seconds / 60)} minutes remaining` : "Availability expired"
+}
+
+setInterval(() => { document.querySelectorAll("[data-expires-at]").forEach((node) => { node.textContent = availabilityCopy(node.dataset.expiresAt); if (remainingAvailabilitySeconds(node.dataset.expiresAt) === 0) { const container = node.closest(".bond-reconnect"); renderReconnectState(container, {relationship_id: container.dataset.relationshipId, status: "idle"}) } }) }, 1_000)
 
 function renderRecordList(container, records) { container.replaceChildren(); if (!records.length) { container.textContent = "Nothing saved locally yet."; return } records.forEach((record) => { const article = document.createElement("article"); const text = document.createElement("p"); text.textContent = record.value.text || record.type; const remove = document.createElement("button"); remove.textContent = "Delete"; remove.addEventListener("click", async () => { await deleteRecord(record.id); renderLocalViews(); renderDataInventory() }); article.append(text, remove); container.append(article) }) }
 async function renderDataInventory() { const records = await listRecords(); const totals = records.reduce((counts, {type}) => ({...counts, [type]: (counts[type] || 0) + 1}), {}); $("#local-data-list").textContent = Object.keys(totals).length ? Object.entries(totals).map(([type, count]) => `${type}: ${count}`).join(" · ") : "No local data stored." }
