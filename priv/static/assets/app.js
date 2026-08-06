@@ -11,15 +11,16 @@ import {
   chronologicalTimeline, selectVoiceMediaType, stopMediaTracks, validVoiceBlob,
   warningAcknowledged
 } from "./voice_notes.mjs"
-import {reconnectDisplayState, reconnectStateRecord, remainingAvailabilitySeconds} from "./bond_reconnect.mjs"
+import {createMatchedTransitionTracker, createReconnectCountdownController, reconnectDisplayState, reconnectStateRecord, remainingAvailabilitySeconds, unavailableReconnectState} from "./bond_reconnect.mjs"
 
 const identityKey = "strangertalks.identity.v1"
-const app = {identity: null, socket: null, participant: null, participantJoined: false, conversation: null, conversationId: null, selectedDoor: null, rendered: new Set(), typingTimer: null, historyConversationId: null, timelinePinned: true, voice: {mediaType: null, recorder: null, stream: null, chunks: [], startedAt: 0, timer: null, stopTimer: null, discard: false, blob: null, objectUrl: null, voiceNoteId: null, durationMs: 0}, voiceUrls: new Map()}
+const app = {identity: null, socket: null, participant: null, participantJoined: false, conversation: null, conversationId: null, selectedDoor: null, rendered: new Set(), typingTimer: null, historyConversationId: null, timelinePinned: true, matchedTransition: createMatchedTransitionTracker(), reconnectCountdown: createReconnectCountdownController(), voice: {mediaType: null, recorder: null, stream: null, chunks: [], startedAt: 0, timer: null, stopTimer: null, discard: false, blob: null, objectUrl: null, voiceNoteId: null, durationMs: 0}, voiceUrls: new Map()}
 const $ = (selector) => document.querySelector(selector)
 const now = () => new Date().toISOString()
 
 function announce(message) { $("#status").textContent = message }
 function show(name) {
+  if (name !== "relationships") app.reconnectCountdown.stop()
   document.querySelectorAll("[data-screen]").forEach((node) => node.classList.toggle("active", node.dataset.screen === name))
   $("#bottom-nav").hidden = !["doors", "chats", "relationships", "settings"].includes(name)
   if (name === "chats") renderChats()
@@ -49,14 +50,14 @@ function connectSocket() {
   app.socket.connect()
   app.participant = app.socket.channel(`participant:${app.identity.participant_id}`, {})
   app.participant.on("queue:status", ({status}) => { announce(`Queue status: ${status}`); if (status === "timed_out") show("doors") })
-  app.participant.on("match_found", ({conversation_id}) => { app.conversationId = conversation_id; show("match"); joinConversation(conversation_id) })
+  app.participant.on("match_found", (payload) => { handleMatchedConversation(payload).catch(() => announce("Reconnecting to the Conversation…")) })
   app.participant.on("relationship:created", ({relationship_id}) => { rememberRelationship(relationship_id); $("#consent-status").textContent = "Bond created."; announce("Mutual Bond created.") })
   app.participant.join().receive("ok", async () => { app.participantJoined = true; await resumeLocalConversation(); if (document.querySelector('[data-screen="relationships"]').classList.contains("active")) renderLocalViews() }).receive("error", recoverIdentity)
 }
 
 async function resumeLocalConversation() {
   const active = activeConversations(await listRecords())[0]
-  if (active) { app.conversationId = active.value.conversation_id; app.selectedDoor = active.value.display_door; updateDoorLabels(); joinConversation(app.conversationId) }
+  if (active) { app.selectedDoor = active.value.display_door; updateDoorLabels(); await handleMatchedConversation({status: "matched", conversation_id: active.value.conversation_id}) }
 }
 
 async function recoverIdentity() { await deleteRecord(identityKey); app.socket?.disconnect(); await createIdentity(true); connectSocket() }
@@ -70,7 +71,18 @@ function joinConversation(id) {
   app.conversation.on("voice_note:new", receiveVoiceNote)
   app.conversation.on("voice_note:status", updateVoiceNoteStatus)
   app.conversation.on("conversation:ended", async () => { cancelRecording(); await markConversationEnded(); show("ended"); announce("Conversation ended. Choose what this device should retain.") })
-  app.conversation.join().receive("ok", async () => { await ensureTemporaryConversation(id); await renderCachedConversation(id); show("conversation"); scrollTimelineToNewest(); announce("Conversation joined.") }).receive("error", () => announce("The conversation is unavailable."))
+  app.conversation.join().receive("ok", async () => { await ensureTemporaryConversation(id); await renderCachedConversation(id); show("conversation"); scrollTimelineToNewest(); announce("Conversation joined.") }).receive("error", () => { app.matchedTransition.release(id); updateLocalConnection("recovery"); show("match"); announce("Reconnecting to the Conversation…") })
+}
+
+async function handleMatchedConversation(payload, relationshipId = null) {
+  const conversationId = app.matchedTransition.claim(payload)
+  if (!conversationId) return
+  if (relationshipId) await putRecord(reconnectStateRecord({relationship_id: relationshipId, status: "matched", conversation_id: conversationId}, now()))
+  app.reconnectCountdown.stop()
+  app.conversationId = conversationId
+  await ensureTemporaryConversation(conversationId)
+  show("match")
+  joinConversation(conversationId)
 }
 
 async function ensureTemporaryConversation(conversationId) {
@@ -345,18 +357,27 @@ async function renderLocalViews() {
     renderReconnectState(reconnect, {relationship_id: record.value.relationship_id, status: "idle"})
     if (app.participantJoined) restoreReconnectStatus(record.value.relationship_id, reconnect)
   })
+  startReconnectCountdown()
 }
 
 async function restoreReconnectStatus(relationshipId, container) {
   try {
     const result = await push(app.participant, "bond:reconnect_status", {relationship_id: relationshipId})
     const state = reconnectDisplayState(result, relationshipId)
-    await putRecord(reconnectStateRecord(state, now())); renderReconnectState(container, state)
-  } catch { renderReconnectState(container, {relationship_id: relationshipId, status: "idle"}) }
+    await putRecord(reconnectStateRecord(state, now()))
+    if (state.status === "matched") await handleMatchedConversation(state, relationshipId)
+    else renderReconnectState(container, state)
+  } catch {
+    const unavailable = unavailableReconnectState(relationshipId)
+    await putRecord(reconnectStateRecord(unavailable, now()))
+    renderReconnectState(container, unavailable)
+  }
 }
 
 function renderReconnectState(container, state) {
   container.replaceChildren()
+  if (state.status === "matched") { const message = document.createElement("p"); message.textContent = "Reconnecting to your Conversation…"; container.append(message); app.reconnectCountdown.stop(); return }
+  if (state.status === "unavailable") { const message = document.createElement("p"); message.textContent = "Private reconnection is unavailable right now."; const retry = document.createElement("button"); retry.textContent = "Try again"; retry.addEventListener("click", () => restoreReconnectStatus(state.relationship_id, container)); container.append(message, retry); return }
   if (state.status !== "waiting_for_mutual_availability" || remainingAvailabilitySeconds(state.expires_at) === 0) {
     const button = document.createElement("button"); button.textContent = "Reconnect privately"; button.addEventListener("click", () => renderReconnectDoors(container, state.relationship_id)); container.append(button); return
   }
@@ -365,21 +386,27 @@ function renderReconnectState(container, state) {
   const selected = document.createElement("p"); selected.textContent = `Selected Door: ${DOORS.find(({value}) => value === state.door_type)?.label || state.door_type}`
   const countdown = document.createElement("time"); countdown.dataset.expiresAt = state.expires_at; countdown.textContent = availabilityCopy(state.expires_at)
   const change = document.createElement("button"); change.textContent = "Change Door"; change.addEventListener("click", () => renderReconnectDoors(container, state.relationship_id))
-  const cancel = document.createElement("button"); cancel.textContent = "Cancel"; cancel.addEventListener("click", async () => { await push(app.participant, "bond:reconnect_cancel", {relationship_id: state.relationship_id}); const idle = {relationship_id: state.relationship_id, status: "idle"}; await putRecord(reconnectStateRecord(idle, now())); renderReconnectState(container, idle) })
+  const cancel = document.createElement("button"); cancel.textContent = "Cancel"; cancel.addEventListener("click", async () => { try { await push(app.participant, "bond:reconnect_cancel", {relationship_id: state.relationship_id}); const idle = {relationship_id: state.relationship_id, status: "idle"}; await putRecord(reconnectStateRecord(idle, now())); renderReconnectState(container, idle); refreshReconnectCountdown() } catch { announce("Could not cancel private availability. Try again.") } })
   container.append(heading, privacy, selected, countdown, change, cancel)
+  startReconnectCountdown()
 }
 
 function renderReconnectDoors(container, relationshipId) {
   container.replaceChildren()
   const prompt = document.createElement("p"); prompt.textContent = "What kind of Conversation do you need right now?"; container.append(prompt)
-  DOORS.forEach((door) => { const button = document.createElement("button"); button.textContent = door.label; button.addEventListener("click", async () => { try { const result = await push(app.participant, "bond:reconnect_start", {relationship_id: relationshipId, door_type: door.value}); const state = reconnectDisplayState(result, relationshipId); await putRecord(reconnectStateRecord(state, now())); if (state.status === "waiting_for_mutual_availability") renderReconnectState(container, state) } catch { announce("Private reconnection is unavailable right now.") } }); container.append(button) })
+  DOORS.forEach((door) => { const button = document.createElement("button"); button.textContent = door.label; button.addEventListener("click", async () => { try { const result = await push(app.participant, "bond:reconnect_start", {relationship_id: relationshipId, door_type: door.value}); const state = reconnectDisplayState(result, relationshipId); await putRecord(reconnectStateRecord(state, now())); if (state.status === "matched") await handleMatchedConversation(state, relationshipId); else renderReconnectState(container, state) } catch { const unavailable = unavailableReconnectState(relationshipId); await putRecord(reconnectStateRecord(unavailable, now())); renderReconnectState(container, unavailable); announce("Private reconnection is unavailable right now.") } }); container.append(button) })
 }
 
 function availabilityCopy(expiresAt) {
   const seconds = remainingAvailabilitySeconds(expiresAt); return seconds ? `${Math.ceil(seconds / 60)} minutes remaining` : "Availability expired"
 }
 
-setInterval(() => { document.querySelectorAll("[data-expires-at]").forEach((node) => { node.textContent = availabilityCopy(node.dataset.expiresAt); if (remainingAvailabilitySeconds(node.dataset.expiresAt) === 0) { const container = node.closest(".bond-reconnect"); renderReconnectState(container, {relationship_id: container.dataset.relationshipId, status: "idle"}) } }) }, 1_000)
+function startReconnectCountdown() {
+  if (!document.querySelector("[data-expires-at]")) return app.reconnectCountdown.stop()
+  if (!app.reconnectCountdown.active()) app.reconnectCountdown.start(updateReconnectCountdowns)
+}
+function refreshReconnectCountdown() { if (document.querySelector("[data-expires-at]")) startReconnectCountdown(); else app.reconnectCountdown.stop() }
+function updateReconnectCountdowns() { document.querySelectorAll("[data-expires-at]").forEach((node) => { node.textContent = availabilityCopy(node.dataset.expiresAt); if (remainingAvailabilitySeconds(node.dataset.expiresAt) === 0) { const container = node.closest(".bond-reconnect"); renderReconnectState(container, {relationship_id: container.dataset.relationshipId, status: "idle"}) } }); refreshReconnectCountdown() }
 
 function renderRecordList(container, records) { container.replaceChildren(); if (!records.length) { container.textContent = "Nothing saved locally yet."; return } records.forEach((record) => { const article = document.createElement("article"); const text = document.createElement("p"); text.textContent = record.value.text || record.type; const remove = document.createElement("button"); remove.textContent = "Delete"; remove.addEventListener("click", async () => { await deleteRecord(record.id); renderLocalViews(); renderDataInventory() }); article.append(text, remove); container.append(article) }) }
 async function renderDataInventory() { const records = await listRecords(); const totals = records.reduce((counts, {type}) => ({...counts, [type]: (counts[type] || 0) + 1}), {}); $("#local-data-list").textContent = Object.keys(totals).length ? Object.entries(totals).map(([type, count]) => `${type}: ${count}`).join(" · ") : "No local data stored." }

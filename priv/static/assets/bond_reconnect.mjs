@@ -13,3 +13,43 @@ export function reconnectStateRecord(state, updatedAt) {
 export function remainingAvailabilitySeconds(expiresAt, now = Date.now()) {
   return Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1000))
 }
+
+export function matchedConversationId(payload) {
+  return payload?.status === "matched" && typeof payload.conversation_id === "string" && payload.conversation_id
+    ? payload.conversation_id
+    : null
+}
+
+export function unavailableReconnectState(relationshipId) {
+  return {relationship_id: relationshipId, status: "unavailable"}
+}
+
+export function createMatchedTransitionTracker() {
+  let current = null
+  return {
+    claim(payload) {
+      const conversationId = matchedConversationId(payload)
+      if (!conversationId || current === conversationId) return null
+      current = conversationId
+      return conversationId
+    },
+    release(conversationId) { if (current === conversationId) current = null },
+    current() { return current }
+  }
+}
+
+export function createReconnectCountdownController(startInterval = setInterval, stopInterval = clearInterval) {
+  let timer = null
+  return {
+    start(callback) {
+      if (timer !== null) stopInterval(timer)
+      timer = startInterval(callback, 1_000)
+      return timer
+    },
+    stop() {
+      if (timer !== null) stopInterval(timer)
+      timer = null
+    },
+    active() { return timer !== null }
+  }
+}

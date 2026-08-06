@@ -1227,6 +1227,24 @@ attempts, absence of unrelated records, stale Relationship handling, and lock re
 Manual Bond Reconnection verification, automated browser E2E, and multi-node coordination remain
 open.
 
+### Adversarial correctness pass — committed-match browser restoration
+
+Ordinary queue pushes, Bond reconnect pushes, direct matched start responses, and matched status
+responses now use one idempotent browser transition into the existing Conversation join path. A
+committed reconnect missed during disconnect can therefore be recovered from server status without
+creating another intent or Bond. Temporary join failure preserves matched/local active state and a
+neutral reconnecting UI so existing socket recovery can retry; it is never rendered as an idle
+`Reconnect privately` action.
+
+Live `reconnection_unavailable` responses replace cached waiting/matched details with a neutral state
+that contains no Conversation or participant identifier and does not disclose blocking. Failed cancel
+requests preserve the last server-confirmed state. The Bonds countdown uses one replaceable controller
+and is stopped after navigation, match, cancellation, or expiry rather than accumulating intervals.
+Pure Node tests cover matched start/status routing, duplicate response/push idempotency, retryable join
+failure, sensitive-state clearing, timer cleanup, and the existing private waiting state. Manual
+two-browser checks for first-intent privacy, different-Door privacy, mutual transition, cancellation,
+expiry, and refresh restoration remain incomplete; automated browser E2E remains open.
+
 ---
 
 # Phase 8 — Integration and Quality
