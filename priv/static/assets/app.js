@@ -50,7 +50,7 @@ function connectSocket() {
 
 async function resumeLocalConversation() {
   const active = activeConversations(await listRecords())[0]
-  if (active) { app.conversationId = active.value.conversation_id; app.selectedDoor = active.value.display_door; joinConversation(app.conversationId) }
+  if (active) { app.conversationId = active.value.conversation_id; app.selectedDoor = active.value.display_door; updateDoorLabels(); joinConversation(app.conversationId) }
 }
 
 async function recoverIdentity() { await deleteRecord(identityKey); app.socket?.disconnect(); await createIdentity(true); connectSocket() }
@@ -139,7 +139,7 @@ function renderChatCards(container, conversations, records, emptyText, openable)
   container.replaceChildren()
   if (!conversations.length) { container.textContent = emptyText; return }
   conversations.forEach((conversation) => {
-    const article = document.createElement("article")
+    const article = document.createElement("article"); article.className = "chat-card"
     article.append(signatureRibbon(conversation.value.abstract_signature_seed))
     const title = document.createElement("h3"); title.textContent = conversation.value.display_door
     const date = document.createElement("time"); date.dateTime = conversation.value.started_at; date.textContent = new Date(conversation.value.started_at).toLocaleString()
@@ -156,6 +156,12 @@ function renderChatCards(container, conversations, records, emptyText, openable)
 function signatureRibbon(seed) {
   const ribbon = document.createElement("div"); ribbon.className = "signature-ribbon"; ribbon.setAttribute("aria-hidden", "true")
   const value = Number.parseInt((seed || "sig-77777777").slice(-8), 16); ribbon.style.setProperty("--signature-a", `hsl(${value % 360} 36% 48%)`); ribbon.style.setProperty("--signature-b", `hsl(${(value >>> 8) % 360} 48% 68%)`); return ribbon
+}
+
+function updateDoorLabels() {
+  if (!app.selectedDoor) return
+  $("#queue-door").textContent = app.selectedDoor
+  $("#conversation-door").textContent = app.selectedDoor
 }
 
 async function openHistory(conversationId) {
@@ -178,7 +184,7 @@ async function renderLocalViews() {
 function renderRecordList(container, records) { container.replaceChildren(); if (!records.length) { container.textContent = "Nothing saved locally yet."; return } records.forEach((record) => { const article = document.createElement("article"); const text = document.createElement("p"); text.textContent = record.value.text || record.type; const remove = document.createElement("button"); remove.textContent = "Delete"; remove.addEventListener("click", async () => { await deleteRecord(record.id); renderLocalViews(); renderDataInventory() }); article.append(text, remove); container.append(article) }) }
 async function renderDataInventory() { const records = await listRecords(); const totals = records.reduce((counts, {type}) => ({...counts, [type]: (counts[type] || 0) + 1}), {}); $("#local-data-list").textContent = Object.keys(totals).length ? Object.entries(totals).map(([type, count]) => `${type}: ${count}`).join(" · ") : "No local data stored." }
 
-DOORS.forEach((door) => { const button = document.createElement("button"); button.className = "door"; button.type = "button"; button.setAttribute("aria-pressed", "false"); const title = document.createElement("strong"); title.textContent = door.label; const description = document.createElement("span"); description.textContent = door.description; button.append(title, description); button.addEventListener("click", () => { app.selectedDoor = door.label; document.querySelectorAll(".door").forEach((node) => node.setAttribute("aria-pressed", String(node === button))); $("#join-queue").disabled = false }); $("#doors").append(button) })
+DOORS.forEach((door) => { const button = document.createElement("button"); button.className = "door"; button.type = "button"; button.dataset.door = door.value; button.setAttribute("aria-pressed", "false"); const mark = document.createElement("i"); mark.className = "door-mark"; mark.setAttribute("aria-hidden", "true"); const title = document.createElement("strong"); title.textContent = door.label; const description = document.createElement("span"); description.textContent = door.description; button.append(mark, title, description); button.addEventListener("click", () => { app.selectedDoor = door.label; updateDoorLabels(); document.querySelectorAll(".door").forEach((node) => node.setAttribute("aria-pressed", String(node === button))); $("#join-queue").disabled = false }); $("#doors").append(button) })
 document.addEventListener("click", (event) => { const target = event.target.closest("[data-go]"); if (target) show(target.dataset.go) })
 $("#join-queue").addEventListener("click", async () => { const payload = queuePayloadFor(app.selectedDoor); if (!payload) return announce("Choose a valid Door."); try { await push(app.participant, "queue:join", payload); show("queue") } catch { announce("Could not join the queue.") } })
 $("#leave-queue").addEventListener("click", async () => { await push(app.participant, "queue:leave"); show("doors") })

@@ -5,7 +5,7 @@ defmodule StrangertalksNewWeb.PageControllerTest do
     conn = get(conn, "/")
     body = html_response(conn, 200)
 
-    assert body =~ "What would help right now?"
+    assert body =~ "What do you need right now?"
 
     assert body =~
              "Normal messages are not permanently stored on StrangerTalks servers. Messages shown during this Conversation were temporarily cached on this device. You decide whether to keep them."
@@ -29,7 +29,8 @@ defmodule StrangertalksNewWeb.PageControllerTest do
     assert chats =~ "<h1>Chats</h1>"
 
     [_, history] = Regex.run(~r/(<section data-screen="history".*?<\/section>)/s, body)
-    assert history =~ "Saved on this device. This is a local copy, not an active Conversation."
+    assert history =~ "<strong>Local copy</strong>"
+    assert history =~ "This is not an active Conversation."
     refute history =~ "message-form"
     refute history =~ "typing"
     refute history =~ "presence"
@@ -41,8 +42,10 @@ defmodule StrangertalksNewWeb.PageControllerTest do
     javascript = File.read!(Path.join(static_dir, "assets/app.js"))
 
     assert css =~ "--bottom-nav-block-size:"
-    assert css =~ "env(safe-area-inset-bottom,0px)"
-    assert css =~ ".screen.top-level{padding-bottom:calc(var(--bottom-nav-block-size)"
+    assert css =~ ~r/env\(safe-area-inset-bottom,\s*0px\)/
+
+    assert css =~
+             ~r/\.screen\.top-level\s*\{\s*padding-bottom:\s*calc\(var\(--bottom-nav-block-size\)/
 
     assert javascript =~ ~s(label.textContent = "Local copy")
     assert javascript =~ ~s(open.textContent = "Open local copy")
@@ -50,5 +53,35 @@ defmodule StrangertalksNewWeb.PageControllerTest do
 
     refute javascript =~
              ~s(label.textContent = "Saved only on this device unless you export an encrypted backup.")
+  end
+
+  test "visual screen hierarchy preserves restrained matching conversation and retention controls",
+       %{
+         conn: conn
+       } do
+    body = conn |> get("/") |> html_response(200)
+
+    [_, matching] = Regex.run(~r/(<section data-screen="queue".*?<\/section>)/s, body)
+    assert matching =~ "Finding someone who chose the same space."
+    assert matching =~ "Leave queue"
+    refute matching =~ "queue count"
+    refute matching =~ "%"
+    refute matching =~ "compatibility"
+
+    [_, conversation] = Regex.run(~r/(<section data-screen="conversation".*?<\/section>)/s, body)
+    assert conversation =~ ~s(id="message-form")
+    assert conversation =~ ~s(id="end-conversation")
+    assert conversation =~ ~s(id="report-open")
+    assert conversation =~ ~s(id="block")
+    refute conversation =~ "read receipt"
+
+    [_, ended] = Regex.run(~r/(<section data-screen="ended".*?<\/section>)/s, body)
+    assert ended =~ "Keep this Conversation"
+    assert ended =~ "Save only a summary"
+    assert ended =~ "Let it fade"
+
+    refute body =~ "<img"
+    refute body =~ "avatar"
+    refute body =~ "profile"
   end
 end

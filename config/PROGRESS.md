@@ -1114,6 +1114,19 @@ Two-browser manual verification confirmed:
 Delete-all behavior remains covered by automated tests but has not been manually verified.
 Automated browser end-to-end coverage also remains open.
 
+### Visual product foundation
+
+The browser client now shares the locked Carbon/Graphite, Incandescent Cream, restrained Door
+accent, native typography, spacing, radius, motion, and safe-area token system. Talk, Matching,
+Conversation, End, and Chats use a consistent responsive hierarchy; Bonds and You inherit the same
+cards and navigation without gaining profile-like treatment or new functionality. Matching remains
+atmospheric without counts or compatibility estimates, Conversation stays nearly still with a
+safe-area-aware glass composer, and reduced-motion preferences disable decorative motion.
+
+This establishes a visual foundation, not a final approved design. Manual review is still required
+at 320px, 390px, 768px, desktop width, short viewports, and 200% zoom. Automated browser end-to-end
+coverage remains open.
+
 ---
 
 # Phase 8 — Integration and Quality
