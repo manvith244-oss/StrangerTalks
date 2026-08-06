@@ -1133,6 +1133,12 @@ follow new messages, while readers reviewing earlier content keep their position
 accessible New messages control. Cached active Conversations and historical local copies open at
 their newest rendered message without changing delivery, acknowledgement, or retention semantics.
 
+Manual browser verification confirmed that Conversation messages are anchored above the composer;
+short Conversations begin near the bottom of the message viewport; new messages appear at the bottom
+while older messages move upward; and the composer does not cover the latest message. Active messaging
+and existing local retention remained functional during this verification. The broader final visual
+review remains incomplete, and automated browser end-to-end coverage remains open.
+
 ---
 
 # Phase 8 — Integration and Quality
