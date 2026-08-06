@@ -1141,6 +1141,31 @@ review remains incomplete, and automated browser end-to-end coverage remains ope
 
 ---
 
+# Phase 7 — Media
+
+## Current Slice Specification — Voice Notes, backend transient delivery
+
+The V1 backend implements authenticated raw-binary upload and recipient-only download with approved
+media types, basic container-signature checks, a hard 1 MiB byte limit, declared 1–60,000 ms duration,
+and client-generated UUID idempotency. Audio uses temporary in-memory delivery, not permanent server
+storage. A supervised `VoiceNoteStore` atomically enforces one upload per participant, three pending
+notes and 3 MiB per Conversation, and a configurable 16 MiB application-wide default. Conversation
+processes coordinate chronological metadata, five-second retries, 120-second expiry, recipient-only
+acknowledgement, reconnection replay, and cleanup on terminal lifecycle or process exit.
+
+No VoiceNote table, PostgreSQL audio/metadata row, server-disk file, object storage, transcription,
+AI processing, biometric processing, or persistent counter update is used. The existing
+`voice_note_count` field is reserved and non-authoritative for this V1 path. Reports and SafetyReviews
+do not automatically receive audio; deliberate voice-report evidence remains a future consent design.
+V1 does not decode media to independently prove duration, one recipient client acknowledgement counts
+as delivery, and a BEAM crash can lose pending audio.
+
+Backend status is test-verified only. Browser recording, device retention, encrypted backup support,
+and real two-browser manual verification belong to the next commit and remain incomplete. Automated
+browser end-to-end coverage remains open.
+
+---
+
 # Phase 8 — Integration and Quality
 
 | Quality area | Evidence-backed status |

@@ -15,6 +15,12 @@ defmodule StrangertalksNewWeb.Router do
     pipe_through :api
 
     post "/participants", ParticipantController, :create
+
+    post "/conversations/:conversation_id/voice-notes/:voice_note_id",
+         VoiceNoteController,
+         :create
+
+    get "/conversations/:conversation_id/voice-notes/:voice_note_id", VoiceNoteController, :show
   end
 
   # Enable Swoosh mailbox preview in development

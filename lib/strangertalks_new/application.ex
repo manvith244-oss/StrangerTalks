@@ -15,6 +15,7 @@ defmodule StrangertalksNew.Application do
       {Registry, keys: :unique, name: StrangertalksNew.DistributedRegistry},
       {DynamicSupervisor,
        strategy: :one_for_one, name: StrangertalksNew.ConversationDynamicSupervisor},
+      StrangertalksNew.ConversationLifecycle.VoiceNoteStore,
 
       # Queue Engine Processes (Must boot before the Web Endpoint)
       StrangertalksNew.QueueEngine.QueueState,

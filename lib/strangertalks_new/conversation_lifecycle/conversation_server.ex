@@ -9,6 +9,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   use GenServer, restart: :transient, spawn_opt: [fullsweep_after: 10]
 
   alias StrangertalksNew.Conversation
+  alias StrangertalksNew.ConversationLifecycle.VoiceNoteStore
   alias StrangertalksNew.Repo
 
   require Logger
@@ -78,6 +79,14 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     safe_call(conversation_id, {:acknowledge_message, participant_id, message_id})
   end
 
+  def append_voice_note(conversation_id, sender_id, attrs, binary) do
+    safe_call(conversation_id, {:append_voice_note, sender_id, attrs, binary})
+  end
+
+  def acknowledge_voice_note(conversation_id, participant_id, voice_note_id) do
+    safe_call(conversation_id, {:acknowledge_voice_note, participant_id, voice_note_id})
+  end
+
   def start_typing(conversation_id, participant_id),
     do: safe_call(conversation_id, {:typing, :start, participant_id})
 
@@ -112,6 +121,8 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
         {:stop, :unknown_conversation}
 
       conversation ->
+        :ok = VoiceNoteStore.register_owner(conversation_id, self())
+
         participant_channels = %{
           conversation.participant_a_id => MapSet.new(),
           conversation.participant_b_id => MapSet.new()
@@ -126,6 +137,8 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
            typing_timers: %{},
            pending: %{},
            completed: %{},
+           pending_voice_notes: %{},
+           completed_voice_notes: %{},
            pending_count: 0,
            pending_bytes: 0,
            next_sequence: 1,
@@ -156,6 +169,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       case maybe_activate_conversation(state) do
         {:ok, state} ->
           state = replay_pending(state, participant_id, channel_pid)
+          state = replay_pending_voice_notes(state, participant_id, channel_pid)
           {:reply, :ok, state}
 
         {:error, _changeset} ->
@@ -206,6 +220,40 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       {:reply, {:error, :conversation_terminating}, state}
     else
       acknowledge_pending_message(state, participant_id, message_id)
+    end
+  end
+
+  def handle_call({:append_voice_note, sender_id, attrs, binary}, _from, state) do
+    state = prune_voice_completed(state)
+
+    with false <- terminating?(state),
+         true <- member?(state, sender_id),
+         true <- active_conversation?(state),
+         {:ok, result, state} <- accept_or_replay_voice_note(state, sender_id, attrs, binary) do
+      {:reply, {:ok, result}, state}
+    else
+      true -> {:reply, {:error, :conversation_terminating}, state}
+      false -> {:reply, {:error, :unauthorized_or_inactive_conversation}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:acknowledge_voice_note, participant_id, voice_note_id}, _from, state) do
+    state = prune_voice_completed(state)
+
+    case state.pending_voice_notes[voice_note_id] do
+      %{sender_id: ^participant_id} ->
+        {:reply, {:error, :sender_cannot_acknowledge}, state}
+
+      %{recipient_id: ^participant_id} = note ->
+        state = finalize_voice_note(state, note, :delivered, nil)
+        {:reply, {:ok, %{voice_note_id: voice_note_id, status: "delivered"}}, state}
+
+      nil ->
+        duplicate_voice_ack_result(state, participant_id, voice_note_id)
+
+      _note ->
+        {:reply, {:error, :not_voice_note_recipient}, state}
     end
   end
 
@@ -309,6 +357,47 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       nil -> {:noreply, prune_completed(state)}
       message -> {:noreply, finalize_message(state, message, :expired, "delivery_expired")}
     end
+  end
+
+  def handle_info({:retry_voice_note, voice_note_id, retry_token}, state) do
+    case state.pending_voice_notes[voice_note_id] do
+      %{retry_token: ^retry_token} = note ->
+        note = %{note | retry_ref: nil, retry_token: nil}
+        state = put_in(state.pending_voice_notes[voice_note_id], note)
+
+        if connected?(state, note.recipient_id) do
+          deliver_voice_note_to_participant(state, note.recipient_id, note)
+          {:noreply, schedule_voice_retry(state, voice_note_id)}
+        else
+          {:noreply, state}
+        end
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:expire_voice_note, voice_note_id, expiry_token}, state) do
+    case state.pending_voice_notes[voice_note_id] do
+      %{expiry_token: ^expiry_token} = note ->
+        {:noreply, finalize_voice_note(state, note, :expired, "delivery_expired")}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:prune_completed_voice_note, voice_note_id, completed_at}, state) do
+    state =
+      case state.completed_voice_notes[voice_note_id] do
+        %{completed_at: ^completed_at} ->
+          update_in(state.completed_voice_notes, &Map.delete(&1, voice_note_id))
+
+        _ ->
+          state
+      end
+
+    {:noreply, state}
   end
 
   def handle_info({:prune_completed, message_id, completed_at}, state) do
@@ -432,6 +521,113 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     end
   end
 
+  defp accept_or_replay_voice_note(state, sender_id, attrs, binary) do
+    voice_note_id = attrs.voice_note_id
+
+    cond do
+      note = state.pending_voice_notes[voice_note_id] ->
+        voice_idempotent_result(note, sender_id, attrs, state)
+
+      note = state.completed_voice_notes[voice_note_id] ->
+        voice_completed_result(note, sender_id, attrs, state)
+
+      map_size(state.pending_voice_notes) >= 3 ->
+        {:error, :voice_note_pending_limit}
+
+      true ->
+        recipient_id = other_participant(state, sender_id)
+        sequence = state.next_sequence
+        inserted_at = DateTime.utc_now()
+        expires_at = DateTime.add(inserted_at, div(@message_expiry_ms, 1_000), :second)
+        expiry_token = make_ref()
+
+        stored_note =
+          Map.merge(attrs, %{
+            conversation_id: state.conversation.conversation_id,
+            sender_id: sender_id,
+            recipient_id: recipient_id,
+            inserted_at: inserted_at,
+            expires_at: expires_at,
+            binary: binary
+          })
+
+        case VoiceNoteStore.put(stored_note) do
+          {:ok, _metadata, storage_status} ->
+            expiry_ref =
+              Process.send_after(
+                self(),
+                {:expire_voice_note, voice_note_id, expiry_token},
+                @message_expiry_ms
+              )
+
+            note =
+              attrs
+              |> Map.merge(%{
+                sender_id: sender_id,
+                recipient_id: recipient_id,
+                sequence: sequence,
+                inserted_at: inserted_at,
+                expiry_ref: expiry_ref,
+                expiry_token: expiry_token,
+                retry_ref: nil,
+                retry_token: nil
+              })
+
+            state = %{
+              state
+              | pending_voice_notes: Map.put(state.pending_voice_notes, voice_note_id, note),
+                next_sequence: sequence + 1
+            }
+
+            notify_voice_status(state, sender_id, voice_note_id, "sent_to_server", nil)
+
+            state =
+              if connected?(state, recipient_id),
+                do:
+                  state
+                  |> deliver_voice_note_to_participant(recipient_id, note)
+                  |> schedule_voice_retry(voice_note_id),
+                else: state
+
+            result = voice_result(note, "sent_to_server")
+            {:ok, Map.put(result, :storage, storage_status), state}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  defp voice_idempotent_result(note, sender_id, attrs, state) do
+    if same_voice_metadata?(note, sender_id, attrs),
+      do: {:ok, voice_result(note, "sent_to_server"), state},
+      else: {:error, :voice_note_id_conflict}
+  end
+
+  defp voice_completed_result(note, sender_id, attrs, state) do
+    if same_voice_metadata?(note, sender_id, attrs),
+      do: {:ok, voice_result(note, Atom.to_string(note.final_state)), state},
+      else: {:error, :voice_note_id_conflict}
+  end
+
+  defp same_voice_metadata?(note, sender_id, attrs) do
+    note.sender_id == sender_id and
+      Enum.all?(
+        [:content_hash, :media_type, :duration_ms, :byte_size],
+        &(Map.fetch!(note, &1) == Map.fetch!(attrs, &1))
+      )
+  end
+
+  defp voice_result(note, status),
+    do: %{
+      voice_note_id: note.voice_note_id,
+      status: status,
+      duration_ms: note.duration_ms,
+      byte_size: note.byte_size,
+      media_type: note.media_type,
+      sequence: note.sequence
+    }
+
   defp idempotent_result(message, sender_id, content_hash, state) do
     if message.sender_id == sender_id and message.content_hash == content_hash do
       {:ok,
@@ -511,9 +707,72 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   end
 
   defp fail_all_pending(state, reason) do
-    Enum.reduce(Map.values(state.pending), state, fn message, acc ->
-      finalize_message(acc, message, :failed, reason)
+    state =
+      Enum.reduce(Map.values(state.pending), state, fn message, acc ->
+        finalize_message(acc, message, :failed, reason)
+      end)
+
+    Enum.reduce(Map.values(state.pending_voice_notes), state, fn note, acc ->
+      finalize_voice_note(acc, note, :failed, reason)
     end)
+  end
+
+  defp finalize_voice_note(state, note, final_state, reason) do
+    cancel_timer(note.expiry_ref)
+    cancel_timer(note.retry_ref)
+    :ok = VoiceNoteStore.delete(state.conversation.conversation_id, note.voice_note_id)
+    completed_at = System.monotonic_time(:millisecond)
+
+    metadata =
+      note
+      |> Map.take([
+        :voice_note_id,
+        :sender_id,
+        :content_hash,
+        :media_type,
+        :duration_ms,
+        :byte_size,
+        :sequence
+      ])
+      |> Map.merge(%{final_state: final_state, completed_at: completed_at})
+
+    Process.send_after(
+      self(),
+      {:prune_completed_voice_note, note.voice_note_id, completed_at},
+      @completed_metadata_ttl_ms
+    )
+
+    notify_voice_status(
+      state,
+      note.sender_id,
+      note.voice_note_id,
+      Atom.to_string(final_state),
+      reason
+    )
+
+    %{
+      state
+      | pending_voice_notes: Map.delete(state.pending_voice_notes, note.voice_note_id),
+        completed_voice_notes: Map.put(state.completed_voice_notes, note.voice_note_id, metadata)
+    }
+  end
+
+  defp duplicate_voice_ack_result(state, participant_id, voice_note_id) do
+    case state.completed_voice_notes[voice_note_id] do
+      %{sender_id: sender_id, final_state: :delivered}
+      when sender_id != participant_id and
+             participant_id in [
+               state.conversation.participant_a_id,
+               state.conversation.participant_b_id
+             ] ->
+        {:reply, {:ok, %{voice_note_id: voice_note_id, status: "delivered"}}, state}
+
+      %{sender_id: ^participant_id} ->
+        {:reply, {:error, :sender_cannot_acknowledge}, state}
+
+      _ ->
+        {:reply, {:error, :unknown_voice_note}, state}
+    end
   end
 
   defp begin_terminal_transition(state, target_status, failure_reason, event_reason) do
@@ -632,6 +891,21 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     |> put_in([:pending, message_id, :retry_token], retry_token)
   end
 
+  defp schedule_voice_retry(state, voice_note_id) do
+    retry_token = make_ref()
+
+    retry_ref =
+      Process.send_after(
+        self(),
+        {:retry_voice_note, voice_note_id, retry_token},
+        @retry_interval_ms
+      )
+
+    state
+    |> put_in([:pending_voice_notes, voice_note_id, :retry_ref], retry_ref)
+    |> put_in([:pending_voice_notes, voice_note_id, :retry_token], retry_token)
+  end
+
   defp replay_pending(state, participant_id, channel_pid) do
     state.pending
     |> Map.values()
@@ -648,10 +922,44 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     end)
   end
 
+  defp replay_pending_voice_notes(state, participant_id, channel_pid) do
+    state.pending_voice_notes
+    |> Map.values()
+    |> Enum.filter(&(&1.recipient_id == participant_id))
+    |> Enum.sort_by(& &1.sequence)
+    |> Enum.reduce(state, fn note, acc ->
+      send_voice_note_delivery(channel_pid, note)
+      if note.retry_ref, do: acc, else: schedule_voice_retry(acc, note.voice_note_id)
+    end)
+  end
+
   defp deliver_to_participant(state, participant_id, message) do
     state.participant_channels
     |> Map.fetch!(participant_id)
     |> Enum.each(&send_delivery(&1, message))
+  end
+
+  defp deliver_voice_note_to_participant(state, participant_id, note) do
+    state.participant_channels
+    |> Map.fetch!(participant_id)
+    |> Enum.each(&send_voice_note_delivery(&1, note))
+
+    state
+  end
+
+  defp send_voice_note_delivery(channel_pid, note) do
+    send(
+      channel_pid,
+      {:conversation_voice_note,
+       %{
+         voice_note_id: note.voice_note_id,
+         duration_ms: note.duration_ms,
+         byte_size: note.byte_size,
+         media_type: note.media_type,
+         sequence: note.sequence,
+         timestamp: DateTime.to_iso8601(note.inserted_at)
+       }}
+    )
   end
 
   defp send_delivery(channel_pid, message) do
@@ -673,6 +981,15 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     state.participant_channels
     |> Map.fetch!(participant_id)
     |> Enum.each(&send(&1, {:conversation_message_status, payload}))
+  end
+
+  defp notify_voice_status(state, participant_id, voice_note_id, status, reason) do
+    payload = %{voice_note_id: voice_note_id, status: status}
+    payload = if reason, do: Map.put(payload, :reason, reason), else: payload
+
+    state.participant_channels
+    |> Map.fetch!(participant_id)
+    |> Enum.each(&send(&1, {:conversation_voice_note_status, payload}))
   end
 
   defp add_channel(state, participant_id, channel_pid) do
@@ -839,6 +1156,18 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       Map.reject(state.completed, fn {_id, metadata} -> metadata.completed_at <= cutoff end)
 
     %{state | completed: completed}
+  end
+
+  defp prune_voice_completed(state) do
+    cutoff = System.monotonic_time(:millisecond) - @completed_metadata_ttl_ms
+
+    %{
+      state
+      | completed_voice_notes:
+          Map.reject(state.completed_voice_notes, fn {_id, metadata} ->
+            metadata.completed_at <= cutoff
+          end)
+    }
   end
 
   defp active_conversation?(state) do

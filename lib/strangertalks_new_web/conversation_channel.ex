@@ -73,6 +73,25 @@ defmodule StrangertalksNewWeb.ConversationChannel do
     {:reply, {:error, %{reason: "invalid_message_payload"}}, socket}
   end
 
+  def handle_in("voice_note:ack", %{"voice_note_id" => voice_note_id}, socket)
+      when is_binary(voice_note_id) do
+    with {:ok, _uuid} <- Ecto.UUID.cast(voice_note_id),
+         {:ok, result} <-
+           ConversationServer.acknowledge_voice_note(
+             conversation_id(socket),
+             socket.assigns.participant_id,
+             voice_note_id
+           ) do
+      {:reply, {:ok, result}, socket}
+    else
+      :error -> {:reply, {:error, %{reason: "invalid_voice_note_id"}}, socket}
+      {:error, reason} -> {:reply, {:error, %{reason: client_reason(reason)}}, socket}
+    end
+  end
+
+  def handle_in("voice_note:ack", _params, socket),
+    do: {:reply, {:error, %{reason: "invalid_voice_note_payload"}}, socket}
+
   def handle_in("conversation:end", _params, socket) do
     case ConversationServer.complete_conversation(
            conversation_id(socket),
@@ -154,6 +173,16 @@ defmodule StrangertalksNewWeb.ConversationChannel do
     {:noreply, socket}
   end
 
+  def handle_info({:conversation_voice_note, payload}, socket) do
+    push(socket, "voice_note:new", payload)
+    {:noreply, socket}
+  end
+
+  def handle_info({:conversation_voice_note_status, payload}, socket) do
+    push(socket, "voice_note:status", payload)
+    {:noreply, socket}
+  end
+
   def handle_info({:conversation_completed, payload}, socket) do
     push(socket, "conversation:ended", payload)
     {:noreply, socket}
@@ -190,6 +219,7 @@ defmodule StrangertalksNewWeb.ConversationChannel do
   defp client_reason(:sender_cannot_acknowledge), do: "sender_cannot_acknowledge"
   defp client_reason(:not_message_recipient), do: "not_message_recipient"
   defp client_reason(:unknown_message), do: "unknown_message"
+  defp client_reason(:unknown_voice_note), do: "unknown_voice_note"
   defp client_reason(:conversation_terminating), do: "conversation_terminating"
   defp client_reason(:not_conversation_member), do: "not_conversation_member"
   defp client_reason(:conversation_inactive), do: "conversation_inactive"
