@@ -136,7 +136,37 @@ export async function putRecord(record) { if (!validRecord(record)) throw new Er
 export async function deleteRecord(id) { return request("readwrite", (store) => store.delete(id)) }
 export async function clearRecords() { return request("readwrite", (store) => store.clear()) }
 export async function importRecords(imported) { const merged = mergeRecords(await listRecords(), imported); await clearRecords(); for (const record of merged) await putRecord(record); return merged }
-export async function replaceRecords(records) { await clearRecords(); for (const record of records) await putRecord(record); return records }
+export async function replaceRecords(records, indexedDb = indexedDB) {
+  if (!Array.isArray(records) || records.some((record) => !validRecord(record))) throw new Error("invalid_record")
+  return atomicReplaceRecords(records, indexedDbAdapter(indexedDb))
+}
+
+export async function atomicReplaceRecords(records, adapter) {
+  if (!Array.isArray(records) || records.some((record) => !validRecord(record))) throw new Error("invalid_record")
+  return adapter.run([{action: "clear"}, ...records.map((record) => ({action: "put", record}))]).then(() => records)
+}
+
+function indexedDbAdapter(indexedDb) {
+  return {run: (operations) => new Promise((resolve, reject) => {
+    const opening = indexedDb.open(DB_NAME, 1)
+    opening.onupgradeneeded = () => opening.result.createObjectStore(STORE, {keyPath: "id"})
+    opening.onerror = () => reject(opening.error)
+    opening.onsuccess = () => {
+      const database = opening.result
+      const transaction = database.transaction(STORE, "readwrite")
+      const store = transaction.objectStore(STORE)
+      transaction.oncomplete = () => { database.close(); resolve() }
+      transaction.onabort = () => { database.close(); reject(transaction.error || new Error("restore_aborted")) }
+      transaction.onerror = () => {}
+      try {
+        operations.forEach((operation) => operation.action === "clear" ? store.clear() : store.put(operation.record))
+      } catch (error) {
+        transaction.abort()
+        reject(error)
+      }
+    }
+  })}
+}
 
 function validRecord(record) { return record && typeof record.id === "string" && typeof record.type === "string" && !Number.isNaN(Date.parse(record.updated_at)) }
 async function serializeBackupRecords(records) {

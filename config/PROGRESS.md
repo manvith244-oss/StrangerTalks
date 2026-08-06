@@ -1715,4 +1715,14 @@ best-effort after an authoritative Drive success, and same-account operations re
 the V1 account lock. The lock is still single-node and requires distributed replacement before a
 multi-node deployment.
 
+Encrypted restore validates the complete decrypted snapshot before preview or mutation and replaces
+local records in one IndexedDB transaction. The explicit category allowlist is:
+`kept_conversations`, `kept_messages`, `summaries`, `memories`, `bonds`, `bond_nicknames`,
+`abstract_signature_seeds`, `accessibility_settings`, `privacy_settings`, `user_preferences`, and
+their `tombstones`. The only currently syncable setting keys are `settings:privacy` (reduced motion)
+and `settings:auto-sync`; OAuth/session/CSRF state, continuity prompts, temporary voice-warning
+state, Participant credentials, queues, debug state, and Voice Note audio are excluded. Unlocked
+non-extractable keys are namespaced by a server-issued opaque continuity identifier. Automatic
+protection never prompts or silently resolves a conflict; setup and conflict restore remain explicit.
+
 *Last Updated: August 2026*

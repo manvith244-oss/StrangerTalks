@@ -19,7 +19,7 @@ test("an unlocked non-extractable key can update and reopen a later revision wit
   const records = syncableRecords([kept, message])
   const {envelope, syncKey} = await encryptSyncBundle(records, "recovery words")
   assert.equal(syncKey.extractable, false)
-  const nextRecords = [...records, {id: "memory:1", type: "memory", value: {text: "later"}, updated_at: time, deleted_at: null}]
+  const nextRecords = [...records, ...syncableRecords([{id: "memory:1", type: "memory", value: {text: "later"}, updated_at: time}])]
   const next = await encryptSyncWithKey(nextRecords, syncKey, envelope, 1)
   assert.deepEqual(await decryptSyncWithKey(next, syncKey), nextRecords)
   const unlocked = await unlockSync(next, "recovery words")
@@ -36,17 +36,35 @@ test("only deliberately retained categories sync and voice data never does", () 
   assert.equal(JSON.stringify(records).includes("secret"), false)
 })
 
-test("unknown and malformed record types fail before mutation", () => {
+test("unknown and malformed record types fail before mutation", async () => {
   assert.equal(validateSyncRecords([{id: "bad", type: "future", value: {}, updated_at: time}]), false)
-  assert.throws(() => mergeSyncRecords([], [{id: "bad", type: "future", updated_at: time}]), /invalid_sync_records/)
+  await assert.rejects(() => mergeSyncRecords([], [{id: "bad", type: "future", updated_at: time}]), /invalid_sync_records/)
 })
 
-test("newest timestamp wins while tombstones block accidental restoration", () => {
-  const old = {id: "memory:1", type: "memory", value: {text: "old"}, updated_at: time, deleted_at: null}
+test("newest timestamp wins while tombstones block accidental restoration", async () => {
+  const [old] = syncableRecords([{id: "memory:1", type: "memory", value: {text: "old"}, updated_at: time}])
   const newer = {...old, value: {text: "new"}, updated_at: "2026-08-06T01:00:00Z"}
-  assert.deepEqual(mergeSyncRecords([old], [newer]), [newer])
+  assert.deepEqual(await mergeSyncRecords([old], [newer]), [newer])
   const tombstone = tombstoneFor(newer, "2026-08-06T02:00:00Z")
   const restored = {...newer, updated_at: "2026-08-06T03:00:00Z"}
-  assert.deepEqual(mergeSyncRecords([tombstone], [restored]), [tombstone])
-  assert.deepEqual(mergeSyncRecords([tombstone], [restored], {restoreTombstones: true}), [restored])
+  assert.deepEqual(await mergeSyncRecords([tombstone], [restored]), [restored])
+  assert.deepEqual(await mergeSyncRecords([tombstone], [restored], {restoreTombstones: true}), [restored])
+})
+
+test("strict sync validation rejects unknown settings, future dates, duplicate IDs and security fields", () => {
+  const [memory] = syncableRecords([{id: "memory:1", type: "memory", value: {text: "safe"}, updated_at: time}])
+  assert.equal(validateSyncRecords([memory], Date.parse(time)), true)
+  assert.equal(validateSyncRecords([memory, memory], Date.parse(time)), false)
+  assert.equal(validateSyncRecords([{...memory, updated_at: "2026-08-08T00:00:01Z"}], Date.parse(time)), false)
+  assert.equal(validateSyncRecords([{...memory, value: {token: "forbidden"}}], Date.parse(time)), false)
+  assert.equal(syncableRecords([{id: "settings:voice-warning:v1", type: "settings", value: {voice_warning_version: 1}, updated_at: time}]).length, 0)
+})
+
+test("equal timestamps use tombstone precedence and canonical SHA-256 tie breaking", async () => {
+  const [first] = syncableRecords([{id: "memory:tie", type: "memory", value: {text: "a"}, updated_at: time}])
+  const second = {...first, value: {text: "b"}}
+  const forward = await mergeSyncRecords([first], [second], {validationNow: Date.parse(time)})
+  const reverse = await mergeSyncRecords([second], [first], {validationNow: Date.parse(time)})
+  assert.deepEqual(forward, reverse)
+  assert.deepEqual(await mergeSyncRecords([first], [tombstoneFor(first, time)], {validationNow: Date.parse(time)}), [tombstoneFor(first, time)])
 })

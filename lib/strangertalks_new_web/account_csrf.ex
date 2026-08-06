@@ -11,6 +11,13 @@ defmodule StrangertalksNewWeb.AccountCSRF do
     Base.url_encode64(:crypto.mac(:hmac, :sha256, secret(), payload), padding: false)
   end
 
+  def continuity_id(session) do
+    Base.url_encode64(
+      :crypto.mac(:hmac, :sha256, secret(), "strangertalks-continuity-v1" <> session.account_id),
+      padding: false
+    )
+  end
+
   def verify(conn, session) do
     with [provided] <- get_req_header(conn, @header),
          true <- same_origin?(conn),

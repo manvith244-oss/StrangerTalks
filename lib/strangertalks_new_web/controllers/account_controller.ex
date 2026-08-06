@@ -16,6 +16,7 @@ defmodule StrangertalksNewWeb.AccountController do
           participant_id: participant_id,
           participant_token: ParticipantToken.sign(participant_id),
           csrf_token: AccountCSRF.token(account_session),
+          continuity_id: AccountCSRF.continuity_id(account_session),
           capabilities: %{google_continuity: true, encrypted_sync: true}
         })
       else

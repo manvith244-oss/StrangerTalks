@@ -39,7 +39,7 @@ async function bootstrap() {
   const saved = await getRecord(identityKey)
   const account = await fetch("/api/account/session", {credentials: "same-origin"}).then((response) => response.json()).catch(() => ({available: false, connected: false}))
   app.account = {...app.account, ...account}
-  if (account.connected && await supportsPersistentCryptoKey().catch(() => false)) app.account.syncKey = await loadSyncKey().catch(() => null)
+  if (account.connected && await supportsPersistentCryptoKey().catch(() => false)) app.account.syncKey = await loadSyncKey(account.continuity_id).catch(() => null)
   if (account.connected) {
     const retained = syncableRecords(await listRecords())
     const useConnected = !saved || saved.value.participant_id === account.participant_id || !retained.length || confirm("Use your privately connected participant on this device? Existing kept local data will remain here until you choose Restore or Sync. Choose Cancel to stay with this guest.")
@@ -480,7 +480,7 @@ async function uploadSync(records, baseRevision, passphrase) {
     const bundle = await encryptSyncBundle(syncableRecords(records), passphrase, baseRevision)
     envelope = bundle.envelope
     app.account.syncKey = bundle.syncKey
-    if (await supportsPersistentCryptoKey().catch(() => false)) await storeSyncKey(bundle.syncKey).catch(() => {})
+    if (await supportsPersistentCryptoKey().catch(() => false)) await storeSyncKey(bundle.syncKey, app.account.continuity_id).catch(() => {})
   }
   const response = await accountFetch("/api/account/sync", {method: "PUT", headers: {"content-type": "application/json"}, body: JSON.stringify({base_revision: baseRevision, envelope})})
   const body = await response.json().catch(() => ({}))
@@ -497,7 +497,7 @@ async function mergeRemoteRecords(remoteRecords) {
   const local = await listRecords()
   const selected = syncableRecords(local)
   const selectedIds = new Set(selected.map(({id}) => id))
-  const merged = mergeSyncRecords(selected, remoteRecords)
+  const merged = await mergeSyncRecords(selected, remoteRecords)
   const counts = merged.reduce((result, record) => ({...result, [record.type]: (result[record.type] || 0) + 1}), {})
   if (!confirm(`Restore these encrypted categories on this device? ${Object.entries(counts).map(([type, count]) => `${type}: ${count}`).join(", ") || "No retained records"}`)) return false
   await replaceRecords([...local.filter((record) => !selectedIds.has(record.id)), ...merged])
@@ -515,7 +515,7 @@ async function restoreFromGoogle(automatic = false) {
   if (!records) {
     const unlocked = await unlockSync(remote.envelope, app.account.passphrase || requestRecoveryPassphrase())
     records = unlocked.records; app.account.syncKey = unlocked.syncKey
-    if (await supportsPersistentCryptoKey().catch(() => false)) await storeSyncKey(unlocked.syncKey).catch(() => {})
+    if (await supportsPersistentCryptoKey().catch(() => false)) await storeSyncKey(unlocked.syncKey, app.account.continuity_id).catch(() => {})
   }
   if (await mergeRemoteRecords(records)) { announce("Encrypted Google data was restored and merged. Newer valid records won; deletions remained deleted."); return true }
   return false
@@ -536,11 +536,11 @@ async function syncNow() {
   if (!remoteRecords) {
     const unlocked = await unlockSync(remote.envelope, app.account.passphrase || requestRecoveryPassphrase())
     remoteRecords = unlocked.records; app.account.syncKey = unlocked.syncKey
-    if (await supportsPersistentCryptoKey().catch(() => false)) await storeSyncKey(unlocked.syncKey).catch(() => {})
+    if (await supportsPersistentCryptoKey().catch(() => false)) await storeSyncKey(unlocked.syncKey, app.account.continuity_id).catch(() => {})
   }
   const passphrase = app.account.passphrase
   const local = await listRecords()
-  const merged = mergeSyncRecords(syncableRecords(local), remoteRecords)
+  const merged = await mergeSyncRecords(syncableRecords(local), remoteRecords)
   if (!confirm(`Merge ${merged.length} retained records and replace revision ${remote.revision}?`)) return
   try { await uploadSync([...local.filter((record) => !new Set(syncableRecords(local).map(({id}) => id)).has(record.id)), ...merged], remote.revision, passphrase); announce("Encrypted Google sync is current.") }
   catch (error) { if (error.message === "sync_conflict") { announce("A newer copy exists. Restore and review it before retrying."); const restored = await restoreFromGoogle(); if (restored && confirm("The newer copy was merged. Retry encrypted sync now?")) { await uploadSync(await listRecords(), app.account.revision, app.account.passphrase); announce("Encrypted Google sync is current.") } } else throw error }
@@ -550,7 +550,18 @@ async function maybeAutoSync() {
   const enabled = (await getRecord("settings:auto-sync"))?.value.enabled === true
   if (!enabled || !app.account.connected) return
   if (!app.account.passphrase && !app.account.syncKey) { $("#sync-status").textContent = "New saved data is waiting. Use Sync now to unlock encrypted sync for this browser session."; return }
-  await syncNow().catch(() => { $("#sync-status").textContent = "Local changes are waiting for a manual sync." })
+  try {
+    const remote = await fetchRemoteSync()
+    if (remote.status === "empty" || !app.account.syncKey) { $("#sync-status").textContent = "Local changes are waiting. Use Sync now to finish setup."; return }
+    const remoteRecords = await decryptSyncWithKey(remote.envelope, app.account.syncKey)
+    const local = await listRecords()
+    const selectedIds = new Set(syncableRecords(local).map(({id}) => id))
+    const merged = await mergeSyncRecords(syncableRecords(local), remoteRecords)
+    await uploadSync([...local.filter((record) => !selectedIds.has(record.id)), ...merged], remote.revision, null)
+  } catch (error) {
+    if (error.message === "google_reauthorization_required") $("#account-reauthorize").hidden = false
+    $("#sync-status").textContent = error.message === "sync_conflict" ? "A newer encrypted copy exists. Use Restore from Google to review it." : "Local changes are waiting for a manual sync."
+  }
 }
 
 async function offerContinuity() {
@@ -604,6 +615,7 @@ $("#export-data").addEventListener("click", async () => { const passphrase = pro
 $("#import-data").addEventListener("change", async (event) => { const file = event.target.files[0]; if (!file) return; const passphrase = prompt("Enter this backup’s passphrase."); if (!passphrase) return; try { await importRecords(await decryptBackup(JSON.parse(await file.text()), passphrase)); await renderLocalViews(); await renderDataInventory(); announce("Backup merged. Newer records won for matching stable IDs.") } catch { announce("Backup could not be opened. Check the file and passphrase.") } finally { event.target.value = "" } })
 $("#account-link").addEventListener("click", () => startGoogle("link").catch(() => announce("Private Google connection could not start.")))
 $("#account-login").addEventListener("click", () => startGoogle("login").catch(() => announce("Private Google sign-in could not start.")))
+$("#account-reauthorize").addEventListener("click", () => startGoogle("login").catch(() => announce("Google reauthorization could not start. Local data remains.")))
 $("#suggest-connect").addEventListener("click", () => startGoogle("link").catch(() => announce("Private Google connection could not start.")))
 $("#suggest-dismiss").addEventListener("click", async () => { await putRecord({id: "settings:continuity-suggestion", type: "settings", value: {dismissed: true}, updated_at: now()}); $("#continuity-suggestion").hidden = true })
 $("#sync-now").addEventListener("click", () => syncNow().catch((error) => announce(error.message === "passphrase_mismatch" ? "Recovery passphrases did not match." : error.message === "google_reauthorization_required" ? "Google needs to be connected again. Local data was not changed." : "Encrypted sync could not complete.")))
