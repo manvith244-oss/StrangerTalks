@@ -14,7 +14,13 @@ defmodule StrangertalksNew.Matching do
       values: [:CREATED, :TRANSITIONING, :ACTIVE, :ENDED, :FAILED, :EXPIRED]
 
     field :match_strategy, Ecto.Enum,
-      values: [:COMPATIBILITY, :OPPORTUNITY, :SCARCITY, :MANUAL_OVERRIDE]
+      values: [
+        COMPATIBILITY: "COMPATIBILITY",
+        OPPORTUNITY: "OPPORTUNITY",
+        SCARCITY: "SCARCITY",
+        MANUAL_OVERRIDE: "MANUAL_OVERRIDE",
+        relationship_reconnect_v1: "RELATIONSHIP_RECONNECT_V1"
+      ]
 
     field :failure_reason, Ecto.Enum,
       values: [
@@ -76,7 +82,6 @@ defmodule StrangertalksNew.Matching do
     :match_strategy,
     :participant_a_id,
     :participant_b_id,
-    :compatibility_score,
     :queue_entry_time,
     :match_found_time,
     :queue_duration_seconds,
@@ -102,6 +107,7 @@ defmodule StrangertalksNew.Matching do
     :conversation_health_score,
     :match_quality_score,
     :learning_version,
+    :compatibility_score,
     :queue_id,
     :atmosphere_id,
     :icebreaker_id,
@@ -111,9 +117,19 @@ defmodule StrangertalksNew.Matching do
   ]
 
   def changeset(matching, attrs) do
-    matching
-    |> cast(attrs, @required_fields ++ @optional_fields)
-    |> validate_required(@required_fields)
+    changeset =
+      matching
+      |> cast(attrs, @required_fields ++ @optional_fields)
+      |> validate_required(@required_fields)
+
+    changeset =
+      if get_field(changeset, :match_strategy) == :relationship_reconnect_v1,
+        do: changeset,
+        else: validate_required(changeset, [:compatibility_score])
+
+    changeset
+    |> check_constraint(:match_strategy, name: :match_strategy_check)
+    |> check_constraint(:compatibility_score, name: :matches_compatibility_by_strategy_check)
     |> foreign_key_constraint(:participant_a_id)
     |> foreign_key_constraint(:participant_b_id)
     |> unique_constraint(:match_id, name: :matches_pkey)

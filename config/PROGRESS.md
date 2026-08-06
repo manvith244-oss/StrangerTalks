@@ -1172,6 +1172,21 @@ Frontend and backend status is automated-test verified only. Real two-browser ma
 record, preview, send, receive, playback, delivered acknowledgement, Keep, Summary, Fade, deletion,
 and refresh/local replay remains incomplete. Automated browser end-to-end coverage remains open.
 
+## Current Slice Specification — Private mutual Bond reconnection
+
+Bond reconnection uses server-authoritative, 15-minute availability intents. The first participant’s
+Door remains private and produces no notification. Only two independently active, unexpired intents
+for the same Relationship and canonical Door can create a reconnect. A relationship-scoped database
+lock and one Ecto.Multi create exactly one Match and pending Conversation, consume both intents, and
+update the existing Relationship atomically. The Match uses `relationship_reconnect_v1` with a null
+compatibility score; the database continues requiring compatibility for every ordinary strategy.
+
+Automated backend tests verify membership and socket identity, first-intent privacy, idempotency,
+private Door replacement and mismatch, same-Door persistence, concurrency, expiry, cancellation,
+block/queue/active-Conversation rejection, safe multi-tab notification, unchanged Relationship
+identity, and absence of automatic Message or safety records. Browser interaction and real
+two-browser verification remain incomplete. Automated browser end-to-end coverage remains open.
+
 ---
 
 # Phase 8 — Integration and Quality

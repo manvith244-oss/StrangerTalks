@@ -3,6 +3,7 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
 
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.QueueEngine.QueueState
+  alias StrangertalksNew.RelationshipReconnections
 
   @matchmaking_topic "strangertalks:matchmaking"
   @doors %{
@@ -66,6 +67,51 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
     {:reply, {:ok, %{status: "left"}}, socket}
   end
 
+  def handle_in(
+        "bond:reconnect_start",
+        %{"relationship_id" => relationship_id, "door_type" => door_type},
+        socket
+      )
+      when is_binary(relationship_id) and is_binary(door_type) do
+    with {:ok, _uuid} <- Ecto.UUID.cast(relationship_id),
+         {:ok, door} <- door_from_string(door_type),
+         {:ok, result} <-
+           RelationshipReconnections.start_or_replace(
+             relationship_id,
+             socket.assigns.participant_id,
+             door
+           ) do
+      {:reply, {:ok, result}, socket}
+    else
+      _ -> {:reply, {:error, %{reason: "reconnection_unavailable"}}, socket}
+    end
+  end
+
+  def handle_in("bond:reconnect_start", _params, socket),
+    do: {:reply, {:error, %{reason: "reconnection_unavailable"}}, socket}
+
+  def handle_in("bond:reconnect_cancel", %{"relationship_id" => relationship_id}, socket)
+      when is_binary(relationship_id) do
+    case RelationshipReconnections.cancel(relationship_id, socket.assigns.participant_id) do
+      {:ok, result} -> {:reply, {:ok, result}, socket}
+      {:error, _} -> {:reply, {:error, %{reason: "reconnection_unavailable"}}, socket}
+    end
+  end
+
+  def handle_in("bond:reconnect_cancel", _params, socket),
+    do: {:reply, {:error, %{reason: "reconnection_unavailable"}}, socket}
+
+  def handle_in("bond:reconnect_status", %{"relationship_id" => relationship_id}, socket)
+      when is_binary(relationship_id) do
+    case RelationshipReconnections.status(relationship_id, socket.assigns.participant_id) do
+      {:ok, result} -> {:reply, {:ok, result}, socket}
+      {:error, _} -> {:reply, {:error, %{reason: "reconnection_unavailable"}}, socket}
+    end
+  end
+
+  def handle_in("bond:reconnect_status", _params, socket),
+    do: {:reply, {:error, %{reason: "reconnection_unavailable"}}, socket}
+
   def handle_in("create", _params, socket) do
     {:reply, {:error, %{reason: "unsupported_event"}}, socket}
   end
@@ -103,6 +149,21 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
       ) do
     if socket.assigns.participant_id in [participant_a_id, participant_b_id] do
       push(socket, "relationship:created", %{status: "created", relationship_id: relationship_id})
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_info(
+        {:bond_reconnect_matched, conversation_id, participant_a_id, participant_b_id},
+        socket
+      ) do
+    if socket.assigns.participant_id in [participant_a_id, participant_b_id] do
+      push(socket, "match_found", %{
+        conversation_id: conversation_id,
+        status: "matched",
+        origin: "bond_reconnect"
+      })
     end
 
     {:noreply, socket}
