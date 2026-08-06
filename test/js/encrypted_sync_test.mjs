@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import {decryptSync, encryptSync, mergeSyncRecords, syncableRecords, tombstoneFor, validSyncEnvelope, validateSyncRecords} from "../../priv/static/assets/encrypted_sync.mjs"
+import {decryptSync, decryptSyncWithKey, encryptSync, encryptSyncBundle, encryptSyncWithKey, mergeSyncRecords, syncableRecords, tombstoneFor, unlockSync, validSyncEnvelope, validateSyncRecords} from "../../priv/static/assets/encrypted_sync.mjs"
 
 const time = "2026-08-06T00:00:00Z"
 const kept = {id: "conversation:1", type: "local_conversation", value: {conversation_id: "1", status: "kept"}, updated_at: time}
@@ -13,6 +13,18 @@ test("sync encryption round trips locally and exposes no plaintext", async () =>
   assert.equal(JSON.stringify(envelope).includes("kept"), false)
   assert.deepEqual(await decryptSync(envelope, "recovery words"), records)
   await assert.rejects(() => decryptSync(envelope, "wrong words"))
+})
+
+test("an unlocked non-extractable key can update and reopen a later revision without retaining the passphrase", async () => {
+  const records = syncableRecords([kept, message])
+  const {envelope, syncKey} = await encryptSyncBundle(records, "recovery words")
+  assert.equal(syncKey.extractable, false)
+  const nextRecords = [...records, {id: "memory:1", type: "memory", value: {text: "later"}, updated_at: time, deleted_at: null}]
+  const next = await encryptSyncWithKey(nextRecords, syncKey, envelope, 1)
+  assert.deepEqual(await decryptSyncWithKey(next, syncKey), nextRecords)
+  const unlocked = await unlockSync(next, "recovery words")
+  assert.equal(unlocked.syncKey.extractable, false)
+  assert.deepEqual(unlocked.records, nextRecords)
 })
 
 test("only deliberately retained categories sync and voice data never does", () => {

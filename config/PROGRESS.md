@@ -1658,4 +1658,44 @@ moved only through the separate encrypted file export. Real Google Drive verific
 * `KNOWN — NOT FIXED`: Voice Note audio is intentionally excluded from Google sync pending a
   separately approved encrypted binary-storage and quota policy.
 
+## Current Slice Specification — Cross-device account and sync experience
+
+Guest mode remains the first and complete product path. The You screen offers private continuity
+only as an optional action and may show one dismissible suggestion after a Bond, kept Conversation,
+summary, or Memory becomes worth preserving. Connected users see account and encrypted-sync state
+without any Google identity. Link, login, restore, sync, delete-sync, device sign-out, all-device
+sign-out, and disconnect are distinct actions with distinct confirmations.
+
+## Architecture Reference Update — Browser continuity lifecycle
+
+The browser obtains a fresh Participant token from the HttpOnly account session and continues using
+the existing socket identity; there is no second Conversation identity. A new device downloads only
+the opaque envelope, asks for the recovery passphrase locally, previews retained categories, and
+merges only after confirmation. Automatic upload is opt-in and runs only after deliberate retained
+data changes while encrypted sync is unlocked in the current browser session.
+
+## Engineering Progress — Cross-device account and sync experience
+
+The guest, connected, unavailable, first-sync, returning-device restore, conflict, revocation,
+delete-sync, sign-out, and disconnect states are represented in the browser client. The UI states
+explicitly that Voice Note audio is excluded from Google sync. Automated static and pure-crypto
+coverage is present; real Google login/Drive behavior and full automated browser E2E remain open and
+must not be described as manually verified.
+
+Automated evidence: `node --test test/js/*.mjs` passed with 37 tests and 0 failures;
+`mix.bat compile --warnings-as-errors` passed; `mix.bat precommit` passed with 158 tests and
+0 failures; and `git diff --check` passed. The isolated database migration chain, two-migration
+rollback, schema removal checks, re-migration, 13 focused database tests, and final drop all passed
+against only `strangertalks_new_test_google_continuity_migration`.
+
+## Technical Debt — Account and sync experience
+
+* `KNOWN — NOT FIXED`: Real-provider browser verification requires approved Google credentials,
+  redirect configuration, consent-screen review, and deployment HTTPS.
+* `KNOWN — NOT FIXED`: Automated browser E2E for OAuth redirects, recovery prompts, two-device
+  restore, conflict resolution, and revocation remains open.
+* `KNOWN — NOT FIXED`: Browsers that cannot structured-clone a non-extractable `CryptoKey` into
+  IndexedDB require the recovery passphrase again after each browser restart. Supported browsers
+  reuse the non-extractable key; raw key material is never written to `localStorage`.
+
 *Last Updated: August 2026*

@@ -12,9 +12,10 @@ import {
   warningAcknowledged
 } from "./voice_notes.mjs"
 import {createMatchedTransitionTracker, createReconnectCountdownController, reconnectDisplayState, reconnectStateRecord, remainingAvailabilitySeconds, unavailableReconnectState} from "./bond_reconnect.mjs"
+import {decryptSyncWithKey, encryptSyncBundle, encryptSyncWithKey, loadSyncKey, mergeSyncRecords, storeSyncKey, supportsPersistentCryptoKey, syncableRecords, tombstoneFor, unlockSync} from "./encrypted_sync.mjs"
 
 const identityKey = "strangertalks.identity.v1"
-const app = {identity: null, socket: null, participant: null, participantJoined: false, conversation: null, conversationId: null, selectedDoor: null, rendered: new Set(), typingTimer: null, historyConversationId: null, timelinePinned: true, matchedTransition: createMatchedTransitionTracker(), reconnectCountdown: createReconnectCountdownController(), voice: {mediaType: null, recorder: null, stream: null, chunks: [], startedAt: 0, timer: null, stopTimer: null, discard: false, blob: null, objectUrl: null, voiceNoteId: null, durationMs: 0}, voiceUrls: new Map()}
+const app = {identity: null, socket: null, participant: null, participantJoined: false, conversation: null, conversationId: null, selectedDoor: null, rendered: new Set(), typingTimer: null, historyConversationId: null, timelinePinned: true, account: {available: false, connected: false, revision: 0, passphrase: null, syncKey: null, envelope: null}, matchedTransition: createMatchedTransitionTracker(), reconnectCountdown: createReconnectCountdownController(), voice: {mediaType: null, recorder: null, stream: null, chunks: [], startedAt: 0, timer: null, stopTimer: null, discard: false, blob: null, objectUrl: null, voiceNoteId: null, durationMs: 0}, voiceUrls: new Map()}
 const $ = (selector) => document.querySelector(selector)
 const now = () => new Date().toISOString()
 
@@ -30,8 +31,23 @@ function push(channel, event, payload = {}) { return new Promise((resolve, rejec
 
 async function bootstrap() {
   const saved = await getRecord(identityKey)
-  if (saved) app.identity = saved.value
+  const account = await fetch("/api/account/session", {credentials: "same-origin"}).then((response) => response.json()).catch(() => ({available: false, connected: false}))
+  app.account = {...app.account, ...account}
+  if (account.connected && await supportsPersistentCryptoKey().catch(() => false)) app.account.syncKey = await loadSyncKey().catch(() => null)
+  if (account.connected) {
+    const retained = syncableRecords(await listRecords())
+    const useConnected = !saved || saved.value.participant_id === account.participant_id || !retained.length || confirm("Use your privately connected participant on this device? Existing kept local data will remain here until you choose Restore or Sync. Choose Cancel to stay with this guest.")
+    if (useConnected) {
+      app.identity = {participant_id: account.participant_id, token: account.participant_token}
+      await putRecord({id: identityKey, type: "identity", value: app.identity, updated_at: now()})
+    } else {
+      await fetch("/api/account/session", {method: "DELETE", credentials: "same-origin"})
+      app.account.connected = false
+    }
+  }
+  if (!app.identity && saved) app.identity = saved.value
   if (!app.identity) await createIdentity(false)
+  await renderAccountState()
   connectSocket()
 }
 
@@ -184,6 +200,8 @@ async function rememberRelationship(id) {
   const conversation = await getRecord(`conversation:${app.conversationId}`)
   await putRecord({id: `relationship:${id}`, type: "relationship", value: {relationship_id: id, status: "created", conversation_id: app.conversationId, abstract_signature_seed: conversation?.value.abstract_signature_seed || null, origin_door_type: conversation?.value.door_type || null, origin_door_label: conversation?.value.display_door || null, formed_at: conversation?.value.ended_at || now(), private_nickname: null}, updated_at: now()})
   renderLocalViews()
+  await offerContinuity()
+  await maybeAutoSync()
 }
 
 async function applyRetention(choice, summaryText) {
@@ -191,6 +209,7 @@ async function applyRetention(choice, summaryText) {
   const next = chooseConversationRetention(records, app.conversationId, choice, {summaryText, now: now()})
   if (choice === "summary_only") await putRecord(next.find(({id}) => id === `summary:${app.conversationId}`))
   await replaceRecords(next)
+  if (["kept", "summary_only"].includes(choice)) { await offerContinuity(); await maybeAutoSync() }
   releaseAllVoiceUrls()
   app.conversationId = null
   if (choice === "kept") show("chats"); else show("doors")
@@ -408,8 +427,138 @@ function startReconnectCountdown() {
 function refreshReconnectCountdown() { if (document.querySelector("[data-expires-at]")) startReconnectCountdown(); else app.reconnectCountdown.stop() }
 function updateReconnectCountdowns() { document.querySelectorAll("[data-expires-at]").forEach((node) => { node.textContent = availabilityCopy(node.dataset.expiresAt); if (remainingAvailabilitySeconds(node.dataset.expiresAt) === 0) { const container = node.closest(".bond-reconnect"); renderReconnectState(container, {relationship_id: container.dataset.relationshipId, status: "idle"}) } }); refreshReconnectCountdown() }
 
-function renderRecordList(container, records) { container.replaceChildren(); if (!records.length) { container.textContent = "Nothing saved locally yet."; return } records.forEach((record) => { const article = document.createElement("article"); const text = document.createElement("p"); text.textContent = record.value.text || record.type; const remove = document.createElement("button"); remove.textContent = "Delete"; remove.addEventListener("click", async () => { await deleteRecord(record.id); renderLocalViews(); renderDataInventory() }); article.append(text, remove); container.append(article) }) }
+function renderRecordList(container, records) { container.replaceChildren(); if (!records.length) { container.textContent = "Nothing saved locally yet."; return } records.forEach((record) => { const article = document.createElement("article"); const text = document.createElement("p"); text.textContent = record.value.text || record.type; const remove = document.createElement("button"); remove.textContent = "Delete"; remove.addEventListener("click", async () => { await putRecord(tombstoneFor(record, now())); renderLocalViews(); renderDataInventory(); await maybeAutoSync() }); article.append(text, remove); container.append(article) }) }
 async function renderDataInventory() { const records = await listRecords(); const totals = records.reduce((counts, {type}) => ({...counts, [type]: (counts[type] || 0) + 1}), {}); $("#local-data-list").textContent = Object.keys(totals).length ? Object.entries(totals).map(([type, count]) => `${type}: ${count}`).join(" · ") : "No local data stored." }
+
+async function renderAccountState() {
+  $("#account-guest").hidden = !app.account.available || app.account.connected
+  $("#account-connected").hidden = !app.account.connected
+  $("#account-disabled").hidden = app.account.available
+  const auto = await getRecord("settings:auto-sync")
+  $("#auto-sync").checked = auto?.value.enabled === true
+  if (!app.account.connected || !app.account.available) $("#continuity-suggestion").hidden = true
+}
+
+async function startGoogle(mode) {
+  const headers = {accept: "application/json"}
+  if (mode === "link") headers.authorization = `Bearer ${app.identity.token}`
+  const response = await fetch(`/auth/google/start?mode=${mode}`, {headers, credentials: "same-origin"})
+  const body = await response.json()
+  if (!response.ok || !body.authorization_url) throw new Error(body.error?.reason || "oauth_start_failed")
+  location.assign(body.authorization_url)
+}
+
+async function fetchRemoteSync() {
+  const response = await fetch("/api/account/sync", {credentials: "same-origin", headers: {accept: "application/json"}})
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(body.error?.reason || "sync_failed")
+  app.account.revision = body.revision
+  app.account.envelope = body.envelope || null
+  if (body.last_synced_at) { $("#sync-last").textContent = `Last synced ${new Date(body.last_synced_at).toLocaleString()}.`; $("#sync-status").textContent = "Encrypted Google sync is available." }
+  return body
+}
+
+function requestRecoveryPassphrase({confirmChoice = false} = {}) {
+  const passphrase = prompt("Enter a recovery passphrase. If you lose it and all unlocked devices, neither StrangerTalks nor Google can recover this encrypted data.")
+  if (!passphrase) throw new Error("passphrase_required")
+  if (confirmChoice && passphrase !== prompt("Enter the recovery passphrase again to confirm.")) throw new Error("passphrase_mismatch")
+  app.account.passphrase = passphrase
+  return passphrase
+}
+
+async function uploadSync(records, baseRevision, passphrase) {
+  let envelope
+  if (app.account.syncKey && app.account.envelope) {
+    envelope = await encryptSyncWithKey(syncableRecords(records), app.account.syncKey, app.account.envelope, baseRevision)
+  } else {
+    const bundle = await encryptSyncBundle(syncableRecords(records), passphrase, baseRevision)
+    envelope = bundle.envelope
+    app.account.syncKey = bundle.syncKey
+    if (await supportsPersistentCryptoKey().catch(() => false)) await storeSyncKey(bundle.syncKey).catch(() => {})
+  }
+  const response = await fetch("/api/account/sync", {method: "PUT", credentials: "same-origin", headers: {"content-type": "application/json"}, body: JSON.stringify({base_revision: baseRevision, envelope})})
+  const body = await response.json().catch(() => ({}))
+  if (response.status === 409) throw new Error("sync_conflict")
+  if (!response.ok) throw new Error(body.error?.reason || "sync_failed")
+  app.account.revision = body.revision
+  app.account.envelope = {...envelope, revision: body.revision}
+  $("#sync-status").textContent = "Encrypted retained data is protected in Google app data."
+  $("#sync-last").textContent = `Last synced ${new Date(body.last_synced_at).toLocaleString()}.`
+  return body
+}
+
+async function mergeRemoteRecords(remoteRecords) {
+  const local = await listRecords()
+  const selected = syncableRecords(local)
+  const selectedIds = new Set(selected.map(({id}) => id))
+  const merged = mergeSyncRecords(selected, remoteRecords)
+  const counts = merged.reduce((result, record) => ({...result, [record.type]: (result[record.type] || 0) + 1}), {})
+  if (!confirm(`Restore these encrypted categories on this device? ${Object.entries(counts).map(([type, count]) => `${type}: ${count}`).join(", ") || "No retained records"}`)) return false
+  await replaceRecords([...local.filter((record) => !selectedIds.has(record.id)), ...merged])
+  await renderLocalViews(); await renderDataInventory()
+  return true
+}
+
+async function restoreFromGoogle(automatic = false) {
+  const remote = await fetchRemoteSync()
+  if (remote.status === "empty") { if (!automatic) announce("No encrypted Google sync data exists yet."); return false }
+  let records
+  if (app.account.syncKey) {
+    try { records = await decryptSyncWithKey(remote.envelope, app.account.syncKey) } catch { app.account.syncKey = null }
+  }
+  if (!records) {
+    const unlocked = await unlockSync(remote.envelope, app.account.passphrase || requestRecoveryPassphrase())
+    records = unlocked.records; app.account.syncKey = unlocked.syncKey
+    if (await supportsPersistentCryptoKey().catch(() => false)) await storeSyncKey(unlocked.syncKey).catch(() => {})
+  }
+  if (await mergeRemoteRecords(records)) { announce("Encrypted Google data was restored and merged. Newer valid records won; deletions remained deleted."); return true }
+  return false
+}
+
+async function syncNow() {
+  const remote = await fetchRemoteSync()
+  if (remote.status === "empty") {
+    const passphrase = requestRecoveryPassphrase({confirmChoice: true})
+    await uploadSync(await listRecords(), 0, passphrase)
+    announce("Encrypted Google sync created. Keep your recovery passphrase safe.")
+    return
+  }
+  let remoteRecords
+  if (app.account.syncKey) {
+    try { remoteRecords = await decryptSyncWithKey(remote.envelope, app.account.syncKey) } catch { app.account.syncKey = null }
+  }
+  if (!remoteRecords) {
+    const unlocked = await unlockSync(remote.envelope, app.account.passphrase || requestRecoveryPassphrase())
+    remoteRecords = unlocked.records; app.account.syncKey = unlocked.syncKey
+    if (await supportsPersistentCryptoKey().catch(() => false)) await storeSyncKey(unlocked.syncKey).catch(() => {})
+  }
+  const passphrase = app.account.passphrase
+  const local = await listRecords()
+  const merged = mergeSyncRecords(syncableRecords(local), remoteRecords)
+  if (!confirm(`Merge ${merged.length} retained records and replace revision ${remote.revision}?`)) return
+  try { await uploadSync([...local.filter((record) => !new Set(syncableRecords(local).map(({id}) => id)).has(record.id)), ...merged], remote.revision, passphrase); announce("Encrypted Google sync is current.") }
+  catch (error) { if (error.message === "sync_conflict") { announce("A newer copy exists. Restore and review it before retrying."); const restored = await restoreFromGoogle(); if (restored && confirm("The newer copy was merged. Retry encrypted sync now?")) { await uploadSync(await listRecords(), app.account.revision, app.account.passphrase); announce("Encrypted Google sync is current.") } } else throw error }
+}
+
+async function maybeAutoSync() {
+  const enabled = (await getRecord("settings:auto-sync"))?.value.enabled === true
+  if (!enabled || !app.account.connected) return
+  if (!app.account.passphrase && !app.account.syncKey) { $("#sync-status").textContent = "New saved data is waiting. Use Sync now to unlock encrypted sync for this browser session."; return }
+  await syncNow().catch(() => { $("#sync-status").textContent = "Local changes are waiting for a manual sync." })
+}
+
+async function offerContinuity() {
+  if (!app.account.available || app.account.connected) return
+  const dismissed = await getRecord("settings:continuity-suggestion")
+  if (!dismissed?.value.dismissed) $("#continuity-suggestion").hidden = false
+}
+
+async function replaceWithSyncTombstones(before, after) {
+  const remaining = new Set(after.map(({id}) => id))
+  const tombstones = syncableRecords(before).filter(({id}) => !remaining.has(id)).map((record) => tombstoneFor(record, now()))
+  await replaceRecords([...after, ...tombstones])
+  await maybeAutoSync()
+}
 
 DOORS.forEach((door) => { const button = document.createElement("button"); button.className = "door"; button.type = "button"; button.dataset.door = door.value; button.setAttribute("aria-pressed", "false"); const mark = document.createElement("i"); mark.className = "door-mark"; mark.setAttribute("aria-hidden", "true"); const title = document.createElement("strong"); title.textContent = door.label; const description = document.createElement("span"); description.textContent = door.description; button.append(mark, title, description); button.addEventListener("click", () => { app.selectedDoor = door.label; updateDoorLabels(); document.querySelectorAll(".door").forEach((node) => node.setAttribute("aria-pressed", String(node === button))); $("#join-queue").disabled = false }); $("#doors").append(button) })
 document.addEventListener("click", (event) => { const target = event.target.closest("[data-go]"); if (target) show(target.dataset.go) })
@@ -437,18 +586,29 @@ $("#report-open").addEventListener("click", () => { $("#report-form").hidden = f
 $("#report-form").addEventListener("submit", async (event) => { event.preventDefault(); const category = $("#report-category").value; if (!category) return; await push(app.conversation, "conversation:report", {category, evidence: $("#report-evidence").value || null}); event.target.hidden = true; announce("Report submitted for pending review.") })
 $("#block").addEventListener("click", async () => { if (confirm("Block this person from future matches? Reporting is separate.")) { await push(app.conversation, "conversation:block"); announce("This person is blocked from future matching.") } })
 $("#consent").addEventListener("click", async () => { const result = await push(app.conversation, "relationship:consent"); $("#consent-status").textContent = result.status === "created" ? "Bond created." : "Waiting for mutual consent."; if (result.relationship_id) rememberRelationship(result.relationship_id) })
-$("#history-summary-form").addEventListener("submit", async (event) => { event.preventDefault(); const text = $("#history-summary").value.trim(); const summaryId = `summary:${app.historyConversationId}`; if (text) await putRecord({id: summaryId, type: "summary", value: {conversation_id: app.historyConversationId, text}, updated_at: now()}); else await deleteRecord(summaryId); const conversation = await getRecord(`conversation:${app.historyConversationId}`); await putRecord({...conversation, value: {...conversation.value, summary_id: text ? summaryId : null}, updated_at: now()}); announce("Local summary updated.") })
-$("#history-memory").addEventListener("click", async () => { const text = prompt("Memory to save separately on this device:"); if (text?.trim()) { await putRecord({id: `memory:${crypto.randomUUID()}`, type: "memory", value: {text: text.trim(), conversation_id: app.historyConversationId}, updated_at: now()}); announce("Memory saved separately.") } })
-$("#history-delete").addEventListener("click", async () => { if (!confirm("Delete this kept local conversation and transcript?")) return; const records = await listRecords(); const hasSummary = records.some(({id}) => id === `summary:${app.historyConversationId}`); const deleteSummary = hasSummary && confirm("Also delete its associated summary? Separate Memories will remain."); await replaceRecords(deleteKeptConversation(records, app.historyConversationId, {deleteSummary})); releaseAllVoiceUrls(); show("chats") })
-$("#delete-kept-all").addEventListener("click", async () => { if (!confirm("Delete all kept local conversations and transcripts?")) return; const records = await listRecords(); const hasSummaries = keptConversations(records).some(({value}) => records.some(({id}) => id === `summary:${value.conversation_id}`)); const deleteSummaries = hasSummaries && confirm("Also delete their associated summaries? Separate Memories will remain."); await replaceRecords(deleteAllKeptConversations(records, {deleteSummaries})); releaseAllVoiceUrls(); renderChats() })
-$("#memory-form").addEventListener("submit", async (event) => { event.preventDefault(); const text = $("#memory-note").value.trim(); if (!text) return; await putRecord({id: `memory:${crypto.randomUUID()}`, type: "memory", value: {text}, updated_at: now()}); event.target.reset(); renderLocalViews() })
+$("#history-summary-form").addEventListener("submit", async (event) => { event.preventDefault(); const text = $("#history-summary").value.trim(); const summaryId = `summary:${app.historyConversationId}`; if (text) await putRecord({id: summaryId, type: "summary", value: {conversation_id: app.historyConversationId, text}, updated_at: now()}); else { const prior = await getRecord(summaryId); if (prior) await putRecord(tombstoneFor(prior, now())) } const conversation = await getRecord(`conversation:${app.historyConversationId}`); await putRecord({...conversation, value: {...conversation.value, summary_id: text ? summaryId : null}, updated_at: now()}); await maybeAutoSync(); announce("Local summary updated.") })
+$("#history-memory").addEventListener("click", async () => { const text = prompt("Memory to save separately on this device:"); if (text?.trim()) { await putRecord({id: `memory:${crypto.randomUUID()}`, type: "memory", value: {text: text.trim(), conversation_id: app.historyConversationId}, updated_at: now()}); await offerContinuity(); await maybeAutoSync(); announce("Memory saved separately.") } })
+$("#history-delete").addEventListener("click", async () => { if (!confirm("Delete this kept local conversation and transcript?")) return; const records = await listRecords(); const hasSummary = records.some(({id}) => id === `summary:${app.historyConversationId}`); const deleteSummary = hasSummary && confirm("Also delete its associated summary? Separate Memories will remain."); await replaceWithSyncTombstones(records, deleteKeptConversation(records, app.historyConversationId, {deleteSummary})); releaseAllVoiceUrls(); show("chats") })
+$("#delete-kept-all").addEventListener("click", async () => { if (!confirm("Delete all kept local conversations and transcripts?")) return; const records = await listRecords(); const hasSummaries = keptConversations(records).some(({value}) => records.some(({id}) => id === `summary:${value.conversation_id}`)); const deleteSummaries = hasSummaries && confirm("Also delete their associated summaries? Separate Memories will remain."); await replaceWithSyncTombstones(records, deleteAllKeptConversations(records, {deleteSummaries})); releaseAllVoiceUrls(); renderChats() })
+$("#memory-form").addEventListener("submit", async (event) => { event.preventDefault(); const text = $("#memory-note").value.trim(); if (!text) return; await putRecord({id: `memory:${crypto.randomUUID()}`, type: "memory", value: {text}, updated_at: now()}); event.target.reset(); renderLocalViews(); await offerContinuity(); await maybeAutoSync() })
 $("#reduced-motion").addEventListener("change", async (event) => { document.body.classList.toggle("reduce-motion", event.target.checked); await putRecord({id: "settings:privacy", type: "settings", value: {reduced_motion: event.target.checked}, updated_at: now()}) })
 $("#view-data").addEventListener("click", renderDataInventory)
 $("#delete-all").addEventListener("click", async () => { if (!confirm("Delete all local StrangerTalks data from this browser? This cannot be undone without an exported backup.")) return; await clearRecords(); releaseAllVoiceUrls(); clearVoicePreview(); app.socket?.disconnect(); app.identity = null; await createIdentity(false); connectSocket(); renderLocalViews(); renderDataInventory(); announce("All prior local data was deleted. A new anonymous identity was created.") })
 $("#export-data").addEventListener("click", async () => { const passphrase = prompt("Choose a backup passphrase. It cannot be recovered if lost."); if (!passphrase) return; const envelope = await encryptBackup(await listRecords(), passphrase); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(envelope)], {type: "application/json"})); link.download = `strangertalks-backup-${now().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); announce("Encrypted backup exported. Keep its passphrase safe.") })
 $("#import-data").addEventListener("change", async (event) => { const file = event.target.files[0]; if (!file) return; const passphrase = prompt("Enter this backup’s passphrase."); if (!passphrase) return; try { await importRecords(await decryptBackup(JSON.parse(await file.text()), passphrase)); await renderLocalViews(); await renderDataInventory(); announce("Backup merged. Newer records won for matching stable IDs.") } catch { announce("Backup could not be opened. Check the file and passphrase.") } finally { event.target.value = "" } })
+$("#account-link").addEventListener("click", () => startGoogle("link").catch(() => announce("Private Google connection could not start.")))
+$("#account-login").addEventListener("click", () => startGoogle("login").catch(() => announce("Private Google sign-in could not start.")))
+$("#suggest-connect").addEventListener("click", () => startGoogle("link").catch(() => announce("Private Google connection could not start.")))
+$("#suggest-dismiss").addEventListener("click", async () => { await putRecord({id: "settings:continuity-suggestion", type: "settings", value: {dismissed: true}, updated_at: now()}); $("#continuity-suggestion").hidden = true })
+$("#sync-now").addEventListener("click", () => syncNow().catch((error) => announce(error.message === "passphrase_mismatch" ? "Recovery passphrases did not match." : error.message === "google_reauthorization_required" ? "Google needs to be connected again. Local data was not changed." : "Encrypted sync could not complete.")))
+$("#sync-restore").addEventListener("click", () => restoreFromGoogle().catch((error) => announce(error.message === "google_reauthorization_required" ? "Google needs to be connected again. Local data was not changed." : "Encrypted data could not be restored. Check the recovery passphrase.")))
+$("#auto-sync").addEventListener("change", async (event) => { await putRecord({id: "settings:auto-sync", type: "settings", value: {enabled: event.target.checked}, updated_at: now()}); announce(event.target.checked ? "Automatic protection is enabled after encrypted sync is unlocked in this browser session." : "Automatic protection is off.") })
+$("#sync-delete").addEventListener("click", async () => { if (!confirm("Permanently delete only the encrypted StrangerTalks sync file from Google app data? Local browser data and your private connection will remain.")) return; const response = await fetch("/api/account/sync", {method: "DELETE", credentials: "same-origin"}); if (response.ok) { app.account.revision = 0; $("#sync-status").textContent = "Encrypted Google sync data was deleted. Local data remains."; announce("Google sync data deleted; this device was not changed.") } })
+$("#account-logout").addEventListener("click", async () => { if (!confirm("Sign out only this device? Local browser data remains.")) return; await fetch("/api/account/session", {method: "DELETE", credentials: "same-origin"}); location.reload() })
+$("#account-logout-all").addEventListener("click", async () => { if (!confirm("Sign out every connected device? Local and Google sync data remain.")) return; await fetch("/api/account/sessions", {method: "DELETE", credentials: "same-origin"}); location.reload() })
+$("#account-disconnect").addEventListener("click", async () => { if (!confirm("Disconnect Google and sign out all devices? Bonds and local data remain. Google sync data is not deleted.")) return; await fetch("/api/account/google-link", {method: "DELETE", credentials: "same-origin"}); location.reload() })
 
 renderLocalViews().catch(() => {})
 app.voice.mediaType = selectVoiceMediaType(globalThis.MediaRecorder)
 if (!app.voice.mediaType || !navigator.mediaDevices?.getUserMedia) { $("#voice-start").disabled = true; $("#voice-unavailable").hidden = false; $("#voice-unavailable").textContent = "Voice recording is unavailable in this browser. Text messaging still works." }
-bootstrap().then(async () => { const settings = await getRecord("settings:privacy"); if (settings?.value.reduced_motion) { $("#reduced-motion").checked = true; document.body.classList.add("reduce-motion") } }).catch(() => announce("StrangerTalks could not start. Please reload."))
+bootstrap().then(async () => { const settings = await getRecord("settings:privacy"); if (settings?.value.reduced_motion) { $("#reduced-motion").checked = true; document.body.classList.add("reduce-motion") } const accountResult = new URLSearchParams(location.search).get("account"); if (accountResult === "connected" && app.account.connected) await restoreFromGoogle(true).catch(() => announce("Connected privately. Unlock encrypted sync from You when you are ready.")); if (accountResult) history.replaceState({}, "", "/") }).catch(() => announce("StrangerTalks could not start. Please reload."))

@@ -5,17 +5,22 @@ defmodule StrangertalksNewWeb.AccountController do
   alias StrangertalksNewWeb.{GoogleAuthController, ParticipantToken}
 
   def session(conn, _params) do
-    with {:ok, account_session} <- current_session(conn) do
-      participant_id = account_session.account.participant_id
+    if StrangertalksNew.GoogleContinuity.enabled?() do
+      with {:ok, account_session} <- current_session(conn) do
+        participant_id = account_session.account.participant_id
 
-      json(conn, %{
-        connected: true,
-        participant_id: participant_id,
-        participant_token: ParticipantToken.sign(participant_id),
-        capabilities: %{google_continuity: true, encrypted_sync: true}
-      })
+        json(conn, %{
+          available: true,
+          connected: true,
+          participant_id: participant_id,
+          participant_token: ParticipantToken.sign(participant_id),
+          capabilities: %{google_continuity: true, encrypted_sync: true}
+        })
+      else
+        _ -> json(conn, %{available: true, connected: false})
+      end
     else
-      _ -> conn |> put_status(:unauthorized) |> json(%{connected: false})
+      json(conn, %{available: false, connected: false})
     end
   end
 

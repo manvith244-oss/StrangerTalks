@@ -71,6 +71,11 @@ defmodule StrangertalksNewWeb.GoogleContinuityTest do
     assert conn |> get(~p"/auth/google/start?mode=login") |> json_response(404) == %{
              "error" => %{"reason" => "google_continuity_disabled"}
            }
+
+    assert conn |> get(~p"/api/account/session") |> json_response(200) == %{
+             "available" => false,
+             "connected" => false
+           }
   end
 
   test "OAuth attempt stores hashes, expires, and is single use" do

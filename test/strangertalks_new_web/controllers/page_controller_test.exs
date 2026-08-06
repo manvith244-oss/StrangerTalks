@@ -162,4 +162,35 @@ defmodule StrangertalksNewWeb.PageControllerTest do
     refute javascript =~
              ~S|if (state.status === "matched") renderReconnectState(container, state)|
   end
+
+  test "guest-first private continuity and encrypted sync controls explain their boundaries", %{
+    conn: conn
+  } do
+    body = conn |> get("/") |> html_response(200)
+    javascript = File.read!(Application.app_dir(:strangertalks_new, "priv/static/assets/app.js"))
+
+    [_, settings] =
+      Regex.run(~r/(<section data-screen="settings".*?<section data-screen="memories")/s, body)
+
+    assert settings =~ "Continue across devices"
+    assert settings =~ "Connect this guest privately"
+    assert settings =~ "Use an existing private account"
+    assert settings =~ "Connected privately."
+    assert settings =~ "Voice notes remain on the device where they were kept."
+    assert settings =~ "Sync now"
+    assert settings =~ "Restore from Google"
+    assert settings =~ "Delete Google sync data"
+    assert settings =~ "Sign out on this device"
+    assert settings =~ "Sign out all devices"
+    assert settings =~ "Disconnect Google"
+    assert settings =~ ~s(id="continuity-suggestion" class="card" hidden)
+    refute settings =~ "Google email"
+    refute settings =~ "Google profile"
+    assert javascript =~ ~s(headers.authorization = `Bearer ${app.identity.token}`)
+    assert javascript =~ ~S|fetch("/api/account/session", {credentials: "same-origin"})|
+    assert javascript =~ "syncableRecords(await listRecords())"
+    assert javascript =~ "unlockSync(remote.envelope"
+    assert javascript =~ "decryptSyncWithKey(remote.envelope"
+    assert javascript =~ "Existing kept local data will remain"
+  end
 end

@@ -183,6 +183,11 @@ textarea, select, input[type="file"] { width: 100%; padding: var(--st-space-3); 
 .local-copy-banner strong { color: var(--st-text); }
 .signature-ribbon { flex: 0 0 auto; width: clamp(4.75rem, 12vw, 7rem); height: 2rem; margin: var(--st-space-4) 0; border-radius: 0.25rem 0.8rem 0.35rem 0.65rem; background: linear-gradient(125deg, var(--signature-a, #876fba), var(--signature-b, #d5a95d)); clip-path: polygon(0 42%, 18% 8%, 72% 0, 100% 28%, 82% 68%, 30% 100%, 5% 78%); transform: rotate(-4deg) skewX(-8deg); }
 .data-actions, .safety-actions { display: flex; flex-wrap: wrap; gap: var(--st-space-3); margin-top: var(--st-space-6); }
+.account-card h2 { margin-top: 0; }
+.account-card p, .sync-warning, #sync-last { color: var(--st-text-muted); }
+.account-card label { display: flex; align-items: center; gap: var(--st-space-2); margin-top: var(--st-space-4); }
+.account-card input[type="checkbox"] { width: auto; }
+#continuity-suggestion { border-left: 3px solid var(--st-deep-talk); }
 
 .bottom-nav { position: fixed; z-index: 3; right: 0; bottom: 0; left: 0; display: flex; min-height: var(--bottom-nav-block-size); align-items: flex-start; justify-content: center; gap: var(--st-space-1); padding: var(--st-space-3) var(--st-space-3) calc(var(--st-space-3) + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--st-border); background: rgba(24, 27, 36, 0.78); backdrop-filter: blur(20px) saturate(130%); }
 .bottom-nav button { min-width: 4.25rem; min-height: var(--bottom-nav-control-size); border-color: transparent; border-radius: var(--st-radius-pill); background: transparent; }

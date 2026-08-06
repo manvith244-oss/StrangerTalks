@@ -36,6 +36,10 @@ export function tombstoneFor(record, deletedAt = new Date().toISOString()) {
 }
 
 export async function encryptSync(records, passphrase, revision = 0, cryptoApi = crypto) {
+  return (await encryptSyncBundle(records, passphrase, revision, cryptoApi)).envelope
+}
+
+export async function encryptSyncBundle(records, passphrase, revision = 0, cryptoApi = crypto) {
   if (!passphrase || !validateSyncRecords(records)) throw new Error("invalid_sync_input")
   const createdAt = new Date().toISOString()
   const syncKey = await cryptoApi.subtle.generateKey({name: "AES-GCM", length: 256}, true, ["encrypt", "decrypt"])
@@ -47,20 +51,39 @@ export async function encryptSync(records, passphrase, revision = 0, cryptoApi =
   const wrapIv = cryptoApi.getRandomValues(new Uint8Array(12))
   const wrappingKey = await deriveWrappingKey(passphrase, salt, ["encrypt"], cryptoApi)
   const wrapped = await cryptoApi.subtle.encrypt({name: "AES-GCM", iv: wrapIv}, wrappingKey, rawSyncKey)
+  const persistentKey = await cryptoApi.subtle.importKey("raw", rawSyncKey, {name: "AES-GCM"}, false, ["encrypt", "decrypt"])
   rawSyncKey.fill(0)
-  return {kind: SYNC_KIND, version: SYNC_VERSION, revision, created_at: createdAt, updated_at: createdAt, key_wrap: {algorithm: "AES-GCM", hash: "SHA-256", iterations: ITERATIONS, salt: encode(salt), iv: encode(wrapIv), wrapped_sync_key: encode(new Uint8Array(wrapped))}, content: {algorithm: "AES-GCM", iv: encode(contentIv), ciphertext: encode(new Uint8Array(ciphertext))}}
+  return {syncKey: persistentKey, envelope: {kind: SYNC_KIND, version: SYNC_VERSION, revision, created_at: createdAt, updated_at: createdAt, key_wrap: {algorithm: "AES-GCM", hash: "SHA-256", iterations: ITERATIONS, salt: encode(salt), iv: encode(wrapIv), wrapped_sync_key: encode(new Uint8Array(wrapped))}, content: {algorithm: "AES-GCM", iv: encode(contentIv), ciphertext: encode(new Uint8Array(ciphertext))}}}
 }
 
 export async function decryptSync(envelope, passphrase, cryptoApi = crypto) {
+  return (await unlockSync(envelope, passphrase, cryptoApi)).records
+}
+
+export async function unlockSync(envelope, passphrase, cryptoApi = crypto) {
   if (!validSyncEnvelope(envelope) || !passphrase) throw new Error("invalid_sync_envelope")
   const wrappingKey = await deriveWrappingKey(passphrase, decode(envelope.key_wrap.salt), ["decrypt"], cryptoApi)
   const raw = new Uint8Array(await cryptoApi.subtle.decrypt({name: "AES-GCM", iv: decode(envelope.key_wrap.iv)}, wrappingKey, decode(envelope.key_wrap.wrapped_sync_key)))
-  const syncKey = await cryptoApi.subtle.importKey("raw", raw, {name: "AES-GCM"}, false, ["decrypt"])
+  const syncKey = await cryptoApi.subtle.importKey("raw", raw, {name: "AES-GCM"}, false, ["encrypt", "decrypt"])
   raw.fill(0)
+  const records = await decryptSyncWithKey(envelope, syncKey, cryptoApi)
+  return {records, syncKey}
+}
+
+export async function decryptSyncWithKey(envelope, syncKey, cryptoApi = crypto) {
+  if (!validSyncEnvelope(envelope) || !syncKey) throw new Error("invalid_sync_envelope")
   const plaintext = await cryptoApi.subtle.decrypt({name: "AES-GCM", iv: decode(envelope.content.iv)}, syncKey, decode(envelope.content.ciphertext))
   const payload = JSON.parse(new TextDecoder().decode(plaintext))
   if (!validateSyncRecords(payload.records)) throw new Error("invalid_sync_records")
   return payload.records
+}
+
+export async function encryptSyncWithKey(records, syncKey, previousEnvelope, revision, cryptoApi = crypto) {
+  if (!validateSyncRecords(records) || !syncKey || !validSyncEnvelope(previousEnvelope)) throw new Error("invalid_sync_input")
+  const iv = cryptoApi.getRandomValues(new Uint8Array(12))
+  const plaintext = new TextEncoder().encode(JSON.stringify({records}))
+  const ciphertext = await cryptoApi.subtle.encrypt({name: "AES-GCM", iv}, syncKey, plaintext)
+  return {...previousEnvelope, revision, updated_at: new Date().toISOString(), content: {algorithm: "AES-GCM", iv: encode(iv), ciphertext: encode(new Uint8Array(ciphertext))}}
 }
 
 export function validSyncEnvelope(envelope) {
