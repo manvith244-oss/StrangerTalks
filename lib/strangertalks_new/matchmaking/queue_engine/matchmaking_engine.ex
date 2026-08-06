@@ -6,12 +6,14 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   """
 
   require Logger
+  import Ecto.Query, warn: false
 
   alias Ecto.Multi
   alias StrangertalksNew.Conversation
   alias StrangertalksNew.Matching
   alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.Participant
+  alias StrangertalksNew.ParticipantActivityLock
   alias StrangertalksNew.QueueEngine.QueueState
   alias StrangertalksNew.Repo
 
@@ -70,9 +72,23 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
       attempt_count: 1
     }
 
-    # Atomically inject into our primary Elixir Agent memory matrix
-    case Agent.update(QueueState, fn state -> Map.put(state, participant_id, entry_payload) end) do
-      :ok ->
+    result =
+      ParticipantActivityLock.with_participants([participant_id], fn ->
+        if active_conversation?(participant_id) do
+          {:error, :participant_busy}
+        else
+          Agent.get_and_update(QueueState, fn state ->
+            case Map.get(state, participant_id) do
+              nil -> {:inserted, Map.put(state, participant_id, entry_payload)}
+              %{door_selection: ^door_type} -> {:same_entry, state}
+              _entry -> {{:error, :already_queued_different_door}, state}
+            end
+          end)
+        end
+      end)
+
+    case result do
+      :inserted ->
         Phoenix.PubSub.broadcast(
           StrangertalksNew.PubSub,
           @pubsub_topic,
@@ -81,7 +97,13 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
         {:ok, %{status: :queued, entry_time: DateTime.utc_now()}}
 
-      _ ->
+      :same_entry ->
+        {:ok, %{status: :queued, entry_time: entry_payload.queue_entry_time}}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      _other ->
         {:error, :queue_instantiation_failed}
     end
   end
@@ -90,7 +112,10 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   Removes a participant from volatile memory, leaving zero data trails behind.
   """
   def leave_queue(participant_id) when is_binary(participant_id) do
-    Agent.update(QueueState, fn state -> Map.delete(state, participant_id) end)
+    ParticipantActivityLock.with_participants([participant_id], fn ->
+      Agent.update(QueueState, fn state -> Map.delete(state, participant_id) end)
+    end)
+
     :ok
   end
 
@@ -183,9 +208,6 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
         {:match, p2, score} ->
           case persist_match_and_conversation(p1, p2, score) do
             {:ok, match, conversation} ->
-              leave_queue(p1.participant_id)
-              leave_queue(p2.participant_id)
-
               Phoenix.PubSub.broadcast(
                 StrangertalksNew.PubSub,
                 @pubsub_topic,
@@ -239,6 +261,26 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   end
 
   defp persist_match_and_conversation(p1, p2, score) do
+    ParticipantActivityLock.with_participants([p1.participant_id, p2.participant_id], fn ->
+      persist_locked_match_and_conversation(p1, p2, score)
+    end)
+  end
+
+  defp persist_locked_match_and_conversation(p1, p2, score) do
+    queue_state = Agent.get(QueueState, & &1)
+
+    with %{door_selection: door_a} <- Map.get(queue_state, p1.participant_id),
+         %{door_selection: ^door_a} <- Map.get(queue_state, p2.participant_id),
+         false <- MatchingRules.check_safety_veto?(p1.participant_id, p2.participant_id),
+         false <- active_conversation?(p1.participant_id),
+         false <- active_conversation?(p2.participant_id) do
+      persist_revalidated_queue_match(p1, p2, score)
+    else
+      _ -> {:error, :participant_activity_changed}
+    end
+  end
+
+  defp persist_revalidated_queue_match(p1, p2, score) do
     missing_participant_ids =
       [p1.participant_id, p2.participant_id]
       |> Enum.reject(&Repo.get(Participant, &1))
@@ -303,6 +345,12 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
       |> Repo.transaction()
       |> case do
         {:ok, %{match: match, conversation: conversation}} ->
+          Agent.update(QueueState, fn state ->
+            state
+            |> Map.delete(p1.participant_id)
+            |> Map.delete(p2.participant_id)
+          end)
+
           {:ok, match, conversation}
 
         {:error, operation, reason, _changes} ->
@@ -325,5 +373,14 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
       {:invalid_participants, missing_participant_ids}
     end
+  end
+
+  defp active_conversation?(participant_id) do
+    Repo.exists?(
+      from c in Conversation,
+        where:
+          c.conversation_status in [:PENDING, :ACTIVE, :PAUSED] and
+            (c.participant_a_id == ^participant_id or c.participant_b_id == ^participant_id)
+    )
   end
 end

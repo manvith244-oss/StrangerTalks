@@ -6,14 +6,11 @@ defmodule StrangertalksNew.ConversationLifecycle.Conversations do
   """
 
   alias StrangertalksNew.Repo
+  alias StrangertalksNew.Conversations, as: CanonicalConversations
   alias StrangertalksNew.Conversation
 
   @spec create_conversation(map()) :: {:ok, Conversation.t()} | {:error, Ecto.Changeset.t()}
-  def create_conversation(attrs \\ %{}) do
-    %Conversation{}
-    |> Conversation.changeset(attrs)
-    |> Repo.insert()
-  end
+  def create_conversation(attrs \\ %{}), do: CanonicalConversations.create_conversation(attrs)
 
   @spec get_conversation(binary()) :: Conversation.t() | nil
   def get_conversation(conversation_id) do

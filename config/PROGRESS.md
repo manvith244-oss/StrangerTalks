@@ -1198,6 +1198,35 @@ Manual two-browser verification remains required for first availability, non-dis
 same-Door transition, different-Door privacy, cancel, expiry, and refresh restoration. Automated
 browser end-to-end coverage remains open.
 
+### Adversarial correctness pass — backend activity serialization
+
+The initial Bond Reconnection implementation was rejected by adversarial review because block,
+ordinary queue, and Conversation creation could race reconnect persistence; matched retries could
+outlive a later block; Relationship lifecycle metadata was incomplete; and the migration lacked an
+explicit safe rollback.
+
+All current single-node participant activity writers now share `ParticipantActivityLock`: queue
+join/leave and queue Match persistence, BoundaryBlock creation, reconnect mutual persistence, and
+other pending/active Conversation creation. Locks use internal UUIDs in deterministic order and are
+released on normal return or caller failure. State is re-read under the activity boundary, successful
+ordinary matches remove both queue entries before releasing it, and notifications remain outside the
+lock. This is a single-node V1 guarantee only; multi-node coordination remains open.
+
+Reconnect persistence now treats PENDING, ACTIVE, and PAUSED Conversations as busy, revalidates live
+blocks before returning matched start/status results, handles expected stale rows safely, increments
+the existing Relationship's `conversation_count`, advances `last_conversation_at`, and performs those
+updates atomically with Match, Conversation, and both intent consumptions. The migration now has
+explicit `up/0` and `down/0`; rollback refuses to proceed if reconnect Match rows exist rather than
+silently deleting or falsifying them. No compatibility value or other unbuilt metric is invented.
+
+Named database-backed tests cover both block directions, post-match block privacy, requester and
+counterpart activity, queue/Conversation races, same-Door idempotency, counterpart-isolated Door
+change and cancellation, consumed-intent non-reuse, late transaction rollback, Relationship counters,
+both directions of the compatibility constraint, nil reconnect compatibility, concurrent mutual
+attempts, absence of unrelated records, stale Relationship handling, and lock release after failure.
+Manual Bond Reconnection verification, automated browser E2E, and multi-node coordination remain
+open.
+
 ---
 
 # Phase 8 — Integration and Quality

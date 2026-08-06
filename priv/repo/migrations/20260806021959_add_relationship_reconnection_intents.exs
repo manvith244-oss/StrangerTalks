@@ -1,7 +1,7 @@
 defmodule StrangertalksNew.Repo.Migrations.AddRelationshipReconnectionIntents do
   use Ecto.Migration
 
-  def change do
+  def up do
     create table(:relationship_reconnection_intents, primary_key: false) do
       add :reconnect_intent_id, :uuid, primary_key: true, default: fragment("gen_random_uuid()")
 
@@ -66,5 +66,37 @@ defmodule StrangertalksNew.Repo.Migrations.AddRelationshipReconnectionIntents do
              check:
                "(match_strategy = 'RELATIONSHIP_RECONNECT_V1' AND compatibility_score IS NULL) OR (match_strategy <> 'RELATIONSHIP_RECONNECT_V1' AND compatibility_score IS NOT NULL)"
            )
+  end
+
+  def down do
+    execute("""
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM matches WHERE match_strategy = 'RELATIONSHIP_RECONNECT_V1'
+      ) THEN
+        RAISE EXCEPTION 'cannot roll back bond reconnection migration while reconnect Match rows exist';
+      END IF;
+    END
+    $$
+    """)
+
+    drop constraint(:matches, :matches_compatibility_by_strategy_check)
+    drop constraint(:matches, :match_strategy_check)
+
+    alter table(:matches) do
+      modify :compatibility_score, :decimal,
+        precision: 5,
+        scale: 4,
+        null: false,
+        from: {:decimal, precision: 5, scale: 4, null: true}
+    end
+
+    create constraint(:matches, :match_strategy_check,
+             check:
+               "match_strategy IN ('COMPATIBILITY','OPPORTUNITY','SCARCITY','MANUAL_OVERRIDE')"
+           )
+
+    drop table(:relationship_reconnection_intents)
   end
 end

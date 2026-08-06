@@ -29,6 +29,30 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngineTest do
                MatchmakingEngine.join_queue(12345, "EXPLORE", "en", 7, 120)
     end
 
+    test "concurrent queue joins cannot overwrite one participant with a different Door" do
+      participant_id = Ecto.UUID.generate()
+
+      results =
+        [:EXPLORE, :JUST_TALK]
+        |> Task.async_stream(
+          &MatchmakingEngine.join_queue(participant_id, &1, nil, nil, nil),
+          timeout: :infinity
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      assert Enum.count(results, &match?({:ok, %{status: :queued}}, &1)) == 1
+
+      assert Enum.count(
+               results,
+               &match?({:error, :already_queued_different_door}, &1)
+             ) == 1
+
+      assert Agent.get(QueueState, &Map.fetch!(&1, participant_id)).door_selection in [
+               :EXPLORE,
+               :JUST_TALK
+             ]
+    end
+
     test "legacy scorer treats unknown cadence as neutral instead of crashing" do
       participant = %{
         language: "en",

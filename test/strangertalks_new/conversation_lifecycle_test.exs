@@ -115,6 +115,10 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationLifecycleTest do
       participant_a: p_id_a,
       participant_b: p_id_b
     } do
+      Repo.get!(StrangertalksNew.Conversation, c_id)
+      |> StrangertalksNew.Conversation.changeset(%{conversation_status: :ENDED})
+      |> Repo.update!()
+
       second_match = match_fixture(p_id_a, p_id_b)
 
       attrs = %{

@@ -7,6 +7,7 @@ defmodule StrangertalksNew.MatchingRules do
   import Ecto.Query, warn: false
   alias StrangertalksNew.Repo
   alias StrangertalksNew.Conversation
+  alias StrangertalksNew.ParticipantActivityLock
   alias StrangertalksNew.MatchingRules.{Participant, QueueState, BoundaryBlock}
 
   def create_participant(attrs \\ %{}) do
@@ -35,14 +36,16 @@ defmodule StrangertalksNew.MatchingRules do
   end
 
   def enforce_block(blocker_id, blocked_id, surface) do
-    %BoundaryBlock{}
-    |> BoundaryBlock.changeset(%{
-      blocker_user_id: blocker_id,
-      blocked_user_id: blocked_id,
-      source_surface: surface,
-      active_status: true
-    })
-    |> Repo.insert(on_conflict: :nothing)
+    ParticipantActivityLock.with_participants([blocker_id, blocked_id], fn ->
+      %BoundaryBlock{}
+      |> BoundaryBlock.changeset(%{
+        blocker_user_id: blocker_id,
+        blocked_user_id: blocked_id,
+        source_surface: surface,
+        active_status: true
+      })
+      |> Repo.insert(on_conflict: :nothing)
+    end)
   end
 
   def check_safety_veto?(participant_a_id, participant_b_id) do

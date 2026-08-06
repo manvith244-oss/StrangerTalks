@@ -1,5 +1,6 @@
 defmodule StrangertalksNew.RelationshipReconnections do
   import Ecto.Query, warn: false
+  require Logger
 
   alias Ecto.Multi
 
@@ -7,6 +8,7 @@ defmodule StrangertalksNew.RelationshipReconnections do
     Conversation,
     Matching,
     MatchingRules,
+    ParticipantActivityLock,
     Relationship,
     RelationshipReconnectionIntent,
     Repo
@@ -18,51 +20,102 @@ defmodule StrangertalksNew.RelationshipReconnections do
   @availability_seconds 15 * 60
 
   def start_or_replace(relationship_id, participant_id, door_type) do
-    with {:ok, relationship} <- eligible_relationship(relationship_id, participant_id) do
-      case matched_or_idle(relationship, participant_id) do
-        {:ok, %{status: "matched"} = result} -> {:ok, result}
-        _ -> start_when_idle(relationship, participant_id, door_type)
+    safely(fn ->
+      with {:ok, relationship} <- eligible_relationship(relationship_id, participant_id) do
+        participant_ids = relationship_participants(relationship)
+
+        case ParticipantActivityLock.with_participants(participant_ids, fn ->
+               matched_or_idle(relationship, participant_id, true)
+             end) do
+          {:ok, %{status: "matched"} = result} -> {:ok, result}
+          {:error, :reconnection_unavailable} -> {:error, :reconnection_unavailable}
+          _ -> start_when_idle(relationship, participant_id, door_type)
+        end
+      else
+        _ -> {:error, :reconnection_unavailable}
       end
-    else
-      _ -> {:error, :reconnection_unavailable}
-    end
+    end)
   end
 
   defp start_when_idle(relationship, participant_id, door_type) do
-    with :ok <- requester_available(participant_id),
-         false <-
-           MatchingRules.check_safety_veto?(
-             relationship.participant_a_id,
-             relationship.participant_b_id
-           ) do
-      case Repo.transaction(fn ->
-             locked_start(relationship.relationship_id, participant_id, door_type)
-           end) do
-        {:ok, {:matched, conversation, updated}} ->
-          Phoenix.PubSub.broadcast(
-            StrangertalksNew.PubSub,
-            @topic,
-            {:bond_reconnect_matched, conversation.conversation_id, updated.participant_a_id,
-             updated.participant_b_id}
-          )
+    prepared =
+      ParticipantActivityLock.with_participants([participant_id], fn ->
+        with {:ok, current_relationship} <-
+               eligible_relationship(relationship.relationship_id, participant_id) do
+          case matched_or_idle(current_relationship, participant_id, true) do
+            {:ok, %{status: "matched", conversation_id: conversation_id}} ->
+              case Repo.get(Conversation, conversation_id) do
+                %Conversation{} = conversation -> {:ok, {:existing, conversation}}
+                nil -> {:error, :reconnection_unavailable}
+              end
 
-          {:ok, %{status: "matched", conversation_id: conversation.conversation_id}}
+            {:ok, %{status: "idle"}} ->
+              with :ok <- requester_available(participant_id) do
+                Repo.transaction(fn ->
+                  prepare_intent(relationship.relationship_id, participant_id, door_type)
+                end)
+              end
 
-        {:ok, {:existing, conversation}} ->
-          {:ok, %{status: "matched", conversation_id: conversation.conversation_id}}
+            _ ->
+              {:error, :reconnection_unavailable}
+          end
+        end
+      end)
 
-        {:ok, {:waiting, intent}} ->
-          {:ok, waiting_result(intent)}
+    case prepared do
+      {:ok, {:waiting, intent}} ->
+        {:ok, waiting_result(intent)}
 
-        {:error, _reason} ->
-          {:error, :reconnection_unavailable}
-      end
-    else
-      _ -> {:error, :reconnection_unavailable}
+      {:ok, {:existing, conversation}} ->
+        {:ok, %{status: "matched", conversation_id: conversation.conversation_id}}
+
+      {:ok, {:mutual_candidate, _intent}} ->
+        complete_mutual_match(relationship, participant_id, door_type)
+
+      _ ->
+        {:error, :reconnection_unavailable}
+    end
+  end
+
+  defp complete_mutual_match(relationship, participant_id, door_type) do
+    result =
+      ParticipantActivityLock.with_participants(relationship_participants(relationship), fn ->
+        Repo.transaction(fn ->
+          persist_locked_mutual_match(relationship.relationship_id, participant_id, door_type)
+        end)
+      end)
+
+    case result do
+      {:ok, {:matched, conversation, updated}} ->
+        Phoenix.PubSub.broadcast(
+          StrangertalksNew.PubSub,
+          @topic,
+          {:bond_reconnect_matched, conversation.conversation_id, updated.participant_a_id,
+           updated.participant_b_id}
+        )
+
+        {:ok, %{status: "matched", conversation_id: conversation.conversation_id}}
+
+      {:ok, {:existing, conversation}} ->
+        {:ok, %{status: "matched", conversation_id: conversation.conversation_id}}
+
+      {:ok, {:waiting, intent}} ->
+        {:ok, waiting_result(intent)}
+
+      _ ->
+        {:error, :reconnection_unavailable}
     end
   end
 
   def cancel(relationship_id, participant_id) do
+    safely(fn ->
+      ParticipantActivityLock.with_participants([participant_id], fn ->
+        cancel_locked(relationship_id, participant_id)
+      end)
+    end)
+  end
+
+  defp cancel_locked(relationship_id, participant_id) do
     now = DateTime.utc_now()
 
     with {:ok, _relationship} <- eligible_relationship(relationship_id, participant_id) do
@@ -82,39 +135,62 @@ defmodule StrangertalksNew.RelationshipReconnections do
   end
 
   def status(relationship_id, participant_id) do
+    safely(fn ->
+      with {:ok, relationship} <- eligible_relationship(relationship_id, participant_id) do
+        ParticipantActivityLock.with_participants(relationship_participants(relationship), fn ->
+          status_locked(relationship, participant_id)
+        end)
+      else
+        _ -> {:error, :reconnection_unavailable}
+      end
+    end)
+  end
+
+  defp status_locked(relationship, participant_id) do
     now = DateTime.utc_now()
 
-    with {:ok, relationship} <- eligible_relationship(relationship_id, participant_id) do
-      expire_stale(relationship_id, participant_id, now)
-
-      case own_active_intent(relationship_id, participant_id) do
-        %RelationshipReconnectionIntent{} = intent -> {:ok, waiting_result(intent)}
-        nil -> matched_or_idle(relationship, participant_id)
-      end
+    if safety_veto?(relationship) do
+      {:error, :reconnection_unavailable}
     else
-      _ -> {:error, :reconnection_unavailable}
+      expire_stale(relationship.relationship_id, participant_id, now)
+
+      case own_active_intent(relationship.relationship_id, participant_id) do
+        %RelationshipReconnectionIntent{} = intent -> {:ok, waiting_result(intent)}
+        nil -> matched_or_idle(relationship, participant_id, false)
+      end
     end
   end
 
-  defp locked_start(relationship_id, participant_id, door_type) do
+  defp prepare_intent(relationship_id, participant_id, door_type) do
     Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", [relationship_id])
     now = DateTime.utc_now()
 
-    relationship =
-      Repo.one!(
-        from r in Relationship, where: r.relationship_id == ^relationship_id, lock: "FOR UPDATE"
-      )
+    case Repo.one(
+           from r in Relationship,
+             where: r.relationship_id == ^relationship_id,
+             lock: "FOR UPDATE"
+         ) do
+      %Relationship{} = relationship ->
+        case matched_or_idle(relationship, participant_id, true) do
+          {:ok, %{status: "matched", conversation_id: conversation_id}} ->
+            case Repo.get(Conversation, conversation_id) do
+              %Conversation{} = conversation -> {:existing, conversation}
+              nil -> Repo.rollback(:reconnection_unavailable)
+            end
 
-    case matched_or_idle(relationship, participant_id) do
-      {:ok, %{status: "matched", conversation_id: conversation_id}} ->
-        {:existing, Repo.get!(Conversation, conversation_id)}
+          {:error, _} ->
+            Repo.rollback(:reconnection_unavailable)
 
-      _ ->
-        locked_start_idle(relationship, participant_id, door_type, now)
+          _ ->
+            prepare_idle_intent(relationship, participant_id, door_type, now)
+        end
+
+      nil ->
+        Repo.rollback(:reconnection_unavailable)
     end
   end
 
-  defp locked_start_idle(relationship, participant_id, door_type, now) do
+  defp prepare_idle_intent(relationship, participant_id, door_type, now) do
     unless valid_relationship?(relationship, participant_id) and
              requester_available?(participant_id) and
              not MatchingRules.check_safety_veto?(
@@ -141,10 +217,55 @@ defmodule StrangertalksNew.RelationshipReconnections do
           lock: "FOR UPDATE"
       )
 
-    if other && requester_available?(other_id) do
-      persist_reconnect(relationship, intent, other, now)
+    if other, do: {:mutual_candidate, intent}, else: {:waiting, intent}
+  end
+
+  defp persist_locked_mutual_match(relationship_id, participant_id, door_type) do
+    Repo.query!("SELECT pg_advisory_xact_lock(hashtext($1))", [relationship_id])
+    now = DateTime.utc_now()
+
+    relationship =
+      Repo.one(
+        from r in Relationship, where: r.relationship_id == ^relationship_id, lock: "FOR UPDATE"
+      )
+
+    if relationship && valid_relationship?(relationship, participant_id) &&
+         not safety_veto?(relationship) do
+      case matched_or_idle(relationship, participant_id, false) do
+        {:ok, %{status: "matched", conversation_id: conversation_id}} ->
+          case Repo.get(Conversation, conversation_id) do
+            %Conversation{} = conversation -> {:existing, conversation}
+            nil -> Repo.rollback(:reconnection_unavailable)
+          end
+
+        _ ->
+          if Enum.all?(relationship_participants(relationship), &requester_available?/1) do
+            intents =
+              Repo.all(
+                from i in RelationshipReconnectionIntent,
+                  where:
+                    i.relationship_id == ^relationship_id and
+                      i.participant_id in ^relationship_participants(relationship) and
+                      i.status == :ACTIVE and i.door_type == ^door_type and i.expires_at > ^now,
+                  lock: "FOR UPDATE"
+              )
+
+            case intents do
+              [first, second] when first.participant_id != second.participant_id ->
+                persist_reconnect(relationship, first, second, now)
+
+              _ ->
+                case own_active_intent(relationship_id, participant_id, "FOR UPDATE") do
+                  %RelationshipReconnectionIntent{} = intent -> {:waiting, intent}
+                  nil -> Repo.rollback(:reconnection_unavailable)
+                end
+            end
+          else
+            Repo.rollback(:reconnection_unavailable)
+          end
+      end
     else
-      {:waiting, intent}
+      Repo.rollback(:reconnection_unavailable)
     end
   end
 
@@ -253,8 +374,10 @@ defmodule StrangertalksNew.RelationshipReconnections do
       |> Multi.update(:relationship, fn %{conversation: conversation} ->
         Relationship.changeset(relationship, %{
           latest_conversation_id: conversation.conversation_id,
+          last_conversation_at: now,
           last_activity_at: now,
           updated_at: now,
+          conversation_count: relationship.conversation_count + 1,
           reconnection_count: relationship.reconnection_count + 1
         })
       end)
@@ -300,7 +423,7 @@ defmodule StrangertalksNew.RelationshipReconnections do
       Repo.exists?(
         from c in Conversation,
           where:
-            c.conversation_status in [:PENDING, :ACTIVE] and
+            c.conversation_status in [:PENDING, :ACTIVE, :PAUSED] and
               (c.participant_a_id == ^participant_id or c.participant_b_id == ^participant_id)
       )
 
@@ -331,7 +454,15 @@ defmodule StrangertalksNew.RelationshipReconnections do
       expires_at: DateTime.to_iso8601(intent.expires_at)
     }
 
-  defp matched_or_idle(relationship, participant_id) do
+  defp matched_or_idle(relationship, participant_id, check_live_block?) do
+    if check_live_block? and safety_veto?(relationship) do
+      {:error, :reconnection_unavailable}
+    else
+      matched_or_idle_without_block(relationship, participant_id)
+    end
+  end
+
+  defp matched_or_idle_without_block(relationship, participant_id) do
     consumed? =
       Repo.exists?(
         from i in RelationshipReconnectionIntent,
@@ -344,8 +475,26 @@ defmodule StrangertalksNew.RelationshipReconnections do
       if consumed? && relationship.latest_conversation_id,
         do: Repo.get(Conversation, relationship.latest_conversation_id)
 
-    if conversation && conversation.conversation_status in [:PENDING, :ACTIVE],
+    if conversation && conversation.conversation_status in [:PENDING, :ACTIVE, :PAUSED],
       do: {:ok, %{status: "matched", conversation_id: conversation.conversation_id}},
       else: {:ok, %{status: "idle"}}
+  end
+
+  defp relationship_participants(relationship),
+    do: [relationship.participant_a_id, relationship.participant_b_id]
+
+  defp safety_veto?(relationship),
+    do:
+      MatchingRules.check_safety_veto?(
+        relationship.participant_a_id,
+        relationship.participant_b_id
+      )
+
+  defp safely(function) do
+    function.()
+  rescue
+    _error in [DBConnection.ConnectionError, Postgrex.Error] ->
+      Logger.error("bond reconnection database operation unavailable")
+      {:error, :reconnection_unavailable}
   end
 end

@@ -492,6 +492,10 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     assert_reply duplicate_ref, :ok, %{status: "blocked"}
     assert Repo.aggregate(BoundaryBlock, :count, :blocker_user_id) == 1
 
+    conversation
+    |> Conversation.changeset(%{conversation_status: :ENDED})
+    |> Repo.update!()
+
     {:ok, _} =
       MatchmakingEngine.join_queue(participant_b.participant_id, :EXPLORE, "en", 7, 120.0)
 
