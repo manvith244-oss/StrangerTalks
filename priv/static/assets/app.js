@@ -146,9 +146,9 @@ function renderChatCards(container, conversations, records, emptyText, openable)
     const summary = records.find(({id}) => id === conversation.value.summary_id)?.value.text
     const firstMessage = records.filter((record) => record.type === "local_message" && record.value.conversation_id === conversation.value.conversation_id).sort((a, b) => a.value.sent_at.localeCompare(b.value.sent_at))[0]?.value.content
     const preview = document.createElement("p"); preview.textContent = summary || firstMessage?.split("\n")[0] || "Conversation kept without a preview."
-    const label = document.createElement("p"); label.className = "local-only"; label.textContent = "Saved only on this device unless you export an encrypted backup."
+    const label = document.createElement("p"); label.className = "local-only"; label.textContent = "Local copy"
     article.append(title, date, preview, label)
-    if (openable) { const open = document.createElement("button"); open.textContent = "Open local copy"; open.addEventListener("click", () => openHistory(conversation.value.conversation_id)); article.append(open) }
+    if (openable) { const open = document.createElement("button"); open.textContent = "Open local copy"; open.setAttribute("aria-label", `Open local copy: ${conversation.value.display_door}`); open.addEventListener("click", () => openHistory(conversation.value.conversation_id)); article.append(open) }
     container.append(article)
   })
 }

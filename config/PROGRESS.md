@@ -1096,6 +1096,14 @@ Memory preservation, and stable/distinct signature seeds. `PageControllerTest` v
 copy, four-tab navigation, and absence of live controls from historical markup. Automated browser
 end-to-end coverage remains open.
 
+Manual browser testing confirmed that the Keep path displays a retained Conversation under Chats.
+The same pass found the fixed bottom navigation overlapping lower Door cards and kept-Conversation
+content on Talk and Chats. The shared top-level shell now reserves navigation height, mobile safe-area
+inset, and normal content spacing so controls remain reachable, and the top-level terminology is
+consistently Chats. The complete manual retention checklist is still unfinished, and automated
+browser end-to-end coverage remains open. Fade, summary-only, refresh persistence, delete-one,
+delete-all, Bond preservation, and offline/reconnect recovery have not yet been manually verified.
+
 ---
 
 # Phase 8 — Integration and Quality
