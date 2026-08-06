@@ -1627,4 +1627,35 @@ redirect URI are available.
   Bandit, Plug, Mint, HPAX, Postgrex, and Swoosh versions. Upgrade compatibility and regression
   verification require a separate security-maintenance slice; no versions were broadened here.
 
+## Current Slice Specification — Encrypted Google app-data sync
+
+Connected accounts may carry deliberately retained text Conversations, summaries, Memories,
+Bonds, private local Bond labels/signatures, preferences, and deletion tombstones through one
+encrypted file in Google's `appDataFolder`. Active delivery state, account/Participant/OAuth
+tokens, reports, safety records, blocks, unsaved Conversations, and Voice Note audio are excluded.
+The server validates only the versioned outer envelope and never decrypts its content.
+
+## Architecture Reference Update — Blind sync relay
+
+The browser encrypts retained records with a random AES-256-GCM sync key and wraps that key with an
+AES-GCM key derived from the user's recovery passphrase using PBKDF2-SHA256 at 210,000 iterations.
+Drive's embedded revision is authoritative. Per-account V1 serialization prevents silent same-node
+overwrites; stale writes return `sync_conflict`. PostgreSQL `account_sync_states` contains only the
+Drive identifier, revision cache, SHA-256 digest, byte size, and last-sync time—never the envelope.
+
+## Engineering Progress — Encrypted Google app-data sync
+
+Authenticated GET, PUT, and DELETE sync endpoints, exact app-data file discovery, revision checks,
+metadata recovery, idempotent deletion, client-side encryption, safe category selection, and
+tombstone-aware merge primitives are implemented. Voice Note audio remains device-local and may be
+moved only through the separate encrypted file export. Real Google Drive verification remains open.
+
+## Technical Debt — Encrypted sync
+
+* `KNOWN — NOT FIXED`: Sync tombstones have no approved expiry policy and are retained indefinitely.
+* `KNOWN — NOT FIXED`: Same-account writes are serialized only within the single-node V1 boundary;
+  multi-node deployment requires a shared lock or authoritative compare-and-swap design.
+* `KNOWN — NOT FIXED`: Voice Note audio is intentionally excluded from Google sync pending a
+  separately approved encrypted binary-storage and quota policy.
+
 *Last Updated: August 2026*

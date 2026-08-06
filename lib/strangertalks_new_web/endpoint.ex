@@ -49,6 +49,7 @@ defmodule StrangertalksNewWeb.Endpoint do
 
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
+    length: 10_485_760,
     pass: ["*/*"],
     json_decoder: Phoenix.json_library()
 

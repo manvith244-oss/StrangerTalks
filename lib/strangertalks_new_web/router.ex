@@ -23,6 +23,9 @@ defmodule StrangertalksNewWeb.Router do
     delete "/account/session", AccountController, :logout
     delete "/account/sessions", AccountController, :logout_all
     delete "/account/google-link", AccountController, :disconnect
+    get "/account/sync", AccountSyncController, :show
+    put "/account/sync", AccountSyncController, :update
+    delete "/account/sync", AccountSyncController, :delete
 
     post "/conversations/:conversation_id/voice-notes/:voice_note_id",
          VoiceNoteController,

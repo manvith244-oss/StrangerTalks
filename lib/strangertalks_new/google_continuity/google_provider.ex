@@ -4,6 +4,9 @@ defmodule StrangertalksNew.GoogleContinuity.GoogleProvider do
 
   @discovery "https://accounts.google.com/.well-known/openid-configuration"
   @scope "openid https://www.googleapis.com/auth/drive.appdata"
+  @drive_api "https://www.googleapis.com/drive/v3/files"
+  @drive_upload "https://www.googleapis.com/upload/drive/v3/files"
+  @sync_name "strangertalks-sync-v1.enc.json"
 
   @impl true
   def authorization_url(state, nonce, mode) do
@@ -98,6 +101,105 @@ defmodule StrangertalksNew.GoogleContinuity.GoogleProvider do
     end
   end
 
+  @impl true
+  def find_sync_file(access_token) do
+    query =
+      "name = '#{@sync_name}' and 'appDataFolder' in parents and trashed = false and appProperties has { key='strangertalks_kind' and value='account_sync' }"
+
+    url =
+      @drive_api <>
+        "?" <>
+        URI.encode_query(
+          spaces: "appDataFolder",
+          q: query,
+          fields: "files(id,name,appProperties)"
+        )
+
+    case Req.get(url, headers: auth(access_token)) do
+      {:ok, %{status: 200, body: %{"files" => []}}} ->
+        {:ok, nil}
+
+      {:ok, %{status: 200, body: %{"files" => [file]}}} ->
+        {:ok, file}
+
+      {:ok, %{status: 200, body: %{"files" => files}}} when length(files) > 1 ->
+        {:error, :ambiguous_sync_files}
+
+      _ ->
+        {:error, :drive_unavailable}
+    end
+  end
+
+  @impl true
+  def download_sync_file(access_token, file_id) do
+    case Req.get("#{@drive_api}/#{URI.encode_www_form(file_id)}?alt=media",
+           headers: auth(access_token)
+         ) do
+      {:ok, %{status: 200, body: body}} when is_map(body) -> {:ok, body}
+      {:ok, %{status: 404}} -> {:error, :sync_file_not_found}
+      _ -> {:error, :drive_unavailable}
+    end
+  end
+
+  @impl true
+  def create_sync_file(access_token, envelope) do
+    metadata = %{
+      name: @sync_name,
+      parents: ["appDataFolder"],
+      mimeType: "application/json",
+      appProperties: %{strangertalks_kind: "account_sync", schema_version: "1"}
+    }
+
+    with {:ok, %{status: status, headers: headers}} when status in 200..299 <-
+           Req.post(@drive_upload <> "?uploadType=resumable&fields=id",
+             headers:
+               auth(access_token) ++
+                 [
+                   {"content-type", "application/json; charset=UTF-8"},
+                   {"x-upload-content-type", "application/json"}
+                 ],
+             json: metadata
+           ),
+         upload_url when is_binary(upload_url) <- header(headers, "location"),
+         {:ok, %{status: upload_status, body: %{"id" => file_id}}} when upload_status in 200..299 <-
+           Req.put(upload_url,
+             headers: [{"content-type", "application/json"}],
+             body: Jason.encode!(envelope)
+           ) do
+      {:ok, file_id}
+    else
+      _ -> {:error, :drive_unavailable}
+    end
+  end
+
+  @impl true
+  def update_sync_file(access_token, file_id, envelope) do
+    case Req.patch("#{@drive_upload}/#{URI.encode_www_form(file_id)}?uploadType=media",
+           headers: auth(access_token) ++ [{"content-type", "application/json"}],
+           body: Jason.encode!(envelope)
+         ) do
+      {:ok, %{status: status}} when status in 200..299 -> :ok
+      {:ok, %{status: 404}} -> {:error, :sync_file_not_found}
+      _ -> {:error, :drive_unavailable}
+    end
+  end
+
+  @impl true
+  def delete_sync_file(access_token, file_id) do
+    case Req.delete("#{@drive_api}/#{URI.encode_www_form(file_id)}", headers: auth(access_token)) do
+      {:ok, %{status: status}} when status in 200..299 or status == 404 -> :ok
+      _ -> {:error, :drive_unavailable}
+    end
+  end
+
   defp valid_audience?(audiences, expected) when is_list(audiences), do: expected in audiences
   defp valid_audience?(audience, expected), do: audience == expected
+  defp auth(token), do: [{"authorization", "Bearer #{token}"}]
+
+  defp header(headers, name) do
+    headers
+    |> Enum.find_value(fn {key, values} ->
+      if String.downcase(key) == name, do: List.first(List.wrap(values))
+    end)
+  end
 end

@@ -22,6 +22,11 @@ defmodule StrangertalksNewWeb.GoogleContinuityTest do
 
     def refresh_access_token(_token), do: {:ok, "memory-only-access-token"}
     def revoke(_token), do: :ok
+    def find_sync_file(_token), do: {:ok, nil}
+    def download_sync_file(_token, _file_id), do: {:error, :sync_file_not_found}
+    def create_sync_file(_token, _envelope), do: {:error, :not_used}
+    def update_sync_file(_token, _file_id, _envelope), do: {:error, :not_used}
+    def delete_sync_file(_token, _file_id), do: :ok
   end
 
   setup do
