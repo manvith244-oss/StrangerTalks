@@ -16,6 +16,7 @@ defmodule StrangertalksNew.Application do
       {DynamicSupervisor,
        strategy: :one_for_one, name: StrangertalksNew.ConversationDynamicSupervisor},
       StrangertalksNew.ConversationLifecycle.VoiceNoteStore,
+      StrangertalksNew.GoogleContinuity.RateLimiter,
 
       # Queue Engine Processes (Must boot before the Web Endpoint)
       StrangertalksNew.QueueEngine.QueueState,

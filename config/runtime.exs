@@ -23,6 +23,35 @@ end
 config :strangertalks_new, StrangertalksNewWeb.Endpoint,
   http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 
+google_continuity_enabled = System.get_env("GOOGLE_CONTINUITY_ENABLED", "false") in ["true", "1"]
+
+google_continuity = [
+  enabled: google_continuity_enabled,
+  client_id: System.get_env("GOOGLE_OAUTH_CLIENT_ID"),
+  client_secret: System.get_env("GOOGLE_OAUTH_CLIENT_SECRET"),
+  redirect_uri: System.get_env("GOOGLE_OAUTH_REDIRECT_URI"),
+  subject_hmac_key: System.get_env("GOOGLE_SUBJECT_HMAC_KEY"),
+  refresh_token_encryption_key: System.get_env("GOOGLE_REFRESH_TOKEN_ENCRYPTION_KEY")
+]
+
+if google_continuity_enabled do
+  Enum.each(
+    [:client_id, :client_secret, :redirect_uri, :subject_hmac_key, :refresh_token_encryption_key],
+    fn key ->
+      if not is_binary(google_continuity[key]) or google_continuity[key] == "" do
+        raise "GOOGLE_CONTINUITY_ENABLED requires #{key} configuration"
+      end
+    end
+  )
+
+  case Base.decode64(google_continuity[:refresh_token_encryption_key]) do
+    {:ok, key} when byte_size(key) == 32 -> :ok
+    _ -> raise "GOOGLE_REFRESH_TOKEN_ENCRYPTION_KEY must be Base64 for exactly 32 bytes"
+  end
+end
+
+config :strangertalks_new, :google_continuity, google_continuity
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

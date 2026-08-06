@@ -1594,4 +1594,37 @@ Verified:
 
 ---
 
+## Current Slice Specification — Private Google account continuity
+
+Google continuity is optional and guest-first. It privately maps a verified Google OIDC subject to
+the existing canonical StrangerTalks Participant without exposing or storing Google profile data.
+The only approved scopes are `openid` and `drive.appdata`; the raw subject, access token, email,
+name, and photo are never persisted. Link mode preserves the verified current guest Participant,
+while login mode restores an existing Participant. Conflicting identities are never auto-merged.
+
+## Architecture Reference Update — Private account boundary
+
+`private_accounts` owns the one-to-one Participant continuity mapping. `google_account_links` keeps
+only an HMAC-SHA-256 subject identifier and AES-256-GCM protected refresh token.
+`account_sessions` stores only SHA-256 hashes of 256-bit opaque cookies with a 30-day absolute
+expiry. One-time OAuth state and nonce hashes expire after ten minutes. Provider HTTP and OIDC
+verification are isolated behind a behaviour so automated tests never contact Google. JOSE is the
+single narrow dependency added for production RS256/JWKS verification.
+
+## Engineering Progress — Private Google account continuity
+
+Implementation is feature-flagged and disabled safely when configuration is absent. OAuth start,
+callback, session bootstrap, current-device logout, all-device logout, and Google disconnect routes
+are implemented. Focused test and full-suite evidence for this commit is recorded with its commit.
+Real Google OAuth browser verification remains open until deployment credentials and an approved
+redirect URI are available.
+
+## Technical Debt — Google continuity
+
+* `KNOWN — NOT FIXED`: OAuth and account request limiting is process-local for the single-node V1.
+  Shared enforcement is required before multi-node deployment.
+* `KNOWN — NOT FIXED`: Dependency resolution reported security advisories in existing Phoenix,
+  Bandit, Plug, Mint, HPAX, Postgrex, and Swoosh versions. Upgrade compatibility and regression
+  verification require a separate security-maintenance slice; no versions were broadened here.
+
 *Last Updated: August 2026*
