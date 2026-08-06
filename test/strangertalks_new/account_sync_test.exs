@@ -64,7 +64,7 @@ defmodule StrangertalksNew.AccountSyncTest do
       client_id: "id",
       client_secret: "secret",
       redirect_uri: "local",
-      subject_hmac_key: "hmac",
+      subject_hmac_key: Base.encode64(:binary.copy(<<9>>, 32)),
       refresh_token_encryption_key: Base.encode64(:binary.copy(<<8>>, 32))
     )
 

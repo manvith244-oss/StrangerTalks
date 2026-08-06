@@ -2,35 +2,45 @@ defmodule StrangertalksNewWeb.AccountSyncController do
   use StrangertalksNewWeb, :controller
 
   alias StrangertalksNew.AccountSync
-  alias StrangertalksNewWeb.AccountController
+  alias StrangertalksNewWeb.{AccountController, AccountCSRF}
 
   def show(conn, _params),
     do:
       with_session(conn, fn session ->
-        case AccountSync.get(session.account_id) do
-          {:ok, response} ->
-            conn |> put_resp_header("cache-control", "no-store, private") |> json(response)
+        if rate_allowed?(:sync_get, session.account_id, 30) do
+          case AccountSync.get(session.account_id) do
+            {:ok, response} ->
+              conn |> put_resp_header("cache-control", "no-store, private") |> json(response)
 
-          {:error, reason} ->
-            error(conn, reason)
+            {:error, reason} ->
+              error(conn, reason)
+          end
+        else
+          conn |> put_status(:too_many_requests) |> json(%{error: %{reason: "rate_limited"}})
         end
       end)
 
   def update(conn, %{"base_revision" => base_revision, "envelope" => envelope}),
     do:
       with_session(conn, fn session ->
-        if StrangertalksNew.GoogleContinuity.RateLimiter.allow?(
-             :sync_put,
-             session.account_id,
-             30,
-             60
-           ) do
+        with :ok <- AccountCSRF.verify(conn, session),
+             true <-
+               StrangertalksNew.GoogleContinuity.RateLimiter.allow?(
+                 :sync_put,
+                 session.account_id,
+                 30,
+                 60
+               ) do
           case AccountSync.put(session.account_id, base_revision, envelope) do
             {:ok, response} -> json(conn, response)
             {:error, reason} -> error(conn, reason)
           end
         else
-          conn |> put_status(:too_many_requests) |> json(%{error: %{reason: "rate_limited"}})
+          {:error, :forbidden} ->
+            error(conn, :forbidden)
+
+          false ->
+            conn |> put_status(:too_many_requests) |> json(%{error: %{reason: "rate_limited"}})
         end
       end)
 
@@ -39,9 +49,18 @@ defmodule StrangertalksNewWeb.AccountSyncController do
   def delete(conn, _params),
     do:
       with_session(conn, fn session ->
-        case AccountSync.delete(session.account_id) do
-          :ok -> send_resp(conn, :no_content, "")
-          {:error, reason} -> error(conn, reason)
+        with :ok <- AccountCSRF.verify(conn, session),
+             true <- rate_allowed?(:sync_delete, session.account_id, 10) do
+          case AccountSync.delete(session.account_id) do
+            :ok -> send_resp(conn, :no_content, "")
+            {:error, reason} -> error(conn, reason)
+          end
+        else
+          {:error, :forbidden} ->
+            error(conn, :forbidden)
+
+          false ->
+            conn |> put_status(:too_many_requests) |> json(%{error: %{reason: "rate_limited"}})
         end
       end)
 
@@ -68,6 +87,12 @@ defmodule StrangertalksNewWeb.AccountSyncController do
   defp error(conn, :account_session_required),
     do: conn |> put_status(:unauthorized) |> json(%{error: %{reason: "account_session_required"}})
 
+  defp error(conn, :forbidden),
+    do: conn |> put_status(:forbidden) |> json(%{error: %{reason: "forbidden"}})
+
   defp error(conn, reason),
     do: conn |> put_status(:unprocessable_entity) |> json(%{error: %{reason: to_string(reason)}})
+
+  defp rate_allowed?(bucket, key, limit),
+    do: StrangertalksNew.GoogleContinuity.RateLimiter.allow?(bucket, key, limit, 60)
 end

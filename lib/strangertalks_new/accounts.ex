@@ -12,7 +12,7 @@ defmodule StrangertalksNew.Accounts do
   }
 
   alias StrangertalksNew.GoogleContinuity.TokenCrypto
-  alias StrangertalksNew.Repo
+  alias StrangertalksNew.{AccountSyncLock, Repo}
 
   @session_seconds 30 * 24 * 60 * 60
   @oauth_seconds 10 * 60
@@ -72,13 +72,16 @@ defmodule StrangertalksNew.Accounts do
     existing_link =
       Repo.one(
         from l in GoogleAccountLink,
-          where: l.provider_subject_hash == ^subject_hash and is_nil(l.revoked_at),
+          where: l.provider_subject_hash == ^subject_hash,
           preload: :account
       )
 
     case {attempt.mode, existing_link} do
       {"SIGN_IN_EXISTING", nil} ->
         {:error, :account_not_found}
+
+      {"SIGN_IN_EXISTING", %{revoked_at: revoked_at}} when not is_nil(revoked_at) ->
+        {:error, :google_reauthorization_required}
 
       {"SIGN_IN_EXISTING", link} ->
         sign_in_existing(link, provider_result)
@@ -88,7 +91,7 @@ defmodule StrangertalksNew.Accounts do
 
       {"LINK_CURRENT_GUEST", %{account: %{participant_id: participant_id}} = link}
       when participant_id == attempt.participant_id ->
-        sign_in_existing(link, provider_result)
+        reactivate_or_sign_in(link, provider_result)
 
       {"LINK_CURRENT_GUEST", _link} ->
         {:error, :existing_account_available}
@@ -130,28 +133,7 @@ defmodule StrangertalksNew.Accounts do
   end
 
   def disconnect(%AccountSession{account_id: account_id}) do
-    link =
-      Repo.one(
-        from l in GoogleAccountLink, where: l.account_id == ^account_id and is_nil(l.revoked_at)
-      )
-
-    if link do
-      token = TokenCrypto.decrypt_refresh_token(link)
-      if is_binary(token), do: StrangertalksNew.GoogleContinuity.provider().revoke(token)
-
-      link
-      |> Ecto.Changeset.change(
-        encrypted_refresh_token: nil,
-        refresh_token_iv: nil,
-        refresh_token_tag: nil,
-        token_key_version: nil,
-        revoked_at: now(),
-        updated_at: now()
-      )
-      |> Repo.update!()
-    end
-
-    revoke_all_sessions(account_id)
+    AccountSyncLock.with_account(account_id, fn -> do_disconnect(account_id) end)
   end
 
   def active_link(account_id),
@@ -232,6 +214,87 @@ defmodule StrangertalksNew.Accounts do
     |> Multi.run(:session, fn repo, %{account: account} -> create_session(repo, account) end)
     |> Repo.transaction()
     |> normalize_result()
+  end
+
+  defp reactivate_or_sign_in(%GoogleAccountLink{revoked_at: nil} = link, result),
+    do: sign_in_existing(link, result)
+
+  defp reactivate_or_sign_in(link, %{refresh_token: token} = result) when is_binary(token) do
+    now = now()
+    token_attrs = refresh_attrs(token, link.google_account_link_id, link.account_id, %{})
+
+    Multi.new()
+    |> Multi.update(
+      :account,
+      Ecto.Changeset.change(link.account, last_signed_in_at: now, updated_at: now)
+    )
+    |> Multi.update(
+      :link,
+      Ecto.Changeset.change(
+        link,
+        Map.merge(token_attrs, %{
+          granted_scopes: result[:scopes] || [],
+          revoked_at: nil,
+          connected_at: now,
+          refreshed_at: now,
+          updated_at: now
+        })
+      )
+    )
+    |> Multi.run(:session, fn repo, %{account: account} -> create_session(repo, account) end)
+    |> Repo.transaction()
+    |> normalize_result()
+  end
+
+  defp reactivate_or_sign_in(_link, _result), do: {:error, :google_reauthorization_required}
+
+  defp do_disconnect(account_id) do
+    link =
+      Repo.one(
+        from l in GoogleAccountLink, where: l.account_id == ^account_id and is_nil(l.revoked_at)
+      )
+
+    if is_nil(link) do
+      :ok
+    else
+      with token when is_binary(token) <- TokenCrypto.decrypt_refresh_token(link),
+           result when result in [:ok, :already_revoked] <-
+             StrangertalksNew.GoogleContinuity.provider().revoke(token),
+           {:ok, _} <- disconnect_transaction(link, account_id) do
+        :ok
+      else
+        {:error, reason} when reason in [:revocation_failed, :provider_unavailable] ->
+          {:error, :google_revocation_failed}
+
+        error ->
+          require Logger
+          Logger.error("Google disconnect local persistence failed")
+          {:error, {:disconnect_persistence_failed, error}}
+      end
+    end
+  end
+
+  defp disconnect_transaction(link, account_id) do
+    now = now()
+
+    Multi.new()
+    |> Multi.update(
+      :link,
+      Ecto.Changeset.change(link,
+        encrypted_refresh_token: nil,
+        refresh_token_iv: nil,
+        refresh_token_tag: nil,
+        token_key_version: nil,
+        revoked_at: now,
+        updated_at: now
+      )
+    )
+    |> Multi.update_all(
+      :sessions,
+      from(s in AccountSession, where: s.account_id == ^account_id and is_nil(s.revoked_at)),
+      set: [revoked_at: now]
+    )
+    |> Repo.transaction()
   end
 
   defp create_session(repo, account) do

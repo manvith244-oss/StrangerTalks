@@ -48,6 +48,11 @@ if google_continuity_enabled do
     {:ok, key} when byte_size(key) == 32 -> :ok
     _ -> raise "GOOGLE_REFRESH_TOKEN_ENCRYPTION_KEY must be Base64 for exactly 32 bytes"
   end
+
+  case Base.decode64(google_continuity[:subject_hmac_key]) do
+    {:ok, key} when byte_size(key) == 32 -> :ok
+    _ -> raise "GOOGLE_SUBJECT_HMAC_KEY must be Base64 for exactly 32 bytes"
+  end
 end
 
 config :strangertalks_new, :google_continuity, google_continuity

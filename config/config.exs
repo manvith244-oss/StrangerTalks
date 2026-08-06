@@ -39,6 +39,23 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+config :phoenix, :filter_parameters, [
+  "password",
+  "token",
+  "authorization",
+  "bearer",
+  "code",
+  "state",
+  "nonce",
+  "sub",
+  "client_secret",
+  "id_token",
+  "access_token",
+  "refresh_token",
+  "session_token",
+  "csrf_token"
+]
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

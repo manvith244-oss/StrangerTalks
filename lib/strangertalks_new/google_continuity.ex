@@ -29,6 +29,11 @@ defmodule StrangertalksNew.GoogleContinuity do
         _ ->
           raise "Google continuity refresh-token encryption key must decode to exactly 32 bytes"
       end
+
+      case Base.decode64(values[:subject_hmac_key]) do
+        {:ok, key} when byte_size(key) == 32 -> :ok
+        _ -> raise "Google continuity subject HMAC key must decode to exactly 32 bytes"
+      end
     end
 
     values

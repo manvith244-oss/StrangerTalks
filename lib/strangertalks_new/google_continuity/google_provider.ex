@@ -7,6 +7,7 @@ defmodule StrangertalksNew.GoogleContinuity.GoogleProvider do
   @drive_api "https://www.googleapis.com/drive/v3/files"
   @drive_upload "https://www.googleapis.com/upload/drive/v3/files"
   @sync_name "strangertalks-sync-v1.enc.json"
+  @clock_skew_seconds 60
 
   @impl true
   def authorization_url(state, nonce, mode) do
@@ -60,14 +61,22 @@ defmodule StrangertalksNew.GoogleContinuity.GoogleProvider do
 
   def verify_id_token(token, audience, nonce) do
     with {:ok, %{status: 200, body: discovery}} <- Req.get(@discovery),
-         {:ok, %{status: 200, body: %{"keys" => keys}}} <- Req.get(discovery["jwks_uri"]),
-         %JOSE.JWS{fields: %{"kid" => kid}} <- JOSE.JWT.peek_protected(token),
+         {:ok, %{status: 200, body: %{"keys" => keys}}} <- Req.get(discovery["jwks_uri"]) do
+      verify_id_token_with_keys(token, audience, nonce, keys)
+    else
+      _ -> {:error, :invalid_id_token}
+    end
+  end
+
+  def verify_id_token_with_keys(token, audience, nonce, keys, now \\ System.system_time(:second)) do
+    with %JOSE.JWS{fields: %{"kid" => kid}} <- JOSE.JWT.peek_protected(token),
          key when not is_nil(key) <- Enum.find(keys, &(&1["kid"] == kid)),
          {true, jwt, _jws} <- JOSE.JWT.verify_strict(JOSE.JWK.from_map(key), ["RS256"], token),
          claims <- jwt.fields,
          true <- claims["iss"] in ["https://accounts.google.com", "accounts.google.com"],
-         true <- valid_audience?(claims["aud"], audience),
-         true <- is_integer(claims["exp"]) and claims["exp"] > System.system_time(:second),
+         true <- valid_audience?(claims, audience),
+         true <- is_integer(claims["exp"]) and claims["exp"] >= now - @clock_skew_seconds,
+         true <- is_integer(claims["iat"]) and claims["iat"] <= now + @clock_skew_seconds,
          true <- claims["nonce"] == nonce,
          sub when is_binary(sub) and sub != "" <- claims["sub"] do
       {:ok, claims}
@@ -97,6 +106,7 @@ defmodule StrangertalksNew.GoogleContinuity.GoogleProvider do
   def revoke(refresh_token) do
     case Req.post("https://oauth2.googleapis.com/revoke", form: [token: refresh_token]) do
       {:ok, %{status: status}} when status in 200..299 -> :ok
+      {:ok, %{status: 400}} -> :already_revoked
       _ -> {:error, :revocation_failed}
     end
   end
@@ -192,8 +202,12 @@ defmodule StrangertalksNew.GoogleContinuity.GoogleProvider do
     end
   end
 
-  defp valid_audience?(audiences, expected) when is_list(audiences), do: expected in audiences
-  defp valid_audience?(audience, expected), do: audience == expected
+  defp valid_audience?(%{"aud" => audiences, "azp" => expected}, expected)
+       when is_list(audiences),
+       do: expected in audiences
+
+  defp valid_audience?(%{"aud" => audiences}, _expected) when is_list(audiences), do: false
+  defp valid_audience?(%{"aud" => audience}, expected), do: audience == expected
   defp auth(token), do: [{"authorization", "Bearer #{token}"}]
 
   defp header(headers, name) do

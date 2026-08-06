@@ -19,6 +19,12 @@ const app = {identity: null, socket: null, participant: null, participantJoined:
 const $ = (selector) => document.querySelector(selector)
 const now = () => new Date().toISOString()
 
+function accountFetch(path, options = {}) {
+  const headers = {...(options.headers || {})}
+  if (options.method && !["GET", "HEAD"].includes(options.method)) headers["X-StrangerTalks-CSRF"] = app.account.csrf_token
+  return fetch(path, {...options, credentials: "same-origin", headers})
+}
+
 function announce(message) { $("#status").textContent = message }
 function show(name) {
   if (name !== "relationships") app.reconnectCountdown.stop()
@@ -41,7 +47,7 @@ async function bootstrap() {
       app.identity = {participant_id: account.participant_id, token: account.participant_token}
       await putRecord({id: identityKey, type: "identity", value: app.identity, updated_at: now()})
     } else {
-      await fetch("/api/account/session", {method: "DELETE", credentials: "same-origin"})
+      await accountFetch("/api/account/session", {method: "DELETE"})
       app.account.connected = false
     }
   }
@@ -476,7 +482,7 @@ async function uploadSync(records, baseRevision, passphrase) {
     app.account.syncKey = bundle.syncKey
     if (await supportsPersistentCryptoKey().catch(() => false)) await storeSyncKey(bundle.syncKey).catch(() => {})
   }
-  const response = await fetch("/api/account/sync", {method: "PUT", credentials: "same-origin", headers: {"content-type": "application/json"}, body: JSON.stringify({base_revision: baseRevision, envelope})})
+  const response = await accountFetch("/api/account/sync", {method: "PUT", headers: {"content-type": "application/json"}, body: JSON.stringify({base_revision: baseRevision, envelope})})
   const body = await response.json().catch(() => ({}))
   if (response.status === 409) throw new Error("sync_conflict")
   if (!response.ok) throw new Error(body.error?.reason || "sync_failed")
@@ -603,10 +609,10 @@ $("#suggest-dismiss").addEventListener("click", async () => { await putRecord({i
 $("#sync-now").addEventListener("click", () => syncNow().catch((error) => announce(error.message === "passphrase_mismatch" ? "Recovery passphrases did not match." : error.message === "google_reauthorization_required" ? "Google needs to be connected again. Local data was not changed." : "Encrypted sync could not complete.")))
 $("#sync-restore").addEventListener("click", () => restoreFromGoogle().catch((error) => announce(error.message === "google_reauthorization_required" ? "Google needs to be connected again. Local data was not changed." : "Encrypted data could not be restored. Check the recovery passphrase.")))
 $("#auto-sync").addEventListener("change", async (event) => { await putRecord({id: "settings:auto-sync", type: "settings", value: {enabled: event.target.checked}, updated_at: now()}); announce(event.target.checked ? "Automatic protection is enabled after encrypted sync is unlocked in this browser session." : "Automatic protection is off.") })
-$("#sync-delete").addEventListener("click", async () => { if (!confirm("Permanently delete only the encrypted StrangerTalks sync file from Google app data? Local browser data and your private connection will remain.")) return; const response = await fetch("/api/account/sync", {method: "DELETE", credentials: "same-origin"}); if (response.ok) { app.account.revision = 0; $("#sync-status").textContent = "Encrypted Google sync data was deleted. Local data remains."; announce("Google sync data deleted; this device was not changed.") } })
-$("#account-logout").addEventListener("click", async () => { if (!confirm("Sign out only this device? Local browser data remains.")) return; await fetch("/api/account/session", {method: "DELETE", credentials: "same-origin"}); location.reload() })
-$("#account-logout-all").addEventListener("click", async () => { if (!confirm("Sign out every connected device? Local and Google sync data remain.")) return; await fetch("/api/account/sessions", {method: "DELETE", credentials: "same-origin"}); location.reload() })
-$("#account-disconnect").addEventListener("click", async () => { if (!confirm("Disconnect Google and sign out all devices? Bonds and local data remain. Google sync data is not deleted.")) return; await fetch("/api/account/google-link", {method: "DELETE", credentials: "same-origin"}); location.reload() })
+$("#sync-delete").addEventListener("click", async () => { if (!confirm("Permanently delete only the encrypted StrangerTalks sync file from Google app data? Local browser data and your private connection will remain.")) return; const response = await accountFetch("/api/account/sync", {method: "DELETE"}); if (response.ok) { app.account.revision = 0; $("#sync-status").textContent = "Encrypted Google sync data was deleted. Local data remains."; announce("Google sync data deleted; this device was not changed.") } })
+$("#account-logout").addEventListener("click", async () => { if (!confirm("Sign out only this device? Local browser data remains.")) return; await accountFetch("/api/account/session", {method: "DELETE"}); location.reload() })
+$("#account-logout-all").addEventListener("click", async () => { if (!confirm("Sign out every connected device? Local and Google sync data remain.")) return; await accountFetch("/api/account/sessions", {method: "DELETE"}); location.reload() })
+$("#account-disconnect").addEventListener("click", async () => { if (!confirm("Disconnect Google and sign out all devices? Bonds and local data remain. Google sync data is not deleted.")) return; await accountFetch("/api/account/google-link", {method: "DELETE"}); location.reload() })
 
 renderLocalViews().catch(() => {})
 app.voice.mediaType = selectVoiceMediaType(globalThis.MediaRecorder)

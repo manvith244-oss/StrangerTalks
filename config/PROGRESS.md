@@ -1698,4 +1698,14 @@ against only `strangertalks_new_test_google_continuity_migration`.
   IndexedDB require the recovery passphrase again after each browser restart. Supported browsers
   reuse the non-extractable key; raw key material is never written to `localStorage`.
 
+## Google continuity security remediation
+
+OAuth callback and account-session handling now explicitly filter credentials, validate 32-byte
+subject-HMAC keys, enforce strict signed Google OIDC claims, preserve encrypted refresh credentials
+when provider revocation is unresolved, and safely reactivate a revoked link only for its existing
+Participant owner. Cookie-authenticated destructive actions use a session-derived, memory-only CSRF
+token plus same-origin checks. The V1 single-node rate limiter hashes identifiers, expires entries,
+prunes during requests, and fails closed at 10,000 active keys. Provider/browser integration and
+multi-node distributed limiting remain deployment work; guest mode remains independent.
+
 *Last Updated: August 2026*

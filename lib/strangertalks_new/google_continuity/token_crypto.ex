@@ -3,7 +3,9 @@ defmodule StrangertalksNew.GoogleContinuity.TokenCrypto do
   @version 1
 
   def subject_hash(subject) when is_binary(subject) do
-    key = StrangertalksNew.GoogleContinuity.required_config!()[:subject_hmac_key]
+    {:ok, key} =
+      StrangertalksNew.GoogleContinuity.required_config!()[:subject_hmac_key] |> Base.decode64()
+
     :crypto.mac(:hmac, :sha256, key, subject)
   end
 

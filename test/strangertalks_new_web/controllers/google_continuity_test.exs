@@ -21,7 +21,7 @@ defmodule StrangertalksNewWeb.GoogleContinuityTest do
     end
 
     def refresh_access_token(_token), do: {:ok, "memory-only-access-token"}
-    def revoke(_token), do: :ok
+    def revoke(_token), do: Application.get_env(:strangertalks_new, :fake_revoke_result, :ok)
     def find_sync_file(_token), do: {:ok, nil}
     def download_sync_file(_token, _file_id), do: {:error, :sync_file_not_found}
     def create_sync_file(_token, _envelope), do: {:error, :not_used}
@@ -38,7 +38,7 @@ defmodule StrangertalksNewWeb.GoogleContinuityTest do
       client_id: "client",
       client_secret: "secret",
       redirect_uri: "http://localhost/auth/google/callback",
-      subject_hmac_key: "test-hmac-secret",
+      subject_hmac_key: Base.encode64(:binary.copy(<<9>>, 32)),
       refresh_token_encryption_key: Base.encode64(:binary.copy(<<7>>, 32))
     ]
 
@@ -59,6 +59,7 @@ defmodule StrangertalksNewWeb.GoogleContinuityTest do
 
       Application.delete_env(:strangertalks_new, :account_cookie_secure)
       Application.delete_env(:strangertalks_new, :fake_google_result)
+      Application.delete_env(:strangertalks_new, :fake_revoke_result)
     end)
 
     :ok
@@ -222,6 +223,107 @@ defmodule StrangertalksNewWeb.GoogleContinuityTest do
     link = Repo.one!(GoogleAccountLink)
     assert link.revoked_at
     assert is_nil(link.encrypted_refresh_token)
+  end
+
+  test "refresh token encryption rejects ciphertext, tag, IV, AAD and version tampering" do
+    link_participant(participant(), "tamper")
+    link = Repo.one!(GoogleAccountLink)
+
+    for field <- [:encrypted_refresh_token, :refresh_token_tag, :refresh_token_iv] do
+      changed =
+        Map.update!(link, field, fn <<byte, rest::binary>> ->
+          <<Bitwise.bxor(byte, 1), rest::binary>>
+        end)
+
+      assert :error == TokenCrypto.decrypt_refresh_token(changed)
+    end
+
+    assert :error == TokenCrypto.decrypt_refresh_token(%{link | account_id: Ecto.UUID.generate()})
+
+    assert :error ==
+             TokenCrypto.decrypt_refresh_token(%{
+               link
+               | google_account_link_id: Ecto.UUID.generate()
+             })
+
+    assert :error == TokenCrypto.decrypt_refresh_token(%{link | token_key_version: 2})
+
+    other = link_participant(participant(), "other-row")
+    other_link = Repo.get_by!(GoogleAccountLink, account_id: other.account.account_id)
+
+    swapped = %{
+      other_link
+      | encrypted_refresh_token: link.encrypted_refresh_token,
+        refresh_token_iv: link.refresh_token_iv,
+        refresh_token_tag: link.refresh_token_tag,
+        token_key_version: link.token_key_version
+    }
+
+    assert :error == TokenCrypto.decrypt_refresh_token(swapped)
+  end
+
+  test "revoked subject requires reauthorization for login and owner can relink the same row" do
+    owner = participant()
+    result = link_participant(owner, "relink")
+    link_id = Repo.one!(GoogleAccountLink).google_account_link_id
+    assert :ok = Accounts.disconnect(result.session)
+
+    {:ok, _, state, _} = Accounts.start_oauth("SIGN_IN_EXISTING", nil)
+    {:ok, attempt} = Accounts.consume_oauth(state)
+
+    assert {:error, :google_reauthorization_required} =
+             Accounts.complete_oauth(attempt, %{
+               subject: "relink",
+               refresh_token: "new",
+               scopes: []
+             })
+
+    {:ok, _, state, _} = Accounts.start_oauth("LINK_CURRENT_GUEST", owner.participant_id)
+    {:ok, attempt} = Accounts.consume_oauth(state)
+
+    assert {:ok, _} =
+             Accounts.complete_oauth(attempt, %{
+               subject: "relink",
+               refresh_token: "new",
+               scopes: []
+             })
+
+    assert Repo.aggregate(GoogleAccountLink, :count, :google_account_link_id) == 1
+    assert Repo.one!(GoogleAccountLink).google_account_link_id == link_id
+    assert is_nil(Repo.one!(GoogleAccountLink).revoked_at)
+  end
+
+  test "disconnect preserves credentials and sessions when provider revocation is unresolved" do
+    result = link_participant(participant(), "retry-disconnect")
+    link = Repo.one!(GoogleAccountLink)
+    Application.put_env(:strangertalks_new, :fake_revoke_result, {:error, :revocation_failed})
+    assert {:error, :google_revocation_failed} = Accounts.disconnect(result.session)
+    assert Repo.one!(GoogleAccountLink).encrypted_refresh_token == link.encrypted_refresh_token
+    assert {:ok, _} = Accounts.authenticate_session(result.raw_token)
+  end
+
+  test "cookie account mutations require the session-specific CSRF token", %{conn: conn} do
+    result = link_participant(participant(), "csrf")
+    conn = put_req_cookie(conn, "strangertalks_account", result.raw_token)
+    session_body = conn |> get(~p"/api/account/session") |> json_response(200)
+
+    assert conn |> recycle() |> delete(~p"/api/account/sessions") |> json_response(403) == %{
+             "error" => %{"reason" => "forbidden"}
+           }
+
+    assert conn
+           |> recycle()
+           |> put_req_header("x-strangertalks-csrf", "wrong")
+           |> delete(~p"/api/account/sessions")
+           |> json_response(403) == %{"error" => %{"reason" => "forbidden"}}
+
+    valid =
+      conn
+      |> recycle()
+      |> put_req_header("x-strangertalks-csrf", session_body["csrf_token"])
+      |> delete(~p"/api/account/sessions")
+
+    assert response(valid, 204)
   end
 
   defp participant do
