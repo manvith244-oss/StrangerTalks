@@ -9,6 +9,7 @@ import {
   encryptBackup,
   keptConversations,
   localMessage,
+  localVoiceNote,
   mergeRecords,
   signatureSeedFor,
   temporaryConversation,
@@ -36,8 +37,41 @@ test("import merge uses stable IDs and keeps the newest updated_at", () => {
 })
 
 test("invalid backup versions and structures are rejected", () => {
-  assert.equal(validEnvelope({version: 2}), false)
+  assert.equal(validEnvelope({version: 3}), false)
   assert.equal(validEnvelope({version: 1, kdf: "PBKDF2-SHA256", cipher: "AES-GCM"}), false)
+})
+
+test("voice blobs follow Keep Summary Fade and deletion without affecting Memories or Bonds", () => {
+  const voice = localVoiceNote({conversation_id: "conversation-a", voice_note_id: "voice-a", blob: new Blob(["voice"], {type: "audio/webm"}), mine: true, delivery_status: "delivered", sent_at: startedAt, sequence: 1, duration_ms: 1000, byte_size: 5, media_type: "audio/webm"})
+  const memory = {id: "memory:1", type: "memory", value: {text: "mine"}, updated_at: startedAt}
+  const bond = {id: "relationship:1", type: "relationship", value: {status: "created"}, updated_at: startedAt}
+  assert.equal(chooseConversationRetention([conversation, voice], "conversation-a", "kept", {now: endedAt}).some(({type}) => type === "local_voice_note"), true)
+  for (const choice of ["summary_only", "faded"]) {
+    const options = choice === "summary_only" ? {now: endedAt, summaryText: "summary"} : {now: endedAt}
+    const result = chooseConversationRetention([conversation, voice, memory, bond], "conversation-a", choice, options)
+    assert.equal(result.some(({type}) => type === "local_voice_note"), false)
+    assert.equal(result.some(({type}) => type === "memory"), true)
+    assert.equal(result.some(({type}) => type === "relationship"), true)
+  }
+  assert.equal(deleteKeptConversation(chooseConversationRetention([conversation, voice], "conversation-a", "kept", {now: endedAt}), "conversation-a").some(({type}) => type === "local_voice_note"), false)
+  assert.equal(deleteAllKeptConversations(chooseConversationRetention([conversation, voice], "conversation-a", "kept", {now: endedAt})).some(({type}) => type === "local_voice_note"), false)
+})
+
+test("only kept voice data enters encrypted backup and round trips as a Blob", async () => {
+  const voice = localVoiceNote({conversation_id: "conversation-a", voice_note_id: "voice-a", blob: new Blob(["voice"], {type: "audio/webm"}), mine: true, delivery_status: "delivered", sent_at: startedAt, sequence: 1, duration_ms: 1000, byte_size: 5, media_type: "audio/webm"})
+  const temporaryEnvelope = await encryptBackup([conversation, voice], "passphrase")
+  assert.equal((await decryptBackup(temporaryEnvelope, "passphrase")).some(({type}) => type === "local_voice_note"), false)
+  const kept = chooseConversationRetention([conversation, voice], "conversation-a", "kept", {now: endedAt})
+  const restored = await decryptBackup(await encryptBackup(kept, "passphrase"), "passphrase")
+  const restoredVoice = restored.find(({type}) => type === "local_voice_note")
+  assert.equal(restoredVoice.value.blob instanceof Blob, true)
+  assert.equal(await restoredVoice.value.blob.text(), "voice")
+})
+
+test("previous text-only backup envelope versions remain importable", async () => {
+  const record = {id: "memory:old", type: "memory", value: {text: "old"}, updated_at: startedAt}
+  const envelope = await encryptBackup([record], "passphrase")
+  assert.deepEqual(await decryptBackup({...envelope, version: 1}, "passphrase"), [record])
 })
 
 test("active messages cache under a temporary conversation without promoting it", () => {

@@ -1160,9 +1160,17 @@ do not automatically receive audio; deliberate voice-report evidence remains a f
 V1 does not decode media to independently prove duration, one recipient client acknowledgement counts
 as delivery, and a BEAM crash can lose pending audio.
 
-Backend status is test-verified only. Browser recording, device retention, encrypted backup support,
-and real two-browser manual verification belong to the next commit and remain incomplete. Automated
-browser end-to-end coverage remains open.
+The official browser client feature-detects the locked MediaRecorder priority and requests microphone
+permission only after a versioned local privacy acknowledgement. It records for at most 60 seconds,
+always previews before an explicit send, rejects payloads over 1 MiB, stops microphone tracks, and
+never autoplays received audio. Text and voice share chronological local rendering. Available Blobs
+remain temporary until the existing Keep choice; Summary, Fade, delete-one, and delete-all remove raw
+voice data while preserving independent Memories and Bonds. Only deliberately kept voice Blobs enter
+the version-2 encrypted manual backup, and version-1 text-only backups remain importable.
+
+Frontend and backend status is automated-test verified only. Real two-browser manual verification of
+record, preview, send, receive, playback, delivered acknowledgement, Keep, Summary, Fade, deletion,
+and refresh/local replay remains incomplete. Automated browser end-to-end coverage remains open.
 
 ---
 

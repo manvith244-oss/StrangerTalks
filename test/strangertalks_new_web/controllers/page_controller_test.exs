@@ -103,4 +103,24 @@ defmodule StrangertalksNewWeb.PageControllerTest do
     assert javascript =~ "timelineNearBottom()"
     assert javascript =~ ~S|$("#new-messages").hidden = false|
   end
+
+  test "voice recording is explicit and remains absent from historical local copies", %{
+    conn: conn
+  } do
+    body = conn |> get("/") |> html_response(200)
+    [_, conversation] = Regex.run(~r/(<section data-screen="conversation".*?<\/section>)/s, body)
+    [_, history] = Regex.run(~r/(<section data-screen="history".*?<\/section>)/s, body)
+    javascript = File.read!(Application.app_dir(:strangertalks_new, "priv/static/assets/app.js"))
+
+    assert conversation =~ ~s(id="voice-start")
+    assert conversation =~ "Your voice may reveal personal details"
+    assert conversation =~ "Voice notes are delivered temporarily through StrangerTalks"
+    assert body =~ ~s(id="voice-preview-audio" controls)
+    refute body =~ ~r/<audio[^>]*autoplay/
+    refute conversation =~ ~s(type="file")
+    refute history =~ "voice-start"
+    refute history =~ "message-form"
+    assert javascript =~ "URL.revokeObjectURL"
+    assert javascript =~ "navigator.mediaDevices.getUserMedia"
+  end
 end

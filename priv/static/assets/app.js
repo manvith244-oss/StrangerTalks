@@ -4,11 +4,16 @@ import {
   activeConversations, chooseConversationRetention, clearRecords, decryptBackup,
   deleteAllKeptConversations, deleteKeptConversation, deleteRecord, encryptBackup,
   getRecord, importRecords, keptConversations, listRecords, localMessage, putRecord,
-  replaceRecords, temporaryConversation
+  localVoiceNote, replaceRecords, temporaryConversation
 } from "./local_data.mjs"
+import {
+  MAX_VOICE_BYTES, MAX_VOICE_DURATION_MS, VOICE_WARNING_VERSION, baseMediaType,
+  chronologicalTimeline, selectVoiceMediaType, stopMediaTracks, validVoiceBlob,
+  warningAcknowledged
+} from "./voice_notes.mjs"
 
 const identityKey = "strangertalks.identity.v1"
-const app = {identity: null, socket: null, participant: null, conversation: null, conversationId: null, selectedDoor: null, rendered: new Set(), typingTimer: null, historyConversationId: null, timelinePinned: true}
+const app = {identity: null, socket: null, participant: null, conversation: null, conversationId: null, selectedDoor: null, rendered: new Set(), typingTimer: null, historyConversationId: null, timelinePinned: true, voice: {mediaType: null, recorder: null, stream: null, chunks: [], startedAt: 0, timer: null, stopTimer: null, discard: false, blob: null, objectUrl: null, voiceNoteId: null, durationMs: 0}, voiceUrls: new Map()}
 const $ = (selector) => document.querySelector(selector)
 const now = () => new Date().toISOString()
 
@@ -61,7 +66,9 @@ function joinConversation(id) {
   app.conversation.on("typing:status", ({typing}) => { $("#typing").textContent = typing ? "The other person is typing…" : "" })
   app.conversation.on("message:new", (message) => { renderMessage(message, false); push(app.conversation, "message:ack", {message_id: message.message_id}).catch(() => {}) })
   app.conversation.on("message:status", updateMessageStatus)
-  app.conversation.on("conversation:ended", async () => { await markConversationEnded(); show("ended"); announce("Conversation ended. Choose what this device should retain.") })
+  app.conversation.on("voice_note:new", receiveVoiceNote)
+  app.conversation.on("voice_note:status", updateVoiceNoteStatus)
+  app.conversation.on("conversation:ended", async () => { cancelRecording(); await markConversationEnded(); show("ended"); announce("Conversation ended. Choose what this device should retain.") })
   app.conversation.join().receive("ok", async () => { await ensureTemporaryConversation(id); await renderCachedConversation(id); show("conversation"); scrollTimelineToNewest(); announce("Conversation joined.") }).receive("error", () => announce("The conversation is unavailable."))
 }
 
@@ -87,7 +94,7 @@ async function markConversationEnded() {
 async function renderCachedConversation(conversationId) {
   app.rendered.clear(); $("#messages").replaceChildren()
   const records = await listRecords()
-  records.filter((record) => record.type === "local_message" && record.value.conversation_id === conversationId).sort((a, b) => a.value.sent_at.localeCompare(b.value.sent_at)).forEach(({value}) => renderMessageNode(value, value.mine, $("#messages")))
+  chronologicalTimeline(records.filter((record) => ["local_message", "local_voice_note"].includes(record.type) && record.value.conversation_id === conversationId)).forEach((record) => record.type === "local_voice_note" ? renderVoiceNoteNode(record.value, $("#messages"), false) : renderMessageNode(record.value, record.value.mine, $("#messages")))
 }
 
 function renderMessage(message, mine) {
@@ -117,6 +124,49 @@ function updateMessageStatus({message_id, status}) {
   getRecord(id).then((record) => record && putRecord({...record, value: {...record.value, delivery_status: status}, updated_at: now()})).catch(() => {})
 }
 
+function renderVoiceNoteNode(note, container, historical) {
+  if (app.rendered.has(note.voice_note_id)) return
+  app.rendered.add(note.voice_note_id)
+  const item = document.createElement("li"); item.className = `message voice-note${note.mine ? " mine" : ""}`; item.dataset.voiceNoteId = note.voice_note_id
+  const label = document.createElement("strong"); label.textContent = "Voice note"
+  const audio = document.createElement("audio"); audio.controls = true; audio.preload = "metadata"; audio.autoplay = false
+  releaseVoiceUrl(note.voice_note_id)
+  const url = URL.createObjectURL(note.blob); app.voiceUrls.set(note.voice_note_id, url); audio.src = url
+  item.append(label, audio)
+  if (historical) { const copy = document.createElement("span"); copy.className = "local-voice-copy"; copy.textContent = "This voice note is stored on this device as part of your local Conversation copy."; item.append(copy) }
+  else if (note.mine) { const status = document.createElement("small"); status.textContent = note.delivery_status || "sent_to_server"; item.append(status) }
+  container.append(item)
+}
+
+async function receiveVoiceNote(note) {
+  const shouldFollow = timelineNearBottom()
+  const id = `voice:${app.conversationId}:${note.voice_note_id}`
+  const existing = await getRecord(id)
+  if (existing?.value.blob) {
+    renderVoiceNoteNode(existing.value, $("#messages"), false)
+    await push(app.conversation, "voice_note:ack", {voice_note_id: note.voice_note_id})
+    return
+  }
+
+  try {
+    const response = await fetch(`/api/conversations/${app.conversationId}/voice-notes/${note.voice_note_id}`, {headers: {authorization: `Bearer ${app.identity.token}`}})
+    if (!response.ok) throw new Error("download_failed")
+    const blob = await response.blob()
+    if (!validVoiceBlob(blob)) throw new Error("invalid_voice_note")
+    const record = localVoiceNote({conversation_id: app.conversationId, voice_note_id: note.voice_note_id, blob, mine: false, delivery_status: "delivered", sent_at: note.timestamp, sequence: note.sequence, duration_ms: note.duration_ms, byte_size: note.byte_size, media_type: note.media_type})
+    try { await putRecord(record) } catch { announce("Voice note received, but it may not survive refresh because local storage is unavailable.") }
+    renderVoiceNoteNode(record.value, $("#messages"), false)
+    requestAnimationFrame(() => { if (shouldFollow) scrollTimelineToNewest({smooth: true}); else $("#new-messages").hidden = false })
+    await push(app.conversation, "voice_note:ack", {voice_note_id: note.voice_note_id})
+  } catch { announce("A voice note could not be downloaded before it expired.") }
+}
+
+function updateVoiceNoteStatus({voice_note_id, status}) {
+  document.querySelector(`[data-voice-note-id="${CSS.escape(voice_note_id)}"] small`)?.replaceChildren(document.createTextNode(status))
+  const id = `voice:${app.conversationId}:${voice_note_id}`
+  getRecord(id).then((record) => record && putRecord({...record, value: {...record.value, delivery_status: status}, updated_at: now()})).catch(() => {})
+}
+
 async function rememberRelationship(id) {
   const conversation = await getRecord(`conversation:${app.conversationId}`)
   await putRecord({id: `relationship:${id}`, type: "relationship", value: {relationship_id: id, status: "created", conversation_id: app.conversationId, abstract_signature_seed: conversation?.value.abstract_signature_seed || null}, updated_at: now()})
@@ -128,6 +178,7 @@ async function applyRetention(choice, summaryText) {
   const next = chooseConversationRetention(records, app.conversationId, choice, {summaryText, now: now()})
   if (choice === "summary_only") await putRecord(next.find(({id}) => id === `summary:${app.conversationId}`))
   await replaceRecords(next)
+  releaseAllVoiceUrls()
   app.conversationId = null
   if (choice === "kept") show("chats"); else show("doors")
 }
@@ -192,14 +243,91 @@ function scrollHistoryToNewest() {
 }
 
 async function openHistory(conversationId) {
-  app.historyConversationId = conversationId; app.rendered.clear(); $("#history-messages").replaceChildren()
+  app.historyConversationId = conversationId; app.rendered.clear(); releaseAllVoiceUrls(); $("#history-messages").replaceChildren()
   const records = await listRecords(); const conversation = records.find(({id}) => id === `conversation:${conversationId}`)
   $("#history-title").textContent = conversation.value.display_door
   const ribbon = signatureRibbon(conversation.value.abstract_signature_seed); $("#history-signature").replaceWith(ribbon); ribbon.id = "history-signature"
-  records.filter((record) => record.type === "local_message" && record.value.conversation_id === conversationId).sort((a, b) => a.value.sent_at.localeCompare(b.value.sent_at)).forEach(({value}) => renderMessageNode(value, value.mine, $("#history-messages")))
+  chronologicalTimeline(records.filter((record) => ["local_message", "local_voice_note"].includes(record.type) && record.value.conversation_id === conversationId)).forEach((record) => record.type === "local_voice_note" ? renderVoiceNoteNode(record.value, $("#history-messages"), true) : renderMessageNode(record.value, record.value.mine, $("#history-messages")))
   $("#history-summary").value = records.find(({id}) => id === `summary:${conversationId}`)?.value.text || ""
   show("history")
   scrollHistoryToNewest()
+}
+
+function releaseVoiceUrl(voiceNoteId) {
+  const url = app.voiceUrls.get(voiceNoteId)
+  if (url) URL.revokeObjectURL(url)
+  app.voiceUrls.delete(voiceNoteId)
+}
+
+function releaseAllVoiceUrls() {
+  for (const voiceNoteId of [...app.voiceUrls.keys()]) releaseVoiceUrl(voiceNoteId)
+}
+
+function clearVoicePreview() {
+  if (app.voice.objectUrl) URL.revokeObjectURL(app.voice.objectUrl)
+  app.voice.objectUrl = null; app.voice.blob = null; app.voice.voiceNoteId = null; app.voice.durationMs = 0
+  $("#voice-preview-audio").removeAttribute("src"); $("#voice-preview-audio").load(); $("#voice-preview").hidden = true
+}
+
+function closeVoiceStream() {
+  clearInterval(app.voice.timer); clearTimeout(app.voice.stopTimer); stopMediaTracks(app.voice.stream)
+  app.voice.stream = null; app.voice.recorder = null; $("#voice-recording").hidden = true
+}
+
+async function requestVoiceRecording() {
+  const warning = await getRecord("settings:voice-warning:v1")
+  if (!warningAcknowledged(warning)) { $("#voice-warning").hidden = false; return }
+  await startVoiceRecording()
+}
+
+async function startVoiceRecording() {
+  $("#voice-warning").hidden = true; clearVoicePreview(); $("#voice-preview-status").textContent = ""
+  if (!app.voice.mediaType || !navigator.mediaDevices?.getUserMedia) { announce("Voice recording is unavailable in this browser. Text messaging still works."); return }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true})
+    const recorder = new MediaRecorder(stream, {mimeType: app.voice.mediaType, audioBitsPerSecond: 64_000})
+    Object.assign(app.voice, {stream, recorder, chunks: [], startedAt: Date.now(), discard: false})
+    recorder.addEventListener("dataavailable", ({data}) => { if (data.size) app.voice.chunks.push(data) })
+    recorder.addEventListener("stop", finishVoiceRecording, {once: true})
+    recorder.start(); $("#voice-recording").hidden = false; updateVoiceTimer()
+    app.voice.timer = setInterval(updateVoiceTimer, 250)
+    app.voice.stopTimer = setTimeout(() => { if (recorder.state === "recording") recorder.stop() }, MAX_VOICE_DURATION_MS)
+  } catch { closeVoiceStream(); announce("Microphone access was not granted. Text messaging is still available.") }
+}
+
+function updateVoiceTimer() {
+  const seconds = Math.min(60, Math.floor((Date.now() - app.voice.startedAt) / 1000))
+  $("#voice-timer").textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`
+}
+
+function finishVoiceRecording() {
+  const durationMs = Math.min(MAX_VOICE_DURATION_MS, Math.max(1, Date.now() - app.voice.startedAt))
+  const discard = app.voice.discard; const blob = new Blob(app.voice.chunks, {type: baseMediaType(app.voice.mediaType)})
+  closeVoiceStream()
+  if (discard) { clearVoicePreview(); return }
+  app.voice.blob = blob; app.voice.durationMs = durationMs; app.voice.voiceNoteId = crypto.randomUUID()
+  app.voice.objectUrl = URL.createObjectURL(blob); $("#voice-preview-audio").src = app.voice.objectUrl; $("#voice-preview").hidden = false
+  const valid = validVoiceBlob(blob); $("#voice-send").disabled = !valid
+  $("#voice-preview-status").textContent = valid ? "Review before sending. Nothing is sent automatically." : `This recording is too large. Voice notes must be ${MAX_VOICE_BYTES.toLocaleString()} bytes or less.`
+}
+
+function cancelRecording() {
+  app.voice.discard = true
+  if (app.voice.recorder?.state === "recording") app.voice.recorder.stop(); else { closeVoiceStream(); clearVoicePreview() }
+}
+
+async function sendVoicePreview() {
+  if (!validVoiceBlob(app.voice.blob)) return
+  const id = app.voice.voiceNoteId; const sentAt = now(); $("#voice-send").disabled = true; $("#voice-preview-status").textContent = "Uploading…"
+  const record = localVoiceNote({conversation_id: app.conversationId, voice_note_id: id, blob: app.voice.blob, mine: true, delivery_status: "sending", sent_at: sentAt, sequence: null, duration_ms: app.voice.durationMs, byte_size: app.voice.blob.size, media_type: baseMediaType(app.voice.mediaType)})
+  await putRecord(record)
+  try {
+    const response = await fetch(`/api/conversations/${app.conversationId}/voice-notes/${id}`, {method: "POST", headers: {authorization: `Bearer ${app.identity.token}`, "content-type": baseMediaType(app.voice.mediaType), "x-voice-duration-ms": String(app.voice.durationMs)}, body: app.voice.blob})
+    const result = await response.json()
+    if (!response.ok) throw new Error(result.error || "upload_failed")
+    const saved = {...record, value: {...record.value, delivery_status: result.status}, updated_at: now()}; await putRecord(saved)
+    renderVoiceNoteNode(saved.value, $("#messages"), false); clearVoicePreview(); scrollTimelineToNewest({smooth: true})
+  } catch { $("#voice-preview-status").textContent = "Voice note failed to send. Try again or re-record."; $("#voice-send").disabled = false; updateVoiceNoteStatus({voice_note_id: id, status: "failed"}) }
 }
 
 async function renderLocalViews() {
@@ -218,6 +346,15 @@ $("#join-queue").addEventListener("click", async () => { const payload = queuePa
 $("#leave-queue").addEventListener("click", async () => { await push(app.participant, "queue:leave"); show("doors") })
 $("#message-form").addEventListener("submit", async (event) => { event.preventDefault(); const input = $("#message-input"); const content = input.value.trim(); if (!content) return; const message_id = crypto.randomUUID(); renderMessage({message_id, content, status: "sending", sent_at: now()}, true); input.value = ""; try { updateMessageStatus(await push(app.conversation, "message:send", {message_id, content})) } catch { updateMessageStatus({message_id, status: "failed"}) } })
 $("#message-input").addEventListener("input", () => { push(app.conversation, "typing:start").catch(() => {}); clearTimeout(app.typingTimer); app.typingTimer = setTimeout(() => push(app.conversation, "typing:stop").catch(() => {}), 1500) })
+$("#voice-start").addEventListener("click", requestVoiceRecording)
+$("#voice-warning-help").addEventListener("click", () => { $("#voice-warning").hidden = false })
+$("#voice-warning-cancel").addEventListener("click", () => { $("#voice-warning").hidden = true })
+$("#voice-warning-continue").addEventListener("click", async () => { await putRecord({id: "settings:voice-warning:v1", type: "settings", value: {voice_warning_version: VOICE_WARNING_VERSION}, updated_at: now()}); await startVoiceRecording() })
+$("#voice-stop").addEventListener("click", () => { if (app.voice.recorder?.state === "recording") app.voice.recorder.stop() })
+$("#voice-record-cancel").addEventListener("click", cancelRecording)
+$("#voice-preview-cancel").addEventListener("click", clearVoicePreview)
+$("#voice-rerecord").addEventListener("click", startVoiceRecording)
+$("#voice-send").addEventListener("click", sendVoicePreview)
 $("#message-viewport").addEventListener("scroll", () => { app.timelinePinned = timelineNearBottom(); if (app.timelinePinned) $("#new-messages").hidden = true })
 $("#new-messages").addEventListener("click", () => scrollTimelineToNewest({smooth: true}))
 window.visualViewport?.addEventListener("resize", () => { if (app.timelinePinned) scrollTimelineToNewest() })
@@ -231,14 +368,16 @@ $("#block").addEventListener("click", async () => { if (confirm("Block this pers
 $("#consent").addEventListener("click", async () => { const result = await push(app.conversation, "relationship:consent"); $("#consent-status").textContent = result.status === "created" ? "Bond created." : "Waiting for mutual consent."; if (result.relationship_id) rememberRelationship(result.relationship_id) })
 $("#history-summary-form").addEventListener("submit", async (event) => { event.preventDefault(); const text = $("#history-summary").value.trim(); const summaryId = `summary:${app.historyConversationId}`; if (text) await putRecord({id: summaryId, type: "summary", value: {conversation_id: app.historyConversationId, text}, updated_at: now()}); else await deleteRecord(summaryId); const conversation = await getRecord(`conversation:${app.historyConversationId}`); await putRecord({...conversation, value: {...conversation.value, summary_id: text ? summaryId : null}, updated_at: now()}); announce("Local summary updated.") })
 $("#history-memory").addEventListener("click", async () => { const text = prompt("Memory to save separately on this device:"); if (text?.trim()) { await putRecord({id: `memory:${crypto.randomUUID()}`, type: "memory", value: {text: text.trim(), conversation_id: app.historyConversationId}, updated_at: now()}); announce("Memory saved separately.") } })
-$("#history-delete").addEventListener("click", async () => { if (!confirm("Delete this kept local conversation and transcript?")) return; const records = await listRecords(); const hasSummary = records.some(({id}) => id === `summary:${app.historyConversationId}`); const deleteSummary = hasSummary && confirm("Also delete its associated summary? Separate Memories will remain."); await replaceRecords(deleteKeptConversation(records, app.historyConversationId, {deleteSummary})); show("chats") })
-$("#delete-kept-all").addEventListener("click", async () => { if (!confirm("Delete all kept local conversations and transcripts?")) return; const records = await listRecords(); const hasSummaries = keptConversations(records).some(({value}) => records.some(({id}) => id === `summary:${value.conversation_id}`)); const deleteSummaries = hasSummaries && confirm("Also delete their associated summaries? Separate Memories will remain."); await replaceRecords(deleteAllKeptConversations(records, {deleteSummaries})); renderChats() })
+$("#history-delete").addEventListener("click", async () => { if (!confirm("Delete this kept local conversation and transcript?")) return; const records = await listRecords(); const hasSummary = records.some(({id}) => id === `summary:${app.historyConversationId}`); const deleteSummary = hasSummary && confirm("Also delete its associated summary? Separate Memories will remain."); await replaceRecords(deleteKeptConversation(records, app.historyConversationId, {deleteSummary})); releaseAllVoiceUrls(); show("chats") })
+$("#delete-kept-all").addEventListener("click", async () => { if (!confirm("Delete all kept local conversations and transcripts?")) return; const records = await listRecords(); const hasSummaries = keptConversations(records).some(({value}) => records.some(({id}) => id === `summary:${value.conversation_id}`)); const deleteSummaries = hasSummaries && confirm("Also delete their associated summaries? Separate Memories will remain."); await replaceRecords(deleteAllKeptConversations(records, {deleteSummaries})); releaseAllVoiceUrls(); renderChats() })
 $("#memory-form").addEventListener("submit", async (event) => { event.preventDefault(); const text = $("#memory-note").value.trim(); if (!text) return; await putRecord({id: `memory:${crypto.randomUUID()}`, type: "memory", value: {text}, updated_at: now()}); event.target.reset(); renderLocalViews() })
 $("#reduced-motion").addEventListener("change", async (event) => { document.body.classList.toggle("reduce-motion", event.target.checked); await putRecord({id: "settings:privacy", type: "settings", value: {reduced_motion: event.target.checked}, updated_at: now()}) })
 $("#view-data").addEventListener("click", renderDataInventory)
-$("#delete-all").addEventListener("click", async () => { if (!confirm("Delete all local StrangerTalks data from this browser? This cannot be undone without an exported backup.")) return; await clearRecords(); app.socket?.disconnect(); app.identity = null; await createIdentity(false); connectSocket(); renderLocalViews(); renderDataInventory(); announce("All prior local data was deleted. A new anonymous identity was created.") })
+$("#delete-all").addEventListener("click", async () => { if (!confirm("Delete all local StrangerTalks data from this browser? This cannot be undone without an exported backup.")) return; await clearRecords(); releaseAllVoiceUrls(); clearVoicePreview(); app.socket?.disconnect(); app.identity = null; await createIdentity(false); connectSocket(); renderLocalViews(); renderDataInventory(); announce("All prior local data was deleted. A new anonymous identity was created.") })
 $("#export-data").addEventListener("click", async () => { const passphrase = prompt("Choose a backup passphrase. It cannot be recovered if lost."); if (!passphrase) return; const envelope = await encryptBackup(await listRecords(), passphrase); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(envelope)], {type: "application/json"})); link.download = `strangertalks-backup-${now().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); announce("Encrypted backup exported. Keep its passphrase safe.") })
 $("#import-data").addEventListener("change", async (event) => { const file = event.target.files[0]; if (!file) return; const passphrase = prompt("Enter this backup’s passphrase."); if (!passphrase) return; try { await importRecords(await decryptBackup(JSON.parse(await file.text()), passphrase)); await renderLocalViews(); await renderDataInventory(); announce("Backup merged. Newer records won for matching stable IDs.") } catch { announce("Backup could not be opened. Check the file and passphrase.") } finally { event.target.value = "" } })
 
 renderLocalViews().catch(() => {})
+app.voice.mediaType = selectVoiceMediaType(globalThis.MediaRecorder)
+if (!app.voice.mediaType || !navigator.mediaDevices?.getUserMedia) { $("#voice-start").disabled = true; $("#voice-unavailable").hidden = false; $("#voice-unavailable").textContent = "Voice recording is unavailable in this browser. Text messaging still works." }
 bootstrap().then(async () => { const settings = await getRecord("settings:privacy"); if (settings?.value.reduced_motion) { $("#reduced-motion").checked = true; document.body.classList.add("reduce-motion") } }).catch(() => announce("StrangerTalks could not start. Please reload."))
