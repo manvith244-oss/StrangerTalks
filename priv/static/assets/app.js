@@ -8,7 +8,7 @@ import {
 } from "./local_data.mjs"
 
 const identityKey = "strangertalks.identity.v1"
-const app = {identity: null, socket: null, participant: null, conversation: null, conversationId: null, selectedDoor: null, rendered: new Set(), typingTimer: null, historyConversationId: null}
+const app = {identity: null, socket: null, participant: null, conversation: null, conversationId: null, selectedDoor: null, rendered: new Set(), typingTimer: null, historyConversationId: null, timelinePinned: true}
 const $ = (selector) => document.querySelector(selector)
 const now = () => new Date().toISOString()
 
@@ -57,12 +57,12 @@ async function recoverIdentity() { await deleteRecord(identityKey); app.socket?.
 
 function joinConversation(id) {
   app.conversation = app.socket.channel(`conversation:${id}`, {})
-  app.conversation.on("conversation:presence", ({status}) => { updateLocalConnection(status === "disconnected" ? "recovery" : status); $("#presence").textContent = status === "connected" ? "Connected" : status === "reconnecting" ? "The other person is reconnecting…" : "Disconnected" })
+  app.conversation.on("conversation:presence", ({status}) => { updateLocalConnection(status === "disconnected" ? "recovery" : status); $("#presence").textContent = status === "connected" ? "Connected" : status === "reconnecting" ? "The other person is reconnecting…" : "Disconnected"; if (status === "connected") scrollTimelineToNewest() })
   app.conversation.on("typing:status", ({typing}) => { $("#typing").textContent = typing ? "The other person is typing…" : "" })
   app.conversation.on("message:new", (message) => { renderMessage(message, false); push(app.conversation, "message:ack", {message_id: message.message_id}).catch(() => {}) })
   app.conversation.on("message:status", updateMessageStatus)
   app.conversation.on("conversation:ended", async () => { await markConversationEnded(); show("ended"); announce("Conversation ended. Choose what this device should retain.") })
-  app.conversation.join().receive("ok", async () => { await ensureTemporaryConversation(id); await renderCachedConversation(id); show("conversation"); announce("Conversation joined.") }).receive("error", () => announce("The conversation is unavailable."))
+  app.conversation.join().receive("ok", async () => { await ensureTemporaryConversation(id); await renderCachedConversation(id); show("conversation"); scrollTimelineToNewest(); announce("Conversation joined.") }).receive("error", () => announce("The conversation is unavailable."))
 }
 
 async function ensureTemporaryConversation(conversationId) {
@@ -92,7 +92,12 @@ async function renderCachedConversation(conversationId) {
 
 function renderMessage(message, mine) {
   if (app.rendered.has(message.message_id)) return
+  const shouldFollow = mine || timelineNearBottom()
   renderMessageNode(message, mine, $("#messages"))
+  requestAnimationFrame(() => {
+    if (shouldFollow) scrollTimelineToNewest({smooth: true})
+    else $("#new-messages").hidden = false
+  })
   const sent_at = message.sent_at || now()
   putRecord(localMessage({conversation_id: app.conversationId, message_id: message.message_id, content: message.content, mine, delivery_status: message.status || "delivered", sent_at})).catch(() => {})
 }
@@ -164,6 +169,28 @@ function updateDoorLabels() {
   $("#conversation-door").textContent = app.selectedDoor
 }
 
+function reducedMotionEnabled() {
+  return document.body.classList.contains("reduce-motion") || window.matchMedia("(prefers-reduced-motion: reduce)").matches
+}
+
+function timelineNearBottom() {
+  const viewport = $("#message-viewport")
+  return viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 80
+}
+
+function scrollTimelineToNewest({smooth = false} = {}) {
+  requestAnimationFrame(() => {
+    const viewport = $("#message-viewport")
+    viewport.scrollTo({top: viewport.scrollHeight, behavior: smooth && !reducedMotionEnabled() ? "smooth" : "auto"})
+    app.timelinePinned = true
+    $("#new-messages").hidden = true
+  })
+}
+
+function scrollHistoryToNewest() {
+  requestAnimationFrame(() => $("#history-messages").lastElementChild?.scrollIntoView({block: "end", behavior: "auto"}))
+}
+
 async function openHistory(conversationId) {
   app.historyConversationId = conversationId; app.rendered.clear(); $("#history-messages").replaceChildren()
   const records = await listRecords(); const conversation = records.find(({id}) => id === `conversation:${conversationId}`)
@@ -172,6 +199,7 @@ async function openHistory(conversationId) {
   records.filter((record) => record.type === "local_message" && record.value.conversation_id === conversationId).sort((a, b) => a.value.sent_at.localeCompare(b.value.sent_at)).forEach(({value}) => renderMessageNode(value, value.mine, $("#history-messages")))
   $("#history-summary").value = records.find(({id}) => id === `summary:${conversationId}`)?.value.text || ""
   show("history")
+  scrollHistoryToNewest()
 }
 
 async function renderLocalViews() {
@@ -190,6 +218,9 @@ $("#join-queue").addEventListener("click", async () => { const payload = queuePa
 $("#leave-queue").addEventListener("click", async () => { await push(app.participant, "queue:leave"); show("doors") })
 $("#message-form").addEventListener("submit", async (event) => { event.preventDefault(); const input = $("#message-input"); const content = input.value.trim(); if (!content) return; const message_id = crypto.randomUUID(); renderMessage({message_id, content, status: "sending", sent_at: now()}, true); input.value = ""; try { updateMessageStatus(await push(app.conversation, "message:send", {message_id, content})) } catch { updateMessageStatus({message_id, status: "failed"}) } })
 $("#message-input").addEventListener("input", () => { push(app.conversation, "typing:start").catch(() => {}); clearTimeout(app.typingTimer); app.typingTimer = setTimeout(() => push(app.conversation, "typing:stop").catch(() => {}), 1500) })
+$("#message-viewport").addEventListener("scroll", () => { app.timelinePinned = timelineNearBottom(); if (app.timelinePinned) $("#new-messages").hidden = true })
+$("#new-messages").addEventListener("click", () => scrollTimelineToNewest({smooth: true}))
+window.visualViewport?.addEventListener("resize", () => { if (app.timelinePinned) scrollTimelineToNewest() })
 $("#end-conversation").addEventListener("click", async () => { if (confirm("End this conversation for both people?")) await push(app.conversation, "conversation:end") })
 $("#keep-conversation").addEventListener("click", () => applyRetention("kept").catch(() => announce("Could not keep this local copy.")))
 $("#summary-choice-form").addEventListener("submit", (event) => { event.preventDefault(); applyRetention("summary_only", $("#summary-choice-text").value).catch(() => announce("Enter and save a summary before removing the transcript.")) })

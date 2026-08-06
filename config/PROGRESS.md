@@ -1127,6 +1127,12 @@ This establishes a visual foundation, not a final approved design. Manual review
 at 320px, 390px, 768px, desktop width, short viewports, and 200% zoom. Automated browser end-to-end
 coverage remains open.
 
+The active Conversation timeline keeps chronological DOM order while bottom-anchoring short message
+lists above a safe-area-aware composer. Long timelines scroll independently; near-bottom readers
+follow new messages, while readers reviewing earlier content keep their position and receive an
+accessible New messages control. Cached active Conversations and historical local copies open at
+their newest rendered message without changing delivery, acknowledgement, or retention semantics.
+
 ---
 
 # Phase 8 — Integration and Quality

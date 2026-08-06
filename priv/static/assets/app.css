@@ -128,6 +128,7 @@ h2 { margin-top: var(--st-space-12); font-size: var(--st-heading); }
 @keyframes breathe { to { opacity: 0.55; transform: scale(0.9) rotate(-3deg); } }
 
 .conversation-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--st-space-4); border-bottom: 1px solid var(--st-border); padding-bottom: var(--st-space-4); }
+.conversation.active { display: flex; height: calc(100dvh - 7rem); min-height: 24rem; flex-direction: column; overflow: hidden; }
 .conversation-identity { display: flex; align-items: center; gap: var(--st-space-4); }
 .conversation-head h1 { margin: 0; font-size: var(--st-heading); }
 #presence, #typing { min-height: 1.5em; margin: 0; color: var(--st-text-muted); font-size: var(--st-small); }
@@ -136,11 +137,14 @@ h2 { margin-top: var(--st-space-12); font-size: var(--st-heading); }
 .overflow summary::-webkit-details-marker { display: none; }
 .overflow-menu { position: absolute; z-index: 4; top: calc(100% + var(--st-space-2)); right: 0; display: grid; width: 9rem; gap: var(--st-space-2); padding: var(--st-space-2); border: 1px solid var(--st-border); border-radius: var(--st-radius-medium); background: rgba(24, 27, 36, 0.92); backdrop-filter: blur(20px) saturate(130%); }
 .privacy-note, .privacy { max-width: 44rem; color: var(--st-text-muted); }
-.conversation #messages, #history-messages { display: flex; min-height: 12rem; flex-direction: column; gap: var(--st-space-3); margin: 0; padding: var(--st-space-8) 0; list-style: none; }
+.message-viewport { flex: 1 1 auto; min-height: 8rem; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.conversation #messages { display: flex; min-height: 100%; flex-direction: column; justify-content: flex-end; gap: var(--st-space-3); margin: 0; padding: var(--st-space-6) 0 var(--st-space-8); list-style: none; }
+#history-messages { display: flex; min-height: 12rem; flex-direction: column; gap: var(--st-space-3); margin: 0; padding: var(--st-space-8) 0; list-style: none; }
 .message { max-width: min(78%, 36rem); padding: var(--st-space-3) var(--st-space-4); border-radius: var(--st-radius-medium) var(--st-radius-medium) var(--st-radius-medium) var(--st-space-1); background: var(--st-surface); overflow-wrap: anywhere; white-space: pre-wrap; }
 .message.mine { align-self: flex-end; border-radius: var(--st-radius-medium) var(--st-radius-medium) var(--st-space-1) var(--st-radius-medium); background: var(--st-surface-raised); }
 .message small { display: block; margin-top: var(--st-space-1); color: var(--st-text-muted); font-size: var(--st-caption); text-align: right; }
-.composer { position: sticky; bottom: max(var(--st-space-3), env(safe-area-inset-bottom, 0px)); z-index: 2; padding: var(--st-space-2); border: 1px solid var(--st-border); border-radius: var(--st-radius-large); background: rgba(24, 27, 36, 0.78); backdrop-filter: blur(20px) saturate(130%); }
+.new-messages { align-self: center; margin: var(--st-space-2) 0; border-radius: var(--st-radius-pill); background: var(--st-text); color: var(--st-bg-deep); font-size: var(--st-small); font-weight: 750; }
+.composer { flex: 0 0 auto; z-index: 2; margin-bottom: max(var(--st-space-2), env(safe-area-inset-bottom, 0px)); padding: var(--st-space-2); border: 1px solid var(--st-border); border-radius: var(--st-radius-large); background: rgba(24, 27, 36, 0.78); backdrop-filter: blur(20px) saturate(130%); }
 .compose { display: flex; align-items: flex-end; gap: var(--st-space-2); }
 .compose textarea { min-height: 3rem; max-height: 10rem; resize: vertical; }
 

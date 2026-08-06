@@ -70,6 +70,10 @@ defmodule StrangertalksNewWeb.PageControllerTest do
 
     [_, conversation] = Regex.run(~r/(<section data-screen="conversation".*?<\/section>)/s, body)
     assert conversation =~ ~s(id="message-form")
+    assert conversation =~ ~s(id="message-viewport")
+    assert conversation =~ ~s(id="new-messages")
+    assert conversation =~ ">New messages</button>"
+    assert conversation =~ ~s(id="new-messages" class="new-messages" hidden)
     assert conversation =~ ~s(id="end-conversation")
     assert conversation =~ ~s(id="report-open")
     assert conversation =~ ~s(id="block")
@@ -83,5 +87,20 @@ defmodule StrangertalksNewWeb.PageControllerTest do
     refute body =~ "<img"
     refute body =~ "avatar"
     refute body =~ "profile"
+  end
+
+  test "message timeline is bottom anchored without reversing chronological DOM order" do
+    static_dir = Application.app_dir(:strangertalks_new, "priv/static")
+    css = File.read!(Path.join(static_dir, "assets/app.css"))
+    javascript = File.read!(Path.join(static_dir, "assets/app.js"))
+
+    assert css =~ ~r/\.message-viewport\s*\{[^}]*overflow-y:\s*auto/s
+    assert css =~ ~r/\.conversation #messages\s*\{[^}]*justify-content:\s*flex-end/s
+    refute css =~ "column-reverse"
+
+    assert javascript =~ "a.value.sent_at.localeCompare(b.value.sent_at)"
+    assert javascript =~ "container.append(item)"
+    assert javascript =~ "timelineNearBottom()"
+    assert javascript =~ ~S|$("#new-messages").hidden = false|
   end
 end
