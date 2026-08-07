@@ -1726,3 +1726,146 @@ non-extractable keys are namespaced by a server-issued opaque continuity identif
 protection never prompts or silently resolves a conflict; setup and conflict restore remain explicit.
 
 *Last Updated: August 2026*
+
+---
+
+# Automated Browser MVP Verification
+
+## Automated Browser Environment
+
+- Automated runner: Playwright Chromium
+- Separate browser contexts with isolated:
+  - `cookies`
+  - `localStorage`
+  - `sessionStorage`
+  - `IndexedDB` (`strangertalks-local-v1`)
+- Phoenix development server running at `http://localhost:4000`
+- Google Continuity disabled in development environment
+- All test scripts, screenshots, and logs remained strictly outside the repository in private scratch storage
+
+## Baseline Text Conversation — Verified
+
+Verified via two-browser Playwright automation:
+
+- Same-Door matching
+- Two-way real-time text delivery
+- Chronological message ordering
+- No duplicate messages
+- Delivery acknowledgements (explicit recipient `message:ack`)
+- Typing indicator start and stop synchronization
+- Scroll preservation on timeline update
+- New-message banner behavior when scrolled up
+- Text composer remains positioned above bottom navigation
+- 390px mobile viewport layout
+- Short-height viewport layout
+- 200% zoom layout integrity
+- Zero console, HTTP, or WebSocket failures
+
+## Voice Notes — Verified with Limitation
+
+Verified via automated Playwright execution:
+
+- Privacy warning banner appears before microphone access request
+- Selecting "Not now" requests no microphone permission
+- Active recording UI and live timer display
+- Media track cleanup upon clicking Stop
+- Preview controls before sending
+- No automatic send after recording completes
+- Cancel button discards audio and sends nothing
+- Explicit upload step
+- Single recipient delivery scope
+- No audio autoplay upon receipt
+- Recipient playback enabled after direct user interaction
+- Delivered acknowledgement upon recipient fetch
+- Duplicate message protection
+- Correct chronological ordering in mixed text/voice timelines
+- Refresh and local-cache restoration
+- Responsive layout across desktop and mobile viewports
+
+Open Limitation:
+
+- Automated verification used Chromium synthetic media streams (`--use-fake-device-for-media-stream`). Real physical microphone hardware and OS-device audio subsystem behavior remain manually unverified.
+
+## Bond Reconnection — Verified
+
+Verified via two-browser Playwright automation:
+
+- Mutual Bond creation upon mutual intent
+- First-intent request remains private
+- Different Doors remain private
+- Cancel isolation
+- Door-change isolation
+- Mutual same-Door match unlocks reconnected conversation
+- One effective reconnected conversation created
+- Duplicate transition protection
+- Waiting-state refresh restoration
+- Committed-match restoration
+- Cancel failure does not falsely revert to idle state
+- Block safety uses generic unavailable state representation
+- Multiple-tab behavior and state synchronization
+- Text and Voice Notes function within a reconnected conversation
+- Responsive layout across viewports
+
+## Local Retention and Encrypted Backup — Verified
+
+Verified via isolated browser context automation:
+
+- Keep option retains local conversation copy in `#kept-chat-list`
+- Summary only option stores reflection summary and removes raw transcript
+- Fade option removes conversation transcript and summary from local storage
+- Delete one kept Conversation removes chosen item while leaving other kept items
+- Delete all kept history removes all kept conversations and transcripts
+- Historical Conversation view is strictly read-only with no active input composer
+- Local Voice Note audio playback in history view
+- Encrypted versioned manual backup export generates versioned envelope
+- Zero plaintext retained content visible inside exported envelope JSON
+- Importing with wrong passphrase causes zero storage mutation
+- Correct passphrase restores kept conversations, settings, and memories into fresh context
+- Voice Note binary Blob restoration and playback from restored backup
+- Repeated backup import does not duplicate records
+- Newer local record wins over older backup based on `updated_at` timestamp
+- Malformed and tampered backup variants fail safely before any database mutation
+- Responsive layout across viewports
+
+Honest Retention Characteristics:
+
+- Standalone Memories remain preserved in storage after history deletion
+- Summary-only choice removes raw transcript and Voice Note audio data
+- Voice Notes are included in manual encrypted backup exports
+
+## Guest-First and Google-Disabled — Verified
+
+Verified via Playwright automation:
+
+- First launch opens directly on Talk screen without any sign-in wall
+- All four canonical product Doors (*Deep Talk*, *Vent*, *Distract*, *Advice*) are immediately usable
+- Queue entry, matching, text delivery, and Voice Notes function completely without Google
+- Keep, Summary, Fade, Memories, Bonds, and manual backup function completely as a guest
+- All four primary navigation tabs (*Talk*, *Chats*, *Bonds*, *You*) remain available to guests
+- Disabled state copy in You/Settings explicitly states that private Google continuity is unavailable while guest StrangerTalks remains fully available
+- Zero Google API, OAuth, or Drive network requests generated
+- Zero Google identity, client ID, or configuration details exposed in DOM or console
+- Browser refresh restores local guest identity and data from IndexedDB
+- Separate browser contexts remain completely isolated without data leakage
+- Local Chats, Memories, and Bonds remain readable offline from browser storage after initial load
+- Offline queue entry failure displays a generic connection message and does not push Google sign-in
+- 200% zoom layout passes
+- Reduced-motion mode (`prefers-reduced-motion: reduce`) passes
+
+## Retained Open Limitations
+
+The following items remain open as technical debt and future verification milestones:
+
+- Real physical microphone hardware verification
+- Real Google OAuth verification with testing credentials and deployment HTTPS
+- Real Google Drive `appDataFolder` remote API operation
+- Cross-device phone-to-laptop backup restore workflow
+- Google consent-screen review and brand verification
+- Automated browser E2E integration into the permanent repository test suite
+- Previously identified Google security test-hardening gaps:
+  - Broader rate-limiter coverage across endpoints
+  - Broader CSRF/session coverage
+  - Drive fake-transport boundary test coverage
+  - Remaining concurrency coverage
+- Multi-node locks and distributed coordination for matchmaking and account state
+- Voice Note Google sync remains excluded by policy
