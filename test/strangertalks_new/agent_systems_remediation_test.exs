@@ -4,7 +4,8 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.QueueEngine.QueueState
-  alias StrangertalksNew.Repo
+  alias StrangertalksNew.{MatchingRules, Repo}
+  alias StrangertalksNewWeb.ConversationChannel
 
   setup do
     Agent.update(QueueState, fn _ -> %{} end)
@@ -104,7 +105,7 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
     assert {:ok, _} = MatchmakingEngine.join_queue(b.participant_id, :EXPLORE, "en", nil, nil)
 
     assert {:ok, _block} =
-             StrangertalksNew.MatchingRules.enforce_block(
+             MatchingRules.enforce_block(
                a.participant_id,
                b.participant_id,
                "AGENT_SYSTEMS_REMEDIATION"
@@ -163,6 +164,80 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
 
     assert recovered.icebreaker == %{status: "active", identity: before_identity}
     assert recovered.messages == []
+  end
+
+  test "block terminates live Conversation authority and defeats refresh or restart recovery" do
+    %{conversation: conversation, a: a, b: b} = queue_match("en")
+    conversation_id = conversation.conversation_id
+
+    pid = start_supervised!({ConversationServer, %{conversation_id: conversation_id}})
+
+    assert {:ok, _} =
+             ConversationServer.sync_and_register_channel(
+               conversation_id,
+               a.participant_id,
+               self(),
+               nil,
+               0
+             )
+
+    assert {:ok, _} =
+             ConversationServer.sync_and_register_channel(
+               conversation_id,
+               b.participant_id,
+               self(),
+               nil,
+               0
+             )
+
+    assert Repo.get!(StrangertalksNew.Conversation, conversation_id).conversation_status == :ACTIVE
+    assert Process.alive?(pid)
+
+    assert {:ok, _block} =
+             MatchingRules.block_conversation_participant(conversation_id, a.participant_id)
+
+    terminal = Repo.get!(StrangertalksNew.Conversation, conversation_id)
+    assert terminal.conversation_status == :ENDED
+    assert terminal.ending_type == :BLOCK
+    assert terminal.ending_initiator == a.participant_id
+    assert terminal.safety_flagged == true
+    assert terminal.conversation_completed == false
+
+    refute Process.alive?(pid)
+    assert {:error, :not_started} = ConversationServer.lookup(conversation_id)
+
+    assert {:error, :conversation_unavailable} =
+             ConversationServer.append_message(
+               conversation_id,
+               b.participant_id,
+               Ecto.UUID.generate(),
+               "must not survive block"
+             )
+
+    assert {:error, :terminal_conversation} = ConversationServer.ensure_started(conversation_id)
+
+    socket = %Phoenix.Socket{assigns: %{participant_id: b.participant_id}}
+    assert {:error, _payload} = ConversationChannel.join("conversation:#{conversation_id}", %{}, socket)
+  end
+
+  test "block closes a pending Conversation before any runtime can be reconstructed" do
+    %{conversation: conversation, a: a} = queue_match("te")
+    conversation_id = conversation.conversation_id
+
+    assert conversation.conversation_status == :PENDING
+    assert {:error, :not_started} = ConversationServer.lookup(conversation_id)
+
+    assert {:ok, _block} =
+             MatchingRules.block_conversation_participant(conversation_id, a.participant_id)
+
+    terminal = Repo.get!(StrangertalksNew.Conversation, conversation_id)
+    assert terminal.conversation_status == :ENDED
+    assert terminal.ending_type == :BLOCK
+    assert terminal.ending_initiator == a.participant_id
+    assert terminal.safety_flagged == true
+    assert terminal.conversation_completed == false
+
+    assert {:error, :terminal_conversation} = ConversationServer.ensure_started(conversation_id)
   end
 
   test "runtime ownership excludes dormant ParticipantServer and legacy Matcher" do
