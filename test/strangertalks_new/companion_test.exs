@@ -142,7 +142,7 @@ defmodule StrangertalksNew.CompanionTest do
     assert result.language == "en"
     assert result.mode == "respond"
     assert length(result.suggestions) == 2
-    assert result.model == "fake-companion"
+    refute Map.has_key?(result, :model)
     assert Repo.aggregate(Message, :count, :message_id) == 0
 
     assert_receive {:companion_context, captured}
@@ -194,6 +194,30 @@ defmodule StrangertalksNew.CompanionTest do
 
     send(provider_pid, :continue)
     assert {:error, :companion_stale} = Task.await(task)
+  end
+
+  test "same participant and Conversation has only one in-flight Companion generation", context do
+    Application.put_env(:strangertalks_new, :companion,
+      enabled: true,
+      provider: RacingProvider
+    )
+
+    first =
+      Task.async(fn ->
+        Companion.request(context.conversation.conversation_id, context.participant_a, %{
+          "mode" => "continue"
+        })
+      end)
+
+    assert_receive {:race_context, provider_pid, _captured}
+
+    assert {:error, :companion_busy} =
+             Companion.request(context.conversation.conversation_id, context.participant_a, %{
+               "mode" => "continue"
+             })
+
+    send(provider_pid, :continue)
+    assert {:ok, %{status: "ready"}} = Task.await(first)
   end
 
   test "terminal block authority prevents Companion generation", context do
