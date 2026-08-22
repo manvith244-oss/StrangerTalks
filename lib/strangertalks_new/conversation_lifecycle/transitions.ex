@@ -135,9 +135,9 @@ defmodule StrangertalksNew.ConversationLifecycle.Transitions do
     apply_transition(conv, :ENDED, :participant_completed, Map.merge(default_attrs, attrs))
   end
 
-  # ACTIVE / PAUSED -> ENDED (safety terminated)
+  # PENDING / ACTIVE / PAUSED -> ENDED (safety terminated)
   def transition(%Conversation{conversation_status: status} = conv, :safety_terminated, attrs)
-      when status in [:ACTIVE, :PAUSED] do
+      when status in [:PENDING, :ACTIVE, :PAUSED] do
     now = DateTime.utc_now()
 
     default_attrs = %{
