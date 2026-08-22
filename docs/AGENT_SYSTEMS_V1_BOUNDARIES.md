@@ -119,3 +119,7 @@ Runtime dependency audit must remain clean for:
 - moderation models.
 
 A future participant-invoked assistant or review aid would require a separate explicit product/architecture decision; it is not part of Agent Systems V1.
+
+## Current-head remediation gate
+
+`.github/workflows/agent-systems-remediation.yml` is the release-preparation evidence runner. It checks out the exact branch HEAD, runs the focused deterministic-authority/recovery/language suites, runs the focused browser Conversation Start/authorship tests, executes the repository's full `mix precommit`, and finally requires `git diff --exit-code` so the evidence cannot be described as clean if precommit rewrites the checkout.
