@@ -22,11 +22,11 @@ defmodule StrangertalksNew.Companion.Context do
 
   def capture(conversation_id, participant_id, attrs) when is_map(attrs) do
     with %Conversation{} = conversation <- Repo.get(Conversation, conversation_id),
-         true <- member?(conversation, participant_id),
-         true <- conversation.conversation_status in @active_statuses,
+         :ok <- authorize_member(conversation, participant_id),
+         :ok <- authorize_active(conversation),
          %Matching{} = match <- Repo.get(Matching, conversation.match_id),
          {:ok, language} <- ConversationLanguages.normalize(match.conversation_language),
-         false <- safety_veto?(conversation, participant_id),
+         :ok <- authorize_safety(conversation, participant_id),
          {:ok, mode} <- normalize_mode(value(attrs, "mode")),
          {:ok, request} <- bounded_optional_text(value(attrs, "request"), @max_request_chars),
          {:ok, draft} <- bounded_optional_text(value(attrs, "draft"), @max_draft_chars),
@@ -59,7 +59,7 @@ defmodule StrangertalksNew.Companion.Context do
        }}
     else
       nil -> {:error, :conversation_not_found}
-      false -> {:error, :conversation_unavailable}
+      false -> {:error, :invalid_payload}
       :error -> {:error, :invalid_payload}
       {:error, _reason} = error -> error
       _ -> {:error, :invalid_payload}
@@ -70,12 +70,12 @@ defmodule StrangertalksNew.Companion.Context do
 
   def revalidate(%{conversation_id: conversation_id, participant_id: participant_id} = context) do
     with %Conversation{} = conversation <- Repo.get(Conversation, conversation_id),
-         true <- member?(conversation, participant_id),
-         true <- conversation.conversation_status in @active_statuses,
+         :ok <- authorize_member(conversation, participant_id),
+         :ok <- authorize_active(conversation),
          %Matching{} = match <- Repo.get(Matching, conversation.match_id),
          {:ok, language} <- ConversationLanguages.normalize(match.conversation_language),
          true <- language == context.language,
-         false <- safety_veto?(conversation, participant_id),
+         :ok <- authorize_safety(conversation, participant_id),
          true <- (conversation.message_count || 0) == context.authority.message_count,
          true <- current_latest_sequence(conversation_id) == context.authority.latest_sequence do
       :ok
@@ -137,6 +137,22 @@ defmodule StrangertalksNew.Companion.Context do
 
   defp latest_sequence([]), do: 0
   defp latest_sequence(messages), do: messages |> List.last() |> Map.fetch!(:sequence)
+
+  defp authorize_member(conversation, participant_id) do
+    if member?(conversation, participant_id), do: :ok, else: {:error, :not_conversation_member}
+  end
+
+  defp authorize_active(conversation) do
+    if conversation.conversation_status in @active_statuses,
+      do: :ok,
+      else: {:error, :conversation_unavailable}
+  end
+
+  defp authorize_safety(conversation, participant_id) do
+    if safety_veto?(conversation, participant_id),
+      do: {:error, :conversation_unavailable},
+      else: :ok
+  end
 
   defp safety_veto?(conversation, participant_id) do
     peer = peer_id(conversation, participant_id)
