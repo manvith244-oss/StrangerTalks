@@ -37,9 +37,11 @@ The model can receive only the bounded A01 projection:
 - requested mode/tone;
 - explicit participant request;
 - participant draft supplied during invocation;
-- at most 12 recent persisted text messages;
+- at most 12 recent live text messages from the authoritative `ConversationServer` runtime;
 - at most 900 characters per selected message;
 - at most 6,000 transcript characters total.
+
+Raw live-message content is not copied into PostgreSQL for A01. The Companion projects from the same temporary in-memory Conversation authority used for delivery and then sends only the bounded projection to the provider.
 
 Messages are projected only as `self` or `stranger`. Participant IDs, peer IDs, account identity, safety-review notes, historical readiness fields, analytics fields, private account data, and other Conversations are not included in the provider payload.
 
@@ -50,9 +52,10 @@ Before model invocation, A01 requires:
 - authenticated participant membership;
 - Conversation status in `PENDING`, `ACTIVE`, or `PAUSED`;
 - valid persisted Match language;
-- no authoritative BoundaryBlock/CLOSED-Relationship veto.
+- no authoritative BoundaryBlock/CLOSED-Relationship veto;
+- a live authoritative `ConversationServer` runtime from which bounded context can be projected.
 
-After model generation, the same authority is re-read. A result is discarded as stale if Conversation status, Match language, safety authority, persisted message count, or latest persisted text sequence changed during generation.
+After model generation, the same persisted authority is re-read and the live runtime is rechecked. A result is discarded as stale if Conversation status, Match language, safety authority, Conversation runtime epoch, or next message sequence changed during generation. A ConversationServer restart therefore invalidates an in-flight result even if the durable Conversation itself remains recoverable.
 
 The browser separately protects the participant draft: a suggestion cannot overwrite a draft that changed after the request started.
 
