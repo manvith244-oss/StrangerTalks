@@ -1,15 +1,25 @@
 # filepath: lib/strangertalks_new/queue/participant_server.ex
 defmodule StrangertalksNew.Queue.ParticipantServer do
   @moduledoc """
-  Specialized supervised GenServer process allocated per active participant.
-  Governs the deterministic state machine lifecycle transitions, temporal threshold
-  updates, and 60-second connection loss grace windows.
+  LEGACY / DORMANT queue-lifecycle prototype retained for historical test coverage.
+
+  This module has no V1 runtime authority. It is not supervised by
+  `StrangertalksNew.Application`, the current ParticipantChannel does not call it,
+  and its private registration path still targets `StrangertalksNew.Queue.Registry`,
+  which the canonical V1 supervision tree does not start.
+
+  Current queue ownership is split deliberately between
+  `StrangertalksNew.QueueEngine.ParticipantConnectionTracker` for live participant-tab
+  ownership, `StrangertalksNew.QueueEngine.QueueState` for volatile attempt state, and
+  `StrangertalksNew.Matchmaking.MatchmakingEngine` for queue mutation/matching.
+
+  Do not wire this prototype back into production without an explicit architecture change.
   """
 
   use GenServer, restart: :temporary, spawn_opt: [fullsweep_after: 10]
   require Logger
 
-  # CORRECTED: Uses the exact namespace declared inside the matchmaking_engine.ex file
+  # Historical namespace retained with the dormant prototype.
   alias StrangertalksNew.Queue.TimeFixture
 
   @pubsub_topic "strangertalks:matchmaking"
@@ -31,7 +41,7 @@ defmodule StrangertalksNew.Queue.ParticipantServer do
   # --- Public Client API Boundaries ---
 
   @doc """
-  Spawns and registers a unique ParticipantServer instance bound to the registry.
+  Spawns and registers a unique ParticipantServer instance bound to the legacy registry.
   """
   @spec start_link(map()) :: GenServer.on_start()
   def start_link(params) do
