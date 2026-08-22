@@ -1,0 +1,74 @@
+name: A01 Conversation Companion Gate
+
+on:
+  push:
+    branches:
+      - feature/a01-conversation-companion
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  companion:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install Elixir dependencies
+        run: mix deps.get
+
+      - name: Focused A01 Elixir tests
+        run: mix test test/strangertalks_new/companion_test.exs
+
+      - name: Focused A01 browser logic
+        run: node --test test/js/companion_test.mjs test/js/prompt_cards_test.mjs
+
+      - name: Full precommit
+        run: mix precommit
+
+      - name: Prove precommit left checkout unchanged
+        run: git diff --exit-code -- .
+
+      - name: Record exact commit
+        run: echo "A01_TESTED_COMMIT=$GITHUB_SHA"
