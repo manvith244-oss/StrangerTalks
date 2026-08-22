@@ -39,7 +39,14 @@ defmodule StrangertalksNew.AgentSystemsProviderProbeTest do
   end
 
   setup do
-    previous_flag = System.get_env("AGENT_SYSTEMS_PROVIDER_PROBE")
+    env_keys = [
+      "AGENT_SYSTEMS_PROVIDER_PROBE",
+      "COMPANION_ENABLED",
+      "AGENT_SYSTEMS_ENABLED",
+      "OPENAI_API_KEY"
+    ]
+
+    previous_env = Map.new(env_keys, &{&1, System.get_env(&1)})
     previous_config = Application.get_env(:strangertalks_new, :agent_provider_probe)
     previous_pid = Application.get_env(:strangertalks_new, :provider_probe_test_pid)
     previous_result = Application.get_env(:strangertalks_new, :provider_probe_test_result)
@@ -49,13 +56,29 @@ defmodule StrangertalksNew.AgentSystemsProviderProbeTest do
     Application.put_env(:strangertalks_new, :provider_probe_test_result, :success)
 
     on_exit(fn ->
-      restore_env("AGENT_SYSTEMS_PROVIDER_PROBE", previous_flag)
+      Enum.each(previous_env, fn {key, value} -> restore_env(key, value) end)
       restore_app_env(:agent_provider_probe, previous_config)
       restore_app_env(:provider_probe_test_pid, previous_pid)
       restore_app_env(:provider_probe_test_result, previous_result)
     end)
 
     :ok
+  end
+
+  test "configuration status reports booleans only and never exposes the key" do
+    System.put_env("COMPANION_ENABLED", "true")
+    System.put_env("AGENT_SYSTEMS_ENABLED", "1")
+    System.put_env("AGENT_SYSTEMS_PROVIDER_PROBE", "yes")
+    System.put_env("OPENAI_API_KEY", "super-secret-test-key")
+
+    assert %{
+             companion_enabled: true,
+             agent_systems_enabled: true,
+             probe_enabled: true,
+             openai_key_present: true
+           } = ProviderProbe.configuration_status()
+
+    refute inspect(ProviderProbe.configuration_status()) =~ "super-secret-test-key"
   end
 
   test "probe is inert unless explicitly enabled" do
