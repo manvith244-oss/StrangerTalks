@@ -18,14 +18,13 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
       assert match.conversation_language == language
 
       pid =
-        start_supervised!(
-          {ConversationServer, %{conversation_id: conversation.conversation_id}}
-        )
+        start_supervised!({ConversationServer, %{conversation_id: conversation.conversation_id}})
 
       assert {:ok, %{icebreaker: {:active, identity}}} =
                ConversationServer.inspect_state(conversation.conversation_id)
 
       assert String.starts_with?(identity, "#{language}/")
+
       assert {:ok, %{language: ^language, text: text}} =
                StrangertalksNew.IcebreakerCatalog.fetch(identity)
 
@@ -68,7 +67,9 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
     assert {:ok, first} = MatchmakingEngine.join_queue(a.participant_id, :EXPLORE, "te", nil, nil)
     assert :ok = MatchmakingEngine.leave_queue(a.participant_id)
 
-    assert {:ok, second} = MatchmakingEngine.join_queue(a.participant_id, :EXPLORE, "en", nil, nil)
+    assert {:ok, second} =
+             MatchmakingEngine.join_queue(a.participant_id, :EXPLORE, "en", nil, nil)
+
     refute second.queue_attempt_id == first.queue_attempt_id
     assert {:ok, _} = MatchmakingEngine.join_queue(b.participant_id, :EXPLORE, "en", nil, nil)
     assert {:ok, [match_id]} = MatchmakingEngine.evaluate_pending_matches()
@@ -78,9 +79,7 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
     assert match.conversation_language == "en"
 
     _pid =
-      start_supervised!(
-        {ConversationServer, %{conversation_id: conversation.conversation_id}}
-      )
+      start_supervised!({ConversationServer, %{conversation_id: conversation.conversation_id}})
 
     assert {:ok, %{icebreaker: {:active, identity}}} =
              ConversationServer.inspect_state(conversation.conversation_id)
@@ -124,9 +123,7 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
     %{conversation: conversation, a: a} = queue_match("hi")
 
     old_pid =
-      start_supervised!(
-        {ConversationServer, %{conversation_id: conversation.conversation_id}}
-      )
+      start_supervised!({ConversationServer, %{conversation_id: conversation.conversation_id}})
 
     assert {:ok, %{icebreaker: {:active, before_identity}}} =
              ConversationServer.inspect_state(conversation.conversation_id)
@@ -189,10 +186,12 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
 
     other_lib =
       Path.wildcard("lib/**/*.ex")
-      |> Enum.reject(&(&1 in [
-        "lib/strangertalks_new/queue/participant_server.ex",
-        "lib/strangertalks_new/matchmaking/queue_engine/matcher.ex"
-      ]))
+      |> Enum.reject(
+        &(&1 in [
+            "lib/strangertalks_new/queue/participant_server.ex",
+            "lib/strangertalks_new/matchmaking/queue_engine/matcher.ex"
+          ])
+      )
       |> Enum.map_join("\n", &File.read!/1)
 
     refute other_lib =~ "StrangertalksNew.Queue.ParticipantServer"
@@ -200,7 +199,9 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
   end
 
   test "historical readiness and analytics schemas have no production mutation path" do
-    matchmaking = File.read!("lib/strangertalks_new/matchmaking/queue_engine/matchmaking_engine.ex")
+    matchmaking =
+      File.read!("lib/strangertalks_new/matchmaking/queue_engine/matchmaking_engine.ex")
+
     participant_channel = File.read!("lib/strangertalks_new_web/participant_channel.ex")
     safety = File.read!("lib/strangertalks_new/matching_rules.ex")
     icebreaker = File.read!("lib/strangertalks_new/icebreaker_catalog.ex")
@@ -285,7 +286,8 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
 
   defp await_replacement(conversation_id, old_pid, attempts \\ 50)
 
-  defp await_replacement(_conversation_id, _old_pid, 0), do: flunk("ConversationServer did not recover")
+  defp await_replacement(_conversation_id, _old_pid, 0),
+    do: flunk("ConversationServer did not recover")
 
   defp await_replacement(conversation_id, old_pid, attempts) do
     case ConversationServer.lookup(conversation_id) do

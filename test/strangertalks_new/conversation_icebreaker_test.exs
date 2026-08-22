@@ -42,7 +42,11 @@ defmodule StrangertalksNew.ConversationIcebreakerTest do
 
     for language <- IcebreakerCatalog.languages() do
       assert length(IcebreakerCatalog.identities(language)) == 7
-      assert Enum.all?(IcebreakerCatalog.identities(language), &String.starts_with?(&1, "#{language}/"))
+
+      assert Enum.all?(
+               IcebreakerCatalog.identities(language),
+               &String.starts_with?(&1, "#{language}/")
+             )
     end
 
     assert Enum.all?(
