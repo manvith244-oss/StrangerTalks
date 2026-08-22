@@ -96,7 +96,13 @@ defmodule StrangertalksNew.Companion.Context do
 
   defp live_runtime_state(conversation_id) do
     case ConversationServer.inspect_state(conversation_id) do
-      {:ok, %{recent_messages: recent_messages, epoch_id: epoch_id, next_sequence: next_sequence} = state}
+      {:ok,
+       %{
+         recent_messages: recent_messages,
+         epoch_id: epoch_id,
+         next_sequence: next_sequence,
+         lifecycle_status: :ACTIVE
+       } = state}
       when is_list(recent_messages) and is_binary(epoch_id) and is_integer(next_sequence) ->
         {:ok, state}
 
