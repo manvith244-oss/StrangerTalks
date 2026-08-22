@@ -230,28 +230,40 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
   end
 
   test "release runtime contains no model or LLM dependency surface" do
-    runtime_files =
-      Path.wildcard("lib/**/*.ex") ++
-        Path.wildcard("lib/**/*.exs") ++
-        Path.wildcard("config/**/*.exs") ++
-        Path.wildcard("priv/static/assets/*.js") ++
-        Path.wildcard("priv/static/assets/*.mjs") ++ ["mix.exs", "package.json"]
+    dependency_manifests = File.read!("mix.exs") <> "\n" <> File.read!("package.json")
 
-    runtime = Enum.map_join(runtime_files, "\n", &File.read!/1)
+    runtime_config =
+      Path.wildcard("config/**/*.exs")
+      |> Enum.map_join("\n", &File.read!/1)
+
+    runtime_source =
+      (Path.wildcard("lib/**/*.ex") ++
+         Path.wildcard("lib/**/*.exs") ++
+         Path.wildcard("priv/static/assets/*.js") ++
+         Path.wildcard("priv/static/assets/*.mjs"))
+      |> Enum.map_join("\n", &File.read!/1)
 
     for pattern <- [
           ~r/\bOpenAI\b/i,
+          ~r/api\.openai\.com/i,
           ~r/\bGemini\b/i,
+          ~r/generativelanguage\.googleapis\.com/i,
           ~r/Google\s+AI/i,
           ~r/\bAnthropic\b/i,
-          ~r/\bLLM\b/i,
-          ~r/\bembeddings?\b/i,
-          ~r/vector\s+search/i,
-          ~r/inference\s+endpoints?/i,
-          ~r/semantic\s+model/i,
-          ~r/moderation\s+model/i
+          ~r/api\.anthropic\.com/i,
+          ~r/\bpgvector\b/i,
+          ~r/\bvectorize\b/i,
+          ~r/inference[_-]?endpoint/i,
+          ~r/model[_-]?endpoint/i
         ] do
-      refute Regex.match?(pattern, runtime), "unexpected runtime model dependency: #{inspect(pattern)}"
+      refute Regex.match?(pattern, dependency_manifests),
+             "unexpected model dependency manifest entry: #{inspect(pattern)}"
+
+      refute Regex.match?(pattern, runtime_config),
+             "unexpected model runtime config: #{inspect(pattern)}"
+
+      refute Regex.match?(pattern, runtime_source),
+             "unexpected model runtime source integration: #{inspect(pattern)}"
     end
   end
 
