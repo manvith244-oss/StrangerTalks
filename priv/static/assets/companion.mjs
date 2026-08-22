@@ -44,16 +44,27 @@ export function applyCompanionSuggestion({requestDraft, currentDraft, suggestion
   return {status: "applied", draft: suggestion.trim()}
 }
 
-function newestActiveConversation(records) {
-  return activeConversations(records)
-    .slice()
-    .sort((a, b) => Date.parse(b.updated_at || 0) - Date.parse(a.updated_at || 0))[0] || null
+export function undoCompanionSuggestion({originalDraft, appliedDraft, currentDraft}) {
+  const original = typeof originalDraft === "string" ? originalDraft : ""
+  const applied = typeof appliedDraft === "string" ? appliedDraft : ""
+  const current = typeof currentDraft === "string" ? currentDraft : ""
+
+  if (!applied || current !== applied) return {status: "blocked_changed_draft", draft: current}
+  return {status: "restored", draft: original}
+}
+
+export function singleActiveConversation(records) {
+  const active = activeConversations(Array.isArray(records) ? records : [])
+  return active.length === 1 ? active[0] : null
 }
 
 async function authority() {
+  const conversationScreen = document.querySelector('[data-screen="conversation"]')
+  if (!conversationScreen?.classList.contains("active")) throw new Error("conversation_not_visible")
+
   const [identity, records] = await Promise.all([getRecord(IDENTITY_KEY), listRecords()])
-  const conversation = newestActiveConversation(records)
-  if (!identity?.value?.token || !conversation?.value?.conversation_id) throw new Error("authority_unavailable")
+  const conversation = singleActiveConversation(records)
+  if (!identity?.value?.token || !conversation?.value?.conversation_id) throw new Error("authority_ambiguous")
   return {token: identity.value.token, conversationId: conversation.value.conversation_id}
 }
 
@@ -105,14 +116,40 @@ function createUi() {
       <label>Tone<select id="companion-tone">${toneOptions}</select></label>
       <label class="companion-request">What do you want help with?<textarea id="companion-request" maxlength="${MAX_REQUEST_CHARS}" placeholder="Example: How can I disagree without sounding rude?"></textarea></label>
     </div>
-    <div class="companion-actions"><button id="companion-generate" type="button" class="primary">Get suggestions</button><button id="companion-cancel" type="button" hidden>Cancel</button></div>
+    <div class="companion-actions"><button id="companion-generate" type="button" class="primary">Get suggestions</button><button id="companion-cancel" type="button" hidden>Cancel</button><button id="companion-undo" type="button" hidden>Undo Companion draft</button></div>
     <p id="companion-status" class="companion-status" role="status" aria-live="polite"></p>
     <div id="companion-suggestions" class="companion-suggestions"></div>
   `
 
   controls.parentElement.append(panel)
 
+  let generation = 0
+  let controller = null
+  let requestDraft = ""
+  let undoState = null
+
+  const status = panel.querySelector("#companion-status")
+  const suggestionsNode = panel.querySelector("#companion-suggestions")
+  const generateButton = panel.querySelector("#companion-generate")
+  const cancelButton = panel.querySelector("#companion-cancel")
+  const undoButton = panel.querySelector("#companion-undo")
+
+  const clearUndo = () => {
+    undoState = null
+    undoButton.hidden = true
+  }
+
+  const cancelInFlight = (message = null) => {
+    generation += 1
+    controller?.abort()
+    controller = null
+    generateButton.disabled = false
+    cancelButton.hidden = true
+    if (message) status.textContent = message
+  }
+
   const close = () => {
+    cancelInFlight()
     panel.hidden = true
     button.setAttribute("aria-expanded", "false")
     button.focus()
@@ -123,25 +160,31 @@ function createUi() {
     panel.hidden = !opening
     button.setAttribute("aria-expanded", String(opening))
     if (opening) panel.querySelector("#companion-request")?.focus()
+    else cancelInFlight()
   })
   panel.querySelector("#companion-close")?.addEventListener("click", close)
 
-  let generation = 0
-  let controller = null
-  let requestDraft = ""
+  cancelButton.addEventListener("click", () => cancelInFlight("Cancelled."))
 
-  const status = panel.querySelector("#companion-status")
-  const suggestionsNode = panel.querySelector("#companion-suggestions")
-  const generateButton = panel.querySelector("#companion-generate")
-  const cancelButton = panel.querySelector("#companion-cancel")
+  undoButton.addEventListener("click", () => {
+    if (!undoState) return
+    const restored = undoCompanionSuggestion({
+      originalDraft: undoState.originalDraft,
+      appliedDraft: undoState.appliedDraft,
+      currentDraft: input.value
+    })
 
-  cancelButton.addEventListener("click", () => {
-    generation += 1
-    controller?.abort()
-    controller = null
-    generateButton.disabled = false
-    cancelButton.hidden = true
-    status.textContent = "Cancelled."
+    if (restored.status !== "restored") {
+      clearUndo()
+      status.textContent = "Your draft changed after the Companion suggestion, so Undo won’t overwrite your newer typing."
+      return
+    }
+
+    input.value = restored.draft
+    input.dispatchEvent(new Event("input", {bubbles: true}))
+    input.focus()
+    clearUndo()
+    status.textContent = "Your original draft is back."
   })
 
   generateButton.addEventListener("click", async () => {
@@ -150,6 +193,7 @@ function createUi() {
     controller?.abort()
     controller = new AbortController()
     requestDraft = input.value
+    clearUndo()
     suggestionsNode.replaceChildren()
     status.textContent = "Thinking…"
     generateButton.disabled = true
@@ -212,7 +256,9 @@ function createUi() {
           input.value = applied.draft
           input.dispatchEvent(new Event("input", {bubbles: true}))
           input.focus()
-          status.textContent = "Added to your draft. Edit it if you want, then press Send when you’re ready."
+          undoState = {originalDraft: requestDraft, appliedDraft: applied.draft}
+          undoButton.hidden = false
+          status.textContent = "Added to your draft. Edit it if you want, press Send when you’re ready, or Undo to restore your original draft."
         })
         card.append(label, text, use)
         suggestionsNode.append(card)
@@ -220,6 +266,7 @@ function createUi() {
     } catch (error) {
       if (mine !== generation || error?.name === "AbortError") return
       if (error?.message === "stale_conversation") status.textContent = "The Conversation changed while I was helping. Try again with the current Conversation."
+      else if (error?.message === "conversation_not_visible" || error?.message === "authority_ambiguous") status.textContent = "Conversation state is still reconciling. Try again once this Conversation is fully active."
       else if (error?.message === "companion_busy") status.textContent = "StrangerTalks Companion is already helping with this Conversation in another request."
       else if (error?.message === "rate_limited") status.textContent = "Too many requests right now. Give it a bit and try again."
       else if (error?.message === "output_rejected") status.textContent = "I couldn’t provide a safe suggestion for that. Try asking in a different way."
