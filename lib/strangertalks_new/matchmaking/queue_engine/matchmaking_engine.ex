@@ -2,7 +2,7 @@
 defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   @moduledoc """
   Core orchestration engine for Slice 02. Manages queue lifecycle boundaries,
-  implements dynamic score-decay evaluations, and enforces safety blockades.
+  implements deterministic Door eligibility and enforces safety blockades.
   """
 
   require Logger
@@ -10,6 +10,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
   alias Ecto.Multi
   alias StrangertalksNew.Conversation
+  alias StrangertalksNew.ConversationLanguages
   alias StrangertalksNew.Matching
   alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.Participant
@@ -18,87 +19,146 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   alias StrangertalksNew.Repo
 
   @pubsub_topic "strangertalks:matchmaking"
-  @max_wait_ceiling_seconds 90
-  @decay_floor 45
-  @initial_threshold 70
+  @scarcity_wait_ms 15_000
+  @approved_cross_door_pairs MapSet.new([
+                               MapSet.new([:JUST_TALK, :EXPLORE]),
+                               MapSet.new([:JUST_TALK, :KEEP_IT_LIGHT]),
+                               MapSet.new([:KEEP_IT_LIGHT, :EXPLORE]),
+                               MapSet.new([:EXPLORE, :SOMETHING_REAL])
+                             ])
 
   @doc """
   Registers an incoming participant profile into volatile memory storage.
   Bypasses persistent disk writes during active wait loops.
   """
-  def join_queue(participant_id, door_type, preferred_language, media_overlap, keystroke_profile)
-      when is_binary(participant_id) and is_atom(door_type) and is_binary(preferred_language) and
-             is_integer(media_overlap) and is_float(keystroke_profile) do
-    put_queue_entry(
-      participant_id,
-      door_type,
-      preferred_language,
-      media_overlap,
-      keystroke_profile
-    )
-  end
-
-  def join_queue(participant_id, door_type, preferred_language, media_overlap, keystroke_profile)
+  def join_queue(
+        participant_id,
+        door_type,
+        conversation_language,
+        media_overlap,
+        keystroke_profile
+      )
       when is_binary(participant_id) and is_atom(door_type) and
-             (is_binary(preferred_language) or is_nil(preferred_language)) and
+             (is_binary(conversation_language) or is_nil(conversation_language)) and
              (is_integer(media_overlap) or is_nil(media_overlap)) and
              (is_number(keystroke_profile) or is_nil(keystroke_profile)) do
-    put_queue_entry(
-      participant_id,
-      door_type,
-      preferred_language,
-      media_overlap,
-      keystroke_profile
-    )
+    with {:ok, normalized_language} <- ConversationLanguages.normalize(conversation_language) do
+      put_queue_entry(
+        participant_id,
+        door_type,
+        normalized_language,
+        media_overlap,
+        keystroke_profile,
+        nil
+      )
+    end
   end
 
   def join_queue(_id, _door, _lang, _media, _key), do: {:error, :unsupported_schema}
 
+  def requeue_transition_survivor(
+        participant_id,
+        door_type,
+        conversation_language,
+        conversation_id
+      )
+      when is_binary(participant_id) and is_atom(door_type) and is_binary(conversation_id) do
+    with {:ok, normalized_language} <-
+           ConversationLanguages.normalize(conversation_language) do
+      put_queue_entry(participant_id, door_type, normalized_language, nil, nil, conversation_id)
+    end
+  end
+
+  def cancel_transition_survivor(participant_id, conversation_id)
+      when is_binary(participant_id) and is_binary(conversation_id) do
+    ParticipantActivityLock.with_participants([participant_id], fn ->
+      Agent.get_and_update(QueueState, fn state ->
+        case Map.get(state, participant_id) do
+          %{recovery_conversation_id: ^conversation_id} ->
+            {:removed, Map.delete(state, participant_id)}
+
+          _other ->
+            {:stale, state}
+        end
+      end)
+    end)
+  end
+
   defp put_queue_entry(
          participant_id,
          door_type,
-         preferred_language,
+         conversation_language,
          media_overlap,
-         keystroke_profile
+         keystroke_profile,
+         recovery_conversation_id
        ) do
     entry_payload = %{
       participant_id: participant_id,
       door_selection: door_type,
-      language_tag: preferred_language,
+      conversation_language: conversation_language,
       media_bitmask: media_overlap,
       # Reserved for a future evidence-based interaction metric. Unknown and unused in V1 matchmaking.
       keystroke_cadence: keystroke_profile,
       queue_entry_time: DateTime.utc_now(),
+      queue_entry_monotonic: System.monotonic_time(),
+      queue_attempt_id: Ecto.UUID.generate(),
       attempt_count: 1
     }
 
+    entry_payload =
+      if recovery_conversation_id,
+        do: Map.put(entry_payload, :recovery_conversation_id, recovery_conversation_id),
+        else: entry_payload
+
     result =
       ParticipantActivityLock.with_participants([participant_id], fn ->
-        if active_conversation?(participant_id) do
-          {:error, :participant_busy}
-        else
-          Agent.get_and_update(QueueState, fn state ->
-            case Map.get(state, participant_id) do
-              nil -> {:inserted, Map.put(state, participant_id, entry_payload)}
-              %{door_selection: ^door_type} -> {:same_entry, state}
-              _entry -> {{:error, :already_queued_different_door}, state}
-            end
-          end)
+        case resolve_active_conversation(participant_id) do
+          :available ->
+            Agent.get_and_update(QueueState, fn state ->
+              case Map.get(state, participant_id) do
+                nil ->
+                  {{:inserted, entry_payload}, Map.put(state, participant_id, entry_payload)}
+
+                %{
+                  door_selection: ^door_type,
+                  conversation_language: ^conversation_language
+                } = existing_entry ->
+                  {{:same_entry, existing_entry}, state}
+
+                _entry ->
+                  {{:error, :already_queued_different_door}, state}
+              end
+            end)
+
+          {:busy, _active_conv} ->
+            {:error, :participant_busy}
         end
       end)
 
     case result do
-      :inserted ->
+      {:inserted, inserted_entry} ->
         Phoenix.PubSub.broadcast(
           StrangertalksNew.PubSub,
           @pubsub_topic,
           {:queue_event, :queue_entered, participant_id}
         )
 
-        {:ok, %{status: :queued, entry_time: DateTime.utc_now()}}
+        StrangertalksNew.Telemetry.execute([:queue, :joined], %{count: 1}, %{door_type: door_type})
 
-      :same_entry ->
-        {:ok, %{status: :queued, entry_time: entry_payload.queue_entry_time}}
+        {:ok,
+         %{
+           status: :queued,
+           entry_time: inserted_entry.queue_entry_time,
+           queue_attempt_id: inserted_entry.queue_attempt_id
+         }}
+
+      {:same_entry, existing_entry} ->
+        {:ok,
+         %{
+           status: :queued,
+           entry_time: existing_entry.queue_entry_time,
+           queue_attempt_id: existing_entry.queue_attempt_id
+         }}
 
       {:error, reason} ->
         {:error, reason}
@@ -111,12 +171,106 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   @doc """
   Removes a participant from volatile memory, leaving zero data trails behind.
   """
-  def leave_queue(participant_id) when is_binary(participant_id) do
-    ParticipantActivityLock.with_participants([participant_id], fn ->
-      Agent.update(QueueState, fn state -> Map.delete(state, participant_id) end)
-    end)
+  def leave_queue(participant_id, reason \\ :explicit_leave)
+      when is_binary(participant_id) and reason in [:explicit_leave, :timeout] do
+    leave_queue(participant_id, reason, :any_attempt)
+  end
 
-    :ok
+  defp leave_queue(participant_id, reason, expected_attempt_id) do
+    removal_result =
+      ParticipantActivityLock.with_participants([participant_id], fn ->
+        Agent.get_and_update(QueueState, fn state ->
+          case Map.pop(state, participant_id) do
+            {nil, state} ->
+              {:not_queued, state}
+
+            {%{queue_attempt_id: attempt_id} = entry, new_state}
+            when expected_attempt_id in [:any_attempt, attempt_id] ->
+              {{:removed, entry}, new_state}
+
+            {_entry, _new_state} ->
+              {:stale_attempt, state}
+          end
+        end)
+      end)
+
+    case removal_result do
+      {:removed, removed_entry} ->
+        emit_queue_residence_duration(removed_entry, reason)
+
+        StrangertalksNew.Telemetry.execute(
+          [:queue, :left],
+          %{count: 1},
+          %{leave_reason: reason, door_type: removed_entry.door_selection}
+        )
+
+        :ok
+
+      :not_queued ->
+        :ok
+
+      :stale_attempt ->
+        {:error, :stale_attempt}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Cancels queue authority without reporting success after a committed conversation wins.
+  """
+  def cancel_queue(participant_id, queue_attempt_id)
+      when is_binary(participant_id) and is_binary(queue_attempt_id) do
+    ParticipantActivityLock.with_participants([participant_id], fn ->
+      case Agent.get_and_update(QueueState, fn state ->
+             case Map.pop(state, participant_id) do
+               {nil, state} ->
+                 {:not_queued, state}
+
+               {%{queue_attempt_id: ^queue_attempt_id} = entry, new_state} ->
+                 {{:removed, entry}, new_state}
+
+               {_current_entry, _new_state} ->
+                 {:stale_attempt, state}
+             end
+           end) do
+        {:removed, removed_entry} ->
+          emit_queue_residence_duration(removed_entry, :explicit_leave)
+
+          StrangertalksNew.Telemetry.execute(
+            [:queue, :left],
+            %{count: 1},
+            %{leave_reason: :explicit_leave, door_type: removed_entry.door_selection}
+          )
+
+          Phoenix.PubSub.broadcast(
+            StrangertalksNew.PubSub,
+            @pubsub_topic,
+            {:queue_event, :queue_left, participant_id, queue_attempt_id}
+          )
+
+          :ok
+
+        :not_queued ->
+          case resolve_active_conversation(participant_id) do
+            {:busy, _conversation} ->
+              {:error, :participant_busy}
+
+            :available ->
+              Phoenix.PubSub.broadcast(
+                StrangertalksNew.PubSub,
+                @pubsub_topic,
+                {:queue_event, :queue_left, participant_id, queue_attempt_id}
+              )
+
+              :ok
+          end
+
+        :stale_attempt ->
+          {:error, :stale_attempt}
+      end
+    end)
   end
 
   @doc """
@@ -157,7 +311,16 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   # require explicit participant reservation or database-level locking.
   def evaluate_pending_matches do
     state = Agent.get(QueueState, fn state -> state end)
-    participants = Map.values(state)
+
+    participants =
+      state
+      |> Map.values()
+      |> Enum.sort_by(fn participant ->
+        {
+          DateTime.to_unix(participant.queue_entry_time, :microsecond),
+          participant.participant_id
+        }
+      end)
 
     case process_matching_pool(participants, []) do
       {:ok, matches_created} ->
@@ -168,112 +331,132 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
     end
   end
 
-  @doc """
-  Calculates the dynamic threshold based on wait time and active pool metrics.
-  Exposed publicly with a default arity clause to fulfill ParticipantServer demands.
-  """
-  @spec calculate_decay_threshold(integer(), integer()) :: integer()
-  def calculate_decay_threshold(t, concurrent_sockets \\ 100)
-
-  def calculate_decay_threshold(t, _concurrent_sockets) when t <= 30, do: @initial_threshold
-
-  def calculate_decay_threshold(t, _concurrent_sockets) do
-    decayed = @initial_threshold - 5 * div(t - 30, 10)
-    max(decayed, @decay_floor)
-  end
-
   # --- Internal Private Implementations ---
 
   defp process_matching_pool([], matched_acc), do: {:ok, matched_acc}
 
   defp process_matching_pool([p1 | rest], matched_acc) do
-    # Calculate operational target threshold based on dwell time metrics
-    wait_time = DateTime.diff(DateTime.utc_now(), p1.queue_entry_time, :second)
+    case find_viable_partner(p1, rest, DateTime.utc_now()) do
+      {:match, p2, score} ->
+        case persist_match_and_conversation(p1, p2, score) do
+          {:ok, match, conversation} ->
+            Phoenix.PubSub.broadcast(
+              StrangertalksNew.PubSub,
+              @pubsub_topic,
+              {:match_event, :match_created, match.match_id, conversation.conversation_id,
+               p1.participant_id, p2.participant_id, score}
+            )
 
-    # Enforce strict 90-second timeout tracking guidelines
-    if wait_time >= @max_wait_ceiling_seconds do
-      leave_queue(p1.participant_id)
+            remaining_pool =
+              Enum.reject(rest, fn participant ->
+                participant.participant_id == p2.participant_id
+              end)
 
-      Phoenix.PubSub.broadcast(
-        StrangertalksNew.PubSub,
-        @pubsub_topic,
-        {:queue_event, :queue_timeout, p1.participant_id}
-      )
+            process_matching_pool(remaining_pool, [match.match_id | matched_acc])
 
-      process_matching_pool(rest, matched_acc)
-    else
-      current_threshold = calculate_decay_threshold(wait_time)
+          {:invalid_participants, missing_participant_ids} ->
+            Enum.each(missing_participant_ids, &leave_queue/1)
 
-      case find_viable_partner(p1, rest, current_threshold) do
-        {:match, p2, score} ->
-          case persist_match_and_conversation(p1, p2, score) do
-            {:ok, match, conversation} ->
-              Phoenix.PubSub.broadcast(
-                StrangertalksNew.PubSub,
-                @pubsub_topic,
-                {:match_event, :match_created, match.match_id, conversation.conversation_id,
-                 p1.participant_id, p2.participant_id, score}
-              )
+            remaining_pool =
+              Enum.reject(rest, fn participant ->
+                participant.participant_id in missing_participant_ids
+              end)
 
-              remaining_pool =
-                Enum.reject(rest, fn participant ->
-                  participant.participant_id == p2.participant_id
-                end)
+            if p1.participant_id in missing_participant_ids do
+              process_matching_pool(remaining_pool, matched_acc)
+            else
+              process_matching_pool([p1 | remaining_pool], matched_acc)
+            end
 
-              process_matching_pool(remaining_pool, [match.match_id | matched_acc])
+          {:error, _reason} ->
+            process_matching_pool(rest, matched_acc)
+        end
 
-            {:invalid_participants, missing_participant_ids} ->
-              Enum.each(missing_participant_ids, &leave_queue/1)
-
-              remaining_pool =
-                Enum.reject(rest, fn participant ->
-                  participant.participant_id in missing_participant_ids
-                end)
-
-              if p1.participant_id in missing_participant_ids do
-                process_matching_pool(remaining_pool, matched_acc)
-              else
-                process_matching_pool([p1 | remaining_pool], matched_acc)
-              end
-
-            {:error, _reason} ->
-              process_matching_pool(rest, matched_acc)
-          end
-
-        :no_match ->
-          process_matching_pool(rest, matched_acc)
-      end
+      :no_match ->
+        process_matching_pool(rest, matched_acc)
     end
   end
 
-  defp find_viable_partner(_p1, [], _threshold), do: :no_match
+  defp find_viable_partner(_p1, [], _now), do: :no_match
 
-  defp find_viable_partner(p1, [p2 | rest], threshold) do
-    if p1.door_selection == p2.door_selection and
-         not MatchingRules.check_safety_veto?(p1.participant_id, p2.participant_id) do
-      # V1 compatibility is the verified binary fact that both participants selected the same Door.
-      # Reserved profile inputs do not affect eligibility, ordering, or score.
-      _unused_threshold = threshold
-      {:match, p2, 100}
-    else
-      find_viable_partner(p1, rest, threshold)
+  defp find_viable_partner(p1, candidates, now) do
+    exact_partner =
+      Enum.find(candidates, fn p2 ->
+        language_compatible?(p1, p2) and p1.door_selection == p2.door_selection and
+          safe_pair?(p1, p2)
+      end)
+
+    cross_partner =
+      if is_nil(exact_partner) and scarcity_qualified?(p1, now) do
+        Enum.find(candidates, fn p2 ->
+          language_compatible?(p1, p2) and scarcity_qualified?(p2, now) and
+            approved_cross_door?(p1, p2) and safe_pair?(p1, p2)
+        end)
+      end
+
+    case exact_partner || cross_partner do
+      nil -> :no_match
+      partner -> {:match, partner, 100}
     end
+  end
+
+  defp scarcity_qualified?(participant, now),
+    do: DateTime.diff(now, participant.queue_entry_time, :millisecond) >= @scarcity_wait_ms
+
+  defp approved_cross_door?(p1, p2),
+    do:
+      MapSet.member?(
+        @approved_cross_door_pairs,
+        MapSet.new([p1.door_selection, p2.door_selection])
+      )
+
+  defp safe_pair?(p1, p2),
+    do: not MatchingRules.check_safety_veto?(p1.participant_id, p2.participant_id)
+
+  defp language_compatible?(p1, p2) do
+    language = Map.get(p1, :conversation_language)
+    is_binary(language) and language == Map.get(p2, :conversation_language)
   end
 
   defp persist_match_and_conversation(p1, p2, score) do
-    ParticipantActivityLock.with_participants([p1.participant_id, p2.participant_id], fn ->
-      persist_locked_match_and_conversation(p1, p2, score)
-    end)
+    started_at = System.monotonic_time()
+
+    result =
+      ParticipantActivityLock.with_participants([p1.participant_id, p2.participant_id], fn ->
+        persist_locked_match_and_conversation(p1, p2, score)
+      end)
+
+    StrangertalksNew.Telemetry.execute(
+      [:match, :operation],
+      %{duration: System.monotonic_time() - started_at},
+      %{
+        result: if(match?({:ok, _match, _conversation}, result), do: :success, else: :failure),
+        match_kind: :anonymous
+      }
+    )
+
+    result
   end
 
   defp persist_locked_match_and_conversation(p1, p2, score) do
     queue_state = Agent.get(QueueState, & &1)
+    activity_a = resolve_active_conversation(p1.participant_id)
+    activity_b = resolve_active_conversation(p2.participant_id)
 
-    with %{door_selection: door_a} <- Map.get(queue_state, p1.participant_id),
-         %{door_selection: ^door_a} <- Map.get(queue_state, p2.participant_id),
+    with %{door_selection: door_a, conversation_language: language_a, queue_attempt_id: attempt_a} <-
+           Map.get(queue_state, p1.participant_id),
+         ^door_a <- p1.door_selection,
+         ^language_a <- p1.conversation_language,
+         ^attempt_a <- p1.queue_attempt_id,
+         %{door_selection: door_b, conversation_language: language_b, queue_attempt_id: attempt_b} <-
+           Map.get(queue_state, p2.participant_id),
+         ^door_b <- p2.door_selection,
+         ^language_b <- p2.conversation_language,
+         ^attempt_b <- p2.queue_attempt_id,
+         ^language_a <- language_b,
          false <- MatchingRules.check_safety_veto?(p1.participant_id, p2.participant_id),
-         false <- active_conversation?(p1.participant_id),
-         false <- active_conversation?(p2.participant_id) do
+         :available <- activity_a,
+         :available <- activity_b do
       persist_revalidated_queue_match(p1, p2, score)
     else
       _ -> {:error, :participant_activity_changed}
@@ -293,11 +476,14 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
       match_attrs = %{
         participant_a_id: p1.participant_id,
         participant_b_id: p2.participant_id,
-        door_type: p1.door_selection,
+        participant_a_door_type: p1.door_selection,
+        participant_b_door_type: p2.door_selection,
+        conversation_language: p1.conversation_language,
+        door_type: common_door(p1, p2),
         compatibility_score: score / 100,
         compatibility_version: "compatibility_v1",
         match_status: :CREATED,
-        match_strategy: :COMPATIBILITY,
+        match_strategy: match_strategy(p1, p2),
         queue_entry_time: queue_entry_time,
         match_found_time: match_found_time,
         queue_duration_seconds: queue_duration_seconds,
@@ -321,7 +507,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
           match_id: match.match_id,
           participant_a_id: p1.participant_id,
           participant_b_id: p2.participant_id,
-          door_type: p1.door_selection,
+          door_type: common_door(p1, p2),
           conversation_status: :PENDING,
           bridge_shown: false,
           bridge_used: false,
@@ -351,36 +537,74 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
             |> Map.delete(p2.participant_id)
           end)
 
+          emit_queue_residence_duration(p1, :matched)
+          emit_queue_residence_duration(p2, :matched)
+
+          StrangertalksNew.Telemetry.execute(
+            [:match, :created],
+            %{count: 1},
+            %{door_type: match.door_type}
+          )
+
+          StrangertalksNew.Telemetry.execute(
+            [:conversation, :created],
+            %{count: 1},
+            %{conversation_status: :PENDING, door_type: match.door_type}
+          )
+
+          StrangertalksNew.Telemetry.execute(
+            [:queue, :left],
+            %{count: 2},
+            %{leave_reason: :matched, door_type: match.door_type}
+          )
+
           {:ok, match, conversation}
 
         {:error, operation, reason, _changes} ->
           Logger.error("matchmaking persistence transaction failed",
             operation: operation,
-            participant_a_id: p1.participant_id,
-            participant_b_id: p2.participant_id,
-            reason: inspect(reason)
+            reason_code: StrangertalksNew.DomainError.from_error(reason).code
           )
 
           {:error, reason}
       end
     else
-      Enum.each(missing_participant_ids, fn participant_id ->
-        Logger.error("matchmaking participant record missing: #{participant_id}",
-          participant_id: participant_id,
-          context: "match_persistence"
-        )
-      end)
+      Logger.error("matchmaking participant record missing",
+        operation: :match_persistence,
+        missing_participant_count: length(missing_participant_ids)
+      )
 
       {:invalid_participants, missing_participant_ids}
     end
   end
 
-  defp active_conversation?(participant_id) do
-    Repo.exists?(
-      from c in Conversation,
-        where:
-          c.conversation_status in [:PENDING, :ACTIVE, :PAUSED] and
-            (c.participant_a_id == ^participant_id or c.participant_b_id == ^participant_id)
-    )
+  defp common_door(p1, p2) do
+    if p1.door_selection == p2.door_selection, do: p1.door_selection, else: nil
+  end
+
+  defp match_strategy(p1, p2) do
+    if p1.door_selection == p2.door_selection, do: :COMPATIBILITY, else: :SCARCITY
+  end
+
+  defp resolve_active_conversation(participant_id) do
+    case StrangertalksNew.SessionReconciliation.reconcile(participant_id) do
+      {:ok, %{canonical_state: :CONVERSATION, conversation: conv}} -> {:busy, conv}
+      _ -> :available
+    end
+  end
+
+  defp emit_queue_residence_duration(entry, leave_reason) do
+    case entry do
+      %{queue_entry_monotonic: started_at, door_selection: door_type}
+      when is_integer(started_at) ->
+        StrangertalksNew.Telemetry.execute(
+          [:queue, :residence],
+          %{duration: System.monotonic_time() - started_at},
+          %{leave_reason: leave_reason, door_type: door_type}
+        )
+
+      _entry ->
+        :ok
+    end
   end
 end

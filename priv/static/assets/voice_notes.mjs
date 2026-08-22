@@ -29,6 +29,22 @@ export function recordingShouldStop(elapsedMs) {
   return elapsedMs >= MAX_VOICE_DURATION_MS
 }
 
+export function voiceDraftMatchesRuntime(draft, conversationId, epochId) {
+  return Boolean(draft?.originConversationId && draft.originEpochId &&
+    draft.originConversationId === conversationId && draft.originEpochId === epochId)
+}
+
+export function nextPlaybackRate(currentRate) {
+  if (currentRate < 1.5) return 1.5
+  if (currentRate < 2) return 2
+  return 1
+}
+
+export function formatVoiceTime(seconds) {
+  const safe = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0
+  return `${Math.floor(safe / 60)}:${String(safe % 60).padStart(2, "0")}`
+}
+
 export function dedupeVoiceNotes(records) {
   return [...new Map(records.map((record) => [record.value.voice_note_id, record])).values()]
 }

@@ -32,17 +32,181 @@ export function temporaryConversation({conversation_id, door_type, display_door,
   }
 }
 
-export function localMessage({conversation_id, message_id, content, mine, delivery_status, sent_at, sequence}) {
+const LEGACY_R0_MAP = Object.freeze({
+  heart: "❤️",
+  laugh: "😂",
+  cry: "😭",
+  thumbs_up: "👍️",
+  eyes: "👀",
+  hug: "🫂"
+})
+
+export function normalizeReactionSlot(slot) {
+  if (!slot) return null
+  const val = slot.emoji || slot.code || slot.reaction || null
+  const emoji = (val && LEGACY_R0_MAP[val]) ? LEGACY_R0_MAP[val] : val
+  const revision = Number.isInteger(slot.revision) ? slot.revision : 0
+  if (!emoji && revision === 0) return null
+  return {emoji, revision}
+}
+
+export function localMessage({conversation_id, client_message_id, message_id, type = "text", content, expressive, mine, delivery_status, sent_at, sequence, content_revision = 0, peer_applied_content_revision = null, edited = false, availability = "available", unsent = false, reply_to_client_message_id, reply_author_relation, reply_snippet, reply_target_availability, self_reaction, peer_reaction, view_once_state, presentation_limit, views_remaining, views_consumed, media_type, byte_size}) {
+  const id_val = client_message_id || message_id
+  const norm_status = delivery_status === "sent_to_server" ? "sent" : delivery_status
+  const terminalUnsent = availability === "unsent" || unsent === true
+  const limitVal = Number.isInteger(presentation_limit) ? presentation_limit : (type === "view_twice_photo" || type === "view_twice_video" ? 2 : 1)
+  const remainingVal = Number.isInteger(views_remaining) ? views_remaining : (view_once_state === "viewed" ? 0 : (view_once_state === "viewed_once" ? 1 : limitVal))
+  const consumedVal = Number.isInteger(views_consumed) ? views_consumed : (view_once_state === "viewed" ? limitVal : (view_once_state === "viewed_once" ? 1 : 0))
   return {
-    id: `message:${conversation_id}:${message_id}`,
+    id: `message:${conversation_id}:${id_val}`,
     type: "local_message",
-    value: {conversation_id, message_id, content, mine, delivery_status, sent_at, sequence},
+    value: {
+      conversation_id,
+      client_message_id: id_val,
+      message_id: id_val,
+      type,
+      content: terminalUnsent ? null : (content !== undefined ? content : null),
+      expressive: expressive || null,
+      mine,
+      delivery_status: norm_status,
+      sent_at,
+      sequence,
+      content_revision: Number.isInteger(content_revision) && content_revision >= 0 ? content_revision : 0,
+      peer_applied_content_revision: Number.isInteger(peer_applied_content_revision) && peer_applied_content_revision >= 0 ? peer_applied_content_revision : null,
+      edited: terminalUnsent ? false : (edited === true || (Number.isInteger(content_revision) && content_revision > 0)),
+      availability: terminalUnsent ? "unsent" : "available",
+      unsent: terminalUnsent,
+      reply_to_client_message_id: reply_to_client_message_id || null,
+      reply_author_relation: reply_author_relation || null,
+      reply_snippet: reply_snippet || null,
+      reply_target_availability: reply_target_availability || null,
+      self_reaction: terminalUnsent ? null : normalizeReactionSlot(self_reaction),
+      peer_reaction: terminalUnsent ? null : normalizeReactionSlot(peer_reaction),
+      view_once_state: view_once_state || (type === "view_once_photo" || type === "view_twice_photo" || type === "view_once_video" || type === "view_twice_video" ? "unviewed" : null),
+      presentation_limit: limitVal,
+      views_remaining: remainingVal,
+      views_consumed: consumedVal,
+      media_type: media_type || null,
+      byte_size: Number.isInteger(byte_size) ? byte_size : null
+    },
     updated_at: sent_at
   }
 }
 
+export function mergeMessageContent(record, incoming, updatedAt = new Date().toISOString()) {
+  if (!record || record.type !== "local_message" || record.value?.type !== "text") return {status: "invalid", record}
+  const messageId = record.value.client_message_id || record.value.message_id
+  const incomingId = incoming?.client_message_id || incoming?.message_id
+  const incomingRevision = incoming?.content_revision
+  const incomingUnsent = incoming?.availability === "unsent" || incoming?.unsent === true
+  const currentUnsent = record.value.availability === "unsent" || record.value.unsent === true
+  if (!messageId || incomingId !== messageId || !Number.isInteger(incomingRevision) || incomingRevision < 0 || (!incomingUnsent && typeof incoming.content !== "string")) {
+    return {status: "invalid", record}
+  }
+
+  const currentRevision = Number.isInteger(record.value.content_revision) ? record.value.content_revision : 0
+  if (currentUnsent && !incomingUnsent) return {status: "ignored_terminal", record}
+  if (incomingRevision < currentRevision) return {status: "ignored_older", record}
+  if (!incomingUnsent && incomingRevision === currentRevision && incoming.content !== record.value.content) return {status: "equal_revision_conflict", record}
+
+  const previousAppliedRevision = Number.isInteger(record.value.peer_applied_content_revision) ? record.value.peer_applied_content_revision : -1
+  const incomingAppliedRevision = Number.isInteger(incoming.peer_applied_content_revision) ? incoming.peer_applied_content_revision : -1
+  const appliedRevision = Math.max(previousAppliedRevision, incomingAppliedRevision)
+  const currentDelivery = record.value.delivery_status === "sent_to_server" ? "sent" : record.value.delivery_status
+  const incomingDelivery = incoming.delivery_status === "sent_to_server" ? "sent" : incoming.delivery_status
+  const deliveryStatus = currentDelivery === "delivered" || incomingDelivery !== "delivered" ? currentDelivery : "delivered"
+  const next = {
+    ...record,
+    value: {
+      ...record.value,
+      content: incomingUnsent ? null : incoming.content,
+      content_revision: incomingRevision,
+      peer_applied_content_revision: appliedRevision >= 0 ? appliedRevision : null,
+      edited: incomingUnsent ? false : incomingRevision > 0,
+      delivery_status: deliveryStatus,
+      availability: incomingUnsent ? "unsent" : "available",
+      unsent: incomingUnsent,
+      reply_to_client_message_id: incoming.reply_to_client_message_id || record.value.reply_to_client_message_id || null,
+      reply_author_relation: incoming.reply_author_relation || record.value.reply_author_relation || null,
+      reply_snippet: incoming.reply_snippet || record.value.reply_snippet || null,
+      self_reaction: incomingUnsent ? null : record.value.self_reaction,
+      peer_reaction: incomingUnsent ? null : record.value.peer_reaction
+    },
+    updated_at: updatedAt
+  }
+
+  return {
+    status: incomingUnsent && !currentUnsent ? "unsent_applied" : (incomingRevision === currentRevision ? "no_op" : "applied"),
+    record: next
+  }
+}
+
+export function sanitizeMessageReference(record, targetClientMessageId, reason, updatedAt = new Date().toISOString()) {
+  if (!record || record.type !== "local_message" || record.value?.reply_to_client_message_id !== targetClientMessageId) return record
+  const snippet = reason === "unsent" ? "Unsent message" : "Message unavailable"
+  return {
+    ...record,
+    value: {
+      ...record.value,
+      reply_snippet: snippet,
+      reply_target_availability: reason
+    },
+    updated_at: updatedAt
+  }
+}
+
+export async function mergeReactionRecord(id, slotKey, incomingSlot) {
+  return new Promise((resolve, reject) => {
+    const opening = indexedDB.open(DB_NAME, 1)
+    opening.onupgradeneeded = () => opening.result.createObjectStore(STORE, {keyPath: "id"})
+    opening.onerror = () => reject(opening.error)
+    opening.onsuccess = () => {
+      const database = opening.result
+      const transaction = database.transaction(STORE, "readwrite")
+      const store = transaction.objectStore(STORE)
+      const getReq = store.get(id)
+
+      getReq.onerror = () => reject(getReq.error)
+      getReq.onsuccess = () => {
+        const record = getReq.result
+        if (!record || record.type !== "local_message") {
+          resolve({record: null, winner: normalizeReactionSlot(incomingSlot)})
+          return
+        }
+
+        const existingSlot = normalizeReactionSlot(record.value[slotKey]) || {emoji: null, revision: 0}
+        const normalizedIncoming = normalizeReactionSlot(incomingSlot) || {emoji: null, revision: 0}
+
+        const existingRev = existingSlot.revision
+        const incomingRev = normalizedIncoming.revision
+
+        let winner = existingSlot
+        if (incomingRev > existingRev || (incomingRev === existingRev && normalizedIncoming.emoji === existingSlot.emoji)) {
+          winner = {emoji: normalizedIncoming.emoji || null, revision: incomingRev}
+          record.value[slotKey] = winner
+          record.updated_at = new Date().toISOString()
+          store.put(record)
+        }
+
+        resolve({record, winner})
+      }
+
+      transaction.oncomplete = () => database.close()
+    }
+  })
+}
+
 export function localVoiceNote({conversation_id, voice_note_id, blob, mine, delivery_status, sent_at, sequence, duration_ms, byte_size, media_type}) {
   return {id: `voice:${conversation_id}:${voice_note_id}`, type: "local_voice_note", value: {conversation_id, voice_note_id, blob, mine, delivery_status, sent_at, sequence, duration_ms, byte_size, media_type}, updated_at: sent_at}
+}
+
+export function conversationSyncCursor({conversation_id, epoch_id, last_applied_sequence, updated_at}) {
+  return {
+    id: `sync_cursor:${conversation_id}`,
+    type: "sync_cursor",
+    value: {conversation_id, epoch_id, last_applied_sequence: last_applied_sequence || 0},
+    updated_at: updated_at || new Date().toISOString()
+  }
 }
 
 export function chooseConversationRetention(records, conversationId, choice, {summaryText, now} = {}) {

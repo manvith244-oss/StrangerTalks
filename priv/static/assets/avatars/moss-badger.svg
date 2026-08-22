@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Moss Badger">
+  <circle cx="32" cy="32" r="30" fill="#18261e" stroke="#a6e3a1" stroke-width="2"/>
+  <ellipse cx="32" cy="36" rx="16" ry="14" fill="#a6adc8"/>
+  <path d="M22 22 L26 44 L38 44 L42 22 Z" fill="#11111b"/>
+  <polygon points="30,22 34,22 32,40" fill="#cdd6f4"/>
+  <circle cx="26" cy="32" r="2.5" fill="#cdd6f4"/>
+  <circle cx="38" cy="32" r="2.5" fill="#cdd6f4"/>
+  <ellipse cx="32" cy="42" rx="4" ry="2.5" fill="#a6e3a1"/>
+</svg>

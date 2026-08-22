@@ -42,7 +42,12 @@ defmodule StrangertalksNew.Repo.Migrations.AddRelationshipConsentsAndSafetyRevie
       modify :relationship_summary, :jsonb, null: true, from: {:jsonb, null: false}
     end
 
-    create unique_index(:relationships, ["LEAST(participant_a_id, participant_b_id)", "GREATEST(participant_a_id, participant_b_id)"],
+    create unique_index(
+             :relationships,
+             [
+               "LEAST(participant_a_id, participant_b_id)",
+               "GREATEST(participant_a_id, participant_b_id)"
+             ],
              name: :relationships_canonical_pair_index
            )
 

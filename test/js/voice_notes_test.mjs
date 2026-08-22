@@ -4,7 +4,8 @@ import {readFileSync} from "node:fs"
 import {
   APPROVED_BASE_MEDIA_TYPES, MAX_VOICE_BYTES, VOICE_WARNING_VERSION,
   chronologicalTimeline, dedupeVoiceNotes, recordingShouldStop, selectVoiceMediaType,
-  stopMediaTracks, validVoiceBlob, warningAcknowledged
+  formatVoiceTime, nextPlaybackRate, stopMediaTracks, validVoiceBlob, voiceDraftMatchesRuntime,
+  warningAcknowledged
 } from "../../priv/static/assets/voice_notes.mjs"
 
 test("supported MIME selection follows the locked priority", () => {
@@ -52,4 +53,39 @@ test("browser flow keeps permission explicit, IDs stable for retry, and never au
   assert.match(source, /audio\.autoplay = false/)
   assert.match(source, /URL\.revokeObjectURL/)
   assert.match(source, /Text messaging still works/)
+})
+
+test("Feature 1E draft runtime binding permits only its originating conversation epoch", () => {
+  const draft = {originConversationId: "conversation-a", originEpochId: "epoch-a"}
+  assert.equal(voiceDraftMatchesRuntime(draft, "conversation-a", "epoch-a"), true)
+  assert.equal(voiceDraftMatchesRuntime(draft, "conversation-b", "epoch-a"), false)
+  assert.equal(voiceDraftMatchesRuntime(draft, "conversation-a", "epoch-b"), false)
+  assert.equal(voiceDraftMatchesRuntime({}, "conversation-a", "epoch-a"), false)
+})
+
+test("Feature 1E playback speeds cycle and time is presented accessibly", () => {
+  assert.equal(nextPlaybackRate(1), 1.5)
+  assert.equal(nextPlaybackRate(1.5), 2)
+  assert.equal(nextPlaybackRate(2), 1)
+  assert.equal(formatVoiceTime(0), "0:00")
+  assert.equal(formatVoiceTime(65.8), "1:05")
+})
+
+test("Feature 1E source keeps draft local until existing upload and cleans every terminal path", () => {
+  const source = readFileSync(new URL("../../priv/static/assets/app.js", import.meta.url), "utf8")
+  assert.match(source, /new Blob\(app\.voice\.chunks/)
+  assert.match(source, /voiceDraftMatchesRuntime\(app\.voice, app\.conversationId, app\.currentEpochId\)/)
+  assert.match(source, /fetch\(`\/api\/conversations\/\$\{app\.conversationId\}\/voice-notes\/\$\{id\}`/)
+  assert.match(source, /cancelAnimationFrame\(app\.voice\.activityFrame\)/)
+  assert.match(source, /stopMediaTracks\(app\.voice\.stream\)/)
+  assert.match(source, /URL\.revokeObjectURL\(app\.voice\.objectUrl\)/)
+  assert.match(source, /Voice draft could not be finalized\. Nothing was sent\./)
+})
+
+test("Feature 1E player exposes seek, progress, speed, failure fallback, and decorative waveform", () => {
+  const source = readFileSync(new URL("../../priv/static/assets/app.js", import.meta.url), "utf8")
+  assert.match(source, /audio\.currentTime =/)
+  assert.match(source, /audio\.playbackRate = nextPlaybackRate/)
+  assert.match(source, /Voice note playback is unavailable\. The message is still here\./)
+  assert.match(source, /waveform\.setAttribute\("aria-hidden", "true"\)/)
 })

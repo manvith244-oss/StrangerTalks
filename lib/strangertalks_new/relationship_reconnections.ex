@@ -11,7 +11,8 @@ defmodule StrangertalksNew.RelationshipReconnections do
     ParticipantActivityLock,
     Relationship,
     RelationshipReconnectionIntent,
-    Repo
+    Repo,
+    SessionReconciliation
   }
 
   alias StrangertalksNew.QueueEngine.QueueState
@@ -20,21 +21,32 @@ defmodule StrangertalksNew.RelationshipReconnections do
   @availability_seconds 15 * 60
 
   def start_or_replace(relationship_id, participant_id, door_type) do
-    safely(fn ->
-      with {:ok, relationship} <- eligible_relationship(relationship_id, participant_id) do
-        participant_ids = relationship_participants(relationship)
+    result =
+      safely(fn ->
+        with {:ok, relationship} <- eligible_relationship(relationship_id, participant_id) do
+          participant_ids = relationship_participants(relationship)
 
-        case ParticipantActivityLock.with_participants(participant_ids, fn ->
-               matched_or_idle(relationship, participant_id, true)
-             end) do
-          {:ok, %{status: "matched"} = result} -> {:ok, result}
-          {:error, :reconnection_unavailable} -> {:error, :reconnection_unavailable}
-          _ -> start_when_idle(relationship, participant_id, door_type)
+          case ParticipantActivityLock.with_participants(participant_ids, fn ->
+                 matched_or_idle(relationship, participant_id, true)
+               end) do
+            {:ok, %{status: "matched"} = result} -> {:ok, result}
+            {:error, :reconnection_unavailable} -> {:error, :reconnection_unavailable}
+            _ -> start_when_idle(relationship, participant_id, door_type)
+          end
+        else
+          _ -> {:error, :reconnection_unavailable}
         end
-      else
-        _ -> {:error, :reconnection_unavailable}
-      end
-    end)
+      end)
+
+    if match?({:error, _reason}, result) do
+      StrangertalksNew.Telemetry.failure(
+        [:reconnection, :failed],
+        :reconnection_unavailable,
+        %{operation: :start}
+      )
+    end
+
+    result
   end
 
   defp start_when_idle(relationship, participant_id, door_type) do
@@ -78,15 +90,39 @@ defmodule StrangertalksNew.RelationshipReconnections do
   end
 
   defp complete_mutual_match(relationship, participant_id, door_type) do
+    participant_ids = relationship_participants(relationship)
+
     result =
-      ParticipantActivityLock.with_participants(relationship_participants(relationship), fn ->
-        Repo.transaction(fn ->
-          persist_locked_mutual_match(relationship.relationship_id, participant_id, door_type)
-        end)
+      ParticipantActivityLock.with_participants(participant_ids, fn ->
+        result =
+          Repo.transaction(fn ->
+            persist_locked_mutual_match(relationship.relationship_id, participant_id, door_type)
+          end)
+
+        if match?({:ok, outcome} when elem(outcome, 0) in [:matched, :existing], result) do
+          converge_queue_state(participant_ids)
+        end
+
+        result
       end)
 
     case result do
       {:ok, {:matched, conversation, updated}} ->
+        StrangertalksNew.Telemetry.execute(
+          [:match, :created],
+          %{count: 1},
+          %{door_type: conversation.door_type}
+        )
+
+        StrangertalksNew.Telemetry.execute(
+          [:conversation, :created],
+          %{count: 1},
+          %{
+            conversation_status: conversation.conversation_status,
+            door_type: conversation.door_type
+          }
+        )
+
         Phoenix.PubSub.broadcast(
           StrangertalksNew.PubSub,
           @topic,
@@ -414,18 +450,17 @@ defmodule StrangertalksNew.RelationshipReconnections do
     do: if(requester_available?(participant_id), do: :ok, else: {:error, :unavailable})
 
   defp requester_available?(participant_id),
-    do: not queued?(participant_id) and not active_conversation?(participant_id)
-
-  defp queued?(participant_id), do: Agent.get(QueueState, &Map.has_key?(&1, participant_id))
-
-  defp active_conversation?(participant_id),
     do:
-      Repo.exists?(
-        from c in Conversation,
-          where:
-            c.conversation_status in [:PENDING, :ACTIVE, :PAUSED] and
-              (c.participant_a_id == ^participant_id or c.participant_b_id == ^participant_id)
+      match?(
+        {:ok, %{canonical_state: state}} when state in [:AVAILABLE, :QUEUED],
+        SessionReconciliation.reconcile(participant_id)
       )
+
+  defp converge_queue_state(participant_ids) do
+    Agent.update(QueueState, fn state ->
+      Enum.reduce(participant_ids, state, &Map.delete(&2, &1))
+    end)
+  end
 
   defp expire_stale(relationship_id, participant_id, now) do
     from(i in RelationshipReconnectionIntent,

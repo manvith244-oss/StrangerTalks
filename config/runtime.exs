@@ -100,7 +100,7 @@ if config_env() == :prod do
       "info" -> :info
       "warning" -> :warning
       "error" -> :error
-      invalid -> raise "environment variable LOG_LEVEL has unsupported value: #{invalid}"
+      _invalid -> raise "environment variable LOG_LEVEL has an unsupported value"
     end
 
   config :logger, level: log_level
@@ -109,6 +109,7 @@ if config_env() == :prod do
 
   config :strangertalks_new, StrangertalksNewWeb.Endpoint,
     url: [host: host, port: 443, scheme: "https"],
+    check_origin: ["https://#{host}"],
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.

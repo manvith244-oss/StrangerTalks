@@ -38,6 +38,8 @@ defmodule StrangertalksNew.Report do
     belongs_to :reported_message, StrangertalksNew.Message,
       foreign_key: :reported_message_id,
       references: :message_id
+
+    has_one :safety_media, StrangertalksNew.ReportSafetyMedia, foreign_key: :report_id
   end
 
   def changeset(report, attrs) do

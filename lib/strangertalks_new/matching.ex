@@ -10,6 +10,14 @@ defmodule StrangertalksNew.Matching do
 
     field :door_type, Ecto.Enum, values: [:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL]
 
+    field :participant_a_door_type, Ecto.Enum,
+      values: [:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL]
+
+    field :participant_b_door_type, Ecto.Enum,
+      values: [:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL]
+
+    field :conversation_language, :string
+
     field :match_status, Ecto.Enum,
       values: [:CREATED, :TRANSITIONING, :ACTIVE, :ENDED, :FAILED, :EXPIRED]
 
@@ -77,7 +85,8 @@ defmodule StrangertalksNew.Matching do
 
   @required_fields [
     :created_at,
-    :door_type,
+    :participant_a_door_type,
+    :participant_b_door_type,
     :match_status,
     :match_strategy,
     :participant_a_id,
@@ -98,6 +107,8 @@ defmodule StrangertalksNew.Matching do
   ]
 
   @optional_fields [
+    :door_type,
+    :conversation_language,
     :failure_reason,
     :compatibility_version,
     :opportunity_score,
@@ -117,6 +128,8 @@ defmodule StrangertalksNew.Matching do
   ]
 
   def changeset(matching, attrs) do
+    attrs = backfill_entry_doors(attrs)
+
     changeset =
       matching
       |> cast(attrs, @required_fields ++ @optional_fields)
@@ -130,8 +143,21 @@ defmodule StrangertalksNew.Matching do
     changeset
     |> check_constraint(:match_strategy, name: :match_strategy_check)
     |> check_constraint(:compatibility_score, name: :matches_compatibility_by_strategy_check)
+    |> check_constraint(:conversation_language, name: :conversation_language_check)
     |> foreign_key_constraint(:participant_a_id)
     |> foreign_key_constraint(:participant_b_id)
     |> unique_constraint(:match_id, name: :matches_pkey)
+  end
+
+  defp backfill_entry_doors(attrs) do
+    door = Map.get(attrs, :door_type) || Map.get(attrs, "door_type")
+
+    if door do
+      attrs
+      |> Map.put_new(:participant_a_door_type, door)
+      |> Map.put_new(:participant_b_door_type, door)
+    else
+      attrs
+    end
   end
 end

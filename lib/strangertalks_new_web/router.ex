@@ -29,9 +29,33 @@ defmodule StrangertalksNewWeb.Router do
 
     post "/conversations/:conversation_id/voice-notes/:voice_note_id",
          VoiceNoteController,
-         :create
+         :create,
+         log: false
 
-    get "/conversations/:conversation_id/voice-notes/:voice_note_id", VoiceNoteController, :show
+    get "/conversations/:conversation_id/voice-notes/:voice_note_id",
+        VoiceNoteController,
+        :show,
+        log: false
+
+    post "/conversations/:conversation_id/view-once/stage",
+         ViewOnceMediaController,
+         :stage,
+         log: false
+
+    get "/conversations/:conversation_id/view-once/:client_message_id",
+        ViewOnceMediaController,
+        :show,
+        log: false
+
+    # 1T Private Save / Reflection
+    get "/reflections", ReflectionController, :index
+    post "/reflections", ReflectionController, :create
+    post "/reflections/grants", ReflectionController, :create_grant
+    put "/reflections/:id", ReflectionController, :update
+    post "/reflections/:id/remove-excerpt", ReflectionController, :remove_excerpt
+    delete "/reflections/:id/excerpt", ReflectionController, :remove_excerpt
+    delete "/reflections/:id", ReflectionController, :delete
+    post "/reflections/:id/undo", ReflectionController, :undo
   end
 
   # Enable Swoosh mailbox preview in development

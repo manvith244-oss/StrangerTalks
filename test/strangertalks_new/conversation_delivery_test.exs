@@ -78,10 +78,10 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
     register_both(context)
     message_id = Ecto.UUID.generate()
 
-    assert {:ok, %{message_id: ^message_id, sequence: 1, status: "sent_to_server"}} =
+    assert {:ok, %{message_id: ^message_id, sequence: 1, status: "sent"}} =
              append(context, context.participant_a, message_id, "hello")
 
-    assert {:ok, %{message_id: ^message_id, sequence: 1, status: "sent_to_server"}} =
+    assert {:ok, %{message_id: ^message_id, sequence: 1, status: "sent"}} =
              append(context, context.participant_a, message_id, "hello")
 
     assert {:error, :message_id_conflict} =
@@ -95,6 +95,66 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
     assert state.pending_bytes == 5
   end
 
+  test "concurrent distinct sends receive one contiguous canonical sequence", context do
+    register_both(context)
+    ids = for _ <- 1..4, do: Ecto.UUID.generate()
+
+    results =
+      race(Enum.map(ids, fn id -> fn -> append(context, context.participant_a, id, id) end end))
+
+    assert Enum.all?(results, &match?({:ok, %{status: "sent"}}, &1))
+
+    assert results |> Enum.map(fn {:ok, result} -> result.sequence end) |> Enum.sort() ==
+             Enum.to_list(1..4)
+
+    assert {:ok, state} = state(context)
+    assert state.pending_count == 4
+    assert state.next_sequence == 5
+  end
+
+  test "concurrent exact retries converge and conflicting reuse cannot overwrite", context do
+    register_both(context)
+    message_id = Ecto.UUID.generate()
+
+    exact =
+      race([
+        fn -> append(context, context.participant_a, message_id, "original") end,
+        fn -> append(context, context.participant_a, message_id, "original") end
+      ])
+
+    assert Enum.all?(exact, &match?({:ok, %{sequence: 1}}, &1))
+
+    conflict =
+      race([
+        fn -> append(context, context.participant_a, message_id, "original") end,
+        fn -> append(context, context.participant_a, message_id, "changed") end
+      ])
+
+    assert Enum.count(conflict, &match?({:ok, %{sequence: 1}}, &1)) == 1
+    assert Enum.count(conflict, &match?({:error, :message_id_conflict}, &1)) == 1
+    assert {:ok, state} = state(context)
+    assert state.pending_count == 1
+    assert state.next_sequence == 2
+    assert state.pending[message_id].content == "original"
+  end
+
+  test "concurrent duplicate progress terminalizes once", context do
+    register_both(context)
+    message_id = Ecto.UUID.generate()
+    assert {:ok, _} = append(context, context.participant_a, message_id, "ack")
+
+    results =
+      race(4, fn ->
+        report_progress(context, context.participant_b, 1)
+      end)
+
+    assert Enum.count(results, &match?({:ok, %{status: "applied"}}, &1)) == 1
+    assert Enum.count(results, &match?({:ok, %{status: "no_op"}}, &1)) == 3
+    assert {:ok, state} = state(context)
+    assert state.pending_count == 0
+    assert Map.has_key?(state.completed, message_id)
+  end
+
   test "server rejects malformed IDs even when called outside the channel", context do
     register_both(context)
 
@@ -102,7 +162,7 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
              append(context, context.participant_a, "not-a-uuid", "hello")
   end
 
-  test "delivery, acknowledgement, duplicate acknowledgement, and content cleanup", context do
+  test "delivery progress, duplicate progress, and content cleanup", context do
     register_both(context)
     message_id = Ecto.UUID.generate()
     assert {:ok, _result} = append(context, context.participant_a, message_id, "hello")
@@ -110,29 +170,16 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
     assert_receive {:conversation_message,
                     %{message_id: ^message_id, sequence: 1, content: "hello", sent_at: _sent_at}}
 
-    assert_receive {:conversation_message_status,
-                    %{message_id: ^message_id, status: "sent_to_server"}}
+    assert_receive {:conversation_message_status, %{message_id: ^message_id, status: "sent"}}
 
-    assert {:error, :sender_cannot_acknowledge} =
-             ConversationServer.acknowledge_message(
-               context.conversation.conversation_id,
-               context.participant_a,
-               message_id
-             )
+    assert {:error, :invalid_sequence} = report_progress(context, context.participant_a, 1)
 
-    assert {:ok, %{status: "delivered"}} =
-             ConversationServer.acknowledge_message(
-               context.conversation.conversation_id,
-               context.participant_b,
-               message_id
-             )
+    assert {:ok, state_before_recipient_progress} = state(context)
+    assert state_before_recipient_progress.pending[message_id]
 
-    assert {:ok, %{status: "delivered"}} =
-             ConversationServer.acknowledge_message(
-               context.conversation.conversation_id,
-               context.participant_b,
-               message_id
-             )
+    assert {:ok, %{status: "applied"}} = report_progress(context, context.participant_b, 1)
+
+    assert {:ok, %{status: "no_op"}} = report_progress(context, context.participant_b, 1)
 
     assert_receive {:conversation_message_status, %{message_id: ^message_id, status: "delivered"}}
 
@@ -147,6 +194,156 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
 
     assert {:error, :message_id_conflict} =
              append(context, context.participant_a, message_id, "different")
+  end
+
+  test "recipient progress matrix keeps candidate routing sent until authenticated cumulative evidence",
+       context do
+    register_both(context)
+    sender_channel = spawn(fn -> receive do: (:stop -> :ok) end)
+
+    assert :ok =
+             ConversationServer.register_channel(
+               context.conversation.conversation_id,
+               context.participant_a,
+               sender_channel
+             )
+
+    message_id = Ecto.UUID.generate()
+
+    assert {:ok, %{sequence: 1, status: "sent"}} =
+             append(context, context.participant_a, message_id, "truth")
+
+    assert_receive {:conversation_message, %{message_id: ^message_id, sequence: 1}}
+    assert_receive {:conversation_message_status, %{message_id: ^message_id, status: "sent"}}
+
+    assert {:ok, before_progress} = state(context)
+    assert before_progress.pending[message_id]
+    refute Map.has_key?(before_progress.completed, message_id)
+
+    recipient_channel = before_progress.participant_channels[context.participant_b] |> Enum.at(0)
+
+    assert {:ok, %{status: "stale"}} =
+             ConversationServer.report_delivery_progress(
+               context.conversation.conversation_id,
+               context.participant_b,
+               recipient_channel,
+               Ecto.UUID.generate(),
+               1
+             )
+
+    assert {:error, :invalid_sequence} =
+             ConversationServer.report_delivery_progress(
+               context.conversation.conversation_id,
+               context.participant_b,
+               recipient_channel,
+               before_progress.epoch_id,
+               2
+             )
+
+    assert {:error, :invalid_sequence} =
+             ConversationServer.report_delivery_progress(
+               context.conversation.conversation_id,
+               context.participant_b,
+               sender_channel,
+               before_progress.epoch_id,
+               1
+             )
+
+    assert {:ok, %{status: "applied", highest_contiguous_sequence: 1}} =
+             report_progress(context, context.participant_b, 1)
+
+    assert_receive {:conversation_message_status, %{message_id: ^message_id, status: "delivered"}}
+
+    assert {:ok, %{status: "no_op", highest_contiguous_sequence: 1}} =
+             report_progress(context, context.participant_b, 1)
+
+    assert {:ok, after_progress} = state(context)
+    assert after_progress.delivery_progress[context.participant_b] == 1
+    assert after_progress.completed[message_id].final_state == :delivered
+
+    refute_receive {:conversation_message_status, %{message_id: ^message_id, status: "delivered"},
+                    50}
+
+    send(sender_channel, :stop)
+  end
+
+  test "delivery progress diagnostics are coarse and identity-free for apply, retry/no-op, stale, and invalid",
+       context do
+    events =
+      for status <- [:applied, :no_op, :stale, :invalid],
+          do: [:strangertalks_new, :delivery_progress, status]
+
+    handler_id = "delivery-progress-privacy-#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        events,
+        fn name, measurements, metadata, _config ->
+          send(test_pid, {:delivery_progress_diagnostic, name, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+    register_both(context)
+
+    assert {:ok, %{sequence: 1}} =
+             append(context, context.participant_a, Ecto.UUID.generate(), "diagnostic privacy")
+
+    assert {:ok, current} = state(context)
+    assert {:ok, %{status: "applied"}} = report_progress(context, context.participant_b, 1)
+    assert {:ok, %{status: "no_op"}} = report_progress(context, context.participant_b, 1)
+
+    recipient_channel = current.participant_channels[context.participant_b] |> Enum.at(0)
+
+    assert {:ok, %{status: "stale"}} =
+             ConversationServer.report_delivery_progress(
+               context.conversation.conversation_id,
+               context.participant_b,
+               recipient_channel,
+               Ecto.UUID.generate(),
+               1
+             )
+
+    assert {:error, :invalid_sequence} =
+             ConversationServer.report_delivery_progress(
+               context.conversation.conversation_id,
+               context.participant_b,
+               recipient_channel,
+               current.epoch_id,
+               2
+             )
+
+    for status <- [:applied, :no_op, :stale, :invalid] do
+      assert_receive {:delivery_progress_diagnostic,
+                      [:strangertalks_new, :delivery_progress, ^status], %{count: 1}, %{}}
+    end
+  end
+
+  test "higher cumulative progress covers earlier obligations and makes a late lower report a no-op",
+       context do
+    register_both(context)
+    first_id = Ecto.UUID.generate()
+    second_id = Ecto.UUID.generate()
+
+    assert {:ok, %{sequence: 1, status: "sent"}} =
+             append(context, context.participant_a, first_id, "first cumulative obligation")
+
+    assert {:ok, %{sequence: 2, status: "sent"}} =
+             append(context, context.participant_a, second_id, "second cumulative obligation")
+
+    assert {:ok, %{status: "applied", highest_contiguous_sequence: 2}} =
+             report_progress(context, context.participant_b, 2)
+
+    assert {:ok, %{status: "no_op", highest_contiguous_sequence: 2}} =
+             report_progress(context, context.participant_b, 1)
+
+    assert {:ok, current} = state(context)
+    assert current.delivery_progress[context.participant_b] == 2
+    assert current.completed[first_id].final_state == :delivered
+    assert current.completed[second_id].final_state == :delivered
   end
 
   test "disconnected recipient is buffered and replayed in sequence on reconnect", context do
@@ -165,14 +362,43 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
     assert_receive {:conversation_message, %{message_id: ^second_id, sequence: 2}}
   end
 
+  test "bounded JOIN establishes retained suffix as authoritative baseline", context do
+    register_both(context)
+
+    for sequence <- 1..51 do
+      message_id = Ecto.UUID.generate()
+
+      assert {:ok, %{sequence: ^sequence}} =
+               append(context, context.participant_a, message_id, "retained")
+
+      assert {:ok, _result} = report_progress(context, context.participant_b, sequence)
+    end
+
+    channel = spawn(fn -> receive do: (:stop -> :ok) end)
+
+    assert {:ok, payload} =
+             ConversationServer.sync_and_register_channel(
+               context.conversation.conversation_id,
+               context.participant_b,
+               channel,
+               nil,
+               0
+             )
+
+    assert payload.status == "initial"
+    assert payload.baseline_sequence == 2
+    assert payload.latest_sequence == 51
+    assert Enum.map(payload.messages, & &1.sequence) == Enum.to_list(2..51)
+    send(channel, :stop)
+  end
+
   test "retry generations ignore stale and duplicate events without changing state", context do
     register_both(context)
     message_id = Ecto.UUID.generate()
     assert {:ok, _result} = append(context, context.participant_a, message_id, "retry me")
     assert_receive {:conversation_message, %{message_id: ^message_id}}
 
-    assert_receive {:conversation_message_status,
-                    %{message_id: ^message_id, status: "sent_to_server"}}
+    assert_receive {:conversation_message_status, %{message_id: ^message_id, status: "sent"}}
 
     {:ok, pid} = ConversationServer.lookup(context.conversation.conversation_id)
     assert {:ok, initial_state} = state(context)
@@ -203,12 +429,7 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
     assert {:ok, before_ack} = state(context)
     third_token = before_ack.pending[message_id].retry_token
 
-    assert {:ok, _result} =
-             ConversationServer.acknowledge_message(
-               context.conversation.conversation_id,
-               context.participant_b,
-               message_id
-             )
+    assert {:ok, _result} = report_progress(context, context.participant_b, 1)
 
     assert_receive {:conversation_message_status, %{message_id: ^message_id, status: "delivered"}}
     send(pid, {:retry_message, message_id, third_token})
@@ -224,7 +445,7 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
 
     send(pid, {:expire_message, expiring_id})
     _ = :sys.get_state(pid)
-    assert_receive {:conversation_message_status, %{message_id: ^expiring_id, status: "expired"}}
+    assert_receive {:conversation_message_status, %{message_id: ^expiring_id, status: "failed"}}
     send(pid, {:retry_message, expiring_id, expiry_retry_token})
     _ = :sys.get_state(pid)
     refute_receive {:conversation_message, %{message_id: ^expiring_id}}, 50
@@ -257,8 +478,7 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
 
     for label <- [:sender_one, :sender_two] do
       assert_receive {:relayed, ^label,
-                      {:conversation_message_status,
-                       %{message_id: ^message_id, status: "sent_to_server"}}}
+                      {:conversation_message_status, %{message_id: ^message_id, status: "sent"}}}
     end
 
     for label <- [:recipient_one, :recipient_two] do
@@ -266,19 +486,9 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
                       {:conversation_message, %{message_id: ^message_id, content: "all tabs"}}}
     end
 
-    assert {:ok, %{status: "delivered"}} =
-             ConversationServer.acknowledge_message(
-               conversation_id,
-               context.participant_b,
-               message_id
-             )
+    assert {:ok, %{status: "applied"}} = report_progress(context, context.participant_b, 1)
 
-    assert {:ok, %{status: "delivered"}} =
-             ConversationServer.acknowledge_message(
-               conversation_id,
-               context.participant_b,
-               message_id
-             )
+    assert {:ok, %{status: "no_op"}} = report_progress(context, context.participant_b, 1)
 
     for label <- [:sender_one, :sender_two] do
       assert_receive {:relayed, ^label,
@@ -287,13 +497,18 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
     end
 
     [first_recipient | _] = recipient_tabs
+    ref = Process.monitor(first_recipient)
     Process.exit(first_recipient, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^first_recipient, _}
     _ = :sys.get_state(pid)
     assert {:ok, one_tab_left} = state(context)
     assert MapSet.size(one_tab_left.participant_channels[context.participant_b]) == 1
     refute Map.has_key?(one_tab_left.recovery_timers, context.participant_b)
 
-    Enum.each(sender_tabs ++ tl(recipient_tabs), &Process.exit(&1, :kill))
+    remaining_tabs = sender_tabs ++ tl(recipient_tabs)
+    remaining_refs = Enum.map(remaining_tabs, fn tab -> {tab, Process.monitor(tab)} end)
+    Enum.each(remaining_tabs, &Process.exit(&1, :kill))
+    Enum.each(remaining_refs, fn {tab, r} -> assert_receive {:DOWN, ^r, :process, ^tab, _} end)
     _ = :sys.get_state(pid)
     assert {:ok, empty_tabs} = state(context)
 
@@ -395,12 +610,7 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
       assert {:ok, %{sequence: ^sequence}} =
                append(context, context.participant_a, message_id, "ok")
 
-      assert {:ok, _result} =
-               ConversationServer.acknowledge_message(
-                 context.conversation.conversation_id,
-                 context.participant_b,
-                 message_id
-               )
+      assert {:ok, _result} = report_progress(context, context.participant_b, sequence)
     end
 
     assert {:ok, state} = state(context)
@@ -453,12 +663,7 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
     message_id = Ecto.UUID.generate()
     assert {:ok, _result} = append(context, context.participant_a, message_id, "done")
 
-    assert {:ok, _result} =
-             ConversationServer.acknowledge_message(
-               context.conversation.conversation_id,
-               context.participant_b,
-               message_id
-             )
+    assert {:ok, _result} = report_progress(context, context.participant_b, 1)
 
     assert {:ok, state} = state(context)
     completed_at = state.completed[message_id].completed_at
@@ -497,6 +702,19 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
 
   defp state(context), do: ConversationServer.inspect_state(context.conversation.conversation_id)
 
+  defp report_progress(context, participant_id, sequence) do
+    {:ok, current} = state(context)
+    channel_pid = current.participant_channels[participant_id] |> Enum.at(0)
+
+    ConversationServer.report_delivery_progress(
+      context.conversation.conversation_id,
+      participant_id,
+      channel_pid,
+      current.epoch_id,
+      sequence
+    )
+  end
+
   defp relay_tab(parent, label) do
     spawn(fn -> relay_messages(parent, label) end)
   end
@@ -507,6 +725,31 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
         send(parent, {:relayed, label, message})
         relay_messages(parent, label)
     end
+  end
+
+  defp race(count, operation), do: race(List.duplicate(operation, count))
+
+  defp race(operations) do
+    parent = self()
+
+    tasks =
+      Enum.map(operations, fn operation ->
+        Task.async(fn ->
+          send(parent, {:ready, self()})
+
+          receive do
+            :go -> operation.()
+          end
+        end)
+      end)
+
+    Enum.each(tasks, fn task ->
+      task_pid = task.pid
+      assert_receive {:ready, ^task_pid}
+    end)
+
+    Enum.each(tasks, &send(&1.pid, :go))
+    Enum.map(tasks, &Task.await(&1, :infinity))
   end
 
   defp conversation_fixture do

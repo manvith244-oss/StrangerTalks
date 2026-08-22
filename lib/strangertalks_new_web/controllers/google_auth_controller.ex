@@ -104,7 +104,7 @@ defmodule StrangertalksNewWeb.GoogleAuthController do
   end
 
   defp rate_allowed?(bucket, conn, limit) do
-    StrangertalksNew.GoogleContinuity.RateLimiter.allow?(bucket, conn.remote_ip, limit, 60)
+    StrangertalksNew.RateLimiter.allow?(bucket, conn.remote_ip, limit, 60)
   end
 
   defp accepts_json?(conn), do: "application/json" in get_req_header(conn, "accept")

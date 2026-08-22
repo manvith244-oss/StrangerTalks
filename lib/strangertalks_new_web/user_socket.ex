@@ -8,7 +8,7 @@ defmodule StrangertalksNewWeb.UserSocket do
   channel "conversation:*", StrangertalksNewWeb.ConversationChannel
 
   @impl true
-  def connect(%{"token" => token}, socket, _connect_info) when is_binary(token) do
+  def connect(_params, socket, %{auth_token: token}) when is_binary(token) do
     with {:ok, participant_id} <- ParticipantToken.verify(token),
          participant when not is_nil(participant) <- Participants.get_participant(participant_id) do
       {:ok, assign(socket, :participant_id, participant.participant_id)}

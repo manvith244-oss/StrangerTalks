@@ -4,7 +4,8 @@ defmodule StrangertalksNewWeb.TextMvpIntegrationTest do
 
   @endpoint StrangertalksNewWeb.Endpoint
 
-  alias StrangertalksNew.{Conversation, Matching, Message, Relationship, Report, SafetyReview}
+  alias StrangertalksNew.{Conversation, Matching, Message, Relationship, Report}
+  alias StrangertalksNew.MatchingRules.BoundaryBlock
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.QueueEngine.QueueState
   alias StrangertalksNew.Repo
@@ -38,8 +39,8 @@ defmodule StrangertalksNewWeb.TextMvpIntegrationTest do
     assert Repo.aggregate(Matching, :count) == 1
     assert Repo.aggregate(Conversation, :count) == 1
 
-    conversation_socket_a = joined_conversation_socket(participant_a, conversation_id)
-    conversation_socket_b = joined_conversation_socket(participant_b, conversation_id)
+    conversation_socket_a = joined_conversation_socket_only(participant_a, conversation_id)
+    conversation_socket_b = joined_conversation_socket_only(participant_b, conversation_id)
     assert Repo.get!(Conversation, conversation_id).conversation_status == :ACTIVE
 
     first_message_id = Ecto.UUID.generate()
@@ -50,10 +51,21 @@ defmodule StrangertalksNewWeb.TextMvpIntegrationTest do
         "content" => "hello"
       })
 
-    assert_reply ref, :ok, %{status: "sent_to_server"}
-    assert_push "message:new", %{message_id: ^first_message_id, content: "hello"}
-    ref = push(conversation_socket_b, "message:ack", %{"message_id" => first_message_id})
-    assert_reply ref, :ok, %{status: "delivered"}
+    assert_reply ref, :ok, %{status: "sent", sequence: 1}
+
+    assert_push "message:new", %{
+      message_id: ^first_message_id,
+      content: "hello",
+      epoch_id: epoch_id
+    }
+
+    ref =
+      push(conversation_socket_b, "delivery:progress", %{
+        "epoch_id" => epoch_id,
+        "highest_contiguous_sequence" => 1
+      })
+
+    assert_reply ref, :ok, %{status: "applied", highest_contiguous_sequence: 1}
     assert_push "message:status", %{message_id: ^first_message_id, status: "delivered"}
 
     Process.flag(:trap_exit, true)
@@ -70,35 +82,33 @@ defmodule StrangertalksNewWeb.TextMvpIntegrationTest do
         "content" => "replayed"
       })
 
-    assert_reply ref, :ok, %{status: "sent_to_server", sequence: 2}
+    assert_reply ref, :ok, %{status: "sent", sequence: 2}
 
-    reconnected_b = joined_conversation_socket(participant_b, conversation_id)
+    {sync_payload, reconnected_b} = joined_conversation_socket(participant_b, conversation_id)
 
-    assert_push "message:new", %{
-      message_id: ^buffered_message_id,
-      content: "replayed",
-      sequence: 2
-    }
+    assert [
+             %{sequence: 1, content: "hello"},
+             %{message_id: ^buffered_message_id, content: "replayed", sequence: 2}
+           ] = sync_payload.messages
 
-    ref = push(reconnected_b, "message:ack", %{"message_id" => buffered_message_id})
-    assert_reply ref, :ok, %{status: "delivered"}
+    ref =
+      push(reconnected_b, "delivery:progress", %{
+        "epoch_id" => sync_payload.epoch_id,
+        "highest_contiguous_sequence" => 2
+      })
+
+    assert_reply ref, :ok, %{status: "applied", highest_contiguous_sequence: 2}
 
     ref = push(conversation_socket_a, "conversation:end", %{})
     assert_reply ref, :ok, %{status: "ended"}
     assert Repo.get!(Conversation, conversation_id).conversation_completed == true
 
-    ref =
-      push(conversation_socket_a, "relationship:consent", %{
-        "participant_id" => participant_b.participant_id
-      })
+    ref = push(conversation_socket_a, "relationship:consent", %{})
 
     assert_reply ref, :ok, %{status: "waiting_for_mutual_consent"}
     assert Repo.aggregate(Relationship, :count) == 0
 
-    ref =
-      push(reconnected_b, "relationship:consent", %{
-        "participant_id" => participant_a.participant_id
-      })
+    ref = push(reconnected_b, "relationship:consent", %{})
 
     assert_reply ref, :ok, %{status: "created"}
     assert Repo.aggregate(Relationship, :count) == 1
@@ -111,12 +121,11 @@ defmodule StrangertalksNewWeb.TextMvpIntegrationTest do
 
     assert_reply ref, :ok, %{status: "submitted"}
     assert Repo.aggregate(Report, :count) == 1
-    assert Repo.one!(SafetyReview).status == :PENDING
 
     ref = push(conversation_socket_a, "conversation:block", %{})
     assert_reply ref, :ok, %{status: "blocked"}
-    {:ok, _} = MatchmakingEngine.join_queue(participant_a.participant_id, :EXPLORE, "en", 0, 0.0)
-    {:ok, _} = MatchmakingEngine.join_queue(participant_b.participant_id, :EXPLORE, "en", 0, 0.0)
+    assert Repo.aggregate(BoundaryBlock, :count) == 1
+
     assert {:ok, []} = MatchmakingEngine.evaluate_pending_matches()
     assert Repo.aggregate(Matching, :count) == 1
     assert Repo.aggregate(Message, :count) == 0
@@ -125,13 +134,15 @@ defmodule StrangertalksNewWeb.TextMvpIntegrationTest do
   defp participant_fixture do
     {:ok, participant} = StrangertalksNew.Participants.create_participant(%{})
     token = ParticipantToken.sign(participant.participant_id)
-    assert {:ok, _socket} = connect(UserSocket, %{"token" => token})
+    assert {:ok, _socket} = connect(UserSocket, %{}, connect_info: %{auth_token: token})
     participant
   end
 
   defp joined_participant_socket(participant) do
     {:ok, socket} =
-      connect(UserSocket, %{"token" => ParticipantToken.sign(participant.participant_id)})
+      connect(UserSocket, %{},
+        connect_info: %{auth_token: ParticipantToken.sign(participant.participant_id)}
+      )
 
     {:ok, _, socket} =
       subscribe_and_join(socket, ParticipantChannel, "participant:#{participant.participant_id}")
@@ -141,13 +152,21 @@ defmodule StrangertalksNewWeb.TextMvpIntegrationTest do
 
   defp joined_conversation_socket(participant, conversation_id) do
     {:ok, socket} =
-      connect(UserSocket, %{"token" => ParticipantToken.sign(participant.participant_id)})
+      connect(UserSocket, %{},
+        connect_info: %{auth_token: ParticipantToken.sign(participant.participant_id)}
+      )
 
-    {:ok, _, socket} =
+    {:ok, sync_payload, socket} =
       subscribe_and_join(socket, ConversationChannel, "conversation:#{conversation_id}")
 
+    {sync_payload, socket}
+  end
+
+  defp joined_conversation_socket_only(participant, conversation_id) do
+    {_sync, socket} = joined_conversation_socket(participant, conversation_id)
     socket
   end
 
-  defp queue_payload, do: %{"door_type" => "EXPLORE"}
+  defp queue_payload,
+    do: %{"door_type" => "EXPLORE", "conversation_language" => "en"}
 end

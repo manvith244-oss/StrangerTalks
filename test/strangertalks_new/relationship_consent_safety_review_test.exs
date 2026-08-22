@@ -89,7 +89,7 @@ defmodule StrangertalksNew.RelationshipConsentSafetyReviewTest do
     {conversation, participant_a, _participant_b} = completed_conversation_fixture()
     outsider = participant_fixture()
 
-    assert {:error, :not_conversation_member_or_ineligible} =
+    assert {:error, :not_conversation_member} =
              Relationships.consent_to_relationship(
                conversation.conversation_id,
                outsider.participant_id
@@ -107,7 +107,7 @@ defmodule StrangertalksNew.RelationshipConsentSafetyReviewTest do
       })
       |> Repo.update!()
 
-      assert {:error, :not_conversation_member_or_ineligible} =
+      assert {:error, :conversation_inactive} =
                Relationships.consent_to_relationship(
                  conversation.conversation_id,
                  participant_a.participant_id

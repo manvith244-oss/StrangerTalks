@@ -11,6 +11,9 @@ config :strangertalks_new,
   ecto_repos: [StrangertalksNew.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# Repo telemetry remains enabled, but query/parameter Logger output is disabled in every environment.
+config :strangertalks_new, StrangertalksNew.Repo, log: false
+
 # Configure the endpoint
 config :strangertalks_new, StrangertalksNewWeb.Endpoint,
   url: [host: "localhost"],
@@ -32,29 +35,31 @@ config :strangertalks_new, StrangertalksNewWeb.Endpoint,
 config :strangertalks_new, StrangertalksNew.Mailer, adapter: Swoosh.Adapters.Local
 
 # Configure Elixir's Logger
+config :logger,
+  translators: [
+    {StrangertalksNew.ChannelCrashDiagnostic, :translate},
+    {Logger.Translator, :translate}
+  ]
+
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id]
+  metadata: [
+    :request_id,
+    :operation,
+    :reason_code,
+    :invariant,
+    :lifecycle_status,
+    :recovery_kind,
+    :target_status,
+    :active_conversation_count,
+    :missing_participant_count
+  ]
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-config :phoenix, :filter_parameters, [
-  "password",
-  "token",
-  "authorization",
-  "bearer",
-  "code",
-  "state",
-  "nonce",
-  "sub",
-  "client_secret",
-  "id_token",
-  "access_token",
-  "refresh_token",
-  "session_token",
-  "csrf_token"
-]
+# Phoenix logs operation and route context, but no request/socket parameter values.
+config :phoenix, :filter_parameters, {:keep, []}
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.

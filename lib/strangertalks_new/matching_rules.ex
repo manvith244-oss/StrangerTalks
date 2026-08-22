@@ -7,6 +7,7 @@ defmodule StrangertalksNew.MatchingRules do
   import Ecto.Query, warn: false
   alias StrangertalksNew.Repo
   alias StrangertalksNew.Conversation
+  alias StrangertalksNew.Relationship
   alias StrangertalksNew.ParticipantActivityLock
   alias StrangertalksNew.MatchingRules.{Participant, QueueState, BoundaryBlock}
 
@@ -58,7 +59,21 @@ defmodule StrangertalksNew.MatchingRules do
                b.active_status == true),
         select: count(b.blocker_user_id)
 
-    Repo.one(query) > 0
+    Repo.one(query) > 0 or closed_relationship?(participant_a_id, participant_b_id)
+  end
+
+  defp closed_relationship?(participant_a_id, participant_b_id) do
+    from(r in Relationship,
+      where:
+        r.relationship_status == :CLOSED and
+          ((r.participant_a_id == ^participant_a_id and
+              r.participant_b_id == ^participant_b_id) or
+             (r.participant_a_id == ^participant_b_id and
+                r.participant_b_id == ^participant_a_id)),
+      select: count(r.relationship_id)
+    )
+    |> Repo.one()
+    |> Kernel.>(0)
   end
 
   def block_conversation_participant(conversation_id, blocker_id) do

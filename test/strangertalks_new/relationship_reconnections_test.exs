@@ -41,8 +41,7 @@ defmodule StrangertalksNew.RelationshipReconnectionsTest do
     ref =
       push(joined, "bond:reconnect_start", %{
         "relationship_id" => f.relationship.relationship_id,
-        "door_type" => "JUST_TALK",
-        "participant_id" => f.b
+        "door_type" => "JUST_TALK"
       })
 
     assert_reply ref, :ok, %{status: "waiting_for_mutual_availability"}
@@ -223,7 +222,7 @@ defmodule StrangertalksNew.RelationshipReconnectionsTest do
              RelationshipReconnections.status(f.relationship.relationship_id, f.b)
   end
 
-  test "blocks, queue membership, and active Conversations reject with one safe reason", %{
+  test "blocks and active Conversations reject while queue intent remains noncanonical", %{
     fixture: f
   } do
     assert {:ok, _} = StrangertalksNew.MatchingRules.enforce_block(f.a, f.b, "CONVERSATION")
@@ -236,9 +235,16 @@ defmodule StrangertalksNew.RelationshipReconnectionsTest do
              )
 
     Repo.delete_all(StrangertalksNew.MatchingRules.BoundaryBlock)
-    Agent.update(QueueState, &Map.put(&1, f.a, %{door_selection: :JUST_TALK}))
 
-    assert {:error, :reconnection_unavailable} =
+    Agent.update(
+      QueueState,
+      &Map.put(&1, f.a, %{
+        door_selection: :JUST_TALK,
+        queue_attempt_id: Ecto.UUID.generate()
+      })
+    )
+
+    assert {:ok, %{status: "waiting_for_mutual_availability"}} =
              RelationshipReconnections.start_or_replace(
                f.relationship.relationship_id,
                f.a,
@@ -324,20 +330,20 @@ defmodule StrangertalksNew.RelationshipReconnectionsTest do
              RelationshipReconnections.status(f.relationship.relationship_id, f.b)
   end
 
-  test "queued and active counterparts prevent mutual reconnect persistence", %{fixture: f} do
+  test "queued counterparts do not outrank reconnect and converge after commit", %{fixture: f} do
     assert {:ok, _} = reconnect(f, f.a, :EXPLORE)
-    Agent.update(QueueState, &Map.put(&1, f.b, %{door_selection: :EXPLORE}))
-    assert {:error, :reconnection_unavailable} = reconnect(f, f.b, :EXPLORE)
-    assert Repo.aggregate(Matching, :count, :match_id) == 1
 
-    Agent.update(QueueState, &Map.delete(&1, f.b))
+    Agent.update(
+      QueueState,
+      &Map.put(&1, f.b, %{
+        door_selection: :EXPLORE,
+        queue_attempt_id: Ecto.UUID.generate()
+      })
+    )
 
-    f.origin_conversation
-    |> Conversation.changeset(%{conversation_status: :ACTIVE})
-    |> Repo.update!()
-
-    assert {:error, :reconnection_unavailable} = reconnect(f, f.b, :EXPLORE)
-    assert Repo.aggregate(Matching, :count, :match_id) == 1
+    assert {:ok, %{status: "matched"}} = reconnect(f, f.b, :EXPLORE)
+    refute Agent.get(QueueState, &Map.has_key?(&1, f.b))
+    assert Repo.aggregate(Matching, :count, :match_id) == 2
   end
 
   test "queue join racing reconnect leaves exactly one participant activity", %{fixture: f} do
@@ -350,7 +356,7 @@ defmodule StrangertalksNew.RelationshipReconnectionsTest do
           StrangertalksNew.Matchmaking.MatchmakingEngine.join_queue(
             f.b,
             :KEEP_IT_LIGHT,
-            nil,
+            "en",
             nil,
             nil
           )
@@ -365,11 +371,90 @@ defmodule StrangertalksNew.RelationshipReconnectionsTest do
 
     if conversation_created? do
       assert match?({:ok, %{status: "matched"}}, reconnect_result)
-      assert match?({:error, :participant_busy}, queue_result)
+      assert match?({:ok, _}, queue_result) or match?({:error, :participant_busy}, queue_result)
+      refute Agent.get(QueueState, &Map.has_key?(&1, f.b))
     else
       assert match?({:error, :reconnection_unavailable}, reconnect_result)
       assert match?({:ok, _}, queue_result)
     end
+  end
+
+  test "anonymous A+C racing reconnect A+B creates at most one current Conversation", %{
+    fixture: f
+  } do
+    {:ok, c} = StrangertalksNew.Participants.create_participant(%{})
+    assert {:ok, _} = reconnect(f, f.a, :KEEP_IT_LIGHT)
+
+    assert {:ok, _} =
+             StrangertalksNew.Matchmaking.MatchmakingEngine.join_queue(
+               f.a,
+               :KEEP_IT_LIGHT,
+               "en",
+               nil,
+               nil
+             )
+
+    assert {:ok, _} =
+             StrangertalksNew.Matchmaking.MatchmakingEngine.join_queue(
+               c.participant_id,
+               :KEEP_IT_LIGHT,
+               "en",
+               nil,
+               nil
+             )
+
+    baseline_matches = Repo.aggregate(Matching, :count, :match_id)
+    baseline_conversations = Repo.aggregate(Conversation, :count, :conversation_id)
+
+    [anonymous_result, reconnect_result] =
+      [
+        &StrangertalksNew.Matchmaking.MatchmakingEngine.evaluate_pending_matches/0,
+        fn -> reconnect(f, f.b, :KEEP_IT_LIGHT) end
+      ]
+      |> Task.async_stream(& &1.(), ordered: true, timeout: :infinity)
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert match?({:ok, _}, anonymous_result)
+
+    assert match?({:ok, _}, reconnect_result) or
+             match?({:error, :reconnection_unavailable}, reconnect_result)
+
+    assert Repo.aggregate(Matching, :count, :match_id) == baseline_matches + 1
+    assert Repo.aggregate(Conversation, :count, :conversation_id) == baseline_conversations + 1
+    assert current_conversation_count(f.a) == 1
+  end
+
+  test "anonymous A+B racing reconnect A+B creates at most one current Conversation", %{
+    fixture: f
+  } do
+    assert {:ok, _} = reconnect(f, f.a, :SOMETHING_REAL)
+
+    for participant_id <- [f.a, f.b] do
+      assert {:ok, _} =
+               StrangertalksNew.Matchmaking.MatchmakingEngine.join_queue(
+                 participant_id,
+                 :SOMETHING_REAL,
+                 "en",
+                 nil,
+                 nil
+               )
+    end
+
+    baseline_matches = Repo.aggregate(Matching, :count, :match_id)
+    baseline_conversations = Repo.aggregate(Conversation, :count, :conversation_id)
+
+    _results =
+      [
+        &StrangertalksNew.Matchmaking.MatchmakingEngine.evaluate_pending_matches/0,
+        fn -> reconnect(f, f.b, :SOMETHING_REAL) end
+      ]
+      |> Task.async_stream(& &1.(), timeout: :infinity)
+      |> Enum.to_list()
+
+    assert Repo.aggregate(Matching, :count, :match_id) == baseline_matches + 1
+    assert Repo.aggregate(Conversation, :count, :conversation_id) == baseline_conversations + 1
+    assert current_conversation_count(f.a) == 1
+    assert current_conversation_count(f.b) == 1
   end
 
   test "another pending Conversation racing reconnect creates only one activity path", %{
@@ -450,6 +535,26 @@ defmodule StrangertalksNew.RelationshipReconnectionsTest do
     after_failure = Repo.get!(Relationship, before.relationship_id)
     assert after_failure.conversation_count == 2_147_483_647
     assert after_failure.last_conversation_at == before.last_conversation_at
+  end
+
+  test "forced reconnect Match insert failure creates neither new Match nor Conversation", %{
+    fixture: f
+  } do
+    assert {:ok, _} = reconnect(f, f.a, :EXPLORE)
+    force_insert_failure!("matches")
+
+    assert {:error, :reconnection_unavailable} = reconnect(f, f.b, :EXPLORE)
+    assert Repo.aggregate(Matching, :count, :match_id) == 1
+    assert Repo.aggregate(Conversation, :count, :conversation_id) == 1
+  end
+
+  test "forced reconnect Conversation insert failure rolls back new Match", %{fixture: f} do
+    assert {:ok, _} = reconnect(f, f.a, :EXPLORE)
+    force_insert_failure!("conversations")
+
+    assert {:error, :reconnection_unavailable} = reconnect(f, f.b, :EXPLORE)
+    assert Repo.aggregate(Matching, :count, :match_id) == 1
+    assert Repo.aggregate(Conversation, :count, :conversation_id) == 1
   end
 
   test "Relationship lifecycle advances once and every unbuilt Match metric stays nil", %{
@@ -538,12 +643,44 @@ defmodule StrangertalksNew.RelationshipReconnectionsTest do
     )
   end
 
+  defp current_conversation_count(participant_id) do
+    Repo.aggregate(
+      from(c in Conversation,
+        where:
+          c.conversation_status in [:PENDING, :ACTIVE, :PAUSED] and
+            (c.participant_a_id == ^participant_id or c.participant_b_id == ^participant_id)
+      ),
+      :count
+    )
+  end
+
+  defp force_insert_failure!(table) when table in ["matches", "conversations"] do
+    function = "foundation_fail_reconnect_#{table}_insert"
+    trigger = "foundation_fail_reconnect_#{table}_insert_trigger"
+
+    Repo.query!("""
+    CREATE FUNCTION #{function}() RETURNS trigger AS $$
+    BEGIN
+      RAISE EXCEPTION 'forced foundation reconnect transaction failure';
+    END;
+    $$ LANGUAGE plpgsql
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER #{trigger}
+    BEFORE INSERT ON #{table}
+    FOR EACH ROW EXECUTE FUNCTION #{function}()
+    """)
+  end
+
   defp match_attrs(f, strategy, compatibility_score) do
     now = DateTime.utc_now()
 
     %{
       created_at: now,
       door_type: :SOMETHING_REAL,
+      participant_a_door_type: :SOMETHING_REAL,
+      participant_b_door_type: :SOMETHING_REAL,
       match_status: :CREATED,
       match_strategy: strategy,
       participant_a_id: f.a,

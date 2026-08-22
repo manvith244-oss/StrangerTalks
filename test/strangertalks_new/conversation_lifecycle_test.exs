@@ -35,6 +35,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationLifecycleTest do
           participant_a_id: participant_a_id,
           participant_b_id: participant_b_id,
           door_type: "SOMETHING_REAL",
+          conversation_language: "en",
           match_status: "ACTIVE",
           match_strategy: "COMPATIBILITY",
           compatibility_score: score_default,
@@ -205,6 +206,245 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationLifecycleTest do
 
       assert_receive {:conversation_event, :"conversation.ended",
                       %{"payload" => %{"reason" => "SAFETY_TERMINATED"}}}
+    end
+  end
+
+  describe "transition survivor recovery" do
+    test "final registration wins deterministically before terminal end", %{
+      conversation_id: conversation_id,
+      participant_a: ending_id,
+      participant_b: final_peer_id,
+      match_id: match_id
+    } do
+      set_pending!(conversation_id)
+      {:ok, pid} = ConversationServer.ensure_started(conversation_id)
+      assert :ok = ConversationServer.register_channel(conversation_id, ending_id, self())
+
+      register_ref = make_ref()
+      end_ref = make_ref()
+      monitor_ref = Process.monitor(pid)
+
+      send(
+        pid,
+        {:"$gen_call", {self(), register_ref}, {:register_channel, final_peer_id, self()}}
+      )
+
+      send(pid, {:"$gen_call", {self(), end_ref}, {:complete_conversation, ending_id}})
+
+      assert_receive {^register_ref, :ok}
+      assert_receive {^end_ref, {:ok, %{status: "ended"}}}
+      assert_receive {:DOWN, ^monitor_ref, :process, ^pid, :normal}
+
+      assert Repo.get!(StrangertalksNew.Conversation, conversation_id).conversation_status ==
+               :ENDED
+
+      match = Repo.get!(StrangertalksNew.Matching, match_id)
+      assert match.match_status == :ACTIVE
+      refute match.failure_reason == :LEFT_DURING_TRANSITION
+      refute queued?(ending_id)
+      refute queued?(final_peer_id)
+    end
+
+    test "terminal end wins deterministically before final registration", %{
+      conversation_id: conversation_id,
+      participant_a: ending_id,
+      participant_b: final_peer_id,
+      match_id: match_id
+    } do
+      set_pending!(conversation_id)
+      {:ok, pid} = ConversationServer.ensure_started(conversation_id)
+      assert :ok = ConversationServer.register_channel(conversation_id, ending_id, self())
+
+      end_ref = make_ref()
+      register_ref = make_ref()
+      monitor_ref = Process.monitor(pid)
+
+      send(pid, {:"$gen_call", {self(), end_ref}, {:complete_conversation, ending_id}})
+
+      send(
+        pid,
+        {:"$gen_call", {self(), register_ref}, {:register_channel, final_peer_id, self()}}
+      )
+
+      assert_receive {^end_ref, {:ok, %{status: "ended"}}}
+      assert_receive {:DOWN, ^monitor_ref, :process, ^pid, :normal}
+      refute_receive {^register_ref, _reply}
+
+      conversation = Repo.get!(StrangertalksNew.Conversation, conversation_id)
+      assert conversation.conversation_status == :FAILED
+      assert conversation.ending_type == :PARTICIPANT_LEFT
+
+      match = Repo.get!(StrangertalksNew.Matching, match_id)
+      assert match.match_status == :FAILED
+      assert match.failure_reason == :LEFT_DURING_TRANSITION
+      assert queued?(final_peer_id)
+      refute queued?(ending_id)
+    end
+
+    test "durable terminal state survives unavailable survivor admission owner", %{
+      conversation_id: conversation_id,
+      participant_a: leaving_id,
+      participant_b: survivor_id,
+      match_id: match_id
+    } do
+      set_pending!(conversation_id)
+      {:ok, _pid} = ConversationServer.ensure_started(conversation_id)
+      assert :ok = ConversationServer.register_channel(conversation_id, leaving_id, self())
+
+      assert :ok =
+               Supervisor.terminate_child(
+                 StrangertalksNew.Supervisor,
+                 StrangertalksNew.QueueEngine.QueueState
+               )
+
+      on_exit(fn -> ensure_queue_state_started() end)
+
+      assert {:ok, %{status: "ended"}} =
+               ConversationServer.complete_conversation(conversation_id, leaving_id)
+
+      assert_receive {:transition_recovery_failed, ^survivor_id, ^conversation_id}
+
+      conversation = Repo.get!(StrangertalksNew.Conversation, conversation_id)
+      match = Repo.get!(StrangertalksNew.Matching, match_id)
+      assert conversation.conversation_status == :FAILED
+      assert conversation.ending_type == :PARTICIPANT_LEFT
+      assert match.match_status == :FAILED
+      assert match.failure_reason == :LEFT_DURING_TRANSITION
+
+      ensure_queue_state_started()
+
+      assert {:ok, %{canonical_state: :AVAILABLE, conversation: nil, queue: nil}} =
+               StrangertalksNew.SessionReconciliation.reconcile(survivor_id)
+
+      refute queued?(survivor_id)
+    end
+
+    test "a terminal leave from PENDING fails old authority and requeues only the survivor once",
+         %{
+           conversation_id: conversation_id,
+           participant_a: leaving_id,
+           participant_b: survivor_id,
+           match_id: match_id
+         } do
+      Repo.get!(StrangertalksNew.Matching, match_id)
+      |> StrangertalksNew.Matching.changeset(%{
+        participant_a_door_type: :JUST_TALK,
+        participant_b_door_type: :EXPLORE,
+        conversation_language: "en",
+        door_type: nil
+      })
+      |> Repo.update!()
+
+      Repo.get!(StrangertalksNew.Conversation, conversation_id)
+      |> StrangertalksNew.Conversation.changeset(%{
+        conversation_status: :PENDING,
+        door_type: nil
+      })
+      |> Repo.update!()
+
+      {:ok, pid} = ConversationServer.ensure_started(conversation_id)
+      monitor_ref = Process.monitor(pid)
+
+      assert {:ok, %{status: "ended"}} =
+               ConversationServer.complete_conversation(conversation_id, leaving_id)
+
+      assert_receive {:DOWN, ^monitor_ref, :process, ^pid, :normal}
+
+      failed_conversation = Repo.get!(StrangertalksNew.Conversation, conversation_id)
+      failed_match = Repo.get!(StrangertalksNew.Matching, match_id)
+
+      assert failed_conversation.conversation_status == :FAILED
+      assert failed_conversation.ending_type == :PARTICIPANT_LEFT
+      assert failed_conversation.ending_initiator == leaving_id
+      assert failed_match.match_status == :FAILED
+      assert failed_match.failure_reason == :LEFT_DURING_TRANSITION
+
+      queue_state = Agent.get(StrangertalksNew.QueueEngine.QueueState, & &1)
+
+      assert %{door_selection: :EXPLORE, queue_attempt_id: attempt_id} =
+               Map.fetch!(queue_state, survivor_id)
+
+      assert is_binary(attempt_id)
+      refute Map.has_key?(queue_state, leaving_id)
+
+      assert_receive {:transition_survivor_requeued, ^survivor_id, ^conversation_id, ^attempt_id}
+
+      assert {:error, :terminal_conversation} = ConversationServer.ensure_started(conversation_id)
+
+      assert {:ok, %{status: "ended"}} =
+               ConversationServer.complete_conversation(conversation_id, leaving_id)
+
+      queue_state_after_duplicate = Agent.get(StrangertalksNew.QueueEngine.QueueState, & &1)
+      assert get_in(queue_state_after_duplicate, [survivor_id, :queue_attempt_id]) == attempt_id
+      refute Map.has_key?(queue_state_after_duplicate, leaving_id)
+    end
+
+    test "a second terminal leaver removes only this transition's survivor recovery", %{
+      conversation_id: conversation_id,
+      participant_a: first_leaver_id,
+      participant_b: second_leaver_id
+    } do
+      Repo.get!(StrangertalksNew.Conversation, conversation_id)
+      |> StrangertalksNew.Conversation.changeset(%{conversation_status: :PENDING})
+      |> Repo.update!()
+
+      {:ok, _pid} = ConversationServer.ensure_started(conversation_id)
+
+      assert {:ok, %{status: "ended"}} =
+               ConversationServer.complete_conversation(conversation_id, first_leaver_id)
+
+      assert {:ok, %{status: "ended"}} =
+               ConversationServer.complete_conversation(conversation_id, second_leaver_id)
+
+      refute Agent.get(
+               StrangertalksNew.QueueEngine.QueueState,
+               &Map.has_key?(&1, second_leaver_id)
+             )
+
+      assert {:ok, %{queue_attempt_id: newer_attempt_id}} =
+               StrangertalksNew.Matchmaking.MatchmakingEngine.join_queue(
+                 second_leaver_id,
+                 :SOMETHING_REAL,
+                 "en",
+                 nil,
+                 nil
+               )
+
+      assert {:ok, %{status: "ended"}} =
+               ConversationServer.complete_conversation(conversation_id, second_leaver_id)
+
+      assert %{queue_attempt_id: ^newer_attempt_id} =
+               Agent.get(
+                 StrangertalksNew.QueueEngine.QueueState,
+                 &Map.fetch!(&1, second_leaver_id)
+               )
+    end
+  end
+
+  defp set_pending!(conversation_id) do
+    Repo.get!(StrangertalksNew.Conversation, conversation_id)
+    |> StrangertalksNew.Conversation.changeset(%{conversation_status: :PENDING})
+    |> Repo.update!()
+  end
+
+  defp queued?(participant_id) do
+    Agent.get(StrangertalksNew.QueueEngine.QueueState, &Map.has_key?(&1, participant_id))
+  end
+
+  defp ensure_queue_state_started do
+    case Process.whereis(StrangertalksNew.QueueEngine.QueueState) do
+      nil ->
+        case Supervisor.restart_child(
+               StrangertalksNew.Supervisor,
+               StrangertalksNew.QueueEngine.QueueState
+             ) do
+          {:ok, _pid} -> :ok
+          {:ok, _pid, _info} -> :ok
+          {:error, :running} -> :ok
+        end
+
+      _pid ->
+        :ok
     end
   end
 end

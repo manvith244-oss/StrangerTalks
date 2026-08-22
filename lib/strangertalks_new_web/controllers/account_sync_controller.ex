@@ -25,7 +25,7 @@ defmodule StrangertalksNewWeb.AccountSyncController do
       with_session(conn, fn session ->
         with :ok <- AccountCSRF.verify(conn, session),
              true <-
-               StrangertalksNew.GoogleContinuity.RateLimiter.allow?(
+               StrangertalksNew.RateLimiter.allow?(
                  :sync_put,
                  session.account_id,
                  30,
@@ -110,5 +110,5 @@ defmodule StrangertalksNewWeb.AccountSyncController do
     do: conn |> put_status(:unprocessable_entity) |> json(%{error: %{reason: to_string(reason)}})
 
   defp rate_allowed?(bucket, key, limit),
-    do: StrangertalksNew.GoogleContinuity.RateLimiter.allow?(bucket, key, limit, 60)
+    do: StrangertalksNew.RateLimiter.allow?(bucket, key, limit, 60)
 end

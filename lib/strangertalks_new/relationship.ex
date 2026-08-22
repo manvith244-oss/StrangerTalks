@@ -20,6 +20,12 @@ defmodule StrangertalksNew.Relationship do
     field :origin_door_type, Ecto.Enum,
       values: [:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL]
 
+    field :origin_participant_a_door_type, Ecto.Enum,
+      values: [:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL]
+
+    field :origin_participant_b_door_type, Ecto.Enum,
+      values: [:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL]
+
     field :closure_reason, Ecto.Enum,
       values: [:PARTICIPANT_CLOSED, :BLOCKED, :SAFETY_ACTION, :INACTIVE_EXPIRATION]
 
@@ -89,6 +95,8 @@ defmodule StrangertalksNew.Relationship do
           attrs
       end
 
+    normalized_attrs = backfill_origin_doors(normalized_attrs)
+
     relationship
     |> cast(normalized_attrs, [
       :created_at,
@@ -101,6 +109,8 @@ defmodule StrangertalksNew.Relationship do
       :closed_at,
       :relationship_status,
       :origin_door_type,
+      :origin_participant_a_door_type,
+      :origin_participant_b_door_type,
       :closure_reason,
       :participant_a_id,
       :participant_b_id,
@@ -144,7 +154,8 @@ defmodule StrangertalksNew.Relationship do
       :updated_at,
       :first_conversation_at,
       :relationship_status,
-      :origin_door_type,
+      :origin_participant_a_door_type,
+      :origin_participant_b_door_type,
       :participant_a_id,
       :participant_b_id,
       :origin_conversation_id,
@@ -163,5 +174,17 @@ defmodule StrangertalksNew.Relationship do
       :shared_memory_count,
       :private_note_count
     ])
+  end
+
+  defp backfill_origin_doors(attrs) do
+    door = Map.get(attrs, :origin_door_type) || Map.get(attrs, "origin_door_type")
+
+    if door do
+      attrs
+      |> Map.put_new(:origin_participant_a_door_type, door)
+      |> Map.put_new(:origin_participant_b_door_type, door)
+    else
+      attrs
+    end
   end
 end

@@ -33,10 +33,8 @@ defmodule StrangertalksNew.QueueEngine.QueueState do
   Triggered by the SafetyReceiver to dynamically remove blocked pairs 
   from candidate lists and apply atomic write-protection locks.
   """
-  def apply_veto(initiating_participant_id, blocked_participant_id) do
-    Logger.warning(
-      "Applying atomic veto lock between #{initiating_participant_id} and #{blocked_participant_id}"
-    )
+  def apply_veto(_initiating_participant_id, _blocked_participant_id) do
+    Logger.warning("Applying atomic safety veto", operation: :apply_safety_veto)
 
     # Logic to remove the blocked participant from the initiator's evaluation pool
     Agent.update(__MODULE__, fn state ->

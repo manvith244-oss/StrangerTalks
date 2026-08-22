@@ -11,6 +11,8 @@ defmodule StrangertalksNew.ConversationLifecycle.VoiceNoteStore do
   @conversation_limit 3_145_728
   @note_limit 1_048_576
 
+  def max_note_bytes, do: @note_limit
+
   def start_link(opts \\ []), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
   def begin_upload(participant_id),

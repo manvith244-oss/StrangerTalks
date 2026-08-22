@@ -15,9 +15,7 @@ defmodule StrangertalksNew.QueueEngine.SafetyReceiver do
   end
 
   def handle_info(%{event_type: "safety.veto", data: payload}, state) do
-    Logger.warning(
-      "Safety Veto received for match involving #{payload["blocked_participant_id"]}"
-    )
+    Logger.warning("Safety veto received", operation: :apply_safety_veto)
 
     # Immediately apply atomic lock/veto via Redis and kill active evaluations
     StrangertalksNew.QueueEngine.QueueState.apply_veto(

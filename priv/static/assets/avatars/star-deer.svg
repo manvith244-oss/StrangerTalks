@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Star Deer">
+  <circle cx="32" cy="32" r="30" fill="#1b1d2e" stroke="#cba6f7" stroke-width="2"/>
+  <path d="M22 14 L26 26 M16 18 L24 22 M42 14 L38 26 M48 18 L40 22" stroke="#f9e2af" stroke-width="2.5" stroke-linecap="round"/>
+  <ellipse cx="32" cy="38" rx="14" ry="16" fill="#a6e3a1"/>
+  <circle cx="27" cy="36" r="2.5" fill="#11111b"/>
+  <circle cx="37" cy="36" r="2.5" fill="#11111b"/>
+  <ellipse cx="32" cy="46" rx="3.5" ry="2" fill="#11111b"/>
+</svg>

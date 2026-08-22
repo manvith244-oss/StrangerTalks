@@ -35,3 +35,12 @@ config :phoenix, :plug_init_mode, :runtime
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Live Communication Suite C11 Policy Test Fixture
+config :strangertalks_new, :c11_policy,
+  quotas_verified: true,
+  primary_available: true,
+  fallback_available: true,
+  max_fallback_reservations: 10,
+  credential_ttl_seconds: 300,
+  usage_snapshot: %{usage_count: 0, budget_limit: 100}

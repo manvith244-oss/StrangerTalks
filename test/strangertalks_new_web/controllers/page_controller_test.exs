@@ -62,8 +62,9 @@ defmodule StrangertalksNewWeb.PageControllerTest do
     body = conn |> get("/") |> html_response(200)
 
     [_, matching] = Regex.run(~r/(<section data-screen="queue".*?<\/section>)/s, body)
-    assert matching =~ "Finding someone who chose the same space."
-    assert matching =~ "Leave queue"
+    assert matching =~ "Finding someone…"
+    assert matching =~ "Go back"
+
     refute matching =~ "queue count"
     refute matching =~ "%"
     refute matching =~ "compatibility"

@@ -16,12 +16,15 @@ defmodule StrangertalksNew.Application do
       {DynamicSupervisor,
        strategy: :one_for_one, name: StrangertalksNew.ConversationDynamicSupervisor},
       StrangertalksNew.ConversationLifecycle.VoiceNoteStore,
-      StrangertalksNew.GoogleContinuity.RateLimiter,
+      StrangertalksNew.ConversationLifecycle.ViewOnceMediaStore,
+      StrangertalksNew.RateLimiter,
 
       # Queue Engine Processes (Must boot before the Web Endpoint)
       StrangertalksNew.QueueEngine.QueueState,
+      StrangertalksNew.QueueEngine.ParticipantConnectionTracker,
       StrangertalksNew.QueueEngine.RamMonitor,
       StrangertalksNew.QueueEngine.SafetyReceiver,
+      StrangertalksNew.ConversationLifecycle.RecoverySweeper,
 
       # Start a worker by calling: StrangertalksNew.Worker.start_link(arg)
       # {StrangertalksNew.Worker, arg},

@@ -46,7 +46,8 @@ defmodule StrangertalksNew.MatchingTest do
   test "changeset is invalid when required fields are missing" do
     changeset = Matching.changeset(%Matching{}, %{})
     refute changeset.valid?
-    assert keyword_has_error?(changeset.errors, :door_type, "can't be blank")
+    assert keyword_has_error?(changeset.errors, :participant_a_door_type, "can't be blank")
+    assert keyword_has_error?(changeset.errors, :participant_b_door_type, "can't be blank")
   end
 
   test "changeset is invalid with unlisted enum value" do

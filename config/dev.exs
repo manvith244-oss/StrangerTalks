@@ -7,7 +7,7 @@ config :strangertalks_new, StrangertalksNew.Repo,
   hostname: "localhost",
   database: "strangertalks_new_dev",
   stacktrace: true,
-  show_sensitive_data_on_connection_error: true,
+  show_sensitive_data_on_connection_error: false,
   pool_size: 10
 
 # For development, we disable any cache and enable
@@ -20,7 +20,7 @@ config :strangertalks_new, StrangertalksNewWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
   http: [ip: {127, 0, 0, 1}],
-  check_origin: false,
+  check_origin: ["http://localhost:4000", "http://127.0.0.1:4000"],
   code_reloader: true,
   debug_errors: true,
   secret_key_base: "3Kyi6grdj8kYl0aS7hosCsIT11xzQ+zaWskcydbdet6BLX5wO3GjTTfbWqFpCSHo",
@@ -53,7 +53,7 @@ config :strangertalks_new, StrangertalksNewWeb.Endpoint,
 config :strangertalks_new, dev_routes: true
 
 # Do not include metadata nor timestamps in development logs
-config :logger, :default_formatter, format: "[$level] $message\n"
+config :logger, :default_formatter, format: "[$level] $metadata$message\n"
 
 # Set a higher stacktrace during development. Avoid configuring such
 # in production as building large stacktraces may be expensive.
@@ -64,3 +64,12 @@ config :phoenix, :plug_init_mode, :runtime
 
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
+
+# Development C11 Policy Fixture (Local Development & Browser E2E)
+config :strangertalks_new, :c11_policy,
+  quotas_verified: true,
+  primary_available: true,
+  fallback_available: true,
+  max_fallback_reservations: 10,
+  credential_ttl_seconds: 300,
+  usage_snapshot: %{usage_count: 0, budget_limit: 100}

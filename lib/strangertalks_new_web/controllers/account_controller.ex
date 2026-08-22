@@ -6,8 +6,8 @@ defmodule StrangertalksNewWeb.AccountController do
 
   def session(conn, _params) do
     if StrangertalksNew.GoogleContinuity.enabled?() do
-      with true <- rate_allowed?(:account_session, conn, 60),
-           {:ok, account_session} <- current_session(conn) do
+      with {:ok, account_session} <- current_session(conn),
+           true <- rate_allowed?(:account_session, account_session.account_id, 60) do
         participant_id = account_session.account.participant_id
 
         json(conn, %{
@@ -78,7 +78,7 @@ defmodule StrangertalksNewWeb.AccountController do
   end
 
   defp rate_allowed?(bucket, key, limit),
-    do: StrangertalksNew.GoogleContinuity.RateLimiter.allow?(bucket, key, limit, 60)
+    do: StrangertalksNew.RateLimiter.allow?(bucket, key, limit, 60)
 
   defp forbidden(conn),
     do: conn |> put_status(:forbidden) |> json(%{error: %{reason: "forbidden"}})

@@ -12,7 +12,8 @@ defmodule StrangertalksNewWeb.Endpoint do
   ]
 
   socket "/socket", StrangertalksNewWeb.UserSocket,
-    websocket: true,
+    auth_token: true,
+    websocket: [connect_info: [:auth_token], max_frame_size: 32_768],
     longpoll: false
 
   plug Plug.Static,
@@ -45,7 +46,10 @@ defmodule StrangertalksNewWeb.Endpoint do
   end
 
   plug Plug.RequestId
-  plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
+
+  plug Plug.Telemetry,
+    event_prefix: [:phoenix, :endpoint],
+    log: {__MODULE__, :request_log_level, []}
 
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
@@ -57,4 +61,7 @@ defmodule StrangertalksNewWeb.Endpoint do
   plug Plug.Head
   plug Plug.Session, @session_options
   plug StrangertalksNewWeb.Router
+
+  def request_log_level(%{path_info: ["api", "conversations" | _rest]}), do: false
+  def request_log_level(_conn), do: :info
 end

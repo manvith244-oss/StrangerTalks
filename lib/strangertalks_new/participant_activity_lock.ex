@@ -12,14 +12,15 @@ defmodule StrangertalksNew.ParticipantActivityLock do
   def with_participants(participant_ids, function)
       when is_list(participant_ids) and is_function(function, 0) do
     participant_ids
-    |> Enum.uniq()
-    |> Enum.sort()
-    |> Enum.each(fn participant_id ->
-      unless match?({:ok, _}, Ecto.UUID.cast(participant_id)) do
-        raise ArgumentError, "participant activity locks require UUIDs"
+    |> Enum.map(fn participant_id ->
+      case Ecto.UUID.cast(participant_id) do
+        {:ok, canonical_participant_id} -> canonical_participant_id
+        :error -> raise ArgumentError, "participant activity locks require UUIDs"
       end
     end)
-    |> then(fn _ -> acquire(participant_ids |> Enum.uniq() |> Enum.sort(), function) end)
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> acquire(function)
   end
 
   defp acquire([], function), do: function.()

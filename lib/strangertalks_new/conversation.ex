@@ -80,7 +80,6 @@ defmodule StrangertalksNew.Conversation do
     :participant_a_id,
     :participant_b_id,
     :conversation_status,
-    :door_type,
     :message_count,
     :voice_note_count,
     :bridge_shown,
@@ -100,6 +99,7 @@ defmodule StrangertalksNew.Conversation do
   ]
 
   @optional_fields [
+    :door_type,
     :ended_at,
     :average_response_time,
     :participation_balance_score,

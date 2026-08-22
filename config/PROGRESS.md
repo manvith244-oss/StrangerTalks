@@ -1741,7 +1741,8 @@ protection never prompts or silently resolves a conflict; setup and conflict res
   - `IndexedDB` (`strangertalks-local-v1`)
 - Phoenix development server running at `http://localhost:4000`
 - Google Continuity disabled in development environment
-- All test scripts, screenshots, and logs remained strictly outside the repository in private scratch storage
+- The maintained Playwright test script is stored in `test/js/browser_e2e_test.mjs`; generated screenshots,
+  traces, and logs remain outside the repository.
 
 ## Baseline Text Conversation — Verified
 
@@ -1861,7 +1862,7 @@ The following items remain open as technical debt and future verification milest
 - Real Google Drive `appDataFolder` remote API operation
 - Cross-device phone-to-laptop backup restore workflow
 - Google consent-screen review and brand verification
-- Automated browser E2E integration into the permanent repository test suite
+- Automated browser E2E orchestration in CI; the maintained local Chromium suite is now in the repository
 - Previously identified Google security test-hardening gaps:
   - Broader rate-limiter coverage across endpoints
   - Broader CSRF/session coverage
@@ -1869,3 +1870,48 @@ The following items remain open as technical debt and future verification milest
   - Remaining concurrency coverage
 - Multi-node locks and distributed coordination for matchmaking and account state
 - Voice Note Google sync remains excluded by policy
+
+---
+
+# Final Big-Testing Closeout — August 2026
+
+## Verified automated baseline
+
+- Elixir: **233 tests, 0 failures**
+- Ordinary JavaScript: **58 tests, 0 failures**
+- Maintained real Chromium E2E baseline: **11 tests, 0 failures**
+- Controlled local load/backpressure harness: **PASS**
+- Deterministic concurrency/idempotency verification: **PASS**
+- Component crash/restart and recovery verification: **PASS**
+
+The local load result is not a production-capacity claim. The highest completed scenarios included
+50 idle synthetic ConversationServers, a five-second distributed message workload, strict pending
+count/byte-bound checks, deliberate soft/hard mailbox pressure, 50 synthetic queue participants,
+and bounded reconnect/voice/limiter cleanup checks.
+
+## Recovery correction
+
+Concurrent `RecoverySweeper` and `SessionReconciliation` orphan resolution exposed duplicate
+transition telemetry caused by a stale pre-lock Conversation struct. `RecoverySweeper` now re-reads
+PostgreSQL under the participant lock and revalidates orphan eligibility. The focused race passed 50
+consecutive runs, and the final ordinary suite passed.
+
+## Explicit incomplete/deferred verification
+
+- Property-based testing: **NOT IMPLEMENTED** — no existing StreamData/property facility; targeted
+  deterministic concurrency and idempotency tests cover the highest-value invariants instead.
+- Whole external BEAM restart with safely isolated persistent rows: **DEFERRED**.
+- Direct Repo/pool interruption: **DEFERRED** because it would invalidate SQL Sandbox ownership.
+- Real two-browser server restart/reconnect: **DEFERRED**; the closeout could not safely replace the
+  pre-existing local process occupying port 4000.
+- Large reconnect herd, long soak, physical microphone, and multi-node recovery remain unverified.
+- V1 remains explicitly single-node; QueueState, RateLimiter windows, connection registrations,
+  voice bytes, runtime message buffers, epochs, and timers are intentionally volatile.
+
+## Repository hygiene before commit
+
+- `package.json` and `package-lock.json` are intentional Playwright test infrastructure and should be
+  tracked.
+- `node_modules/` is generated dependency material and must not be committed. It is currently not
+  covered by `.gitignore`; add an ignore rule before preparing commits.
+- The working tree remains intentionally dirty pending final review and commit grouping.

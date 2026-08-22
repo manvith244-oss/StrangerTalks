@@ -33,7 +33,9 @@ defmodule StrangertalksNewWeb.ParticipantControllerTest do
              )
 
     assert {:ok, socket} =
-             Phoenix.ChannelTest.connect(StrangertalksNewWeb.UserSocket, %{"token" => token})
+             Phoenix.ChannelTest.connect(StrangertalksNewWeb.UserSocket, %{},
+               connect_info: %{auth_token: token}
+             )
 
     assert socket.assigns.participant_id == participant_id
   end

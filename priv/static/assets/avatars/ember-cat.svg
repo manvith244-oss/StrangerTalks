@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Ember Cat">
+  <circle cx="32" cy="32" r="30" fill="#2d1a1e" stroke="#f38ba8" stroke-width="2"/>
+  <polygon points="18,30 22,14 30,24" fill="#eba0ac"/>
+  <polygon points="46,30 42,14 34,24" fill="#eba0ac"/>
+  <circle cx="32" cy="36" r="15" fill="#f38ba8"/>
+  <ellipse cx="26" cy="34" rx="2.5" ry="3.5" fill="#11111b"/>
+  <ellipse cx="38" cy="34" rx="2.5" ry="3.5" fill="#11111b"/>
+  <polygon points="32,39 30,42 34,42" fill="#11111b"/>
+  <path d="M22 40 L16 38 M22 43 L16 44 M42 40 L48 38 M42 43 L48 44" stroke="#11111b" stroke-width="1.5" stroke-linecap="round"/>
+</svg>
