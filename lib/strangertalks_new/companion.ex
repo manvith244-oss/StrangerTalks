@@ -5,32 +5,31 @@ defmodule StrangertalksNew.Companion do
   The model can reason only over an explicitly captured, bounded Conversation context. It has no
   send, queue, relationship, block, or configuration mutation capability. Authoritative
   Conversation/safety state is checked before generation and again before any result is returned.
+
+  At most one Companion generation may be in flight for the same participant and Conversation on
+  the V1 node. The lock is process-owned through the existing unique Registry and disappears if
+  the HTTP/request process exits.
   """
 
   alias StrangertalksNew.Companion.{Context, OpenAIProvider, Output}
 
+  @registry StrangertalksNew.DistributedRegistry
+
   def request(conversation_id, participant_id, attrs) when is_map(attrs) do
     started_at = System.monotonic_time()
+    lock_key = {:companion_request, conversation_id, participant_id}
 
     result =
-      with {:ok, context} <- Context.capture(conversation_id, participant_id, attrs),
-           provider <- provider(),
-           {:ok, raw_result} <- provider.generate(context),
-           {:ok, output} <- Output.validate(raw_result),
-           :ok <- Context.revalidate(context) do
-        {:ok,
-         %{
-           request_id: context.request_id,
-           status: if(output.decision == :assist, do: "ready", else: "declined"),
-           conversation_id: context.conversation_id,
-           language: context.language,
-           mode: context.mode,
-           tone: context.tone,
-           draft_fingerprint: context.draft_fingerprint,
-           suggestions: output.suggestions,
-           reason: output.reason,
-           model: output.model
-         }}
+      case Registry.register(@registry, lock_key, nil) do
+        {:ok, _value} ->
+          try do
+            run_request(conversation_id, participant_id, attrs)
+          after
+            Registry.unregister(@registry, lock_key)
+          end
+
+        {:error, {:already_registered, _pid}} ->
+          {:error, :companion_busy}
       end
 
     emit_telemetry(started_at, attrs, result)
@@ -38,6 +37,27 @@ defmodule StrangertalksNew.Companion do
   end
 
   def request(_conversation_id, _participant_id, _attrs), do: {:error, :invalid_payload}
+
+  defp run_request(conversation_id, participant_id, attrs) do
+    with {:ok, context} <- Context.capture(conversation_id, participant_id, attrs),
+         provider <- provider(),
+         {:ok, raw_result} <- provider.generate(context),
+         {:ok, output} <- Output.validate(raw_result),
+         :ok <- Context.revalidate(context) do
+      {:ok,
+       %{
+         request_id: context.request_id,
+         status: if(output.decision == :assist, do: "ready", else: "declined"),
+         conversation_id: context.conversation_id,
+         language: context.language,
+         mode: context.mode,
+         tone: context.tone,
+         draft_fingerprint: context.draft_fingerprint,
+         suggestions: output.suggestions,
+         reason: output.reason
+       }}
+    end
+  end
 
   defp provider do
     :strangertalks_new
