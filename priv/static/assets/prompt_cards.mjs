@@ -1,3 +1,5 @@
+import "./companion.mjs"
+
 export const PROMPT_CATEGORIES = Object.freeze([
   Object.freeze({id: "start", label: "Start"}),
   Object.freeze({id: "continue", label: "Continue"}),
