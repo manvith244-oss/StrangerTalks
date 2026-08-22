@@ -25,3 +25,9 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 strangertalks_new-*.tar
 
+# Node dependencies
+/node_modules/
+
+# Local diagnostic logs
+debug.log
+
