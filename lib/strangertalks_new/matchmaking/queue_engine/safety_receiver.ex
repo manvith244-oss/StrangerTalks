@@ -1,4 +1,15 @@
 defmodule StrangertalksNew.QueueEngine.SafetyReceiver do
+  @moduledoc """
+  ACTIVE BUT NON-AUTHORITATIVE legacy safety-event subscriber.
+
+  Current V1 final safety authority is the persisted BoundaryBlock / closed-Relationship
+  re-read performed by `MatchmakingEngine` while both participant activity locks are held.
+  This process does not replace that boundary. Its `QueueState.apply_veto/2` call is a
+  compatibility placeholder and is not relied on to prevent Match persistence.
+
+  There is no Redis runtime dependency in the current V1 application.
+  """
+
   use GenServer
   require Logger
 
@@ -9,15 +20,13 @@ defmodule StrangertalksNew.QueueEngine.SafetyReceiver do
   end
 
   def init(state) do
-    # Subscribe to Elixir Phoenix PubSub which is bridged to Redis Pub/Sub
     Phoenix.PubSub.subscribe(StrangertalksNew.PubSub, @pubsub_topic)
     {:ok, state}
   end
 
   def handle_info(%{event_type: "safety.veto", data: payload}, state) do
-    Logger.warning("Safety veto received", operation: :apply_safety_veto)
+    Logger.warning("Legacy safety veto notification received", operation: :apply_safety_veto)
 
-    # Immediately apply atomic lock/veto via Redis and kill active evaluations
     StrangertalksNew.QueueEngine.QueueState.apply_veto(
       payload["initiating_participant_id"],
       payload["blocked_participant_id"]
@@ -25,4 +34,6 @@ defmodule StrangertalksNew.QueueEngine.SafetyReceiver do
 
     {:noreply, state}
   end
+
+  def handle_info(_message, state), do: {:noreply, state}
 end
