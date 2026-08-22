@@ -2,14 +2,16 @@ defmodule StrangertalksNew.Companion.Context do
   @moduledoc """
   Captures and revalidates the minimum authoritative context A01 may use.
 
-  Conversation transcript content is included only after an explicit Companion request.
+  Conversation transcript content is included only after an explicit Companion request and is
+  projected from the current ConversationServer runtime. Raw live messages remain ephemeral;
+  A01 does not create a PostgreSQL transcript copy.
+
   Historical readiness, analytics, safety-review notes, private account data, and other
   Conversations are intentionally outside this boundary.
   """
 
-  import Ecto.Query, warn: false
-
-  alias StrangertalksNew.{Conversation, ConversationLanguages, Matching, MatchingRules, Message, Repo}
+  alias StrangertalksNew.ConversationLifecycle.ConversationServer
+  alias StrangertalksNew.{Conversation, ConversationLanguages, Matching, MatchingRules, Repo}
 
   @active_statuses [:PENDING, :ACTIVE, :PAUSED]
   @modes ~w(start continue recover change_topic rephrase simplify language_help tone_help respond clarify deescalate express_feeling icebreaker story_prompt translate_localize)
@@ -31,9 +33,9 @@ defmodule StrangertalksNew.Companion.Context do
          {:ok, request} <- bounded_optional_text(value(attrs, "request"), @max_request_chars),
          {:ok, draft} <- bounded_optional_text(value(attrs, "draft"), @max_draft_chars),
          {:ok, tone} <- normalize_tone(value(attrs, "tone")),
-         true <- meaningful_request?(mode, request, draft) do
-      messages = recent_messages(conversation_id, participant_id)
-      latest_sequence = latest_sequence(messages)
+         true <- meaningful_request?(mode, request, draft),
+         {:ok, runtime_state} <- live_runtime_state(conversation_id) do
+      messages = recent_messages(runtime_state.recent_messages, participant_id)
 
       {:ok,
        %{
@@ -53,8 +55,8 @@ defmodule StrangertalksNew.Companion.Context do
            conversation_status: conversation.conversation_status,
            match_id: conversation.match_id,
            language: language,
-           message_count: conversation.message_count || 0,
-           latest_sequence: latest_sequence
+           epoch_id: runtime_state.epoch_id,
+           next_sequence: runtime_state.next_sequence
          }
        }}
     else
@@ -76,8 +78,9 @@ defmodule StrangertalksNew.Companion.Context do
          {:ok, language} <- ConversationLanguages.normalize(match.conversation_language),
          true <- language == context.language,
          :ok <- authorize_safety(conversation, participant_id),
-         true <- (conversation.message_count || 0) == context.authority.message_count,
-         true <- current_latest_sequence(conversation_id) == context.authority.latest_sequence do
+         {:ok, runtime_state} <- live_runtime_state(conversation_id),
+         true <- runtime_state.epoch_id == context.authority.epoch_id,
+         true <- runtime_state.next_sequence == context.authority.next_sequence do
       :ok
     else
       _ -> {:error, :companion_stale}
@@ -88,20 +91,30 @@ defmodule StrangertalksNew.Companion.Context do
     Map.take(context, [:conversation_id, :language, :door, :mode, :tone, :request, :draft, :messages])
   end
 
-  defp recent_messages(conversation_id, participant_id) do
+  defp live_runtime_state(conversation_id) do
+    case ConversationServer.inspect_state(conversation_id) do
+      {:ok, %{recent_messages: recent_messages, epoch_id: epoch_id, next_sequence: next_sequence} = state}
+      when is_list(recent_messages) and is_binary(epoch_id) and is_integer(next_sequence) ->
+        {:ok, state}
+
+      _ ->
+        {:error, :conversation_unavailable}
+    end
+  end
+
+  defp recent_messages(runtime_messages, participant_id) do
     rows =
-      Repo.all(
-        from m in Message,
-          where: m.conversation_id == ^conversation_id,
-          order_by: [desc: m.expected_sequence_id],
-          limit: ^@max_messages,
-          select: %{
-            sender_id: m.sender_id,
-            content: m.content,
-            sequence: m.expected_sequence_id
-          }
-      )
-      |> Enum.reverse()
+      runtime_messages
+      |> Enum.filter(fn
+        %{type: :text, content: content, sender_id: sender_id, sequence: sequence} = message
+        when is_binary(content) and is_binary(sender_id) and is_integer(sequence) ->
+          Map.get(message, :availability, :available) != :unsent
+
+        _ ->
+          false
+      end)
+      |> Enum.sort_by(& &1.sequence)
+      |> Enum.take(-@max_messages)
       |> Enum.map(fn row ->
         %{
           role: if(row.sender_id == participant_id, do: "self", else: "stranger"),
@@ -126,17 +139,6 @@ defmodule StrangertalksNew.Companion.Context do
 
     bounded
   end
-
-  defp current_latest_sequence(conversation_id) do
-    Repo.one(
-      from m in Message,
-        where: m.conversation_id == ^conversation_id,
-        select: max(m.expected_sequence_id)
-    ) || 0
-  end
-
-  defp latest_sequence([]), do: 0
-  defp latest_sequence(messages), do: messages |> List.last() |> Map.fetch!(:sequence)
 
   defp authorize_member(conversation, participant_id) do
     if member?(conversation, participant_id), do: :ok, else: {:error, :not_conversation_member}
