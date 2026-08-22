@@ -6,7 +6,8 @@ defmodule StrangertalksNew.AgentSystems.ProviderProbe do
   performs one synthetic A01 request through generation, critic and moderation before the release
   is considered healthy. No participant, Conversation, database record or user content is read.
 
-  Startup logs include only boolean provider-readiness state. Secret values are never logged.
+  Startup diagnostics include only boolean provider-readiness state and the non-secret model name.
+  Secret values are never logged or printed.
   """
 
   require Logger
@@ -15,6 +16,14 @@ defmodule StrangertalksNew.AgentSystems.ProviderProbe do
 
   def run do
     status = configuration_status()
+
+    readiness_line =
+      "[agent-provider] config companion_enabled=#{status.companion_enabled} " <>
+        "agent_systems_enabled=#{status.agent_systems_enabled} " <>
+        "probe_enabled=#{status.probe_enabled} " <>
+        "openai_key_present=#{status.openai_key_present}"
+
+    IO.puts(readiness_line)
 
     Logger.info("Agent provider configuration state",
       operation: :agent_provider_configuration,
@@ -28,6 +37,8 @@ defmodule StrangertalksNew.AgentSystems.ProviderProbe do
       case provider().generate(probe_context()) do
         {:ok, %{decision: :assist, model: model, suggestions: suggestions}}
         when is_binary(model) and is_list(suggestions) and suggestions != [] ->
+          IO.puts("[agent-provider] production probe passed model=#{model}")
+
           Logger.info("Agent provider production probe passed",
             operation: :agent_provider_probe,
             model: model
@@ -36,12 +47,15 @@ defmodule StrangertalksNew.AgentSystems.ProviderProbe do
           :ok
 
         {:ok, _unexpected} ->
+          IO.puts("[agent-provider] production probe failed reason=invalid_probe_output")
           {:error, :invalid_probe_output}
 
         {:error, reason} ->
+          IO.puts("[agent-provider] production probe failed reason=#{reason}")
           {:error, reason}
       end
     else
+      IO.puts("[agent-provider] production probe skipped")
       :ok
     end
   end
