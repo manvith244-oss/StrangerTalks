@@ -14,6 +14,33 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
   @default_moderation_model "omni-moderation-latest"
   @default_timeout_ms 15_000
 
+  defmodule ReqClient do
+    @moduledoc false
+
+    def responses(config, body) do
+      Req.post("#{config.base_url}/responses",
+        json: body,
+        headers: auth_headers(config.api_key),
+        receive_timeout: config.timeout_ms
+      )
+    end
+
+    def moderate(config, texts) do
+      Req.post("#{config.base_url}/moderations",
+        json: %{model: config.moderation_model, input: texts},
+        headers: auth_headers(config.api_key),
+        receive_timeout: config.timeout_ms
+      )
+    end
+
+    defp auth_headers(api_key) do
+      [
+        {"authorization", "Bearer #{api_key}"},
+        {"content-type", "application/json"}
+      ]
+    end
+  end
+
   @impl true
   def generate(context) do
     with {:ok, config} <- config(),
@@ -61,7 +88,8 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
                override,
                :timeout_ms,
                parse_positive_integer(System.get_env("COMPANION_TIMEOUT_MS"), @default_timeout_ms)
-             )
+             ),
+           http_client: Keyword.get(override, :http_client, ReqClient)
          }}
     end
   end
@@ -72,7 +100,7 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
       |> StrangertalksNew.Companion.Context.public_context()
       |> Map.drop([:conversation_id])
 
-    body = %{
+    request_body = %{
       model: config.model,
       store: false,
       instructions: system_instructions(),
@@ -88,18 +116,20 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
       }
     }
 
-    case Req.post("#{config.base_url}/responses",
-           json: body,
-           headers: auth_headers(config.api_key),
-           receive_timeout: config.timeout_ms
-         ) do
+    case config.http_client.responses(config, request_body) do
       {:ok, %Req.Response{status: status, body: response_body}} when status in 200..299 ->
         {:ok, response_body}
+
+      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
+        {:ok, response_body}
+
+      {:ok, %{status: status}} when status in [408, 409, 429, 500, 502, 503, 504] ->
+        {:error, :companion_unavailable}
 
       {:ok, %Req.Response{status: status}} when status in [408, 409, 429, 500, 502, 503, 504] ->
         {:error, :companion_unavailable}
 
-      {:ok, %Req.Response{}} ->
+      {:ok, _response} ->
         {:error, :companion_provider_failure}
 
       {:error, _reason} ->
@@ -156,18 +186,17 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
   defp moderate_output(config, %{decision: :assist, suggestions: suggestions}) do
     texts = Enum.map(suggestions, fn suggestion -> suggestion["text"] || suggestion[:text] end)
 
-    case Req.post("#{config.base_url}/moderations",
-           json: %{model: config.moderation_model, input: texts},
-           headers: auth_headers(config.api_key),
-           receive_timeout: config.timeout_ms
-         ) do
+    case config.http_client.moderate(config, texts) do
       {:ok, %Req.Response{status: status, body: %{"results" => results}}}
       when status in 200..299 and is_list(results) ->
-        if Enum.any?(results, &(&1["flagged"] == true)) do
-          {:error, :companion_unsafe_output}
-        else
-          :ok
-        end
+        moderation_verdict(results)
+
+      {:ok, %{status: status, body: %{"results" => results}}}
+      when status in 200..299 and is_list(results) ->
+        moderation_verdict(results)
+
+      {:ok, %{status: status}} when status in [408, 409, 429, 500, 502, 503, 504] ->
+        {:error, :companion_unavailable}
 
       {:ok, %Req.Response{status: status}} when status in [408, 409, 429, 500, 502, 503, 504] ->
         {:error, :companion_unavailable}
@@ -177,11 +206,12 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
     end
   end
 
-  defp auth_headers(api_key) do
-    [
-      {"authorization", "Bearer #{api_key}"},
-      {"content-type", "application/json"}
-    ]
+  defp moderation_verdict(results) do
+    if Enum.any?(results, &(&1["flagged"] == true)) do
+      {:error, :companion_unsafe_output}
+    else
+      :ok
+    end
   end
 
   defp system_instructions do
