@@ -25,7 +25,8 @@ defmodule StrangertalksNew.CompanionConversationStartTest do
     fixture
   end
 
-  test "A01 projects the canonical language-qualified starter instead of inventing another one", context do
+  test "A01 projects the canonical language-qualified starter instead of inventing another one",
+       context do
     assert {:ok, captured} =
              Context.capture(context.conversation.conversation_id, context.participant_a, %{
                "mode" => "icebreaker",
@@ -42,7 +43,8 @@ defmodule StrangertalksNew.CompanionConversationStartTest do
     refute Map.has_key?(public, :peer_id)
   end
 
-  test "human conversation retires the canonical starter and A01 sees no parallel active starter", context do
+  test "human conversation retires the canonical starter and A01 sees no parallel active starter",
+       context do
     assert {:ok, %{sequence: 1}} =
              ConversationServer.append_message(
                context.conversation.conversation_id,

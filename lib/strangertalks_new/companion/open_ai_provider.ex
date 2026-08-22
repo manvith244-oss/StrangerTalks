@@ -78,7 +78,11 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
          %{
            api_key: api_key,
            base_url:
-             Keyword.get(override, :base_url, System.get_env("OPENAI_BASE_URL") || @default_base_url)
+             Keyword.get(
+               override,
+               :base_url,
+               System.get_env("OPENAI_BASE_URL") || @default_base_url
+             )
              |> String.trim_trailing("/"),
            model: model,
            critic_model:

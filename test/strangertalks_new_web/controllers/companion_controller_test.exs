@@ -74,7 +74,8 @@ defmodule StrangertalksNewWeb.CompanionControllerTest do
     assert %{"error" => %{"code" => "COMPANION_INVALID_TOKEN"}} = json_response(conn, 401)
   end
 
-  test "authenticated outsider cannot read another Conversation through Companion", %{conn: conn} = context do
+  test "authenticated outsider cannot read another Conversation through Companion",
+       %{conn: conn} = context do
     {:ok, outsider} = StrangertalksNew.Participants.create_participant(%{})
     token = ParticipantToken.sign(outsider.participant_id)
 

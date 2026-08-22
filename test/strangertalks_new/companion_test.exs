@@ -119,7 +119,8 @@ defmodule StrangertalksNew.CompanionTest do
     fixture
   end
 
-  test "explicit request receives live bounded context without creating a PostgreSQL transcript", context do
+  test "explicit request receives live bounded context without creating a PostgreSQL transcript",
+       context do
     message_id = Ecto.UUID.generate()
 
     assert {:ok, %{sequence: 1}} =
@@ -157,7 +158,8 @@ defmodule StrangertalksNew.CompanionTest do
     refute Map.has_key?(public, :peer_id)
   end
 
-  test "result is discarded when Conversation authority changes during model generation", context do
+  test "result is discarded when Conversation authority changes during model generation",
+       context do
     Application.put_env(:strangertalks_new, :companion_test_mode, :stale)
 
     assert {:error, :companion_stale} =

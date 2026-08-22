@@ -8,7 +8,9 @@ defmodule StrangertalksNew.CompanionOpenAIProviderTest do
       case get_in(body, [:text, :format, :name]) do
         "strangertalks_companion_critic" ->
           send(test_pid(), {:critic_request, body})
-          approved = Application.get_env(:strangertalks_new, :companion_test_critic_approved, true)
+
+          approved =
+            Application.get_env(:strangertalks_new, :companion_test_critic_approved, true)
 
           critic = %{
             approved: approved,
@@ -36,7 +38,9 @@ defmodule StrangertalksNew.CompanionOpenAIProviderTest do
     def moderate(_config, texts) do
       send(test_pid(), {:moderation_request, texts})
       flagged = Application.get_env(:strangertalks_new, :companion_test_flagged, false)
-      {:ok, %{status: 200, body: %{"results" => Enum.map(texts, fn _ -> %{"flagged" => flagged} end)}}}
+
+      {:ok,
+       %{status: 200, body: %{"results" => Enum.map(texts, fn _ -> %{"flagged" => flagged} end)}}}
     end
 
     defp response(model, payload) do

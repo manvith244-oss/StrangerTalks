@@ -73,7 +73,11 @@ defmodule StrangertalksNew.Companion do
       result: if(match?({:ok, _}, result), do: :success, else: :failure)
     }
 
-    :telemetry.execute([:strangertalks_new, :companion, :request], %{duration: duration}, metadata)
+    :telemetry.execute(
+      [:strangertalks_new, :companion, :request],
+      %{duration: duration},
+      metadata
+    )
   end
 
   defp safe_metadata(attrs, key) do

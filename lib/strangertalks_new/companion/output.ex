@@ -8,10 +8,18 @@ defmodule StrangertalksNew.Companion.Output do
 
   def validate(%{decision: :decline} = result) do
     reason = clean_optional(result[:reason], @max_reason_chars)
-    {:ok, %{decision: :decline, reason: reason || "I can’t help with that request.", suggestions: [], model: result[:model]}}
+
+    {:ok,
+     %{
+       decision: :decline,
+       reason: reason || "I can’t help with that request.",
+       suggestions: [],
+       model: result[:model]
+     }}
   end
 
-  def validate(%{decision: :assist, suggestions: suggestions} = result) when is_list(suggestions) do
+  def validate(%{decision: :assist, suggestions: suggestions} = result)
+      when is_list(suggestions) do
     normalized =
       suggestions
       |> Enum.map(&normalize_suggestion/1)
@@ -35,7 +43,8 @@ defmodule StrangertalksNew.Companion.Output do
 
   def validate(_result), do: {:error, :companion_invalid_output}
 
-  defp normalize_suggestion(%{style: style, text: text}) when is_binary(style) and is_binary(text) do
+  defp normalize_suggestion(%{style: style, text: text})
+       when is_binary(style) and is_binary(text) do
     style = String.trim(style)
     text = String.trim(text)
 

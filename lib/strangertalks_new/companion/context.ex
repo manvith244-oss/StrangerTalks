@@ -97,7 +97,8 @@ defmodule StrangertalksNew.Companion.Context do
          true <- runtime_state.epoch_id == context.authority.epoch_id,
          true <- runtime_state.next_sequence == context.authority.next_sequence,
          current_messages <- recent_messages(runtime_state.recent_messages, participant_id),
-         true <- fingerprint_messages(current_messages) == context.authority.transcript_fingerprint,
+         true <-
+           fingerprint_messages(current_messages) == context.authority.transcript_fingerprint,
          current_start <- conversation_start(runtime_state, language),
          true <- starter_identity(current_start) == context.authority.starter_identity do
       :ok
@@ -137,7 +138,8 @@ defmodule StrangertalksNew.Companion.Context do
     end
   end
 
-  defp conversation_start(%{icebreaker: {:active, identity}}, language) when is_binary(identity) do
+  defp conversation_start(%{icebreaker: {:active, identity}}, language)
+       when is_binary(identity) do
     with {:ok, %{language: ^language, text: text}} <- IcebreakerCatalog.fetch(identity),
          true <- is_binary(text) and text != "" do
       %{status: "active", identity: identity, text: text}
