@@ -1,6 +1,7 @@
 defmodule StrangertalksNewWeb.CompanionControllerTest do
   use StrangertalksNewWeb.ConnCase, async: false
 
+  alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNewWeb.ParticipantToken
 
   defmodule FakeProvider do
@@ -24,8 +25,24 @@ defmodule StrangertalksNewWeb.CompanionControllerTest do
   setup do
     previous = Application.get_env(:strangertalks_new, :companion)
     Application.put_env(:strangertalks_new, :companion, enabled: true, provider: FakeProvider)
-    on_exit(fn -> restore(:companion, previous) end)
-    conversation_fixture()
+
+    fixture = conversation_fixture()
+    conversation_id = fixture.conversation.conversation_id
+    {:ok, _pid} = ConversationServer.ensure_started(conversation_id)
+
+    on_exit(fn ->
+      case ConversationServer.lookup(conversation_id) do
+        {:ok, pid} ->
+          DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, pid)
+
+        {:error, :not_started} ->
+          :ok
+      end
+
+      restore(:companion, previous)
+    end)
+
+    fixture
   end
 
   test "authenticated member receives no-store draft suggestions", %{conn: conn} = context do
