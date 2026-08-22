@@ -1,7 +1,10 @@
 defmodule StrangertalksNew.QueueEngine.QueueState do
   @moduledoc """
-  Volatile, in-memory RAM process for tracking active matchmaking queues.
-  Executes as a lightweight Elixir Agent.
+  Volatile, in-memory RAM process for current matchmaking queue attempts.
+
+  This is Elixir's ordinary `Agent` state primitive, not an autonomous StrangerTalks Agent.
+  Canonical queue mutation is owned by `MatchmakingEngine`; live participant-tab ownership is
+  tracked by `ParticipantConnectionTracker`.
   """
   use Agent
   require Logger
@@ -14,34 +17,25 @@ defmodule StrangertalksNew.QueueEngine.QueueState do
   end
 
   @doc """
-  Triggered by the RamMonitor. Executes the Least Recently Suspended (LRS) 
-  eviction routine to keep the container within the 512MB RAM constraints.
+  Legacy RamMonitor hook. Current implementation is a no-op placeholder.
   """
   def evict_stale_connections do
-    Logger.info("Executing LRS eviction routine in RAM...")
-
-    # State update logic will be implemented here to drop inactive sockets
-    Agent.update(__MODULE__, fn state ->
-      # Placeholder for state reduction
-      state
-    end)
-
+    Logger.info("Legacy QueueState eviction hook invoked")
+    Agent.update(__MODULE__, fn state -> state end)
     :ok
   end
 
   @doc """
-  Triggered by the SafetyReceiver to dynamically remove blocked pairs 
-  from candidate lists and apply atomic write-protection locks.
+  Legacy SafetyReceiver compatibility hook.
+
+  PLACEHOLDER ONLY: this function intentionally does not mutate authoritative safety state and
+  MUST NOT be treated as final safety enforcement. V1 safety authority is persisted in
+  BoundaryBlock / closed Relationship state and is re-read by `MatchmakingEngine` under the
+  participant activity lock immediately before Match + Conversation persistence.
   """
   def apply_veto(_initiating_participant_id, _blocked_participant_id) do
-    Logger.warning("Applying atomic safety veto", operation: :apply_safety_veto)
-
-    # Logic to remove the blocked participant from the initiator's evaluation pool
-    Agent.update(__MODULE__, fn state ->
-      # Placeholder for veto application
-      state
-    end)
-
+    Logger.warning("Legacy QueueState safety-veto hook invoked", operation: :apply_safety_veto)
+    Agent.update(__MODULE__, fn state -> state end)
     :ok
   end
 end
