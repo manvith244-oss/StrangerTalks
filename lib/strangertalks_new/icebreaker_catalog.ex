@@ -65,11 +65,13 @@ defmodule StrangertalksNew.IcebreakerCatalog do
     }
   }
 
-  @items for {language, localized} <- @localized_text,
-             {base_identity, text} <- localized,
-             into: %{} do
-           {"#{language}/#{base_identity}", %{language: language, text: text}}
-         end
+  @items (
+           for {language, localized} <- @localized_text,
+               {base_identity, text} <- localized,
+               into: %{} do
+             {"#{language}/#{base_identity}", %{language: language, text: text}}
+           end
+         )
 
   def identity_for(conversation_id) when is_binary(conversation_id) do
     with %Conversation{match_id: match_id} <- Repo.get(Conversation, conversation_id),
