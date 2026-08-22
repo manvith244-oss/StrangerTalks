@@ -21,7 +21,9 @@ defmodule StrangertalksNew.AgentSystems.SafetyReviewAssistant do
     case Repo.get(Report, report_id) do
       %Report{} = report ->
         media_attached =
-          Repo.exists?(from media in ReportSafetyMedia, where: media.report_id == ^report.report_id)
+          Repo.exists?(
+            from media in ReportSafetyMedia, where: media.report_id == ^report.report_id
+          )
 
         review(%{
           category: report.report_category && Atom.to_string(report.report_category),
@@ -134,7 +136,10 @@ defmodule StrangertalksNew.AgentSystems.SafetyReviewAssistant do
 
   defp bounded_context(value) when is_binary(value) do
     value = String.trim(value)
-    if String.length(value) <= @max_context_chars, do: value, else: String.slice(value, 0, @max_context_chars)
+
+    if String.length(value) <= @max_context_chars,
+      do: value,
+      else: String.slice(value, 0, @max_context_chars)
   end
 
   defp value(map, key), do: Map.get(map, key) || Map.get(map, Atom.to_string(key))

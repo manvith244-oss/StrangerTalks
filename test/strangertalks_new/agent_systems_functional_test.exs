@@ -67,13 +67,16 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
                },
                %{
                  "tier" => "broad",
-                 "bridge" => "What is something everyone seems to be talking about that you actually enjoy?",
+                 "bridge" =>
+                   "What is something everyone seems to be talking about that you actually enjoy?",
                  "rationale" => "Keeps the prompt broad without requiring specialist knowledge."
                },
                %{
                  "tier" => "niche",
-                 "bridge" => "Has a recent match, movie, or festival changed your mood this week?",
-                 "rationale" => "Offers optional cultural anchors without assuming one shared interest."
+                 "bridge" =>
+                   "Has a recent match, movie, or festival changed your mood this week?",
+                 "rationale" =>
+                   "Offers optional cultural anchors without assuming one shared interest."
                }
              ]
            }}
@@ -203,7 +206,9 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
 
   test "Trend research rejects unsupported languages and oversized signals before provider" do
     assert {:error, :unsupported_language} = TrendBridgeResearch.research("fr", ["signal"])
-    assert {:error, :invalid_trend_research} = TrendBridgeResearch.research("en", [String.duplicate("x", 241)])
+
+    assert {:error, :invalid_trend_research} =
+             TrendBridgeResearch.research("en", [String.duplicate("x", 241)])
 
     refute_receive {:agent_request, "trend_bridge_research", _}, 20
   end
