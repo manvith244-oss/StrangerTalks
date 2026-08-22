@@ -27,6 +27,8 @@ defmodule StrangertalksNewWeb.Router do
     put "/account/sync", AccountSyncController, :update
     delete "/account/sync", AccountSyncController, :delete
 
+    post "/conversations/:conversation_id/companion", CompanionController, :create, log: false
+
     post "/conversations/:conversation_id/voice-notes/:voice_note_id",
          VoiceNoteController,
          :create,
