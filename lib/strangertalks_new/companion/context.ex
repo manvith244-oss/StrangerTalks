@@ -56,7 +56,8 @@ defmodule StrangertalksNew.Companion.Context do
            match_id: conversation.match_id,
            language: language,
            epoch_id: runtime_state.epoch_id,
-           next_sequence: runtime_state.next_sequence
+           next_sequence: runtime_state.next_sequence,
+           transcript_fingerprint: fingerprint_messages(messages)
          }
        }}
     else
@@ -80,7 +81,9 @@ defmodule StrangertalksNew.Companion.Context do
          :ok <- authorize_safety(conversation, participant_id),
          {:ok, runtime_state} <- live_runtime_state(conversation_id),
          true <- runtime_state.epoch_id == context.authority.epoch_id,
-         true <- runtime_state.next_sequence == context.authority.next_sequence do
+         true <- runtime_state.next_sequence == context.authority.next_sequence,
+         current_messages <- recent_messages(runtime_state.recent_messages, participant_id),
+         true <- fingerprint_messages(current_messages) == context.authority.transcript_fingerprint do
       :ok
     else
       _ -> {:error, :companion_stale}
@@ -139,6 +142,8 @@ defmodule StrangertalksNew.Companion.Context do
 
     bounded
   end
+
+  defp fingerprint_messages(messages), do: fingerprint(:erlang.term_to_binary(messages))
 
   defp authorize_member(conversation, participant_id) do
     if member?(conversation, participant_id), do: :ok, else: {:error, :not_conversation_member}
@@ -216,8 +221,8 @@ defmodule StrangertalksNew.Companion.Context do
 
   defp fingerprint(nil), do: nil
 
-  defp fingerprint(text) do
-    :crypto.hash(:sha256, text)
+  defp fingerprint(value) when is_binary(value) do
+    :crypto.hash(:sha256, value)
     |> Base.url_encode64(padding: false)
   end
 
