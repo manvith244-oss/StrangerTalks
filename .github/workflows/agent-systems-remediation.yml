@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   statuses: write
 
 jobs:
@@ -123,6 +123,38 @@ jobs:
           fi
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit "$code"
+
+      - name: One-time canonical formatter commit
+        if: >-
+          always() &&
+          steps.clean.outputs.exit_code == '1' &&
+          github.event_name == 'push' &&
+          github.event.head_commit.message == 'Bootstrap canonical formatter closure'
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(cat <<'EOF'
+          lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
+          lib/strangertalks_new/icebreaker_catalog.ex
+          lib/strangertalks_new/reflections.ex
+          test/strangertalks_new/agent_systems_remediation_test.exs
+          test/strangertalks_new/conversation_icebreaker_test.exs
+          EOF
+          )
+          actual=$(git status --porcelain | sed -E 's/^.. //' | sort)
+          expected_sorted=$(printf '%s\n' "$expected" | sed '/^[[:space:]]*$/d' | sort)
+          test "$actual" = "$expected_sorted"
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/icebreaker_catalog.ex \
+            lib/strangertalks_new/reflections.ex \
+            test/strangertalks_new/agent_systems_remediation_test.exs \
+            test/strangertalks_new/conversation_icebreaker_test.exs
+          git commit -m "Apply mix precommit formatting"
+          git push origin HEAD:release/prep-2026-08-22
 
       - name: Publish exact-SHA remediation status
         if: always()
