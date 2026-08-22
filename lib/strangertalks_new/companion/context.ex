@@ -14,7 +14,7 @@ defmodule StrangertalksNew.Companion.Context do
   alias StrangertalksNew.{Conversation, ConversationLanguages, Matching, MatchingRules, Repo}
 
   @active_statuses [:PENDING, :ACTIVE, :PAUSED]
-  @modes ~w(start continue recover change_topic rephrase simplify language_help tone_help respond clarify deescalate express_feeling icebreaker story_prompt translate_localize)
+  @modes ~w(auto start continue recover change_topic rephrase simplify language_help tone_help respond clarify deescalate express_feeling icebreaker story_prompt translate_localize)
   @tones ~w(natural warm funny direct thoughtful light gentle confident)
   @max_request_chars 800
   @max_draft_chars 4_000
