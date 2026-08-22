@@ -9,6 +9,7 @@ defmodule StrangertalksNew.MixProject do
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
       aliases: aliases(),
+      releases: releases(),
       deps: deps(),
       listeners: [Phoenix.CodeReloader]
     ]
@@ -34,6 +35,20 @@ defmodule StrangertalksNew.MixProject do
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
+  defp releases do
+    [
+      strangertalks_new: [
+        steps: [:assemble, &ensure_migrate_executable/1]
+      ]
+    ]
+  end
+
+  defp ensure_migrate_executable(release) do
+    migrate_path = Path.join([release.path, "bin", "migrate"])
+    File.chmod!(migrate_path, 0o755)
+    release
+  end
+
   # Specifies your project dependencies.
   #
   # Type `mix help deps` for examples and options.
@@ -58,7 +73,7 @@ defmodule StrangertalksNew.MixProject do
   # Aliases are shortcuts or tasks specific to the current project.
   # For example, to install project dependencies and perform other setup tasks, run:
   #
-  #     $ mix setup
+  #     mix setup
   #
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
