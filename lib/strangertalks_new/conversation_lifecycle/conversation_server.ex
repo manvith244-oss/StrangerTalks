@@ -5743,7 +5743,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       (message.type == :text and
          (Map.get(message, :availability) == :unsent or
             Map.get(message, :delivery_status, :sent) in [:sent, :delivered])) or
-        message.type in [:view_once_photo, :view_once_video]
+        message.type in [:view_once_photo, :view_once_video, :expressive, :voice_note]
     end)
     |> format_replay_for_participant(participant_id, state)
   end
