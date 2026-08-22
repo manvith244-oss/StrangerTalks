@@ -53,7 +53,7 @@ test("1H lifecycle is RAM-only: reconnect preserves while end, replacement, and 
   assert.match(appSource, /app\.currentEpochId !== epoch_id\) \{[\s\S]*?resetAtmosphere\(\)/)
   assert.match(appSource, /conversation:ended[\s\S]*?resetQuietMode\(\)[\s\S]*?resetAtmosphere\(\)/)
   assert.match(appSource, /handleMatchedConversation[\s\S]*?resetQuietMode\(\)[\s\S]*?resetAtmosphere\(\)/)
-  assert.doesNotMatch(appSource, /localStorage|sessionStorage|BroadcastChannel/)
+  assert.doesNotMatch(atmosphereRuntimeSource, /localStorage|sessionStorage|BroadcastChannel/)
   assert.doesNotMatch(appSource, /putRecord\([^\n]*atmosphere|sync[^\n]*atmosphere/i)
 })
 

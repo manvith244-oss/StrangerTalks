@@ -549,7 +549,9 @@ section[data-screen="conversation"] #typing {
 section[data-screen="conversation"] .composer {
   position: relative;
   z-index: 2;
+  width: 100%;
   max-width: 800px;
+  box-sizing: border-box;
   margin: 0.4rem auto;
   margin-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
   padding: 0.4rem 0.5rem 0.4rem 1.1rem;
@@ -611,7 +613,8 @@ section[data-screen="conversation"] .compose button.primary:active {
 
 /* Voice Controls & Sheets */
 section[data-screen="conversation"] .voice-controls {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.35rem;
   margin-top: 0;
