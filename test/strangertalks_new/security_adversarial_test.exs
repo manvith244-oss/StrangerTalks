@@ -754,9 +754,9 @@ defmodule StrangertalksNew.SecurityAdversarialTest do
       assert_reply ref_b2, :ok, %{status: "blocked"}
       assert Repo.aggregate(BoundaryBlock, :count) == 1
 
-      # End conversation and test consent replay
+      # Block is terminal safety authority; stale End cannot recover the Conversation.
       end_ref = push(socket_a, "conversation:end", %{})
-      assert_reply end_ref, :ok, %{status: "ended"}
+      assert_reply end_ref, :error, %{code: "CONVERSATION_UNAVAILABLE"}
 
       consent_a1 = push(socket_a, "relationship:consent", %{})
       assert_reply consent_a1, :ok, %{status: "waiting_for_mutual_consent"}
