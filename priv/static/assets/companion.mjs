@@ -3,17 +3,22 @@ import {activeConversations, getRecord, listRecords} from "./local_data.mjs"
 const IDENTITY_KEY = "strangertalks.identity.v1"
 const MAX_REQUEST_CHARS = 800
 const MODES = Object.freeze([
+  ["auto", "Ask anything"],
+  ["start", "Help me start"],
   ["respond", "Help me reply"],
   ["continue", "Keep this going"],
+  ["recover", "Recover an awkward moment"],
   ["change_topic", "Change topic"],
   ["rephrase", "Rephrase my draft"],
   ["simplify", "Make this easier to say"],
   ["language_help", "Language help"],
+  ["tone_help", "Tone help"],
   ["clarify", "Help me clarify"],
   ["deescalate", "De-escalate"],
   ["express_feeling", "Express a feeling"],
   ["icebreaker", "Give us an icebreaker"],
-  ["story_prompt", "Give us something to talk about"]
+  ["story_prompt", "Give us something to talk about"],
+  ["translate_localize", "Translate or localize"]
 ])
 const TONES = Object.freeze(["natural", "warm", "funny", "direct", "thoughtful", "light", "gentle", "confident"])
 
@@ -117,7 +122,7 @@ function createUi() {
     const opening = panel.hidden
     panel.hidden = !opening
     button.setAttribute("aria-expanded", String(opening))
-    if (opening) panel.querySelector("#companion-mode")?.focus()
+    if (opening) panel.querySelector("#companion-request")?.focus()
   })
   panel.querySelector("#companion-close")?.addEventListener("click", close)
 
@@ -174,6 +179,7 @@ function createUi() {
       if (!response.ok) {
         const code = body?.error?.code
         if (code === "COMPANION_STALE") throw new Error("stale_conversation")
+        if (code === "COMPANION_BUSY") throw new Error("companion_busy")
         if (code === "COMPANION_RATE_LIMITED") throw new Error("rate_limited")
         if (code === "COMPANION_OUTPUT_REJECTED") throw new Error("output_rejected")
         throw new Error("companion_unavailable")
@@ -214,6 +220,7 @@ function createUi() {
     } catch (error) {
       if (mine !== generation || error?.name === "AbortError") return
       if (error?.message === "stale_conversation") status.textContent = "The Conversation changed while I was helping. Try again with the current Conversation."
+      else if (error?.message === "companion_busy") status.textContent = "StrangerTalks Companion is already helping with this Conversation in another request."
       else if (error?.message === "rate_limited") status.textContent = "Too many requests right now. Give it a bit and try again."
       else if (error?.message === "output_rejected") status.textContent = "I couldn’t provide a safe suggestion for that. Try asking in a different way."
       else status.textContent = "Couldn’t help with that right now. Your Conversation still works normally."
