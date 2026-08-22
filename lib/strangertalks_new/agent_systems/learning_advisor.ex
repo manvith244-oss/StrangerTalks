@@ -47,13 +47,17 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
     :aggregation_level
   ]
 
-  def advise_latest(limit \\ 12) when is_integer(limit) and limit in 1..@max_rows do
+  def advise_latest(limit \\ 12)
+
+  def advise_latest(limit) when is_integer(limit) and limit in 1..@max_rows do
     with {:ok, rows} <- snapshot(limit), do: advise(rows)
   end
 
   def advise_latest(_limit), do: {:error, :invalid_learning_snapshot}
 
-  def snapshot(limit \\ 12) when is_integer(limit) and limit in 1..@max_rows do
+  def snapshot(limit \\ 12)
+
+  def snapshot(limit) when is_integer(limit) and limit in 1..@max_rows do
     rows =
       AnalyticsRecord
       |> where([a], a.contains_personal_data == false)
