@@ -156,14 +156,15 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
       Map.get(row, "contains_personal_data") == true
   end
 
+  defp normalize_values(%Decimal{} = value), do: Decimal.to_string(value, :normal)
+  defp normalize_values(%Date{} = value), do: Date.to_iso8601(value)
+  defp normalize_values(%DateTime{} = value), do: DateTime.to_iso8601(value)
+
   defp normalize_values(value) when is_map(value) do
     Map.new(value, fn {key, item} -> {key, normalize_values(item)} end)
   end
 
   defp normalize_values(value) when is_list(value), do: Enum.map(value, &normalize_values/1)
-  defp normalize_values(%Decimal{} = value), do: Decimal.to_string(value, :normal)
-  defp normalize_values(%Date{} = value), do: Date.to_iso8601(value)
-  defp normalize_values(%DateTime{} = value), do: DateTime.to_iso8601(value)
   defp normalize_values(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_values(value), do: value
 
