@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: a01-conversation-companion-${{ github.ref }}
+  group: a01-conversation-companion-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -40,8 +40,16 @@ jobs:
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
 
     steps:
-      - name: Checkout exact commit
+      - name: Checkout exact feature commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          echo "EXPECTED_A01_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "ACTUAL_A01_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -80,4 +88,4 @@ jobs:
         run: git diff --exit-code -- .
 
       - name: Record exact commit
-        run: echo "A01_TESTED_COMMIT=$GITHUB_SHA"
+        run: echo "A01_TESTED_COMMIT=$(git rev-parse HEAD)"
