@@ -56,6 +56,33 @@ defmodule StrangertalksNew.CompanionTest do
     end
   end
 
+  defmodule RacingProvider do
+    @behaviour StrangertalksNew.Companion.Provider
+
+    @impl true
+    def generate(context) do
+      test_pid = Application.fetch_env!(:strangertalks_new, :companion_test_pid)
+      send(test_pid, {:race_context, self(), context})
+
+      receive do
+        :continue ->
+          {:ok,
+           %{
+             decision: :assist,
+             reason: nil,
+             suggestions: [
+               %{style: "Warm", text: "Tell me more about that."},
+               %{style: "Light", text: "Okay, what happened next?"}
+             ],
+             model: "race-test"
+           }}
+      after
+        2_000 ->
+          {:error, :companion_provider_failure}
+      end
+    end
+  end
+
   setup do
     previous_companion = Application.get_env(:strangertalks_new, :companion)
     previous_pid = Application.get_env(:strangertalks_new, :companion_test_pid)
@@ -143,46 +170,19 @@ defmodule StrangertalksNew.CompanionTest do
   end
 
   test "new live message while the model reasons makes the result stale", context do
-    test_pid = self()
-
-    defmodule RacingProvider do
-      @behaviour StrangertalksNew.Companion.Provider
-
-      @impl true
-      def generate(context) do
-        send(Application.fetch_env!(:strangertalks_new, :companion_test_pid), {:race_context, context})
-
-        {:ok,
-         %{
-           decision: :assist,
-           reason: nil,
-           suggestions: [
-             %{style: "Warm", text: "Tell me more about that."},
-             %{style: "Light", text: "Okay, what happened next?"}
-           ],
-           model: "race-test"
-         }}
-      end
-    end
-
     Application.put_env(:strangertalks_new, :companion,
       enabled: true,
       provider: RacingProvider
     )
 
-    parent = self()
-
     task =
       Task.async(fn ->
-        result =
-          Companion.request(context.conversation.conversation_id, context.participant_a, %{
-            "mode" => "continue"
-          })
-
-        send(parent, {:race_result, result})
+        Companion.request(context.conversation.conversation_id, context.participant_a, %{
+          "mode" => "continue"
+        })
       end)
 
-    assert_receive {:race_context, _captured}
+    assert_receive {:race_context, provider_pid, _captured}
 
     assert {:ok, %{sequence: 1}} =
              ConversationServer.append_message(
@@ -192,9 +192,8 @@ defmodule StrangertalksNew.CompanionTest do
                "A newer message arrived."
              )
 
-    Task.await(task)
-    assert_receive {:race_result, {:error, :companion_stale}}
-    assert is_pid(test_pid)
+    send(provider_pid, :continue)
+    assert {:error, :companion_stale} = Task.await(task)
   end
 
   test "terminal block authority prevents Companion generation", context do
