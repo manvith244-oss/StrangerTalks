@@ -9,7 +9,10 @@ defmodule StrangertalksNew.MatchingRules do
   alias StrangertalksNew.Conversation
   alias StrangertalksNew.Relationship
   alias StrangertalksNew.ParticipantActivityLock
+  alias StrangertalksNew.ConversationLifecycle.{ConversationServer, Transitions}
   alias StrangertalksNew.MatchingRules.{Participant, QueueState, BoundaryBlock}
+
+  @terminal_conversation_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]
 
   def create_participant(attrs \\ %{}) do
     %Participant{}
@@ -38,14 +41,7 @@ defmodule StrangertalksNew.MatchingRules do
 
   def enforce_block(blocker_id, blocked_id, surface) do
     ParticipantActivityLock.with_participants([blocker_id, blocked_id], fn ->
-      %BoundaryBlock{}
-      |> BoundaryBlock.changeset(%{
-        blocker_user_id: blocker_id,
-        blocked_user_id: blocked_id,
-        source_surface: surface,
-        active_status: true
-      })
-      |> Repo.insert(on_conflict: :nothing)
+      insert_block(blocker_id, blocked_id, surface)
     end)
   end
 
@@ -88,10 +84,73 @@ defmodule StrangertalksNew.MatchingRules do
               do: conversation.participant_b_id,
               else: conversation.participant_a_id
 
-          enforce_block(blocker_id, blocked_id, "CONVERSATION")
+          ParticipantActivityLock.with_participants([blocker_id, blocked_id], fn ->
+            result =
+              Repo.transaction(fn ->
+                current_conversation = Repo.get!(Conversation, conversation_id)
+
+                with {:ok, block} <- insert_block(blocker_id, blocked_id, "CONVERSATION"),
+                     {:ok, _conversation} <-
+                       terminate_conversation_for_block(current_conversation, blocker_id) do
+                  block
+                else
+                  {:error, reason} -> Repo.rollback(reason)
+                end
+              end)
+
+            case result do
+              {:ok, block} ->
+                stop_conversation_runtime(conversation_id)
+                {:ok, block}
+
+              {:error, reason} ->
+                {:error, reason}
+            end
+          end)
         else
           {:error, :not_conversation_member}
         end
+    end
+  end
+
+  defp insert_block(blocker_id, blocked_id, surface) do
+    %BoundaryBlock{}
+    |> BoundaryBlock.changeset(%{
+      blocker_user_id: blocker_id,
+      blocked_user_id: blocked_id,
+      source_surface: surface,
+      active_status: true
+    })
+    |> Repo.insert(on_conflict: :nothing)
+  end
+
+  defp terminate_conversation_for_block(
+         %Conversation{conversation_status: status} = conversation,
+         _blocker_id
+       )
+       when status in @terminal_conversation_statuses,
+       do: {:ok, conversation}
+
+  defp terminate_conversation_for_block(%Conversation{} = conversation, blocker_id) do
+    Transitions.transition(conversation, :safety_terminated, %{
+      ending_type: :BLOCK,
+      ending_initiator: blocker_id,
+      conversation_completed: false,
+      safety_flagged: true
+    })
+  end
+
+  defp stop_conversation_runtime(conversation_id) do
+    case ConversationServer.lookup(conversation_id) do
+      {:ok, pid} ->
+        try do
+          GenServer.stop(pid, :normal, 5_000)
+        catch
+          :exit, _reason -> :ok
+        end
+
+      {:error, :not_started} ->
+        :ok
     end
   end
 end
