@@ -190,7 +190,9 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
                0
              )
 
-    assert Repo.get!(StrangertalksNew.Conversation, conversation_id).conversation_status == :ACTIVE
+    assert Repo.get!(StrangertalksNew.Conversation, conversation_id).conversation_status ==
+             :ACTIVE
+
     assert Process.alive?(pid)
 
     assert {:ok, _block} =
@@ -217,7 +219,9 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
     assert {:error, :terminal_conversation} = ConversationServer.ensure_started(conversation_id)
 
     socket = %Phoenix.Socket{assigns: %{participant_id: b.participant_id}}
-    assert {:error, _payload} = ConversationChannel.join("conversation:#{conversation_id}", %{}, socket)
+
+    assert {:error, _payload} =
+             ConversationChannel.join("conversation:#{conversation_id}", %{}, socket)
   end
 
   test "block closes a pending Conversation before any runtime can be reconstructed" do
