@@ -14,6 +14,7 @@ defmodule StrangertalksNew.Companion do
   alias StrangertalksNew.Companion.{Context, OpenAIProvider, Output}
 
   @registry StrangertalksNew.DistributedRegistry
+  @telemetry_modes ~w(auto start continue recover change_topic rephrase simplify language_help tone_help respond clarify deescalate express_feeling icebreaker story_prompt translate_localize)
 
   def request(conversation_id, participant_id, attrs) when is_map(attrs) do
     started_at = System.monotonic_time()
@@ -69,7 +70,7 @@ defmodule StrangertalksNew.Companion do
     duration = System.monotonic_time() - started_at
 
     metadata = %{
-      mode: safe_metadata(attrs, "mode"),
+      mode: telemetry_mode(attrs),
       result: if(match?({:ok, _}, result), do: :success, else: :failure)
     }
 
@@ -80,10 +81,14 @@ defmodule StrangertalksNew.Companion do
     )
   end
 
-  defp safe_metadata(attrs, key) do
-    case Map.get(attrs, key) || Map.get(attrs, String.to_existing_atom(key)) do
-      value when is_binary(value) -> String.slice(value, 0, 40)
-      _ -> "unknown"
+  defp telemetry_mode(attrs) do
+    value = Map.get(attrs, "mode") || Map.get(attrs, :mode)
+
+    if is_binary(value) do
+      normalized = value |> String.trim() |> String.downcase()
+      if normalized in @telemetry_modes, do: normalized, else: "invalid"
+    else
+      "unknown"
     end
   end
 end
