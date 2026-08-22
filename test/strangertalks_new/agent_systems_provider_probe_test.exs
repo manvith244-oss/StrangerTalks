@@ -88,7 +88,12 @@ defmodule StrangertalksNew.AgentSystemsProviderProbeTest do
 
   test "enabled probe surfaces provider failure" do
     System.put_env("AGENT_SYSTEMS_PROVIDER_PROBE", "1")
-    Application.put_env(:strangertalks_new, :provider_probe_test_result, {:error, :bad_credentials})
+
+    Application.put_env(
+      :strangertalks_new,
+      :provider_probe_test_result,
+      {:error, :bad_credentials}
+    )
 
     assert {:error, :bad_credentials} = ProviderProbe.run()
   end
