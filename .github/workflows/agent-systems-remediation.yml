@@ -114,6 +114,9 @@ jobs:
           status=$(git status --porcelain)
           printf '%s\n' "$status"
           if [ -n "$status" ]; then
+            echo "--- precommit diff begin ---"
+            git diff --no-ext-diff -- .
+            echo "--- precommit diff end ---"
             code=1
           else
             code=0
