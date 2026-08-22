@@ -1,12 +1,24 @@
-# StrangerTalks — Current Project Context (snapshot)
+# StrangerTalks — Current Project Context
 
 ## Current checkpoint
-1K — Conversational Polls (current roadmap checkpoint; Team 2 next owner)
 
-## Verified completed features
-## Verified completed features
+**Agent Systems A01–A04 — closure candidate.**
+
+The historical multi-Agent swarm is superseded. Canonical runtime boundaries are defined in `docs/AGENT_SYSTEMS_V1_BOUNDARIES.md`.
+
+## Canonical Agent inventory
+
+- **A01 — Conversation Companion:** participant-invoked, bounded current-Conversation assistance; suggestions/draft only; no Send or product mutation authority.
+- **A02 — Learning Advisor:** internal/offline recommendations from aggregated/system analytics only; no silent production mutation.
+- **A03 — Safety Review Assistant:** contextual recommendation for an existing Report; no Block/ban/report-state mutation; severe/media cases require human review.
+- **A04 — Trend / Bridge Research:** operator-supplied current signals to candidate Conversation Bridges; no automatic publication or live Conversation injection.
+
+Historical Queue, Compatibility, Opportunity, Scarcity, Matchmaking Lead, Category, Language, Complexity, Confidence, Icebreaker Lead, Safety, Learning, Stewardship and HCIL Agent identities remain absorbed into deterministic services, content rules, analytics, or human/product governance. There is no generic Agent Router/Executor/Decision Bus and no always-on Flow/Trust/intimacy surveillance layer.
+
+## Verified conversation features
+
 1A — Reply / Quote: VERIFIED COMPLETE
-1B — Emoji Reactions: VERIFIED COMPLETE (R0 + R1 closed)
+1B — Emoji Reactions: VERIFIED COMPLETE
 1C — Session Pinned Messages: VERIFIED COMPLETE
 1D — GIFs & Stickers: VERIFIED COMPLETE
 1E — Voice Note Experience: VERIFIED COMPLETE
@@ -15,52 +27,49 @@
 1H — Atmosphere / Chat Themes: VERIFIED COMPLETE
 1I — Ambient Audio: VERIFIED COMPLETE
 1J — Conversation Prompt Cards: VERIFIED COMPLETE
-Ephemeral conversation UX: VERIFIED COMPLETE (ConversationServer doc + PROGRESS.md).
+Ephemeral Conversation UX: VERIFIED COMPLETE.
 
-## Implemented / verification unclear
-Voice privacy effects: PARTIALLY IMPLEMENTED (UI and warnings exist; server-side hooks require authoritative verification).
+Conversational Polls (1K) remains a separate product-roadmap feature and is not part of Agent Systems closure.
 
-## Not found / deferred
-Conversational Polls (1K): CURRENT ROADMAP FEATURE — TEAM 2 next owner (Feature Card not yet produced)
+## Architecture map
 
-## Architecture map (concise)
-Browser: `priv/static/assets/app.js` + IndexedDB (`local_data.mjs`) — manages composer, timeline rendering, local persistence, expressive picker, prompt cards, ambient audio, quiet mode.
-Socket surface: `lib/strangertalks_new_web/UserSocket.ex`, `ParticipantChannel`, `ConversationChannel` — validates and rate-limits client actions.
-Realtime server: `lib/strangertalks_new/conversation_lifecycle/conversation_server.ex` — ephemeral authoritative delivery, pending/completed buffers, epoch_id + sequence, replay/pruning, pins, reactions, voice-note ownership.
-Persistence: Ecto/Postgres for Conversations/Participants/metadata; live messages are not persisted by `ConversationServer` (ephemeral only).
-- Socket surface: `lib/strangertalks_new_web/UserSocket.ex`, `ParticipantChannel`, `ConversationChannel` — validates and rate-limits client actions.
-- Realtime server: `lib/strangertalks_new/conversation_lifecycle/conversation_server.ex` — ephemeral authoritative delivery, pending/completed buffers, epoch_id + sequence, replay/pruning, pins, reactions, voice-note ownership.
-## Next owner and action
-Current next owner: TEAM 2 — ARCHITECTURE & SPEC LAB
-Current next action: Create the 1K Conversational Polls Feature Card (do NOT implement until Team 2 delivers the card).
+Browser: `priv/static/assets/app.js` + IndexedDB (`local_data.mjs`) manages composer/timeline/local state and the A01 Companion UI.
 
-## Message model
-- Client generates `client_message_id` / `message_id` (UUID). Server assigns `sequence` and `epoch_id` per `ConversationServer` instance. `sync:reconcile` returns messages after a `last_applied_sequence`. No `server_sequence` concept outside `sequence` + `epoch_id` pairing.
+Socket surface: `UserSocket`, `ParticipantChannel`, `ConversationChannel` validates and rate-limits realtime participant actions.
 
-## Sync / reconnect
-- `join` → `ConversationServer.ensure_started` → `sync_and_register_channel` provides initial sync payload. `sync:reconcile` used for incremental timeline reconciliation. Delivery progress uses `epoch_id` + `highest_contiguous_sequence`.
+Realtime authority: `ConversationLifecycle.ConversationServer` owns ephemeral message delivery, epoch/sequence authority, replay/pruning, presence and Conversation Start lifecycle.
 
-## Security / privacy rules
-- Product data must not appear in logs/telemetry/exception strings. `format_status` redacts sensitive state. Telemetry uses reason codes and small metadata (e.g., message_type), not content.
+Persistence: Ecto/Postgres owns durable Conversation/Match/Relationship/Safety/analytics metadata. Live Conversation text remains ephemeral rather than being copied into a transcript table.
 
-## Tests and ownership
-- Server/unit: ExUnit suites under `test/strangertalks_new/*` (conversation lifecycle, matchmaking, delivery, servers).
-- Channel tests: `test/strangertalks_new_web/channels/*` (ParticipantChannelTest, ConversationChannel tests).
-- JS/browser: `test/js/*` includes `browser_e2e_test.mjs` and focused feature tests (reactions, pins, voice notes, prompt cards, ambient audio). Playwright is the intended runner for E2E.
-- Rule: extend the owning test surface first when changing behaviour.
+Agent model boundary: `Companion.OpenAIProvider` is the only provider-specific runtime surface. A01 uses generation + critic + moderation. A02–A04 use the shared schema-constrained `AgentSystems.Provider.structured/5` boundary. Requests use `store: false` and no model tools.
 
-## Current git/worktree reality (snapshot)
-- Current branch: `full-source-recovery` (ahead). Working tree intentionally dirty with edits across `lib/` and `priv/static/assets/` and `config/PROGRESS.md`. DO NOT reset/restore/checkout/stash/commit/push/clean.
+Operational internal agents: `mix strangertalks.agents learning`, `mix strangertalks.agents safety REPORT_ID`, and `mix strangertalks.agents trends LANGUAGE ...`.
 
-## Test commands
-- `mix test` (server/unit). `mix precommit` runs compile+format+tests. JS tests live in `test/js/*.mjs` (Playwright/Node runner per repo docs).
+## Deterministic authorities Agents cannot override
 
-## Known technical debt (high-level)
-- Some features documented in PROGRESS.md have partial automation; browser E2E has historical Playwright usage but may require environment setup.
-- Ephemeral server design trades durability for low infra; be cautious about adding persistent message stores.
+- Matchmaking final authority: `Matchmaking.MatchmakingEngine` under `ParticipantActivityLock`.
+- Durable safety veto / boundary enforcement: deterministic `MatchingRules` and canonical safety services.
+- Conversation Language: persisted Match authority (`en`, `te`, `hi`).
+- Conversation Start: curated `IcebreakerCatalog` / ConversationServer authority.
+- Participant message authorship: ordinary Send boundary only.
+- Recovery: persisted Conversation/Match state + ConversationServer lifecycle rules.
 
-## Next feature (repository evidence)
-- Finish/verify Voice Privacy effects and their server-side hooks (UI present; server integration partially unclear).
+## Privacy / safety rules
 
----
-This is a compact snapshot for future Copilot sessions. Update only when facts change or after major refactors.
+Product content must not enter ordinary logs or telemetry. Agent payloads are minimized per task. Historical readiness/psychological fields are not active Agent inputs. No Agent may infer hidden participant state as authoritative fact, relax a Block/safety invariant, silently mutate production behavior, or impersonate a participant.
+
+## Agent Systems closure evidence
+
+`.github/workflows/a01-conversation-companion.yml` is the **Agent Systems Closure Gate**. A valid completion claim requires an exact-feature-SHA checkout proof, focused A01–A04 functional/adversarial tests, browser authorship/draft tests, full `mix precommit`, and a clean-checkout proof after precommit.
+
+## Runtime configuration
+
+A01 live model calls require `COMPANION_ENABLED=true` and `OPENAI_API_KEY`.
+
+A02–A04 live model calls require `AGENT_SYSTEMS_ENABLED=true` and the same provider credential. Optional model overrides are `COMPANION_MODEL` and `AGENT_SYSTEMS_MODEL`.
+
+If the provider is disabled/unavailable, model-backed assistance fails independently; human Conversation and deterministic product authorities continue.
+
+## Known unrelated technical debt
+
+Dependency audit currently reports existing security advisories in the pinned Bandit/Postgrex dependency set. These are infrastructure/dependency remediation items rather than Agent authority design and should be handled as separate release hardening work.

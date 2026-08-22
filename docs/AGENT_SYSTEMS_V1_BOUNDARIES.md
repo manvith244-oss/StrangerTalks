@@ -1,125 +1,135 @@
-# StrangerTalks Agent Systems — V1 Runtime Boundaries
+# StrangerTalks Agent Systems — Canonical Runtime Boundaries
 
-Status: canonical release-remediation note for `release/prep-2026-08-22`.
+Status: canonical Agent Systems boundary on `feature/a01-conversation-companion`, superseding the earlier zero-Agent remediation note.
 
-This document does not introduce an Agent system. It records the deterministic V1 authority boundaries so historical Agent-era names cannot be mistaken for live runtime design.
+The earlier release remediation correctly removed the historical multi-Agent swarm from V1. After that cleanup, four bounded capabilities have now earned explicit Agent status. This document is the authority ledger for what is an Agent, what is not, and what each Agent may do.
 
-## Zero-Agent V1
+## Canonical Agent inventory
 
-V1 has no generic Agent Runtime, Agent Router, Agent Executor, Node Agent Cluster, runtime LLM, embedding/vector-search dependency, or autonomous learning-to-production mutation path.
+### A01 — Conversation Companion
 
-Elixir's `Agent` used by `QueueEngine.QueueState` is only an in-memory OTP state primitive.
+Participant-invoked, user-visible advisory assistant inside an existing Conversation.
 
-## Matchmaking safety authority
+- Explicit invocation only; no continuous semantic surveillance.
+- Receives only bounded current-Conversation context and the participant's explicit draft/request.
+- Uses generation -> independent critic -> moderation -> deterministic validation -> authority revalidation.
+- Can suggest text; cannot send, queue, match, block, report, change a Relationship, or mutate configuration.
+- `Use in draft` is local composer assistance only; ordinary human Send remains the authorship boundary.
 
-Final anonymous Match authority is `StrangertalksNew.Matchmaking.MatchmakingEngine` while both participants are held by `ParticipantActivityLock`.
+Detailed contract: `docs/A01_CONVERSATION_COMPANION.md`.
 
-Immediately before Match + Conversation persistence it re-reads:
+### A02 — Learning Advisor
 
-- both current QueueState entries;
-- queue-attempt IDs;
-- Door values;
-- Conversation Language values;
-- the persisted safety veto (`MatchingRules.check_safety_veto?/2`);
-- active Conversation authority for both participants.
+Offline/internal recommendation Agent over aggregated/system analytics.
 
-The persisted safety veto currently consists of:
+- Reads only `AnalyticsRecord` rows with `contains_personal_data=false` and aggregation level `AGGREGATED` or `SYSTEM_ONLY` when using `advise_latest/1`.
+- Direct snapshots reject participant/conversation/message/report-context identifiers.
+- Produces hypotheses, evidence summaries, confidence and small reversible experiment recommendations.
+- Has zero authority to change matchmaking thresholds, Conversation Start content, safety rules, runtime configuration, code or deploys.
+- Any recommendation requires normal human/product review and an explicit code/configuration change before production behavior can change.
 
-1. an active `BoundaryBlock` in either direction; or
-2. a canonical Relationship whose status is `CLOSED`.
+### A03 — Safety Review Assistant
 
-The Match and pending Conversation are then created in one `Ecto.Multi`; queue entries are removed only after the transaction succeeds.
+Internal contextual assistant for an already-created canonical `Report`.
 
-No separate ban, suspension, safety-hold, review-triggered matchmaking restriction, bot/tarpit restriction, or other participant restriction is part of the frozen current anonymous V1 matchmaking admission contract. Historical documents/schema fields that discuss broader enforcement do not create a runtime requirement.
+- Receives report category/status, bounded textual evidence and only a boolean indicating whether safety media is attached.
+- Participant IDs, Conversation IDs and raw safety media are outside its model payload.
+- Produces severity/action recommendations only.
+- HIGH/CRITICAL recommendations, permanent-ban recommendations and media-bearing reports must require human review.
+- It cannot write `Report`, `SafetyReview`, `BoundaryBlock`, Matchmaking or participant restriction state.
+- Deterministic boundary enforcement remains authoritative and is never relaxed by model output.
 
-## Queue lifecycle ownership
+### A04 — Trend / Bridge Research
 
-Canonical V1 owners are:
+Internal research Agent that turns explicit current signals into candidate Conversation Bridges.
 
-- `QueueEngine.ParticipantConnectionTracker` — live ParticipantChannel/tab ownership and final-tab disconnect cleanup;
-- `QueueEngine.QueueState` — volatile current queue-attempt state;
-- `Matchmaking.MatchmakingEngine` — join/leave/cancel/requeue/matching mutations.
+- Supports canonical Conversation languages `en`, `te`, `hi`.
+- Current cultural/seasonal/sports/shared-life signals are supplied explicitly by operations; the Agent has no autonomous web-browsing authority.
+- Produces Universal/Broad/Niche research candidates.
+- Has no publication authority and cannot write `IcebreakerCatalog` or push content into a live Conversation.
+- Candidate publication remains a reviewed content change.
 
-`Queue.ParticipantServer` is **DORMANT BUT REFERENCED**. It is retained for historical focused tests only. Production supervision does not start it or its private `StrangertalksNew.Queue.Registry`, and current ParticipantChannel/controller/matchmaking paths do not call it.
+## What is NOT an Agent
 
-`QueueEngine.Matcher` is **DORMANT**. Its historical intent/media/tempo scoring function remains for regression-only callers; current MatchmakingEngine does not call it.
+The following historical names remain absorbed into explicit deterministic owners and must not be resurrected as autonomous runtime identities:
 
-## Legacy safety hooks
+- Matchmaking Lead Agent -> `Matchmaking.MatchmakingEngine`
+- Queue Intelligence Agent -> QueueState / MatchmakingEngine
+- Compatibility Agent -> MatchmakingEngine algorithm/rules
+- Opportunity Agent -> Matchmaking strategy/policy
+- Scarcity Agent -> Matchmaking strategy/policy
+- Language Intelligence Agent -> language normalization + matching/start rules
+- Icebreaker Lead / Category / Complexity / Confidence agents -> Conversation Start / curated content rules
+- Safety Agent -> deterministic Safety Gate / Safety Services / designated review authority
+- Learning Agent / Icebreaker Learning Agent -> analytics pipeline plus A02 recommendations
+- Stewardship Agent / HCIL runtime master -> human/product governance
+- generic Decision Engine / Agent Priority System -> rejected
+- Intern/Senior/Lead/Executive runtime hierarchy -> rejected
 
-`QueueEngine.SafetyReceiver` is **ACTIVE BUT BENIGN / NON-AUTHORITATIVE**. It remains supervised as a compatibility subscriber.
+Elixir's OTP `Agent` state primitive is never evidence of product Agent status.
 
-`QueueEngine.QueueState.apply_veto/2` is a **PLACEHOLDER** no-op. Neither component is relied on for final safety. The authoritative persisted safety re-read in MatchmakingEngine is the protection boundary.
+## Shared Agent constitution
 
-Old comments implying a Redis safety bridge were historical. Current V1 dependencies do not include Redis.
+1. **Safety over optimization.** No Agent can relax a deterministic safety boundary.
+2. **Privacy over curiosity.** Each Agent receives the minimum data needed for its explicit task.
+3. **Human authorship.** Agent output never becomes participant-authored content without an explicit human action through the ordinary product boundary.
+4. **Advice is not authority.** A recommendation does not mutate production state unless a separately authorized deterministic/human workflow performs that mutation.
+5. **No hidden surveillance.** There is no always-on Flow/Trust/intimacy/psychological monitoring Agent.
+6. **No god-object runtime.** There is no generic Agent Router, Executor, Decision Bus or autonomous hierarchy.
+7. **Fail closed.** Missing credentials, invalid schema, stale Conversation authority, unsafe output or ambiguous ownership produces no Agent result.
+8. **No silent self-learning.** A02 may recommend; production changes require reviewed code/configuration.
 
-## Readiness / privacy remnants
+## Shared model provider boundary
 
-The following remain only as historical schema vocabulary and are not active V1 behavioral inputs:
+`StrangertalksNew.Companion.OpenAIProvider` is the single provider-specific runtime surface. It exposes:
 
-- `LearningRecord.record_type == READINESS_EVALUATION` — **DORMANT schema**;
-- `readiness_score` — **DORMANT schema field**;
-- `keystroke_latency_variance` — **DORMANT schema field**;
-- analytics `*_agent_accuracy` fields — **HISTORICAL NAMING ONLY**.
+- A01's dedicated `generate/1` pipeline with critic and moderation; and
+- the schema-constrained `AgentSystems.Provider.structured/5` boundary used by A02-A04.
 
-Current ParticipantChannel passes `nil` for media/keystroke profile inputs when joining the anonymous queue. Current MatchmakingEngine does not consume LearningRecord/AnalyticsRecord or the historical readiness fields to select candidates, relax scarcity, choose language, choose Conversation Start content, or decide safety.
+Provider requests use the Responses API, `store: false`, JSON Schema structured output and no tools. Provider credentials are environment/configuration secrets and are never committed.
 
-This is an explicit V1 privacy boundary: no hidden semantic or psychological Conversation surveillance is authorized by those historical fields.
+Runtime flags:
 
-## Learning / analytics authority
+- `COMPANION_ENABLED=true` enables A01.
+- `AGENT_SYSTEMS_ENABLED=true` enables A02-A04 through the shared provider.
+- `OPENAI_API_KEY=<secret>` is required for live model calls.
+- optional `COMPANION_MODEL` and `AGENT_SYSTEMS_MODEL`; default model is `gpt-5.6-luna`.
+- optional `OPENAI_BASE_URL`, timeout and moderation settings remain provider configuration.
 
-`LearningRecords` and `AnalyticsRecords` are CRUD persistence contexts. They do not write application configuration and are not called by authoritative Matchmaking, Conversation Start, language, or safety paths.
+Agent failure is isolated: ordinary human Conversation, deterministic Matchmaking, Safety and Recovery continue when model service is unavailable.
 
-V1 production behavior changes require an explicit reviewed code/configuration change. Analytics may observe or support later recommendations; it has no silent mutation authority.
+## Operational invocation
 
-## Conversation Start language authority
+Non-public agents are intentionally not exposed through unauthenticated HTTP administration routes.
 
-Conversation Language remains attempt-bound and Match-authoritative (`en`, `te`, `hi`).
+Operators can use:
 
-`IcebreakerCatalog.identity_for/1` resolves:
+```text
+mix strangertalks.agents learning [limit]
+mix strangertalks.agents safety REPORT_ID
+mix strangertalks.agents trends LANGUAGE "signal one" "signal two"
+```
 
-`Conversation -> persisted Match -> conversation_language -> approved language-qualified starter identity`.
+A01 remains participant-invoked through the authenticated Conversation Companion endpoint/UI.
 
-The browser receives that approved identity and renders only the matching curated catalog item. It does not select a fallback language from local browser state. Missing/invalid Match language produces no active starter rather than an English fallback.
+## Deterministic authority retained from remediation
 
-System starter state has no participant sender, message ID, sequence, or delivery lifecycle. Genuine participant-authored timeline content is still accepted only through the normal message/media send boundaries and retires the starter.
+Matchmaking authority remains `Matchmaking.MatchmakingEngine` under `ParticipantActivityLock`, with persisted safety veto and active-Conversation checks immediately before atomic Match + Conversation creation.
 
-## Recovery
+Conversation Language remains Match-authoritative (`en`, `te`, `hi`). `IcebreakerCatalog` remains the canonical curated Conversation Start source; A01 may read the active starter but A04 cannot publish to it.
 
-Conversation runtime recovery reconstructs authority from persisted Conversation/Match state. A terminal durable Conversation is not resurrected, stale runtime epochs do not regain authority, and unauthorized participants cannot join another participant's Conversation.
+Conversation recovery reconstructs from persisted Conversation/Match state. Terminal durable Conversations are not resurrected. `ParticipantActivityLock` remains a single-node V1 serialization boundary; horizontal authoritative BEAM scaling requires a separate distributed-coordination design.
 
-A recovered transition survivor re-enters the same canonical QueueState/MatchmakingEngine path; any later Match therefore passes the same final persisted safety re-read as an ordinary queue attempt.
+Historical readiness/psychological fields and analytics `*_agent_accuracy` naming remain non-authoritative legacy schema vocabulary.
 
-## Single-node V1 deployment invariant
+## Closure gate
 
-`ParticipantActivityLock` is intentionally a **single-node V1** serialization boundary. Horizontal multi-node app execution is not supported by this V1 authority model.
+`.github/workflows/a01-conversation-companion.yml` is now the **Agent Systems Closure Gate**. It must:
 
-Release invariant:
+- check out and prove the exact feature SHA;
+- run focused A01/A02/A03/A04 functional and adversarial Elixir tests;
+- run focused browser authorship/draft tests;
+- run full `mix precommit`;
+- prove precommit leaves the checkout unchanged.
 
-- the authoritative Phoenix release must run exactly one application instance;
-- automatic horizontal scaling must remain disabled;
-- preview instances must not share production matchmaking authority;
-- any future move to multiple authoritative BEAM nodes requires an explicit distributed-coordination design before scaling.
-
-Operational verification on 2026-08-22 found the Render service `strangertalks-phoenix` on branch `release/prep-2026-08-22` configured with `numInstances: 1`, plan `free`, preview generation off, PR previews off, and auto-deploy off. That configuration satisfies the single-node V1 invariant at the time of this remediation audit.
-
-The separate legacy Node service on branch `master` is not the release-preparation Phoenix authority and must not be treated as a second BEAM matchmaking node.
-
-## Model / LLM boundary
-
-Runtime dependency audit must remain clean for:
-
-- OpenAI;
-- Gemini / Google AI;
-- Anthropic;
-- LLM libraries/endpoints;
-- embeddings;
-- vector search;
-- inference endpoints;
-- semantic models;
-- moderation models.
-
-A future participant-invoked assistant or review aid would require a separate explicit product/architecture decision; it is not part of Agent Systems V1.
-
-## Current-head remediation gate
-
-`.github/workflows/agent-systems-remediation.yml` is the release-preparation evidence runner. It checks out the exact branch HEAD, runs the focused deterministic-authority/recovery/language suites, runs the focused browser Conversation Start/authorship tests, executes the repository's full `mix precommit`, and finally requires `git diff --exit-code` so the evidence cannot be described as clean if precommit rewrites the checkout.
+No Agent Systems completion claim is valid without a green exact-head closure run.

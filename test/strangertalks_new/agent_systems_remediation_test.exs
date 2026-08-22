@@ -309,23 +309,50 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
     refute analytics_context =~ "MatchingRules"
   end
 
-  test "release runtime contains no model or LLM dependency surface" do
+  test "runtime model authority is restricted to A01 Conversation Companion" do
     dependency_manifests = File.read!("mix.exs") <> "\n" <> File.read!("package.json")
 
     runtime_config =
       Path.wildcard("config/**/*.exs")
       |> Enum.map_join("\n", &File.read!/1)
 
-    runtime_source =
-      (Path.wildcard("lib/**/*.ex") ++
-         Path.wildcard("lib/**/*.exs") ++
-         Path.wildcard("priv/static/assets/*.js") ++
-         Path.wildcard("priv/static/assets/*.mjs"))
+    runtime_files =
+      Path.wildcard("lib/**/*.ex") ++
+        Path.wildcard("lib/**/*.exs") ++
+        Path.wildcard("priv/static/assets/*.js") ++
+        Path.wildcard("priv/static/assets/*.mjs")
+
+    approved_model_paths = [
+      "lib/strangertalks_new/companion.ex",
+      "lib/strangertalks_new/companion/open_ai_provider.ex"
+    ]
+
+    companion_provider = File.read!("lib/strangertalks_new/companion/open_ai_provider.ex")
+
+    assert companion_provider =~ "https://api.openai.com/v1"
+    assert companion_provider =~ "store: false"
+    assert companion_provider =~ "/responses"
+    assert companion_provider =~ "/moderations"
+
+    runtime_outside_a01_model_surface =
+      runtime_files
+      |> Enum.reject(&(&1 in approved_model_paths))
       |> Enum.map_join("\n", &File.read!/1)
 
+    for pattern <- [~r/\bOpenAI\b/i, ~r/api\.openai\.com/i] do
+      refute Regex.match?(pattern, dependency_manifests),
+             "provider-specific SDK dependency is not allowed: #{inspect(pattern)}"
+
+      refute Regex.match?(pattern, runtime_config),
+             "provider authority must not leak into generic runtime config: #{inspect(pattern)}"
+
+      refute Regex.match?(pattern, runtime_outside_a01_model_surface),
+             "OpenAI runtime authority escaped bounded A01 model surface: #{inspect(pattern)}"
+    end
+
+    all_runtime_source = Enum.map_join(runtime_files, "\n", &File.read!/1)
+
     for pattern <- [
-          ~r/\bOpenAI\b/i,
-          ~r/api\.openai\.com/i,
           ~r/\bGemini\b/i,
           ~r/generativelanguage\.googleapis\.com/i,
           ~r/Google\s+AI/i,
@@ -342,8 +369,8 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
       refute Regex.match?(pattern, runtime_config),
              "unexpected model runtime config: #{inspect(pattern)}"
 
-      refute Regex.match?(pattern, runtime_source),
-             "unexpected model runtime source integration: #{inspect(pattern)}"
+      refute Regex.match?(pattern, all_runtime_source),
+             "unexpected model runtime integration outside approved A01 design: #{inspect(pattern)}"
     end
   end
 
