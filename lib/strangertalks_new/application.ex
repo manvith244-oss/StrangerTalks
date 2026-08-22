@@ -5,6 +5,8 @@ defmodule StrangertalksNew.Application do
 
   use Application
 
+  alias StrangertalksNew.AgentSystems.ProviderProbe
+
   @impl true
   def start(_type, _args) do
     children = [
@@ -33,10 +35,24 @@ defmodule StrangertalksNew.Application do
       StrangertalksNewWeb.Endpoint
     ]
 
-    # See https://elixir.hexdocs.pm/Supervisor.html
+    # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: StrangertalksNew.Supervisor]
-    Supervisor.start_link(children, opts)
+
+    case Supervisor.start_link(children, opts) do
+      {:ok, supervisor} = started ->
+        case ProviderProbe.run() do
+          :ok ->
+            started
+
+          {:error, reason} ->
+            Supervisor.stop(supervisor)
+            {:error, {:agent_provider_probe_failed, reason}}
+        end
+
+      error ->
+        error
+    end
   end
 
   # Tell Phoenix to update the endpoint configuration
