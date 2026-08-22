@@ -1,6 +1,7 @@
 defmodule StrangertalksNew.CompanionTest do
   use StrangertalksNew.DataCase, async: false
 
+  alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNew.{Companion, Conversation, MatchingRules, Message, Repo}
 
   defmodule FakeProvider do
@@ -68,18 +69,39 @@ defmodule StrangertalksNew.CompanionTest do
     Application.put_env(:strangertalks_new, :companion_test_pid, self())
     Application.put_env(:strangertalks_new, :companion_test_mode, :assist)
 
+    fixture = conversation_fixture("en")
+    conversation_id = fixture.conversation.conversation_id
+    {:ok, _pid} = ConversationServer.ensure_started(conversation_id)
+    :ok = ConversationServer.register_channel(conversation_id, fixture.participant_a, self())
+    :ok = ConversationServer.register_channel(conversation_id, fixture.participant_b, self())
+
     on_exit(fn ->
+      case ConversationServer.lookup(conversation_id) do
+        {:ok, pid} ->
+          DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, pid)
+
+        {:error, :not_started} ->
+          :ok
+      end
+
       restore_env(:companion, previous_companion)
       restore_env(:companion_test_pid, previous_pid)
       restore_env(:companion_test_mode, previous_mode)
     end)
 
-    conversation_fixture("en")
+    fixture
   end
 
-  test "explicit request gets bounded suggestions without creating a participant message", context do
-    insert_message(context, context.participant_b, 1, "I started learning guitar last week.")
-    update_message_count(context.conversation, 1)
+  test "explicit request receives live bounded context without creating a PostgreSQL transcript", context do
+    message_id = Ecto.UUID.generate()
+
+    assert {:ok, %{sequence: 1}} =
+             ConversationServer.append_message(
+               context.conversation.conversation_id,
+               context.participant_b,
+               message_id,
+               "I started learning guitar last week."
+             )
 
     assert {:ok, result} =
              Companion.request(context.conversation.conversation_id, context.participant_a, %{
@@ -94,13 +116,18 @@ defmodule StrangertalksNew.CompanionTest do
     assert result.mode == "respond"
     assert length(result.suggestions) == 2
     assert result.model == "fake-companion"
-    assert Repo.aggregate(Message, :count) == 1
+    assert Repo.aggregate(Message, :count, :message_id) == 0
 
     assert_receive {:companion_context, captured}
     assert captured.language == "en"
-    assert captured.messages == [%{role: "stranger", text: "I started learning guitar last week.", sequence: 1}]
-    refute Map.has_key?(StrangertalksNew.Companion.Context.public_context(captured), :participant_id)
-    refute Map.has_key?(StrangertalksNew.Companion.Context.public_context(captured), :peer_id)
+
+    assert captured.messages == [
+             %{role: "stranger", text: "I started learning guitar last week.", sequence: 1}
+           ]
+
+    public = StrangertalksNew.Companion.Context.public_context(captured)
+    refute Map.has_key?(public, :participant_id)
+    refute Map.has_key?(public, :peer_id)
   end
 
   test "result is discarded when Conversation authority changes during model generation", context do
@@ -113,6 +140,61 @@ defmodule StrangertalksNew.CompanionTest do
              })
 
     assert_receive {:companion_context, _captured}
+  end
+
+  test "new live message while the model reasons makes the result stale", context do
+    test_pid = self()
+
+    defmodule RacingProvider do
+      @behaviour StrangertalksNew.Companion.Provider
+
+      @impl true
+      def generate(context) do
+        send(Application.fetch_env!(:strangertalks_new, :companion_test_pid), {:race_context, context})
+
+        {:ok,
+         %{
+           decision: :assist,
+           reason: nil,
+           suggestions: [
+             %{style: "Warm", text: "Tell me more about that."},
+             %{style: "Light", text: "Okay, what happened next?"}
+           ],
+           model: "race-test"
+         }}
+      end
+    end
+
+    Application.put_env(:strangertalks_new, :companion,
+      enabled: true,
+      provider: RacingProvider
+    )
+
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        result =
+          Companion.request(context.conversation.conversation_id, context.participant_a, %{
+            "mode" => "continue"
+          })
+
+        send(parent, {:race_result, result})
+      end)
+
+    assert_receive {:race_context, _captured}
+
+    assert {:ok, %{sequence: 1}} =
+             ConversationServer.append_message(
+               context.conversation.conversation_id,
+               context.participant_b,
+               Ecto.UUID.generate(),
+               "A newer message arrived."
+             )
+
+    Task.await(task)
+    assert_receive {:race_result, {:error, :companion_stale}}
+    assert is_pid(test_pid)
   end
 
   test "terminal block authority prevents Companion generation", context do
@@ -162,24 +244,6 @@ defmodule StrangertalksNew.CompanionTest do
              })
 
     assert is_binary(reason)
-  end
-
-  defp insert_message(context, sender_id, sequence, content) do
-    Repo.insert!(
-      Message.changeset(%Message{}, %{
-        conversation_id: context.conversation.conversation_id,
-        sender_id: sender_id,
-        content: content,
-        expected_sequence_id: sequence,
-        created_at: DateTime.utc_now()
-      })
-    )
-  end
-
-  defp update_message_count(conversation, count) do
-    conversation
-    |> Ecto.Changeset.change(message_count: count, last_message_timestamp: DateTime.utc_now())
-    |> Repo.update!()
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:strangertalks_new, key)
