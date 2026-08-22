@@ -9,6 +9,10 @@ on:
       - release/prep-2026-08-22
   workflow_dispatch:
 
+concurrency:
+  group: a01-conversation-companion-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
