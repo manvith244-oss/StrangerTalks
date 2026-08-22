@@ -87,6 +87,9 @@ defmodule StrangertalksNewWeb.CompanionController do
   defp error_response(conn, :conversation_unavailable),
     do: companion_error(conn, 409, "COMPANION_CONVERSATION_UNAVAILABLE", false)
 
+  defp error_response(conn, :companion_busy),
+    do: companion_error(conn, 409, "COMPANION_BUSY", true)
+
   defp error_response(conn, :companion_stale),
     do: companion_error(conn, 409, "COMPANION_STALE", true)
 
