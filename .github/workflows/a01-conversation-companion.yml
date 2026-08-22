@@ -62,7 +62,8 @@ jobs:
         run: |
           mix test \
             test/strangertalks_new/companion_test.exs \
-            test/strangertalks_new/companion_open_ai_provider_test.exs
+            test/strangertalks_new/companion_open_ai_provider_test.exs \
+            test/strangertalks_new_web/controllers/companion_controller_test.exs
 
       - name: Focused A01 browser logic
         run: node --test test/js/companion_test.mjs test/js/prompt_cards_test.mjs
