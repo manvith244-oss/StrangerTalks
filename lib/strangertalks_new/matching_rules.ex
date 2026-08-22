@@ -85,6 +85,8 @@ defmodule StrangertalksNew.MatchingRules do
               else: conversation.participant_a_id
 
           ParticipantActivityLock.with_participants([blocker_id, blocked_id], fn ->
+            suspended_runtime = suspend_conversation_runtime(conversation_id)
+
             result =
               Repo.transaction(fn ->
                 current_conversation = Repo.get!(Conversation, conversation_id)
@@ -100,10 +102,12 @@ defmodule StrangertalksNew.MatchingRules do
 
             case result do
               {:ok, block} ->
+                terminate_suspended_runtime(suspended_runtime)
                 stop_conversation_runtime(conversation_id)
                 {:ok, block}
 
               {:error, reason} ->
+                resume_conversation_runtime(suspended_runtime)
                 {:error, reason}
             end
           end)
@@ -139,6 +143,41 @@ defmodule StrangertalksNew.MatchingRules do
       safety_flagged: true
     })
   end
+
+  defp suspend_conversation_runtime(conversation_id) do
+    case ConversationServer.lookup(conversation_id) do
+      {:ok, pid} ->
+        try do
+          :ok = :sys.suspend(pid)
+          {:suspended, pid}
+        catch
+          :exit, _reason -> :not_running
+        end
+
+      {:error, :not_started} ->
+        :not_running
+    end
+  end
+
+  defp resume_conversation_runtime({:suspended, pid}) do
+    try do
+      :sys.resume(pid)
+    catch
+      :exit, _reason -> :ok
+    end
+  end
+
+  defp resume_conversation_runtime(:not_running), do: :ok
+
+  defp terminate_suspended_runtime({:suspended, pid}) do
+    try do
+      :sys.terminate(pid, :normal, 5_000)
+    catch
+      :exit, _reason -> :ok
+    end
+  end
+
+  defp terminate_suspended_runtime(:not_running), do: :ok
 
   defp stop_conversation_runtime(conversation_id) do
     case ConversationServer.lookup(conversation_id) do
