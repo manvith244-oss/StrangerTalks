@@ -733,10 +733,9 @@ defmodule StrangertalksNew.SecurityAdversarialTest do
       assert_reply ref_msg, :ok, %{message_id: ^msg_id}
     end
 
-    test "repeated report, block, and consent actions are idempotent and safe" do
-      {conversation, participant_a, participant_b} = matched_conversation_fixture()
+    test "repeated report and block actions are idempotent and terminal safety wins" do
+      {conversation, participant_a, _participant_b} = matched_conversation_fixture()
       socket_a = joined_conversation_socket(participant_a, conversation.conversation_id)
-      socket_b = joined_conversation_socket(participant_b, conversation.conversation_id)
 
       # Repeated reports with exact same evidence return same report_id
       report_payload = %{"category" => "SPAM", "evidence" => "repeat evidence"}
@@ -747,31 +746,18 @@ defmodule StrangertalksNew.SecurityAdversarialTest do
       assert_reply ref2, :ok, %{report_id: ^rep_id, status: "submitted"}
       assert Repo.aggregate(Report, :count) == 1
 
-      # Repeated blocks are idempotent
+      # Repeated blocks are idempotent and terminalize Conversation authority.
       ref_b1 = push(socket_a, "conversation:block", %{})
       assert_reply ref_b1, :ok, %{status: "blocked"}
       ref_b2 = push(socket_a, "conversation:block", %{})
       assert_reply ref_b2, :ok, %{status: "blocked"}
       assert Repo.aggregate(BoundaryBlock, :count) == 1
 
-      # Block is terminal safety authority; stale End cannot recover the Conversation.
       end_ref = push(socket_a, "conversation:end", %{})
       assert_reply end_ref, :error, %{code: "CONVERSATION_UNAVAILABLE"}
 
-      consent_a1 = push(socket_a, "relationship:consent", %{})
-      assert_reply consent_a1, :ok, %{status: "waiting_for_mutual_consent"}
-      consent_a2 = push(socket_a, "relationship:consent", %{})
-      assert_reply consent_a2, :ok, %{status: "waiting_for_mutual_consent"}
-      assert Repo.aggregate(RelationshipConsent, :count) == 1
-
-      consent_b = push(socket_b, "relationship:consent", %{})
-      assert_reply consent_b, :ok, %{status: "created", relationship_id: rel_id}
-      assert Repo.aggregate(Relationship, :count) == 1
-
-      # Re-consenting after relationship creation is safe
-      consent_b_repeat = push(socket_b, "relationship:consent", %{})
-      assert_reply consent_b_repeat, :ok, %{status: "created", relationship_id: ^rel_id}
-      assert Repo.aggregate(Relationship, :count) == 1
+      consent_ref = push(socket_a, "relationship:consent", %{})
+      assert_reply consent_ref, :error, %{code: "CONVERSATION_UNAVAILABLE"}
     end
   end
 
