@@ -117,16 +117,10 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
     }
 
     case config.http_client.responses(config, request_body) do
-      {:ok, %Req.Response{status: status, body: response_body}} when status in 200..299 ->
-        {:ok, response_body}
-
       {:ok, %{status: status, body: response_body}} when status in 200..299 ->
         {:ok, response_body}
 
       {:ok, %{status: status}} when status in [408, 409, 429, 500, 502, 503, 504] ->
-        {:error, :companion_unavailable}
-
-      {:ok, %Req.Response{status: status}} when status in [408, 409, 429, 500, 502, 503, 504] ->
         {:error, :companion_unavailable}
 
       {:ok, _response} ->
@@ -187,18 +181,11 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
     texts = Enum.map(suggestions, fn suggestion -> suggestion["text"] || suggestion[:text] end)
 
     case config.http_client.moderate(config, texts) do
-      {:ok, %Req.Response{status: status, body: %{"results" => results}}}
-      when status in 200..299 and is_list(results) ->
-        moderation_verdict(results)
-
       {:ok, %{status: status, body: %{"results" => results}}}
       when status in 200..299 and is_list(results) ->
         moderation_verdict(results)
 
       {:ok, %{status: status}} when status in [408, 409, 429, 500, 502, 503, 504] ->
-        {:error, :companion_unavailable}
-
-      {:ok, %Req.Response{status: status}} when status in [408, 409, 429, 500, 502, 503, 504] ->
         {:error, :companion_unavailable}
 
       _ ->
