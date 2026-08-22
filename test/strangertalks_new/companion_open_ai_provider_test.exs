@@ -5,38 +5,56 @@ defmodule StrangertalksNew.CompanionOpenAIProviderTest do
 
   defmodule FakeHTTPClient do
     def responses(_config, body) do
-      send(test_pid(), {:responses_request, body})
+      case get_in(body, [:text, :format, :name]) do
+        "strangertalks_companion_critic" ->
+          send(test_pid(), {:critic_request, body})
+          approved = Application.get_env(:strangertalks_new, :companion_test_critic_approved, true)
 
-      suggestions = %{
-        decision: "assist",
-        reason: nil,
-        suggestions: [
-          %{style: "Warm", text: "That makes sense. What happened next?"},
-          %{style: "Light", text: "Okay, now I’m curious — tell me more."}
-        ]
-      }
+          critic = %{
+            approved: approved,
+            reason: if(approved, do: nil, else: "Suggestion claims hidden intent.")
+          }
 
-      {:ok,
-       %{
-         status: 200,
-         body: %{
-           "model" => "test-model",
-           "output" => [
-             %{
-               "type" => "message",
-               "content" => [
-                 %{"type" => "output_text", "text" => Jason.encode!(suggestions)}
-               ]
-             }
-           ]
-         }
-       }}
+          response("critic-test-model", critic)
+
+        _ ->
+          send(test_pid(), {:responses_request, body})
+
+          suggestions = %{
+            decision: "assist",
+            reason: nil,
+            suggestions: [
+              %{style: "Warm", text: "That makes sense. What happened next?"},
+              %{style: "Light", text: "Okay, now I’m curious — tell me more."}
+            ]
+          }
+
+          response("test-model", suggestions)
+      end
     end
 
     def moderate(_config, texts) do
       send(test_pid(), {:moderation_request, texts})
       flagged = Application.get_env(:strangertalks_new, :companion_test_flagged, false)
       {:ok, %{status: 200, body: %{"results" => Enum.map(texts, fn _ -> %{"flagged" => flagged} end)}}}
+    end
+
+    defp response(model, payload) do
+      {:ok,
+       %{
+         status: 200,
+         body: %{
+           "model" => model,
+           "output" => [
+             %{
+               "type" => "message",
+               "content" => [
+                 %{"type" => "output_text", "text" => Jason.encode!(payload)}
+               ]
+             }
+           ]
+         }
+       }}
     end
 
     defp test_pid, do: Application.fetch_env!(:strangertalks_new, :companion_test_pid)
@@ -46,22 +64,26 @@ defmodule StrangertalksNew.CompanionOpenAIProviderTest do
     previous = Application.get_env(:strangertalks_new, :companion)
     previous_pid = Application.get_env(:strangertalks_new, :companion_test_pid)
     previous_flagged = Application.get_env(:strangertalks_new, :companion_test_flagged)
+    previous_critic = Application.get_env(:strangertalks_new, :companion_test_critic_approved)
 
     Application.put_env(:strangertalks_new, :companion,
       enabled: true,
       api_key: "test-secret",
       model: "test-model",
+      critic_model: "critic-test-model",
       moderation_model: "test-moderation",
       http_client: FakeHTTPClient
     )
 
     Application.put_env(:strangertalks_new, :companion_test_pid, self())
     Application.put_env(:strangertalks_new, :companion_test_flagged, false)
+    Application.put_env(:strangertalks_new, :companion_test_critic_approved, true)
 
     on_exit(fn ->
       restore(:companion, previous)
       restore(:companion_test_pid, previous_pid)
       restore(:companion_test_flagged, previous_flagged)
+      restore(:companion_test_critic_approved, previous_critic)
     end)
 
     :ok
@@ -103,8 +125,42 @@ defmodule StrangertalksNew.CompanionOpenAIProviderTest do
     refute serialized =~ "participant-secret-id"
     refute serialized =~ "peer-secret-id"
 
+    assert_receive {:critic_request, critic_body}
+    assert critic_body.store == false
+    assert critic_body.model == "critic-test-model"
+    assert critic_body.text.format.name == "strangertalks_companion_critic"
+
+    critic_input = Jason.decode!(critic_body.input)
+    refute Jason.encode!(critic_input) =~ "conversation-secret-id"
+    refute Jason.encode!(critic_input) =~ "participant-secret-id"
+    refute Jason.encode!(critic_input) =~ "peer-secret-id"
+    assert critic_input["context"]["language"] == "te"
+    assert length(critic_input["suggestions"]) == 2
+
     assert_receive {:moderation_request, moderated}
     assert moderated == Enum.map(suggestions, & &1["text"])
+  end
+
+  test "critic rejects policy-invalid generated output before moderation" do
+    Application.put_env(:strangertalks_new, :companion_test_critic_approved, false)
+
+    assert {:error, :companion_unsafe_output} =
+             OpenAIProvider.generate(%{
+               conversation_id: "conversation-secret-id",
+               participant_id: "participant-secret-id",
+               peer_id: "peer-secret-id",
+               language: "en",
+               door: "JUST_TALK",
+               mode: "respond",
+               tone: "natural",
+               request: "Help me reply",
+               draft: nil,
+               messages: []
+             })
+
+    assert_receive {:responses_request, _}
+    assert_receive {:critic_request, _}
+    refute_receive {:moderation_request, _}, 20
   end
 
   test "flagged generated output is never returned" do
