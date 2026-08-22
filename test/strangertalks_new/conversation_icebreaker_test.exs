@@ -5,7 +5,7 @@ defmodule StrangertalksNew.ConversationIcebreakerTest do
   alias StrangertalksNew.IcebreakerCatalog
 
   setup do
-    fixture = conversation_fixture()
+    fixture = conversation_fixture("en")
 
     pid =
       start_supervised!(
@@ -19,6 +19,7 @@ defmodule StrangertalksNew.ConversationIcebreakerTest do
        context do
     assert {:ok, state} = inspect_state(context)
     assert {:active, identity} = state.icebreaker
+    assert String.starts_with?(identity, "en/")
     assert IcebreakerCatalog.approved?(identity)
     refute is_list(state.icebreaker)
 
@@ -32,21 +33,92 @@ defmodule StrangertalksNew.ConversationIcebreakerTest do
     refute Map.has_key?(join_a.icebreaker, :delivery_status)
   end
 
-  test "catalog is bounded first-party authority and unknown identity cannot become canonical",
+  test "catalog is bounded first-party en/te/hi authority and unknown identity cannot become canonical",
        context do
     identities = IcebreakerCatalog.identities()
-    assert length(identities) == 7
+    assert length(identities) == 21
     assert Enum.uniq(identities) == identities
+    assert IcebreakerCatalog.languages() == ["en", "te", "hi"]
+
+    for language <- IcebreakerCatalog.languages() do
+      assert length(IcebreakerCatalog.identities(language)) == 7
+      assert Enum.all?(IcebreakerCatalog.identities(language), &String.starts_with?(&1, "#{language}/"))
+    end
 
     assert Enum.all?(
              identities,
-             &match?({:ok, %{text: text}} when is_binary(text), IcebreakerCatalog.fetch(&1))
+             &match?(
+               {:ok, %{language: language, text: text}}
+               when language in ["en", "te", "hi"] and is_binary(text),
+               IcebreakerCatalog.fetch(&1)
+             )
            )
 
     assert {:error, :unknown_identity} = IcebreakerCatalog.fetch("<script>alert(1)</script>")
     assert {:error, :unknown_identity} = IcebreakerCatalog.fetch("https://example.invalid/bridge")
     assert {:ok, %{icebreaker: {:active, canonical}}} = inspect_state(context)
     assert canonical in identities
+  end
+
+  test "persisted Match language is the sole Conversation Start language authority", _context do
+    for language <- ["en", "te", "hi"] do
+      fixture = conversation_fixture(language)
+
+      pid =
+        start_supervised!(
+          {ConversationServer, %{conversation_id: fixture.conversation.conversation_id}}
+        )
+
+      assert {:ok, %{icebreaker: {:active, identity}}} =
+               ConversationServer.inspect_state(fixture.conversation.conversation_id)
+
+      assert String.starts_with?(identity, "#{language}/")
+      assert {:ok, %{language: ^language, text: text}} = IcebreakerCatalog.fetch(identity)
+      assert is_binary(text) and text != ""
+
+      assert {:ok, joined} =
+               ConversationServer.sync_and_register_channel(
+                 fixture.conversation.conversation_id,
+                 fixture.participant_a,
+                 self(),
+                 nil,
+                 0
+               )
+
+      assert joined.icebreaker == %{status: "active", identity: identity}
+
+      assert StrangertalksNew.Repo.get!(StrangertalksNew.Matching, fixture.match.match_id).conversation_language ==
+               language
+
+      assert :ok =
+               stop_supervised({ConversationServer, fixture.conversation.conversation_id})
+
+      refute Process.alive?(pid)
+    end
+  end
+
+  test "missing persisted Match language fails Conversation Start closed with no English fallback",
+       _context do
+    fixture = conversation_fixture(nil)
+
+    _pid =
+      start_supervised!(
+        {ConversationServer, %{conversation_id: fixture.conversation.conversation_id}}
+      )
+
+    assert {:ok, %{icebreaker: :retired}} =
+             ConversationServer.inspect_state(fixture.conversation.conversation_id)
+
+    assert {:ok, joined} =
+             ConversationServer.sync_and_register_channel(
+               fixture.conversation.conversation_id,
+               fixture.participant_a,
+               self(),
+               nil,
+               0
+             )
+
+    assert joined.icebreaker == %{status: "retired"}
   end
 
   test "first canonical text retires once while preserving ordinary sequence and delivery",
@@ -345,7 +417,7 @@ defmodule StrangertalksNew.ConversationIcebreakerTest do
     }
   end
 
-  defp conversation_fixture do
+  defp conversation_fixture(language \\ "en") do
     {:ok, participant_a} = StrangertalksNew.Participants.create_participant(%{})
     {:ok, participant_b} = StrangertalksNew.Participants.create_participant(%{})
     now = DateTime.utc_now()
@@ -358,6 +430,7 @@ defmodule StrangertalksNew.ConversationIcebreakerTest do
         match_strategy: :COMPATIBILITY,
         participant_a_id: participant_a.participant_id,
         participant_b_id: participant_b.participant_id,
+        conversation_language: language,
         compatibility_score: Decimal.new("1.0"),
         queue_entry_time: now,
         match_found_time: now,
@@ -401,6 +474,7 @@ defmodule StrangertalksNew.ConversationIcebreakerTest do
       })
 
     %{
+      match: match,
       conversation: conversation,
       participant_a: participant_a.participant_id,
       participant_b: participant_b.participant_id
