@@ -1,16 +1,14 @@
 defmodule StrangertalksNew.Companion.OpenAIProvider do
   @moduledoc """
-  Model-backed A01 provider using the OpenAI Responses API.
+  Shared model boundary for StrangerTalks' bounded agent systems.
 
-  Raw Conversation context is never persisted by StrangerTalks as an Agent log. API requests
-  set `store: false`, and only the bounded context selected by `Companion.Context` is sent.
-
-  A generated assist result must pass a second bounded critic review and output moderation before
-  it can be returned to the participant. The critic has no tools or runtime authority; it can only
-  approve or reject the proposed suggestions against the A01 communication/safety contract.
+  A01 Conversation Companion keeps its generation -> critic -> moderation pipeline here. Other
+  bounded agents may use `structured/5`; they receive only caller-minimized payloads and no tools or
+  runtime mutation capability. Requests set `store: false`.
   """
 
   @behaviour StrangertalksNew.Companion.Provider
+  @behaviour StrangertalksNew.AgentSystems.Provider
 
   @default_base_url "https://api.openai.com/v1"
   @default_model "gpt-5.6-luna"
@@ -44,9 +42,9 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
     end
   end
 
-  @impl true
+  @impl StrangertalksNew.Companion.Provider
   def generate(context) do
-    with {:ok, config} <- config(),
+    with {:ok, config} <- companion_config(),
          {:ok, body} <- create_response(config, context),
          {:ok, decoded} <- decode_structured_output(body),
          {:ok, result} <- normalize_result(decoded, body["model"] || config.model),
@@ -59,12 +57,61 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
     end
   end
 
-  defp config do
-    override = Application.get_env(:strangertalks_new, :companion, [])
+  @impl StrangertalksNew.AgentSystems.Provider
+  def structured(agent_id, payload, instructions, schema, opts \\ [])
+      when is_binary(agent_id) and is_map(payload) and is_binary(instructions) and is_map(schema) and
+             is_list(opts) do
+    with {:ok, config} <- agent_config(),
+         body = %{
+           model: Keyword.get(opts, :model, config.model),
+           store: false,
+           instructions: instructions,
+           input: Jason.encode!(payload),
+           max_output_tokens: Keyword.get(opts, :max_output_tokens, 700),
+           text: %{
+             format: %{
+               type: "json_schema",
+               name: "strangertalks_#{agent_id}",
+               strict: true,
+               schema: schema
+             }
+           }
+         },
+         {:ok, response} <- response_request(config, body),
+         {:ok, decoded} <- decode_structured_output(response) do
+      {:ok, decoded}
+    else
+      {:error, :companion_unavailable} -> {:error, :agent_unavailable}
+      {:error, :companion_provider_failure} -> {:error, :agent_provider_failure}
+      {:error, :companion_invalid_output} -> {:error, :agent_invalid_output}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :agent_provider_failure}
+    end
+  end
 
-    enabled = Keyword.get(override, :enabled, env_truthy?("COMPANION_ENABLED"))
+  def structured(_agent_id, _payload, _instructions, _schema, _opts),
+    do: {:error, :agent_invalid_request}
+
+  defp companion_config do
+    override = Application.get_env(:strangertalks_new, :companion, [])
+    build_config(override, "COMPANION_ENABLED", "COMPANION_MODEL")
+  end
+
+  defp agent_config do
+    override = Application.get_env(:strangertalks_new, :agent_systems, [])
+    build_config(override, "AGENT_SYSTEMS_ENABLED", "AGENT_SYSTEMS_MODEL")
+  end
+
+  defp build_config(override, enabled_env, model_env) do
+    enabled = Keyword.get(override, :enabled, env_truthy?(enabled_env))
     api_key = Keyword.get(override, :api_key, System.get_env("OPENAI_API_KEY"))
-    model = Keyword.get(override, :model, System.get_env("COMPANION_MODEL") || @default_model)
+
+    model =
+      Keyword.get(
+        override,
+        :model,
+        System.get_env(model_env) || System.get_env("COMPANION_MODEL") || @default_model
+      )
 
     cond do
       not enabled ->
@@ -230,11 +277,18 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
 
   defp normalize_result(_decoded, _model), do: {:error, :companion_invalid_output}
 
+  defp moderate_output(config, %{decision: :decline, reason: reason}) when is_binary(reason) do
+    moderate_texts(config, [reason])
+  end
+
   defp moderate_output(_config, %{decision: :decline}), do: :ok
 
   defp moderate_output(config, %{decision: :assist, suggestions: suggestions}) do
     texts = Enum.map(suggestions, fn suggestion -> suggestion["text"] || suggestion[:text] end)
+    moderate_texts(config, texts)
+  end
 
+  defp moderate_texts(config, texts) do
     case config.http_client.moderate(config, texts) do
       {:ok, %{status: status, body: %{"results" => results}}}
       when status in 200..299 and is_list(results) ->
