@@ -59,6 +59,8 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
 
   @impl StrangertalksNew.AgentSystems.Provider
   def structured(agent_id, payload, instructions, schema, opts \\ [])
+
+  def structured(agent_id, payload, instructions, schema, opts)
       when is_binary(agent_id) and is_map(payload) and is_binary(instructions) and is_map(schema) and
              is_list(opts) do
     with {:ok, config} <- agent_config(),
