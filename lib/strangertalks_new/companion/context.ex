@@ -6,12 +6,23 @@ defmodule StrangertalksNew.Companion.Context do
   projected from the current ConversationServer runtime. Raw live messages remain ephemeral;
   A01 does not create a PostgreSQL transcript copy.
 
+  The current Conversation Start starter, when still active, is projected only from the canonical
+  `ConversationServer`/`IcebreakerCatalog` identity. A01 never creates a second starter authority.
+
   Historical readiness, analytics, safety-review notes, private account data, and other
   Conversations are intentionally outside this boundary.
   """
 
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
-  alias StrangertalksNew.{Conversation, ConversationLanguages, Matching, MatchingRules, Repo}
+
+  alias StrangertalksNew.{
+    Conversation,
+    ConversationLanguages,
+    IcebreakerCatalog,
+    Matching,
+    MatchingRules,
+    Repo
+  }
 
   @active_statuses [:PENDING, :ACTIVE, :PAUSED]
   @modes ~w(auto start continue recover change_topic rephrase simplify language_help tone_help respond clarify deescalate express_feeling icebreaker story_prompt translate_localize)
@@ -36,6 +47,7 @@ defmodule StrangertalksNew.Companion.Context do
          true <- meaningful_request?(mode, request, draft),
          {:ok, runtime_state} <- live_runtime_state(conversation_id) do
       messages = recent_messages(runtime_state.recent_messages, participant_id)
+      conversation_start = conversation_start(runtime_state, language)
 
       {:ok,
        %{
@@ -51,13 +63,15 @@ defmodule StrangertalksNew.Companion.Context do
          draft: draft,
          draft_fingerprint: fingerprint(draft),
          messages: messages,
+         conversation_start: conversation_start,
          authority: %{
            conversation_status: conversation.conversation_status,
            match_id: conversation.match_id,
            language: language,
            epoch_id: runtime_state.epoch_id,
            next_sequence: runtime_state.next_sequence,
-           transcript_fingerprint: fingerprint_messages(messages)
+           transcript_fingerprint: fingerprint_messages(messages),
+           starter_identity: starter_identity(conversation_start)
          }
        }}
     else
@@ -83,7 +97,9 @@ defmodule StrangertalksNew.Companion.Context do
          true <- runtime_state.epoch_id == context.authority.epoch_id,
          true <- runtime_state.next_sequence == context.authority.next_sequence,
          current_messages <- recent_messages(runtime_state.recent_messages, participant_id),
-         true <- fingerprint_messages(current_messages) == context.authority.transcript_fingerprint do
+         true <- fingerprint_messages(current_messages) == context.authority.transcript_fingerprint,
+         current_start <- conversation_start(runtime_state, language),
+         true <- starter_identity(current_start) == context.authority.starter_identity do
       :ok
     else
       _ -> {:error, :companion_stale}
@@ -91,7 +107,17 @@ defmodule StrangertalksNew.Companion.Context do
   end
 
   def public_context(context) do
-    Map.take(context, [:conversation_id, :language, :door, :mode, :tone, :request, :draft, :messages])
+    Map.take(context, [
+      :conversation_id,
+      :language,
+      :door,
+      :mode,
+      :tone,
+      :request,
+      :draft,
+      :messages,
+      :conversation_start
+    ])
   end
 
   defp live_runtime_state(conversation_id) do
@@ -110,6 +136,20 @@ defmodule StrangertalksNew.Companion.Context do
         {:error, :conversation_unavailable}
     end
   end
+
+  defp conversation_start(%{icebreaker: {:active, identity}}, language) when is_binary(identity) do
+    with {:ok, %{language: ^language, text: text}} <- IcebreakerCatalog.fetch(identity),
+         true <- is_binary(text) and text != "" do
+      %{status: "active", identity: identity, text: text}
+    else
+      _ -> nil
+    end
+  end
+
+  defp conversation_start(_runtime_state, _language), do: nil
+
+  defp starter_identity(%{identity: identity}) when is_binary(identity), do: identity
+  defp starter_identity(_conversation_start), do: nil
 
   defp recent_messages(runtime_messages, participant_id) do
     rows =
