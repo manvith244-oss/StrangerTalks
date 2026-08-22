@@ -1,4 +1,4 @@
-name: A01 Conversation Companion Gate
+name: Agent Systems Closure Gate
 
 on:
   push:
@@ -10,14 +10,14 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: a01-conversation-companion-${{ github.event.pull_request.head.sha || github.sha }}
+  group: agent-systems-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  companion:
+  agents:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -47,8 +47,8 @@ jobs:
 
       - name: Prove checkout identity
         run: |
-          echo "EXPECTED_A01_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
-          echo "ACTUAL_A01_COMMIT=$(git rev-parse HEAD)"
+          echo "EXPECTED_AGENT_SYSTEMS_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "ACTUAL_AGENT_SYSTEMS_COMMIT=$(git rev-parse HEAD)"
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
 
       - name: Set up BEAM
@@ -70,15 +70,17 @@ jobs:
       - name: Install Elixir dependencies
         run: mix deps.get
 
-      - name: Focused A01 Elixir tests
+      - name: Focused Agent Systems Elixir tests
         run: |
           mix test \
             test/strangertalks_new/companion_test.exs \
             test/strangertalks_new/companion_conversation_start_test.exs \
             test/strangertalks_new/companion_open_ai_provider_test.exs \
+            test/strangertalks_new/agent_systems_functional_test.exs \
+            test/strangertalks_new/agent_systems_break_test.exs \
             test/strangertalks_new_web/controllers/companion_controller_test.exs
 
-      - name: Focused A01 browser logic
+      - name: Focused Agent Systems browser logic
         run: node --test test/js/companion_test.mjs test/js/prompt_cards_test.mjs
 
       - name: Full precommit
@@ -88,4 +90,4 @@ jobs:
         run: git diff --exit-code -- .
 
       - name: Record exact commit
-        run: echo "A01_TESTED_COMMIT=$(git rev-parse HEAD)"
+        run: echo "AGENT_SYSTEMS_TESTED_COMMIT=$(git rev-parse HEAD)"
