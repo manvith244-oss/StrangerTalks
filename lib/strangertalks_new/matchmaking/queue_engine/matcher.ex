@@ -1,34 +1,35 @@
 defmodule StrangertalksNew.QueueEngine.Matcher do
   @moduledoc """
-  Executes the 10-second candidate evaluation loop for the Queue Engine.
-  Enforces the 100-point match matrix, media bitmasking, and Four Attempt Doctrine (FAD).
+  LEGACY / DORMANT compatibility scorer retained for historical regression coverage.
+
+  The current V1 `MatchmakingEngine` does not call this module when selecting or
+  committing candidates. Its old intent/media/tempo matrix, Four Attempt Doctrine
+  comments, and typing-rate input are therefore non-authoritative and must not be
+  treated as active psychological or behavioral profiling.
   """
   import Bitwise
 
-  # Media Bitmasks (Documented for reference)
+  # Historical Media Bitmasks (non-authoritative in current V1 matching)
   # @media_text 1
   # @media_audio 2
   # @media_video 4
 
-  # Decay Limits (Documented for reference)
+  # Historical Decay Limits (non-authoritative in current V1 matching)
   # @initial_threshold 70
   # @decay_floor 45
 
   @doc """
-  Evaluates a candidate pair's compatibility score.
+  Computes the historical compatibility score for regression-only callers.
   """
   def compute_match_score(participant_a, participant_b) do
     if participant_a.language != participant_b.language do
-      # Linguistic Isolation Gate: binary veto
       0
     else
       s_intent = score_intent(participant_a.intent_vibe_vector, participant_b.intent_vibe_vector)
       s_media = score_media_overlap(participant_a.media_mask, participant_b.media_mask)
-      # Historically neutral default per spec
       s_history = 15
       s_tempo = score_tempo(participant_a.typing_rate, participant_b.typing_rate)
 
-      # Language implicitly passed to reach here, granting 20 points
       s_intent + 20 + s_media + s_history + s_tempo
     end
   end
@@ -41,7 +42,6 @@ defmodule StrangertalksNew.QueueEngine.Matcher do
         true -> 0
       end
 
-    # Calculate cosine similarity of vibe_dimensions to dynamically scale base_score
     similarity_modifier =
       calculate_cosine_similarity(vector_a["vibe_dimensions"], vector_b["vibe_dimensions"])
 
@@ -52,8 +52,7 @@ defmodule StrangertalksNew.QueueEngine.Matcher do
     if (mask_a &&& mask_b) !== 0, do: 15, else: 0
   end
 
-  # Tempo Calibration: 10-point bonus for < 50ms difference
-  # Reserved cadence is unknown in V1; legacy scorer callers must treat it as neutral, not numeric.
+  # Reserved cadence is unknown in V1; historical callers treat it as neutral, not numeric.
   defp score_tempo(nil, _rate_b), do: 0
   defp score_tempo(_rate_a, nil), do: 0
 
@@ -65,10 +64,5 @@ defmodule StrangertalksNew.QueueEngine.Matcher do
   defp complementary_intents?("ADVICE", "VENT"), do: true
   defp complementary_intents?(_, _), do: false
 
-  # Math utility for Vibe Dimensions
-  defp calculate_cosine_similarity(_dim_a, _dim_b) do
-    # Implementation of dot_product(A,B) / (magnitude(A) * magnitude(B))
-    # Returns float between 0.0 and 1.0 mapping
-    1.0
-  end
+  defp calculate_cosine_similarity(_dim_a, _dim_b), do: 1.0
 end
