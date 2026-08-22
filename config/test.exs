@@ -6,7 +6,7 @@ import Config
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 config :strangertalks_new, StrangertalksNew.Repo,
-  username: "postgres",
+  username: System.get_env("STRANGERTALKS_LOCAL_DB_USER", "strangertalks_local"),
   password: System.get_env("STRANGERTALKS_LOCAL_DB_PASSWORD"),
   hostname: "localhost",
   database: "strangertalks_new_test#{System.get_env("MIX_TEST_PARTITION")}",

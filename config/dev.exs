@@ -2,7 +2,7 @@ import Config
 
 # Configure your database
 config :strangertalks_new, StrangertalksNew.Repo,
-  username: "postgres",
+  username: System.get_env("STRANGERTALKS_LOCAL_DB_USER", "strangertalks_local"),
   password: System.get_env("STRANGERTALKS_LOCAL_DB_PASSWORD"),
   hostname: "localhost",
   database: "strangertalks_new_dev",
