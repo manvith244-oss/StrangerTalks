@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {chromium} from "playwright"
 
-const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://127.0.0.1:4000"
+const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://127.0.0.1:4002"
 const DEVICES = [
   {name: "small Android phone", width: 360, height: 740},
   {name: "modern phone", width: 390, height: 844},
@@ -53,6 +53,7 @@ async function prepareConversation(page) {
   })
 
   await page.waitForFunction(() => document.body.classList.contains("st-chat-mode"))
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".site-header")).display === "none")
   await page.waitForFunction(() => document.querySelector("#messages > .message.ig-group-start"))
 }
 
