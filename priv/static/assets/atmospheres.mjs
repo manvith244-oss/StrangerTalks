@@ -1,3 +1,5 @@
+import "./instagram_chat.mjs"
+
 export const ATMOSPHERES = Object.freeze([
   Object.freeze({id: "rain-window", label: "Rain Window", description: "Cool glass, soft rainlight, and a sheltered midnight blue."}),
   Object.freeze({id: "late-night-library", label: "Late Night Library", description: "Dark walnut, old paper, and a quiet pool of lamplight."}),
