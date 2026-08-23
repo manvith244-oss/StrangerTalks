@@ -13,7 +13,7 @@ const ICONS = Object.freeze({
   camera: '<svg class="ig-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h3l1.4-2h7.2l1.4 2h3a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2v-8a2 2 0 012-2z"/><circle cx="12" cy="13" r="4"/></svg>',
   mic: '<svg class="ig-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0013 0M12 18v3M9 21h6"/></svg>',
   plus: '<svg class="ig-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg>',
-  prompt: '<svg class="ig-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.4 4.3L18 9l-4.6 1.7L12 15l-1.4-4.3L6 9l4.6-1.7z"/><path d="M18.5 14l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg>',
+  prompt: '<svg class="ig-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l1.4 4.3L18 9l-4.6 1.7L12 15l-1.4-4.3L6 9l4.6-1.7z"/><path d="M18.5 14l.8 2 2.2.8-2.2.8L19 19l-.8-2.2-2.2-.8 2.2-.8z"/></svg>',
   gallery: '<svg class="ig-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M4 17l5-4 3 2 3-3 5 5"/></svg>',
   privacy: '<svg class="ig-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v5c0 5.2-3.3 8.3-8 10-4.7-1.7-8-4.8-8-10V6z"/><path d="M9.5 12l1.7 1.7 3.6-4"/></svg>',
   magic: '<svg class="ig-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20L16.5 7.5M14 4l1 2.5L17.5 8 15 9l-1 2.5L13 9l-2.5-1L13 6.5zM19 13l.8 2 2.2.8-2.2.8L19 19l-.8-2.2-2.2-.8 2.2-.8z"/></svg>'
@@ -164,11 +164,6 @@ function setupHeader() {
     divider.setAttribute("role", "separator")
     menu.insertBefore(divider, firstDanger)
   }
-
-  const pinned = document.querySelector("#pinned-messages-control")
-  if (pinned) pinned.textContent = pinned.hidden ? "Pinned messages" : `Pinned messages (${document.querySelector("#pinned-count")?.textContent || "0"})`
-  const quiet = document.querySelector("#quiet-mode-control")
-  if (quiet) quiet.textContent = "Quiet mode"
 }
 
 function setupTemporaryCue() {
