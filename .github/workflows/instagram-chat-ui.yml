@@ -100,7 +100,12 @@ jobs:
 
       - name: Start Phoenix for responsive browser checks
         run: |
-          mix phx.server > /tmp/strangertalks-browser.log 2>&1 &
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/strangertalks-browser.log 2>&1 &
           echo $! > /tmp/strangertalks-browser.pid
           for attempt in $(seq 1 45); do
             if ! kill -0 "$(cat /tmp/strangertalks-browser.pid)" 2>/dev/null; then
@@ -109,6 +114,7 @@ jobs:
               exit 1
             fi
             if curl -fsS http://127.0.0.1:4002/ >/dev/null; then
+              echo "Phoenix browser test endpoint is ready."
               exit 0
             fi
             sleep 1
