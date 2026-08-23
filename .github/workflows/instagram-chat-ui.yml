@@ -1,0 +1,128 @@
+name: Instagram-Inspired Conversation UI Gate
+
+on:
+  push:
+    branches:
+      - feature/instagram-chat-ui
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+
+concurrency:
+  group: instagram-chat-ui-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  conversation-ui:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4000
+
+    steps:
+      - name: Checkout exact feature commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          echo "EXPECTED_CHAT_UI_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "ACTUAL_CHAT_UI_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install dependencies
+        run: |
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Conversation interaction regressions
+        run: |
+          node --test \
+            test/js/instagram_chat_test.mjs \
+            test/js/reply_quote_test.mjs \
+            test/js/reaction_test.mjs \
+            test/js/message_edit_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/pin_test.mjs \
+            test/js/expressive_media_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/atmosphere_test.mjs \
+            test/js/prompt_cards_test.mjs \
+            test/js/companion_test.mjs \
+            test/js/presence_test.mjs
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix for responsive browser checks
+        run: |
+          mix phx.server > /tmp/strangertalks-browser.log 2>&1 &
+          echo $! > /tmp/strangertalks-browser.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:4000/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/strangertalks-browser.log
+          exit 1
+
+      - name: Five-device responsive browser checks
+        run: node --test test/js/instagram_chat_browser_test.mjs
+
+      - name: Full precommit
+        run: mix precommit
+
+      - name: Prove precommit left checkout unchanged
+        run: git status --porcelain | tee /tmp/chat-ui-status && test ! -s /tmp/chat-ui-status
+
+      - name: Record exact tested commit
+        run: echo "INSTAGRAM_CHAT_UI_TESTED_COMMIT=$(git rev-parse HEAD)"
+
+      - name: Browser server log on failure
+        if: failure()
+        run: cat /tmp/strangertalks-browser.log || true
