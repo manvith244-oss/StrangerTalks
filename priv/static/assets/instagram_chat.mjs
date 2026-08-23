@@ -342,7 +342,7 @@ function setupMessageInteractions() {
   }, {passive: true})
 
   const observer = new MutationObserver(refreshMessageDecorations)
-  observer.observe(list, {childList: true, subtree: true, attributes: true, attributeFilter: ["class"]})
+  observer.observe(list, {childList: true, subtree: true})
   refreshMessageDecorations()
 }
 
