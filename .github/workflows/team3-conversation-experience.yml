@@ -82,8 +82,22 @@ jobs:
       - name: Start Phoenix real stack
         run: |
           mix run --no-start -e '
-            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
-            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNew.Repo,
+              repo_config
+              |> Keyword.put(:pool, DBConnection.ConnectionPool)
+              |> Keyword.put(:pool_size, 20)
+            )
+            endpoint_config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNewWeb.Endpoint,
+              endpoint_config
+              |> Keyword.put(:server, true)
+              |> Keyword.put(:http, [ip: {127, 0, 0, 1}, port: 4000])
+            )
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
             Process.sleep(:infinity)
           ' > /tmp/team3-phoenix.log 2>&1 &
