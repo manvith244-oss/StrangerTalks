@@ -100,8 +100,7 @@ defmodule StrangertalksNew.Relationships do
       :consents,
       from(c in RelationshipConsent, where: c.conversation_id == ^conversation_id)
     )
-    |> Multi.run(:relationship, fn repo,
-                                   %{conversation_lock: conversation, consents: consents} ->
+    |> Multi.run(:relationship, fn repo, %{conversation_lock: conversation, consents: consents} ->
       if length(consents) == 2 do
         {participant_a_id, participant_b_id} =
           canonical_pair(conversation.participant_a_id, conversation.participant_b_id)
@@ -172,7 +171,10 @@ defmodule StrangertalksNew.Relationships do
       end
     end)
     |> Multi.run(:conversation_link, fn repo,
-                                        %{conversation_lock: conversation, relationship: relationship_result} ->
+                                        %{
+                                          conversation_lock: conversation,
+                                          relationship: relationship_result
+                                        } ->
       if relationship_result do
         {relationship, _created?} = relationship_result
 
@@ -220,8 +222,8 @@ defmodule StrangertalksNew.Relationships do
          conversation.participant_a_id,
          conversation.participant_b_id
        ),
-      do: {:error, :relationship_unavailable},
-      else: :ok
+       do: {:error, :relationship_unavailable},
+       else: :ok
   end
 
   defp close_relationship_locked(relationship_id, participant_id, closure_reason) do
