@@ -4,10 +4,13 @@ on:
   push:
     branches:
       - team3/conversation-experience-proof
+  pull_request:
+    branches:
+      - feature/instagram-chat-ui
   workflow_dispatch:
 
 concurrency:
-  group: team3-conversation-experience-${{ github.sha }}
+  group: team3-conversation-experience-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -42,13 +45,14 @@ jobs:
       - name: Checkout exact Team 3 commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Prove checkout identity
         run: |
-          echo "EXPECTED_TEAM3_COMMIT=${{ github.sha }}"
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "EXPECTED_TEAM3_COMMIT=$expected"
           echo "ACTUAL_TEAM3_COMMIT=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$expected"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
