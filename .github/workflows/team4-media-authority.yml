@@ -76,6 +76,7 @@ jobs:
         run: |
           node --test --test-concurrency=1 \
             test/js/team4_media_authority_test.mjs \
+            test/js/team4_call_operation_race_test.mjs \
             test/js/team11_media_expression_break_test.mjs \
             test/js/live_call_test.mjs \
             test/js/voice_notes_test.mjs \
