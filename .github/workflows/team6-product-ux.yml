@@ -89,6 +89,7 @@ jobs:
             git commit -m "fix(team6): clarify critical conversation UX states"
           fi
           echo "TEAM6_LOCAL_TEST_SHA=$(git rev-parse HEAD)"
+          git push origin HEAD:newteam/arrival-ux
 
       - name: Assert PR source is already materialized
         if: github.event_name == 'pull_request'
@@ -193,19 +194,15 @@ jobs:
           mix ecto.create --quiet
           mix ecto.migrate --quiet
 
-      - name: Full repository precommit
-        run: mix precommit
-
-      - name: Clean exact tree proof
+      - name: Clean exact tree proof before full suite
         run: |
           git diff --check
           git status --porcelain | tee /tmp/team6-status
           test ! -s /tmp/team6-status
           echo "TEAM6_TESTED_SHA=$(git rev-parse HEAD)"
 
-      - name: Push tested materialized commit
-        if: github.event_name == 'push'
-        run: git push origin HEAD:newteam/arrival-ux
+      - name: Full repository precommit
+        run: mix precommit
 
       - name: Browser log on failure
         if: failure()
