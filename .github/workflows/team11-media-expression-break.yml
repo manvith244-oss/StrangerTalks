@@ -1,0 +1,77 @@
+name: Team 11 Media Expression Break
+
+on:
+  push:
+    branches:
+      - newteam/media-expression-break
+  workflow_dispatch:
+
+concurrency:
+  group: team11-media-expression-break-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  phase-a-hostile-break:
+    runs-on: ubuntu-latest
+    env:
+      TEAM11_PRODUCT_BASELINE: e938cdd6e806cc5d05837a9c97755477be95bb27
+    steps:
+      - name: Checkout exact Team 11 commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Prove checkout identity
+        run: |
+          echo "EXPECTED_TEAM11_SHA=${{ github.sha }}"
+          echo "CHECKED_OUT_TEAM11_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Prove Phase A is test-only over product baseline
+        run: |
+          git cat-file -e "$TEAM11_PRODUCT_BASELINE^{commit}"
+          git diff --name-only "$TEAM11_PRODUCT_BASELINE"...HEAD | tee /tmp/team11-files
+          while IFS= read -r path; do
+            case "$path" in
+              test/js/team11_media_expression_break_test.mjs|.github/workflows/team11-media-expression-break.yml) ;;
+              "") ;;
+              *) echo "Unexpected product/non-Team11 change: $path"; exit 1 ;;
+            esac
+          done < /tmp/team11-files
+
+      - name: Existing owner regression evidence
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/expressive_media_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/live_call_test.mjs
+
+      - name: Team 11 deterministic seam attacks
+        run: |
+          node --test --test-concurrency=1 test/js/team11_media_expression_break_test.mjs
+
+      - name: Diff integrity
+        if: always()
+        run: git diff --check
+
+      - name: Clean tree proof
+        if: always()
+        run: |
+          git status --porcelain | tee /tmp/team11-status
+          test ! -s /tmp/team11-status
+
+      - name: Record exact tested commit
+        if: always()
+        run: |
+          echo "TEAM11_PRODUCT_BASELINE=$TEAM11_PRODUCT_BASELINE"
+          echo "TEAM11_TESTED_SHA=$(git rev-parse HEAD)"
