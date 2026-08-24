@@ -5,6 +5,7 @@ import {chromium} from "playwright"
 import "./team10_expression_browser_test.mjs"
 import "./team10_expression_actions_browser_test.mjs"
 import "./team10_expression_reliability_browser_test.mjs"
+import "./team10_expression_authority_browser_test.mjs"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4002"
 const SCREENSHOT_DIR = "tmp/chat-ui-screenshots"
