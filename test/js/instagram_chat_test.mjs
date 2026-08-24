@@ -66,6 +66,12 @@ test("chat hardening covers short keyboards, landscape notches, iOS zoom and coa
   assert.match(moduleSource, /\.message-action-btn,[\s\S]*min-height: 44px/)
 })
 
+test("tray decoration is idempotent so its subtree observer cannot self-trigger forever", () => {
+  assert.match(moduleSource, /button\.dataset\.igTrayLabel === label/)
+  assert.match(moduleSource, /if \(!alreadyDecorated\)/)
+  assert.match(moduleSource, /button\.dataset\.igTrayLabel = label/)
+})
+
 test("chat enhancement loads Companion and preserves human Send authority", () => {
   assert.match(moduleSource, /import "\.\/companion\.mjs"/)
   assert.match(moduleSource, /#bottom-nav \[data-go="chats"\]/)
