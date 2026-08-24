@@ -26,16 +26,38 @@ export function normalMediaDraftMatchesRuntime(draft, conversationId) {
   )
 }
 
+export function genericTimelineKey(sequence) {
+  const value = Number(sequence)
+  return Number.isInteger(value) && value > 0 ? [value, 0, 0] : null
+}
+
+export function normalMediaTimelineKey(item) {
+  const anchor = Number(item?.anchor_sequence)
+  const ordinal = Number(item?.anchor_ordinal)
+  if (!Number.isInteger(anchor) || anchor < 0 || !Number.isInteger(ordinal) || ordinal < 1) return null
+  return [anchor, 1, ordinal]
+}
+
+export function compareTimelineKeys(a, b) {
+  for (let i = 0; i < 3; i += 1) {
+    const delta = Number(a?.[i] ?? Number.MAX_SAFE_INTEGER) - Number(b?.[i] ?? Number.MAX_SAFE_INTEGER)
+    if (delta !== 0) return delta
+  }
+  return 0
+}
+
 export function dedupeNormalMedia(items) {
   const byId = new Map()
   for (const item of items || []) {
     if (!item?.client_message_id) continue
     const existing = byId.get(item.client_message_id)
-    if (!existing || Number(item.sequence || 0) >= Number(existing.sequence || 0)) {
+    const incomingKey = normalMediaTimelineKey(item)
+    const existingKey = normalMediaTimelineKey(existing)
+    if (!existing || (incomingKey && (!existingKey || compareTimelineKeys(incomingKey, existingKey) >= 0))) {
       byId.set(item.client_message_id, item)
     }
   }
-  return [...byId.values()].sort((a, b) => Number(a.sequence || 0) - Number(b.sequence || 0))
+  return [...byId.values()].sort((a, b) => compareTimelineKeys(normalMediaTimelineKey(a), normalMediaTimelineKey(b)))
 }
 
 export function normalMediaLabel(kind) {
