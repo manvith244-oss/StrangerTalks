@@ -1,9 +1,7 @@
 diff --git a/priv/static/assets/app.js b/priv/static/assets/app.js
 --- a/priv/static/assets/app.js
 +++ b/priv/static/assets/app.js
-@@ -785,12 +785,22 @@ async function joinConversation(id) {
-   app.conversation.on("call:reaction", (payload) => coord.handleReaction(payload))
- 
+@@ -817,22 +817,33 @@ async function joinConversation(id) {
    app.conversation.on("conversation:ended", async () => {
 +    if (app.conversationId !== id) return
      app.liveCall?.teardown()
@@ -25,11 +23,15 @@ diff --git a/priv/static/assets/app.js b/priv/static/assets/app.js
      resetPinnedMessages()
      app.peerPresence = null
      renderPresenceText()
-@@ -804,6 +814,7 @@ async function joinConversation(id) {
+     resetAmbientAudio()
+     resetQuietMode()
+     resetAtmosphere()
+     resetPromptCards()
+     resetIcebreaker()
+     resetAvatars()
      app.messageAvailability.clear()
      await markConversationEnded()
      show("ended")
 +    $("#consent")?.focus()
      announce("Conversation ended. Choose what this device should retain.")
    })
- 
