@@ -1,0 +1,38 @@
+name: Team 4 Format Probe
+
+on:
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Format Team 4 Elixir tests
+        run: mix format test/strangertalks_new/relationship_consent_safety_review_test.exs test/strangertalks_new/team4_safety_boundary_test.exs
+      - name: Commit exact formatter output
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if git diff --quiet -- test/strangertalks_new/relationship_consent_safety_review_test.exs test/strangertalks_new/team4_safety_boundary_test.exs; then
+            echo "Already formatted"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add test/strangertalks_new/relationship_consent_safety_review_test.exs test/strangertalks_new/team4_safety_boundary_test.exs
+          git commit -m "Format Team 4 safety regressions"
+          git push origin HEAD:"${HEAD_REF}"
