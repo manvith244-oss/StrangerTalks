@@ -1,4 +1,5 @@
 import "./instagram_chat.mjs"
+import "./thumb_interactions.mjs"
 
 // app.js already owns report open/close behavior and binds #report-cancel during
 // module evaluation. Keep the existing Conversation contract intact even on the
