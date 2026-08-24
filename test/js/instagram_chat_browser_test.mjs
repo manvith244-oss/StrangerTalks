@@ -32,6 +32,7 @@ function screenshotName(name) {
 async function prepareConversation(page) {
   await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
   await page.waitForFunction(() => document.documentElement.dataset.instagramChatBooted === "true")
+  await page.waitForFunction(() => document.querySelector("#doors")?.children.length > 0)
 
   await page.evaluate(() => {
     document.querySelectorAll("[data-screen]").forEach((screen) => screen.classList.remove("active"))
