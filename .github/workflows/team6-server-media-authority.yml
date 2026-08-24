@@ -1,0 +1,54 @@
+name: Team 6 Server Media Authority
+
+on:
+  push:
+    branches: [team6/voice-video-expression]
+    paths:
+      - "lib/strangertalks_new/conversation_lifecycle/conversation_server.ex"
+      - "test/strangertalks_new/team6_media_authority_test.exs"
+      - ".github/workflows/team6-server-media-authority.yml"
+  pull_request:
+    paths:
+      - "lib/strangertalks_new/conversation_lifecycle/conversation_server.ex"
+      - "test/strangertalks_new/team6_media_authority_test.exs"
+      - ".github/workflows/team6-server-media-authority.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  media-authority:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      DATABASE_URL: ecto://postgres:postgres@localhost:5432/strangertalks_new_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.0"
+          elixir-version: "1.18.4"
+      - name: Dependencies
+        run: mix deps.get
+      - name: Prepare database
+        run: mix ecto.create && mix ecto.migrate
+      - name: Authoritative endpoint regressions
+        run: mix test test/strangertalks_new/team6_media_authority_test.exs --trace
+      - name: Existing call authority regressions
+        run: mix test test/strangertalks_new/conversation_live_call_test.exs
+      - name: Diff hygiene
+        run: git diff --check
