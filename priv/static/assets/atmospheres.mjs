@@ -14,6 +14,14 @@ if (typeof document !== "undefined") {
     cancel.textContent = "Cancel"
     reportForm.append(cancel)
   }
+
+  // Some Conversation modules can finish their own synchronous setup after this
+  // dependency evaluates. Collapse any later duplicate legacy fallback to the
+  // first control, which is the one app.js binds, so the DOM keeps one unique ID.
+  queueMicrotask(() => {
+    const [, ...duplicates] = document.querySelectorAll("#report-cancel")
+    duplicates.forEach((duplicate) => duplicate.remove())
+  })
 }
 
 export const ATMOSPHERES = Object.freeze([
