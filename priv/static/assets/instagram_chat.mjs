@@ -203,6 +203,7 @@ function setupComposer() {
 
   input.placeholder = "Message…"
   input.setAttribute("enterkeyhint", "send")
+  input.style.fontSize = "16px"
   send.setAttribute("aria-label", "Send message")
   send.title = "Send message"
 
