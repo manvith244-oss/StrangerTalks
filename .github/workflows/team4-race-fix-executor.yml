@@ -1,0 +1,330 @@
+name: Team 4 Canonical Race Fix Executor
+
+on:
+  push:
+    branches:
+      - newteam/media-race-fix-executor
+
+permissions:
+  contents: write
+
+jobs:
+  land-canonical-race-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: newteam/media
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Patch canonical call authority and permanent regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          live = Path('priv/static/assets/live_call.mjs')
+          s = live.read_text()
+
+          def replace_once(old, new, label):
+              global s
+              if new in s:
+                  return
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one old block, found {count}')
+              s = s.replace(old, new, 1)
+
+          replace_once(
+          '''    this.transportAudioTransceiver = null
+    this.transportVideoTransceiver = null
+    this.activeMediaAcquisitionGeneration = 0
+''',
+          '''    this.transportAudioTransceiver = null
+    this.transportVideoTransceiver = null
+    this.activeMediaAcquisitionGeneration = 0
+    this.callOperationGeneration = 0
+''',
+          'call operation generation state')
+
+          replace_once(
+          '''  setConversationId(id) {
+    this.conversationId = id
+  }
+''',
+          '''  setConversationId(id) {
+    if (this.conversationId !== id) this.callOperationGeneration++
+    this.conversationId = id
+  }
+''',
+          'conversation transition invalidation')
+
+          old_initiate = '''  async initiate(callType = "voice") {
+    if (this.status !== CALL_STATUS.IDLE && this.status !== CALL_STATUS.TERMINAL) {
+      throw new Error("Call already in progress")
+    }
+
+    this.role = "caller"
+    this.callType = callType
+    this.status = CALL_STATUS.PENDING_OUTGOING
+    this.mediaGeneration = 1
+    this.localVisualFloorClosed = false
+    this.returnToVoiceGeneration = 0
+    this.presentedReactions.clear()
+    this.voiceEffectPreset = "plain"
+    this.voiceEffectActive = false
+    this.peerVoiceEffectActive = false
+    this.notifyStateChange()
+
+    return new Promise((resolve, reject) => {
+      if (!this.channel) return reject(new Error("Channel unavailable"))
+      this.channel.push("call:initiate", { call_type: callType })
+        .receive("ok", (res) => {
+          this.callAttemptId = res.call_attempt_id
+          this.notifyStateChange()
+          resolve(res)
+        })
+        .receive("error", (err) => {
+          this.teardown("initiate_failed")
+          reject(err)
+        })
+    })
+  }
+'''
+          new_initiate = '''  async initiate(callType = "voice") {
+    if (this.status !== CALL_STATUS.IDLE && this.status !== CALL_STATUS.TERMINAL) {
+      throw new Error("Call already in progress")
+    }
+
+    const operationGeneration = ++this.callOperationGeneration
+    const operationConversationId = this.conversationId
+
+    this.role = "caller"
+    this.callType = callType
+    this.status = CALL_STATUS.PENDING_OUTGOING
+    this.mediaGeneration = 1
+    this.localVisualFloorClosed = false
+    this.returnToVoiceGeneration = 0
+    this.presentedReactions.clear()
+    this.voiceEffectPreset = "plain"
+    this.voiceEffectActive = false
+    this.peerVoiceEffectActive = false
+    this.notifyStateChange()
+
+    const stillCurrent = () =>
+      this.callOperationGeneration === operationGeneration &&
+      this.conversationId === operationConversationId &&
+      this.status === CALL_STATUS.PENDING_OUTGOING &&
+      this.role === "caller" &&
+      this.callAttemptId === null
+
+    return new Promise((resolve, reject) => {
+      if (!this.channel) return reject(new Error("Channel unavailable"))
+      this.channel.push("call:initiate", { call_type: callType })
+        .receive("ok", (res) => {
+          if (!stillCurrent()) return resolve({...res, stale: true})
+          this.callAttemptId = res.call_attempt_id
+          this.notifyStateChange()
+          resolve(res)
+        })
+        .receive("error", (err) => {
+          if (!stillCurrent()) return resolve({stale: true, error: err})
+          this.teardown("initiate_failed")
+          reject(err)
+        })
+        .receive("timeout", () => {
+          if (!stillCurrent()) return resolve({stale: true, timeout: true})
+          this.teardown("initiate_timeout")
+          reject(new Error("Call initiation timed out"))
+        })
+    })
+  }
+'''
+          replace_once(old_initiate, new_initiate, 'initiate async authority')
+
+          old_accept = '''  async accept() {
+    if (this.status !== CALL_STATUS.PENDING_INCOMING || !this.callAttemptId) {
+      throw new Error("No pending incoming call")
+    }
+
+    return new Promise((resolve, reject) => {
+      if (!this.channel) return reject(new Error("Channel unavailable"))
+      this.channel.push("call:accept", { call_attempt_id: this.callAttemptId })
+        .receive("ok", (res) => {
+          this.status = CALL_STATUS.CONNECTING
+          this.notifyStateChange()
+          resolve(res)
+        })
+        .receive("error", (err) => {
+          this.teardown("accept_failed")
+          reject(err)
+        })
+    })
+  }
+'''
+          new_accept = '''  async accept() {
+    if (this.status !== CALL_STATUS.PENDING_INCOMING || !this.callAttemptId) {
+      throw new Error("No pending incoming call")
+    }
+
+    const operationGeneration = ++this.callOperationGeneration
+    const operationConversationId = this.conversationId
+    const operationAttemptId = this.callAttemptId
+    const stillCurrent = () =>
+      this.callOperationGeneration === operationGeneration &&
+      this.conversationId === operationConversationId &&
+      this.callAttemptId === operationAttemptId &&
+      this.status === CALL_STATUS.PENDING_INCOMING &&
+      this.role === "callee"
+
+    return new Promise((resolve, reject) => {
+      if (!this.channel) return reject(new Error("Channel unavailable"))
+      this.channel.push("call:accept", { call_attempt_id: operationAttemptId })
+        .receive("ok", (res) => {
+          if (!stillCurrent()) return resolve({...res, stale: true})
+          this.status = CALL_STATUS.CONNECTING
+          this.applyOutgoingAudioGate()
+          this.notifyStateChange()
+          resolve(res)
+        })
+        .receive("error", (err) => {
+          if (!stillCurrent()) return resolve({stale: true, error: err})
+          this.teardown("accept_failed")
+          reject(err)
+        })
+        .receive("timeout", () => {
+          if (!stillCurrent()) return resolve({stale: true, timeout: true})
+          this.teardown("accept_timeout")
+          reject(new Error("Call acceptance timed out"))
+        })
+    })
+  }
+'''
+          replace_once(old_accept, new_accept, 'accept async authority')
+
+          replace_once(
+          '''  teardown(reason = "normal") {
+    if (this.connectingTimer) {
+''',
+          '''  teardown(reason = "normal") {
+    this.callOperationGeneration++
+    if (this.connectingTimer) {
+''',
+          'teardown async invalidation')
+
+          live.write_text(s)
+
+          tests = Path('test/js/team4_media_authority_test.mjs')
+          t = tests.read_text()
+          marker = 'T4-011: Conversation A async completion cannot mutate Conversation B'
+          if marker not in t:
+              t += r'''
+
+test("T4-008: late Initiate error cannot teardown a newer authoritative call", async () => {
+  const pushes = []
+  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push(event) { const push = controllablePush(); pushes.push({event, push}); return push }}})
+  const oldPending = coord.initiate("voice")
+  coord.teardown("blocked")
+  coord.status = CALL_STATUS.IDLE
+  const newPending = coord.initiate("voice")
+  pushes[0].push.fire("error", {reason: "late_old_error"})
+  const oldResult = await oldPending
+  assert.equal(oldResult.stale, true)
+  assert.equal(coord.status, CALL_STATUS.PENDING_OUTGOING)
+  assert.equal(coord.callAttemptId, null)
+  pushes[1].push.fire("ok", {call_attempt_id: "new-authoritative"})
+  await newPending
+  assert.equal(coord.callAttemptId, "new-authoritative")
+  assert.equal(coord.status, CALL_STATUS.PENDING_OUTGOING)
+})
+
+test("T4-009: late Accept error cannot teardown a newer incoming call", async () => {
+  const pushes = []
+  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push(event) { const push = controllablePush(); pushes.push({event, push}); return push }}})
+  coord.callAttemptId = "old"; coord.role = "callee"; coord.status = CALL_STATUS.PENDING_INCOMING
+  const oldPending = coord.accept()
+  coord.teardown("ended")
+  coord.status = CALL_STATUS.IDLE
+  coord.handleIncomingCall({call_attempt_id: "new", caller_id: "p2", call_type: "voice"})
+  pushes[0].push.fire("error", {reason: "late_old_error"})
+  const oldResult = await oldPending
+  assert.equal(oldResult.stale, true)
+  assert.equal(coord.callAttemptId, "new")
+  assert.equal(coord.status, CALL_STATUS.PENDING_INCOMING)
+})
+
+test("T4-010: Accept reapplies outgoing-audio privacy gate before CONNECTING", async () => {
+  const push = controllablePush()
+  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push() { return push }}})
+  const audio = {kind: "audio", enabled: true, stop() {}}
+  coord.rawAudioTrack = audio
+  coord.callAttemptId = "a1"; coord.role = "callee"; coord.status = CALL_STATUS.PENDING_INCOMING
+  const pending = coord.accept()
+  push.fire("ok", {call_attempt_id: "a1"})
+  await pending
+  assert.equal(coord.status, CALL_STATUS.CONNECTING)
+  assert.equal(audio.enabled, false, "CONNECTING must re-close any pre-existing outgoing audio track")
+})
+
+test("T4-011: Conversation A async completion cannot mutate Conversation B", async () => {
+  const pushes = []
+  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "conversation-a", channel: {push(event) { const push = controllablePush(); pushes.push({event, push}); return push }}})
+  const pendingA = coord.initiate("voice")
+  coord.teardown("ended")
+  coord.status = CALL_STATUS.IDLE
+  coord.setConversationId("conversation-b")
+  const pendingB = coord.initiate("voice")
+  pushes[0].push.fire("ok", {call_attempt_id: "attempt-a"})
+  const resultA = await pendingA
+  assert.equal(resultA.stale, true)
+  assert.equal(coord.conversationId, "conversation-b")
+  assert.equal(coord.callAttemptId, null)
+  assert.equal(coord.status, CALL_STATUS.PENDING_OUTGOING)
+  pushes[1].push.fire("ok", {call_attempt_id: "attempt-b"})
+  await pendingB
+  assert.equal(coord.callAttemptId, "attempt-b")
+})
+
+test("T4-006E: late Accept success after ordinary End is inert", async () => {
+  const push = controllablePush()
+  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push() { return push }}})
+  coord.callAttemptId = "a1"; coord.role = "callee"; coord.status = CALL_STATUS.PENDING_INCOMING
+  const pending = coord.accept()
+  coord.teardown("ended")
+  push.fire("ok", {call_attempt_id: "a1"})
+  const result = await pending
+  assert.equal(result.stale, true)
+  assert.equal(coord.callAttemptId, null)
+  assert.notEqual(coord.status, CALL_STATUS.CONNECTING)
+})
+
+test("T4-007B: late Initiate success after Block is inert", async () => {
+  const push = controllablePush()
+  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push() { return push }}})
+  const pending = coord.initiate("voice")
+  coord.teardown("blocked")
+  push.fire("ok", {call_attempt_id: "dead-attempt"})
+  const result = await pending
+  assert.equal(result.stale, true)
+  assert.equal(coord.callAttemptId, null)
+  assert.notEqual(coord.status, CALL_STATUS.CONNECTING)
+  assert.notEqual(coord.status, CALL_STATUS.ACTIVE)
+})
+'''
+              tests.write_text(t)
+          PY
+
+          node --test test/js/team4_media_authority_test.mjs
+          git diff --check
+
+          if ! git diff --quiet -- priv/static/assets/live_call.mjs test/js/team4_media_authority_test.mjs; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add priv/static/assets/live_call.mjs test/js/team4_media_authority_test.mjs
+            git commit -m "Team 4: close async call authority races"
+            git pull --rebase origin newteam/media
+            git push origin HEAD:newteam/media
+          fi
