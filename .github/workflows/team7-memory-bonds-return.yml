@@ -92,8 +92,10 @@ jobs:
           mix test "${tests[@]}"
 
       - name: Team 7 local retention export import sync attacks
+        shell: bash
         run: |
-          node --test \
+          set -euo pipefail
+          if node --test \
             test/js/local_data_test.mjs \
             test/js/team7_retention_race_test.mjs \
             test/js/team7_backup_import_test.mjs \
@@ -105,7 +107,24 @@ jobs:
             test/js/message_edit_test.mjs \
             test/js/message_unsend_test.mjs \
             test/js/ephemeral_conversation_ux_test.mjs \
-            test/js/security_adversarial_test.mjs
+            test/js/security_adversarial_test.mjs \
+            > /tmp/team7-js.log 2>&1; then
+            tail -n 60 /tmp/team7-js.log
+          else
+            tail -n 180 /tmp/team7-js.log
+            exit 1
+          fi
+
+      - name: Team 7 Device A to B to A encrypted continuity composite
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test test/js/team7_two_device_continuity_test.mjs > /tmp/team7-two-device.log 2>&1; then
+            cat /tmp/team7-two-device.log
+          else
+            cat /tmp/team7-two-device.log
+            exit 1
+          fi
 
       - name: Prepare browser database
         run: |
@@ -135,10 +154,27 @@ jobs:
           exit 1
 
       - name: Team 7 continuity browser matrix
-        run: node --test test/js/team7_continuity_browser_test.mjs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test test/js/team7_continuity_browser_test.mjs > /tmp/team7-matrix.log 2>&1; then
+            cat /tmp/team7-matrix.log
+          else
+            cat /tmp/team7-matrix.log
+            exit 1
+          fi
 
       - name: Existing end-to-end browser proof
-        run: node --test test/js/browser_e2e_test.mjs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test test/js/browser_e2e_test.mjs > /tmp/team7-browser-e2e.log 2>&1; then
+            tail -n 80 /tmp/team7-browser-e2e.log
+          else
+            echo "EXISTING_BROWSER_E2E_FIRST_FAILURE_CONTEXT"
+            tail -n 220 /tmp/team7-browser-e2e.log
+            exit 1
+          fi
 
       - name: Stop Phoenix browser server
         if: always()
@@ -159,14 +195,29 @@ jobs:
           mix ecto.create --quiet
           mix ecto.migrate --quiet
 
+      - name: Format check
+        run: mix format --check-formatted
+
       - name: Full precommit
-        run: mix precommit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if mix precommit > /tmp/team7-precommit.log 2>&1; then
+            tail -n 100 /tmp/team7-precommit.log
+          else
+            tail -n 240 /tmp/team7-precommit.log
+            exit 1
+          fi
 
       - name: Diff check
         run: git diff --check
 
       - name: Prove final checkout clean
-        run: git status --porcelain | tee /tmp/team7-status && test ! -s /tmp/team7-status
+        shell: bash
+        run: |
+          git status --short --branch
+          git status --porcelain | tee /tmp/team7-status
+          test ! -s /tmp/team7-status
 
       - name: Record exact tested commit
         run: echo "TEAM7_TESTED_COMMIT=$(git rev-parse HEAD)"
