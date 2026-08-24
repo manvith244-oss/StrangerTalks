@@ -1,0 +1,95 @@
+name: Team 6 Visible Remediation
+
+on:
+  push:
+    branches: [team6/voice-video-expression]
+    paths:
+      - "tmp/team6_direct_remediate.py"
+      - ".github/workflows/team6-visible-remediation.yml"
+  pull_request:
+    paths:
+      - "tmp/team6_direct_remediate.py"
+      - ".github/workflows/team6-visible-remediation.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-apply:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: team6/voice-video-expression
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "28.0"
+          elixir-version: "1.18.4"
+      - run: mix deps.get
+      - run: npm ci
+      - run: mix ecto.create && mix ecto.migrate
+      - name: Apply direct source remediation in runner
+        run: python tmp/team6_direct_remediate.py
+      - name: Format canonical Elixir changes
+        run: |
+          mix format \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/c11_policy.ex \
+            config/runtime.exs config/test.exs \
+            test/support/turn_credential_test_client.ex \
+            test/strangertalks_new/team6_media_authority_test.exs \
+            test/strangertalks_new/team6_turn_provider_test.exs
+      - name: Focused JavaScript media proof
+        run: |
+          node --test \
+            test/js/voice_notes_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/team6_media_gate_test.mjs \
+            test/js/team6_voice_note_permission_test.mjs \
+            test/js/team6_media_privacy_test.mjs
+      - name: Focused server media proof
+        run: |
+          mix test \
+            test/strangertalks_new/c11_policy_test.exs \
+            test/strangertalks_new/team6_turn_provider_test.exs \
+            test/strangertalks_new/conversation_live_call_test.exs \
+            test/strangertalks_new/team6_media_authority_test.exs
+      - name: Integrity
+        run: |
+          mix format --check-formatted
+          git diff --check
+      - name: Commit proven canonical source on push
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "team6-media-bot"
+          git config user.email "team6-media-bot@users.noreply.github.com"
+          git add \
+            priv/static/assets/live_call.mjs priv/static/assets/voice_notes.mjs priv/static/assets/app.js \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex lib/strangertalks_new/c11_policy.ex \
+            config/runtime.exs config/test.exs test/support/turn_credential_test_client.ex \
+            test/js/team6_media_gate_test.mjs test/js/team6_voice_note_permission_test.mjs test/js/team6_media_privacy_test.mjs \
+            test/strangertalks_new/team6_media_authority_test.exs test/strangertalks_new/team6_turn_provider_test.exs
+          git commit -m "fix(team6): close provider-independent media authority gaps [skip ci]"
+          git push origin HEAD:team6/voice-video-expression
