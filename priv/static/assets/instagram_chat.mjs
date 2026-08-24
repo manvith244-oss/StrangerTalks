@@ -3,6 +3,7 @@ import "./companion.mjs"
 const HEART = "❤️"
 const DOUBLE_TAP_MS = 320
 const DOUBLE_TAP_DISTANCE_PX = 26
+const TAP_MOVEMENT_PX = 12
 const MAX_COMPOSER_HEIGHT_PX = 120
 
 const ICONS = Object.freeze({
@@ -41,6 +42,14 @@ export function shouldTriggerQuickHeart(previousTap, currentTap) {
   const dx = currentTap.x - previousTap.x
   const dy = currentTap.y - previousTap.y
   return elapsed > 0 && elapsed <= DOUBLE_TAP_MS && Math.hypot(dx, dy) <= DOUBLE_TAP_DISTANCE_PX
+}
+
+export function isTapGesture(start, end) {
+  if (!start || !end) return false
+  const elapsed = end.time - start.time
+  const dx = end.x - start.x
+  const dy = end.y - start.y
+  return elapsed >= 0 && elapsed <= DOUBLE_TAP_MS && Math.hypot(dx, dy) <= TAP_MOVEMENT_PX
 }
 
 export function normalizedViewportHeight(visualHeight, fallbackHeight) {
@@ -232,6 +241,21 @@ function autosizeComposer(input) {
   input.style.height = `${next}px`
 }
 
+function observeProgrammaticComposerValue(input, onChange) {
+  if (!input || input.dataset.igValueObserved === "true") return
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")
+  if (!descriptor?.get || !descriptor?.set) return
+  Object.defineProperty(input, "value", {
+    configurable: true,
+    get() { return descriptor.get.call(this) },
+    set(value) {
+      descriptor.set.call(this, value)
+      queueMicrotask(onChange)
+    }
+  })
+  input.dataset.igValueObserved = "true"
+}
+
 function setupComposer() {
   const form = document.querySelector("#message-form")
   const compose = form?.querySelector(".compose")
@@ -285,6 +309,8 @@ function setupComposer() {
     autosizeComposer(input)
   }
 
+  observeProgrammaticComposerValue(input, updateState)
+
   plus.addEventListener("click", () => {
     const opening = !form.classList.contains("ig-tray-open")
     form.classList.toggle("ig-tray-open", opening)
@@ -294,6 +320,7 @@ function setupComposer() {
 
   input.addEventListener("input", updateState)
   input.addEventListener("focus", () => {
+    updateState()
     document.body.classList.add("ig-keyboard-open")
     setTimeout(syncVisualViewport, 0)
   })
@@ -364,6 +391,7 @@ function setupMessageInteractions() {
   if (!list) return
 
   const touchTaps = new WeakMap()
+  const pointerStarts = new Map()
 
   list.addEventListener("dblclick", (event) => {
     if (eventIsInteractive(event)) return
@@ -374,12 +402,31 @@ function setupMessageInteractions() {
     applyQuickHeart(message)
   })
 
-  list.addEventListener("pointerup", (event) => {
+  list.addEventListener("pointerdown", (event) => {
     if (event.pointerType === "mouse" || eventIsInteractive(event)) return
     const message = event.target.closest(".message")
     if (!message) return
+    pointerStarts.set(event.pointerId, {
+      message,
+      time: performance.now(),
+      x: event.clientX,
+      y: event.clientY
+    })
+  }, {passive: true})
+
+  list.addEventListener("pointerup", (event) => {
+    if (event.pointerType === "mouse" || eventIsInteractive(event)) return
+    const message = event.target.closest(".message")
+    const start = pointerStarts.get(event.pointerId)
+    pointerStarts.delete(event.pointerId)
+    if (!message || !start || start.message !== message) return
 
     const current = {time: performance.now(), x: event.clientX, y: event.clientY}
+    if (!isTapGesture(start, current)) {
+      touchTaps.delete(message)
+      return
+    }
+
     const previous = touchTaps.get(message)
     if (shouldTriggerQuickHeart(previous, current)) {
       touchTaps.delete(message)
@@ -387,6 +434,12 @@ function setupMessageInteractions() {
     } else {
       touchTaps.set(message, current)
     }
+  }, {passive: true})
+
+  list.addEventListener("pointercancel", (event) => {
+    const start = pointerStarts.get(event.pointerId)
+    pointerStarts.delete(event.pointerId)
+    if (start?.message) touchTaps.delete(start.message)
   }, {passive: true})
 
   const observer = new MutationObserver(refreshMessageDecorations)
