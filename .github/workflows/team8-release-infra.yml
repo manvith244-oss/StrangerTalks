@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - newteam/release-break
+      - release/render-2026-08-24
   workflow_dispatch:
 
 permissions:
