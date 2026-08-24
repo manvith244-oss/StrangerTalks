@@ -95,6 +95,7 @@ jobs:
         run: |
           node --test \
             test/js/local_data_test.mjs \
+            test/js/team7_retention_race_test.mjs \
             test/js/atomic_restore_test.mjs \
             test/js/restoration_validation_test.mjs \
             test/js/encrypted_sync_test.mjs \
@@ -102,6 +103,7 @@ jobs:
             test/js/bond_reconnect_test.mjs \
             test/js/message_edit_test.mjs \
             test/js/message_unsend_test.mjs \
+            test/js/ephemeral_conversation_ux_test.mjs \
             test/js/security_adversarial_test.mjs
 
       - name: Prepare browser database
