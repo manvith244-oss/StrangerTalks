@@ -52,12 +52,14 @@ defmodule StrangertalksNew.Intelligence.V1Recommendations do
 
   def analyze(_snapshot), do: {:error, :invalid_analytics_input}
 
-  defp canonical_snapshot?(%{
-         schema_version: schema_version,
-         window: window,
-         system: system,
-         human_outcomes: outcomes
-       } = snapshot) do
+  defp canonical_snapshot?(
+         %{
+           schema_version: schema_version,
+           window: window,
+           system: system,
+           human_outcomes: outcomes
+         } = snapshot
+       ) do
     MapSet.new(Map.keys(snapshot)) ==
       MapSet.new([:schema_version, :window, :system, :human_outcomes]) and
       schema_version == V1Metrics.schema_version() and
