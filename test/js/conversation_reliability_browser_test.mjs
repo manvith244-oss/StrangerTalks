@@ -4,6 +4,11 @@ import {chromium} from "playwright"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://127.0.0.1:4000"
 
+function assertOkResult(result, label) {
+  assert.equal(result.kind, "ok", `${label}: ${JSON.stringify(result)}`)
+  return result.value
+}
+
 async function bootstrapParticipant(page, identity = null) {
   await page.goto(`${BASE_URL}/health/live`, {waitUntil: "domcontentloaded"})
 
@@ -19,11 +24,11 @@ async function bootstrapParticipant(page, identity = null) {
       return response.json()
     })
 
-    const joinChannel = (channel) => new Promise((resolve, reject) => {
+    const joinChannelResult = (channel) => new Promise((resolve) => {
       channel.join(5000)
-        .receive("ok", resolve)
-        .receive("error", reject)
-        .receive("timeout", () => reject({reason: "join_timeout"}))
+        .receive("ok", (value) => resolve({kind: "ok", value}))
+        .receive("error", (value) => resolve({kind: "error", value}))
+        .receive("timeout", () => resolve({kind: "timeout", value: {reason: "join_timeout"}}))
     })
 
     const socket = new Socket("/socket", {
@@ -45,7 +50,10 @@ async function bootstrapParticipant(page, identity = null) {
     socket.connect()
     const participant = socket.channel(`participant:${identity.participant_id}`, {})
     participant.on("match_found", (payload) => events.match.push(payload))
-    const participantJoin = await joinChannel(participant)
+    const participantJoinResult = await joinChannelResult(participant)
+    if (participantJoinResult.kind !== "ok") {
+      throw new Error(`ParticipantChannel join failed: ${JSON.stringify(participantJoinResult)}`)
+    }
 
     window.__t5 = {
       identity,
@@ -54,24 +62,25 @@ async function bootstrapParticipant(page, identity = null) {
       conversation: null,
       conversationId: null,
       events,
-      participantJoin,
-      joinChannel
+      participantJoin: participantJoinResult.value,
+      joinChannelResult
     }
 
-    return {identity, participantJoin}
+    return {identity, participantJoin: participantJoinResult.value}
   }, identity)
 }
 
 async function pushParticipant(page, event, payload) {
-  return page.evaluate(({event, payload}) => new Promise((resolve, reject) => {
+  const result = await page.evaluate(({event, payload}) => new Promise((resolve) => {
     window.__t5.participant.push(event, payload, 5000)
-      .receive("ok", resolve)
-      .receive("error", reject)
-      .receive("timeout", () => reject({reason: "push_timeout", event}))
+      .receive("ok", (value) => resolve({kind: "ok", value}))
+      .receive("error", (value) => resolve({kind: "error", value}))
+      .receive("timeout", () => resolve({kind: "timeout", value: {reason: "push_timeout", event}}))
   }), {event, payload})
+  return assertOkResult(result, `participant push ${event}`)
 }
 
-async function joinConversation(page, conversationId, epochId = null, lastAppliedSequence = 0) {
+async function joinConversationResult(page, conversationId, epochId = null, lastAppliedSequence = 0) {
   return page.evaluate(async ({conversationId, epochId, lastAppliedSequence}) => {
     const channel = window.__t5.socket.channel(`conversation:${conversationId}`, {
       epoch_id: epochId,
@@ -88,19 +97,15 @@ async function joinConversation(page, conversationId, epochId = null, lastApplie
     window.__t5.conversation = channel
     window.__t5.conversationId = conversationId
 
-    const sync = await window.__t5.joinChannel(channel)
-    window.__t5.sync = sync
-    return sync
+    const result = await window.__t5.joinChannelResult(channel)
+    if (result.kind === "ok") window.__t5.sync = result.value
+    return result
   }, {conversationId, epochId, lastAppliedSequence})
 }
 
-async function pushConversation(page, event, payload) {
-  return page.evaluate(({event, payload}) => new Promise((resolve, reject) => {
-    window.__t5.conversation.push(event, payload, 5000)
-      .receive("ok", resolve)
-      .receive("error", reject)
-      .receive("timeout", () => reject({reason: "push_timeout", event}))
-  }), {event, payload})
+async function joinConversation(page, conversationId, epochId = null, lastAppliedSequence = 0) {
+  const result = await joinConversationResult(page, conversationId, epochId, lastAppliedSequence)
+  return assertOkResult(result, `ConversationChannel join ${conversationId}`)
 }
 
 async function pushConversationResult(page, event, payload) {
@@ -110,6 +115,11 @@ async function pushConversationResult(page, event, payload) {
       .receive("error", (value) => resolve({kind: "error", value}))
       .receive("timeout", () => resolve({kind: "timeout", value: {reason: "push_timeout", event}}))
   }), {event, payload})
+}
+
+async function pushConversation(page, event, payload) {
+  const result = await pushConversationResult(page, event, payload)
+  return assertOkResult(result, `conversation push ${event}`)
 }
 
 async function disconnect(page) {
@@ -178,6 +188,11 @@ test("two isolated browsers converge across disconnect, replay, reconnect and te
     assert.equal(matchA.conversation_id, matchB.conversation_id)
     const conversationId = matchA.conversation_id
     assert.ok(conversationId)
+
+    const reconcileA = await pushParticipant(pageA, "session:reconcile", {})
+    const reconcileB = await pushParticipant(pageB, "session:reconcile", {})
+    assert.equal(reconcileA.snapshot?.conversation?.conversation_id, conversationId)
+    assert.equal(reconcileB.snapshot?.conversation?.conversation_id, conversationId)
 
     const syncA = await joinConversation(pageA, conversationId)
     const syncB = await joinConversation(pageB, conversationId)
@@ -271,10 +286,8 @@ test("two isolated browsers converge across disconnect, replay, reconnect and te
     })
     assert.notEqual(stalePostTerminalSend.kind, "ok")
 
-    const freshRuntimeAttempt = await joinConversation(pageA, conversationId, firstEpoch, 6)
-      .then((value) => ({kind: "ok", value}))
-      .catch((value) => ({kind: "error", value}))
-    assert.equal(freshRuntimeAttempt.kind, "error")
+    const freshRuntimeAttempt = await joinConversationResult(pageA, conversationId, firstEpoch, 6)
+    assert.notEqual(freshRuntimeAttempt.kind, "ok")
   } finally {
     await contextA.close()
     await contextB.close()
