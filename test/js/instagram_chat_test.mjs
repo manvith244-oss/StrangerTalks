@@ -75,6 +75,21 @@ test("chat hardening covers short keyboards, landscape notches, iOS zoom and coa
   assert.match(moduleSource, /\.message-action-btn,[\s\S]*min-height: 44px/)
 })
 
+test("short Conversation panels remain scrollable instead of clipping escape controls", () => {
+  assert.match(moduleSource, /body\.st-chat-mode \.voice-sheet,[\s\S]*body\.st-chat-mode \.atmosphere-chooser/)
+  assert.match(moduleSource, /body\.st-chat-mode #report-form,[\s\S]*body\.st-chat-mode \.live-call-active-panel/)
+  assert.match(moduleSource, /max-height: calc\(var\(--ig-vh, 100vh\) - 112px\)/)
+  assert.match(moduleSource, /overflow-y: auto/)
+  assert.match(moduleSource, /overscroll-behavior-y: contain/)
+})
+
+test("media and info controls describe and dismiss their real behavior", () => {
+  assert.match(moduleSource, /iconButton\(photo, "camera", "Choose a view-once photo"\)/)
+  assert.match(moduleSource, /summary\.setAttribute\("aria-expanded"/)
+  assert.match(moduleSource, /event\.key !== "Escape" \|\| !overflow\?\.open/)
+  assert.match(moduleSource, /!overflow\?\.open \|\| overflow\.contains\(event\.target\)/)
+})
+
 test("programmatic prompt insertion and send clearing cannot desync composer visuals", () => {
   assert.match(moduleSource, /observeProgrammaticComposerValue\(input, updateState\)/)
   assert.match(moduleSource, /Object\.getOwnPropertyDescriptor\(HTMLTextAreaElement\.prototype, "value"\)/)
