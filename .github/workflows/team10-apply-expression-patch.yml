@@ -4,7 +4,7 @@ on:
   push:
     branches: [newteam/expression-surface]
     paths:
-      - "team10-patches/apply_team10.py"
+      - "team10-patches/**"
 
 permissions:
   contents: write
