@@ -36,6 +36,13 @@ config :phoenix, :plug_init_mode, :runtime
 config :phoenix,
   sort_verified_routes_query_params: true
 
+# Team 10 deterministic test-only GIF provider. Production remains disabled unless
+# a real server-side adapter and media-host allowlist are configured.
+config :strangertalks_new,
+  gif_provider_adapter: StrangertalksNew.TestGifProvider,
+  gif_media_hosts: ["media.example.test"],
+  gif_provider_timeout_ms: 75
+
 # Live Communication Suite C11 Policy Test Fixture
 config :strangertalks_new, :c11_policy,
   quotas_verified: true,
