@@ -1,7 +1,16 @@
 defmodule StrangertalksNew.Team7RelationshipContinuityTest do
   use StrangertalksNew.DataCase, async: false
 
-  alias StrangertalksNew.{Conversation, MatchingRules, Relationship, RelationshipConsent, Relationships, Repo}
+  alias StrangertalksNew.{
+    Conversation,
+    MatchingRules,
+    Relationship,
+    RelationshipConsent,
+    RelationshipReconnections,
+    Relationships,
+    Repo
+  }
+
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.QueueEngine.QueueState
 
@@ -64,6 +73,88 @@ defmodule StrangertalksNew.Team7RelationshipContinuityTest do
     assert relationship.reconnection_eligible == false
     assert Repo.aggregate(Relationship, :count) == 1
   end
+
+  test "Block racing final mutual consent has one serialized safety-safe outcome" do
+    {conversation, participant_a, participant_b} = completed_conversation_fixture()
+
+    assert {:ok, %{status: "waiting_for_mutual_consent"}} =
+             Relationships.consent_to_relationship(
+               conversation.conversation_id,
+               participant_a.participant_id
+             )
+
+    parent = self()
+
+    consent_task =
+      Task.async(fn ->
+        send(parent, {:ready, :consent})
+
+        receive do
+          :go ->
+            Relationships.consent_to_relationship(
+              conversation.conversation_id,
+              participant_b.participant_id
+            )
+        end
+      end)
+
+    block_task =
+      Task.async(fn ->
+        send(parent, {:ready, :block})
+
+        receive do
+          :go ->
+            MatchingRules.enforce_block(
+              participant_a.participant_id,
+              participant_b.participant_id,
+              "TEAM7_RACE"
+            )
+        end
+      end)
+
+    assert_receive {:ready, :consent}
+    assert_receive {:ready, :block}
+    send(consent_task.pid, :go)
+    send(block_task.pid, :go)
+
+    consent_result = Task.await(consent_task, 5_000)
+    assert {:ok, _block} = Task.await(block_task, 5_000)
+
+    assert consent_result in [
+             {:error, :relationship_unavailable},
+             {:ok, %{status: "created", relationship_id: relationship_id(consent_result)}}
+           ]
+
+    assert MatchingRules.check_safety_veto?(
+             participant_a.participant_id,
+             participant_b.participant_id
+           )
+
+    # A stale request arriving after the durable Block can never create/re-open a Bond.
+    assert {:error, :relationship_unavailable} =
+             Relationships.consent_to_relationship(
+               conversation.conversation_id,
+               participant_b.participant_id
+             )
+
+    assert Repo.aggregate(Relationship, :count) <= 1
+
+    case Repo.one(Relationship) do
+      nil ->
+        :ok
+
+      relationship ->
+        assert {:error, :reconnection_unavailable} =
+                 RelationshipReconnections.start_or_replace(
+                   relationship.relationship_id,
+                   participant_a.participant_id,
+                   :EXPLORE
+                 )
+    end
+  end
+
+  defp relationship_id({:ok, %{relationship_id: relationship_id}}), do: relationship_id
+  defp relationship_id(_), do: nil
 
   defp completed_conversation_fixture do
     participant_a = participant_fixture()
