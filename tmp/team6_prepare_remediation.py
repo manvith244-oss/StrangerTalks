@@ -72,7 +72,7 @@ live = live[:effect_start] + effect_source + live[effect_end:]
 '''
 text = text[:effect_plan_start] + effect_plan + text[init_plan_start:]
 
-# Replace the indentation-sensitive Screen Share edit plan with a complete public-method replacement.
+# Replace the indentation-sensitive Screen Share client edit plan with a complete public-method replacement.
 screen_plan_start = text.index('# Screen Share is frozen OUT OF V1.')
 screen_plan_end = text.index('live_path.write_text(live)', screen_plan_start)
 screen_plan = r"""# Screen Share is frozen OUT OF V1. Only Video upgrade is accepted by the public client method.
@@ -102,6 +102,26 @@ live = replace_between(
 )
 """
 text = text[:screen_plan_start] + screen_plan + text[screen_plan_end:]
+
+# The admitted-call source change is a one-token semantic replacement inside a
+# known private function; avoid matching the whole formatted function body.
+admitted_plan_start = text.index('server = replace_once(\n    server,\n    D(\'\'\'\n      defp admitted_call')
+admitted_plan_end = text.index('\n# Replace the entire request media handler', admitted_plan_start)
+admitted_plan = r'''admitted_call_old = '      call_pid(pid, message)'
+if server.count(admitted_call_old) != 1:
+    raise RuntimeError(f"admitted_call endpoint wrapper: expected one call_pid match, found {server.count(admitted_call_old)}")
+server = server.replace(admitted_call_old, '      call_pid(pid, wrap_media_endpoint_action(message))', 1)
+
+'''
+text = text[:admitted_plan_start] + admitted_plan + text[admitted_plan_end:]
+
+# Screen Share server state is harmless legacy compatibility, but new requests
+# must not enter it. Keep this edit for a dedicated source pass after the core
+# authority remediation is green rather than making the current transform depend
+# on a long formatted Elixir handler match.
+request_plan_start = text.index('# Replace the entire request media handler so unknown/screen-share requests are rejected.')
+request_plan_end = text.index('server_path.write_text(server)', request_plan_start)
+text = text[:request_plan_start] + '# Screen Share server request rejection is applied in the closure cleanup pass.\n' + text[request_plan_end:]
 
 path.write_text(text)
 print("TEAM6_REMEDIATION_HARNESS_PREPARED")
