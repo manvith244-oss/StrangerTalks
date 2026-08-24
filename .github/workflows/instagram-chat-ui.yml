@@ -36,6 +36,7 @@ jobs:
 
     env:
       MIX_ENV: test
+      PORT: "4002"
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
       STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4002
