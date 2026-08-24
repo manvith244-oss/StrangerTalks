@@ -142,4 +142,72 @@ text = text.replace(
 )
 
 path.write_text(text)
+
+# Make the temporary C11 fixture correction whitespace/formatter independent.
+# This edits the hardening script itself in the disposable runner; no production authority is relaxed.
+hardening_path = Path("tmp/team6_final_hardening.py")
+hardening = hardening_path.read_text()
+c11_start = hardening.index("# Existing C11 concurrency tests predate one-authoritative-endpoint enforcement.")
+c11_end = hardening.index('print("TEAM6_FINAL_HARDENING_APPLIED")', c11_start)
+c11_plan = r'''# Existing C11 concurrency tests predate one-authoritative-endpoint enforcement.
+# Preserve their concurrency intent while using the caller endpoint already stored by initiate_call.
+live_call_test_path = Path("test/strangertalks_new/conversation_live_call_test.exs")
+live_call_test = live_call_test_path.read_text()
+
+winner_anchor = '      winner_attempt = if winner_conv == conv_a, do: attempt_a, else: attempt_b\n'
+if live_call_test.count(winner_anchor) != 1:
+    raise RuntimeError("C11 admission winner anchor not found uniquely")
+live_call_test = live_call_test.replace(
+    winner_anchor,
+    winner_anchor + '      winner_session = if winner_conv == conv_a, do: "s_a1", else: "s_b1"\n',
+    1,
+)
+
+loser_anchor = '      loser_attempt = if loser_conv == conv_a, do: attempt_a, else: attempt_b\n'
+if live_call_test.count(loser_anchor) != 1:
+    raise RuntimeError("C11 admission loser anchor not found uniquely")
+live_call_test = live_call_test.replace(
+    loser_anchor,
+    loser_anchor + '      loser_session = if loser_conv == conv_a, do: "s_a1", else: "s_b1"\n',
+    1,
+)
+
+winner_session_old = '                 "s_win",\n                 winner_attempt'
+if live_call_test.count(winner_session_old) != 1:
+    raise RuntimeError("C11 winner invented session marker not found uniquely")
+live_call_test = live_call_test.replace(
+    winner_session_old,
+    '                 winner_session,\n                 winner_attempt',
+    1,
+)
+
+loser_session_old = '                 "s_lose",\n                 loser_attempt'
+if live_call_test.count(loser_session_old) != 1:
+    raise RuntimeError("C11 loser invented session marker not found uniquely")
+live_call_test = live_call_test.replace(
+    loser_session_old,
+    '                 loser_session,\n                 loser_attempt',
+    1,
+)
+
+extension_test = live_call_test.index('test "C11 Cross-Conversation Extension Race:')
+extension_start = live_call_test.index('      # Concurrent extension requests', extension_test)
+extension_end = live_call_test.index('      ext_results =', extension_start)
+extension_source = live_call_test[extension_start:extension_end]
+if extension_source.count('            self(),\n') != 2:
+    raise RuntimeError("C11 extension Task PID markers not found exactly twice")
+extension_source = extension_source.replace(
+    '      # Concurrent extension requests\n',
+    '      # Concurrent extension requests use the stored caller endpoint, not each Task process PID.\n'
+    '      caller_endpoint_pid = self()\n\n',
+    1,
+)
+extension_source = extension_source.replace('            self(),\n', '            caller_endpoint_pid,\n')
+live_call_test = live_call_test[:extension_start] + extension_source + live_call_test[extension_end:]
+live_call_test_path.write_text(live_call_test)
+
+'''
+hardening = hardening[:c11_start] + c11_plan + hardening[c11_end:]
+hardening_path.write_text(hardening)
+
 print("TEAM6_REMEDIATION_HARNESS_PREPARED")
