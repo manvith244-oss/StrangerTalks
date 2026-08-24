@@ -4,11 +4,13 @@ import {chromium} from "playwright"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://127.0.0.1:4002"
 const DEVICES = [
-  {name: "small Android phone", width: 360, height: 740},
-  {name: "modern phone", width: 390, height: 844},
-  {name: "phone landscape", width: 844, height: 390},
-  {name: "tablet", width: 820, height: 1180},
-  {name: "desktop", width: 1440, height: 900}
+  {name: "tiny legacy phone", width: 320, height: 568, mobile: true, touch: true},
+  {name: "small Android phone", width: 360, height: 740, mobile: true, touch: true},
+  {name: "modern phone", width: 390, height: 844, mobile: true, touch: true},
+  {name: "tall Android phone", width: 412, height: 915, mobile: true, touch: true},
+  {name: "phone landscape", width: 844, height: 390, mobile: true, touch: true},
+  {name: "tablet", width: 820, height: 1180, mobile: true, touch: true},
+  {name: "desktop", width: 1440, height: 900, mobile: false, touch: false}
 ]
 
 async function prepareConversation(page) {
@@ -27,7 +29,7 @@ async function prepareConversation(page) {
     messages.replaceChildren()
     const rows = [
       {mine: false, text: "Hey, how is your day going?"},
-      {mine: false, text: "Anything unexpectedly good happen?"},
+      {mine: false, text: `https://example.com/${"very-long-unbroken-path-".repeat(12)}`},
       {mine: true, text: "Honestly, getting a quiet evening 😭"},
       {mine: true, text: "I needed it."},
       {mine: false, text: "That sounds peaceful."}
@@ -60,7 +62,12 @@ async function prepareConversation(page) {
 for (const device of DEVICES) {
   test(`Conversation shell stays usable on ${device.name}`, async () => {
     const browser = await chromium.launch({headless: true})
-    const context = await browser.newContext({viewport: {width: device.width, height: device.height}})
+    const context = await browser.newContext({
+      viewport: {width: device.width, height: device.height},
+      isMobile: device.mobile,
+      hasTouch: device.touch,
+      deviceScaleFactor: device.mobile ? 2 : 1
+    })
     const page = await context.newPage()
 
     try {
@@ -91,6 +98,7 @@ for (const device of DEVICES) {
           cameraSize: Math.min(cameraRect.width, cameraRect.height),
           voiceSize: Math.min(voiceRect.width, voiceRect.height),
           plusSize: Math.min(plusRect.width, plusRect.height),
+          composerFontSize: Number.parseFloat(getComputedStyle(input).fontSize),
           heading: heading.textContent,
           hasBack: Boolean(back),
           placeholder: input.getAttribute("placeholder"),
@@ -110,6 +118,7 @@ for (const device of DEVICES) {
       assert.ok(layout.cameraSize >= 40)
       assert.ok(layout.voiceSize >= 40)
       assert.ok(layout.plusSize >= 40)
+      if (device.mobile) assert.ok(layout.composerFontSize >= 16, `mobile composer font is ${layout.composerFontSize}px`)
       assert.equal(layout.heading, "Stranger")
       assert.equal(layout.hasBack, true)
       assert.equal(layout.placeholder, "Message…")
