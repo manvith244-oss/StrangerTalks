@@ -275,10 +275,12 @@ test("two isolated browsers converge across disconnect, replay, reconnect and te
     assert.deepEqual(messageIdsInSequence(replayA), [m6])
 
     const endResult = await pushConversation(pageA, "conversation:end", {})
-    assert.ok(endResult)
+    assert.equal(endResult.status, "ended")
     const [endedA, endedB] = await Promise.all([waitForEnded(pageA), waitForEnded(pageB)])
-    assert.equal(endedA.conversation_id, conversationId)
-    assert.equal(endedB.conversation_id, conversationId)
+    for (const ended of [endedA, endedB]) {
+      assert.equal(ended.status, "ended")
+      assert.equal(ended.reason, "participant_completed")
+    }
 
     const stalePostTerminalSend = await pushConversationResult(pageB, "message:send", {
       client_message_id: crypto.randomUUID(),
