@@ -1,7 +1,7 @@
 defmodule StrangertalksNew.LearningRecordTest do
   use StrangertalksNew.DataCase, async: true
-  alias StrangertalksNew.LearningRecords
-  alias StrangertalksNew.Repo
+
+  alias StrangertalksNew.{LearningRecord, LearningRecords, Repo}
 
   @valid_time DateTime.from_naive!(~N[2026-07-04 12:00:00.000000], "Etc/UTC")
 
@@ -79,7 +79,24 @@ defmodule StrangertalksNew.LearningRecordTest do
     %{participant: participant, match: match, conv: conv}
   end
 
-  test "valid telemetry insertion executes successfully", %{participant: p, match: m, conv: c} do
+  test "legacy participant-linked LearningRecord writer is disabled for V1", %{
+    participant: participant
+  } do
+    assert {:error, :legacy_learning_record_write_disabled} =
+             LearningRecords.create_learning_record(%{
+               record_type: :READINESS_EVALUATION,
+               created_at: @valid_time,
+               participant_id: participant.participant_id,
+               readiness_score: "5.0000",
+               keystroke_latency_variance: "2.0000"
+             })
+  end
+
+  test "legacy schema still accepts its historical valid shape when inspected directly", %{
+    participant: p,
+    match: m,
+    conv: c
+  } do
     attrs = %{
       record_type: :ICEBREAKER_LEARNING,
       created_at: @valid_time,
@@ -94,48 +111,59 @@ defmodule StrangertalksNew.LearningRecordTest do
       outcome_signal: :SUCCESS
     }
 
-    assert {:ok, %StrangertalksNew.LearningRecord{} = record} =
-             LearningRecords.create_learning_record(attrs)
-
+    assert {:ok, %LearningRecord{} = record} = legacy_insert(attrs)
     assert record.learning_record_id != nil
   end
 
-  test "required field validations block incomplete inserts" do
-    assert {:error, changeset} = LearningRecords.create_learning_record(%{})
+  test "legacy schema required-field validation remains covered" do
+    changeset = LearningRecord.changeset(%LearningRecord{}, %{})
+    refute changeset.valid?
     assert errors_on(changeset).record_type == ["can't be blank"]
   end
 
-  # Fixed key destructuring mismatch
-  test "enum structural values are validated", %{participant: _p} do
-    attrs = %{record_type: :INVALID_TYPE, created_at: @valid_time}
-    assert {:error, changeset} = LearningRecords.create_learning_record(attrs)
+  test "legacy schema enum validation remains covered" do
+    changeset =
+      LearningRecord.changeset(%LearningRecord{}, %{
+        record_type: :INVALID_TYPE,
+        created_at: @valid_time
+      })
+
+    refute changeset.valid?
     assert errors_on(changeset).record_type == ["is invalid"]
   end
 
-  test "decimal fields enforce precision scales and bounding ranges" do
-    attrs = %{
-      record_type: :ATMOSPHERE_ADAPTATION,
-      created_at: @valid_time,
-      readiness_score: "10.0001"
-    }
+  test "legacy schema decimal ranges remain covered" do
+    changeset =
+      LearningRecord.changeset(%LearningRecord{}, %{
+        record_type: :ATMOSPHERE_ADAPTATION,
+        created_at: @valid_time,
+        readiness_score: "10.0001"
+      })
 
-    assert {:error, changeset} = LearningRecords.create_learning_record(attrs)
     assert errors_on(changeset).readiness_score == ["must be between 0.0000 and 9.9999"]
   end
 
-  test "business validations enforce icebreaker metadata alignment" do
-    attrs = %{record_type: :ICEBREAKER_LEARNING, created_at: @valid_time}
-    assert {:error, changeset} = LearningRecords.create_learning_record(attrs)
+  test "legacy schema icebreaker alignment validation remains covered" do
+    changeset =
+      LearningRecord.changeset(%LearningRecord{}, %{
+        record_type: :ICEBREAKER_LEARNING,
+        created_at: @valid_time
+      })
+
     assert errors_on(changeset).bridge_used == ["can't be blank"]
   end
 
-  test "business validations enforce readiness biometric tracking profiles" do
-    attrs = %{record_type: :READINESS_EVALUATION, created_at: @valid_time}
-    assert {:error, changeset} = LearningRecords.create_learning_record(attrs)
+  test "legacy readiness-profile validation remains covered without enabling production writes" do
+    changeset =
+      LearningRecord.changeset(%LearningRecord{}, %{
+        record_type: :READINESS_EVALUATION,
+        created_at: @valid_time
+      })
+
     assert errors_on(changeset).readiness_score == ["can't be blank"]
   end
 
-  test "account erasure triggers explicit foreign key nilification", %{
+  test "pre-existing legacy rows retain account-erasure foreign-key nilification", %{
     participant: p,
     match: m,
     conv: c
@@ -148,9 +176,8 @@ defmodule StrangertalksNew.LearningRecordTest do
       conversation_id: c.conversation_id
     }
 
-    {:ok, record} = LearningRecords.create_learning_record(attrs)
+    {:ok, record} = legacy_insert(attrs)
 
-    # Clear upstream relational constraint blockers to safely isolate and test the target nilify effect
     Repo.delete!(c)
     Repo.delete!(m)
     Repo.delete!(p)
@@ -161,14 +188,20 @@ defmodule StrangertalksNew.LearningRecordTest do
     assert fetched.conversation_id == nil
   end
 
-  test "change_learning_record/2 generates form changeset contexts without database runtime modifications" do
+  test "legacy rows still expose schema changesets without reopening the writer" do
     {:ok, record} =
-      LearningRecords.create_learning_record(%{
+      legacy_insert(%{
         record_type: :ATMOSPHERE_ADAPTATION,
         created_at: @valid_time
       })
 
     changeset = LearningRecords.change_learning_record(record, %{outcome_signal: :ABANDONED})
     assert changeset.valid?
+  end
+
+  defp legacy_insert(attrs) do
+    %LearningRecord{}
+    |> LearningRecord.changeset(attrs)
+    |> Repo.insert()
   end
 end

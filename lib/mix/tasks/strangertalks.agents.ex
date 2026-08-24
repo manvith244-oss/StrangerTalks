@@ -1,36 +1,30 @@
 defmodule Mix.Tasks.Strangertalks.Agents do
   use Mix.Task
 
-  @shortdoc "Runs bounded StrangerTalks Agent Systems operations"
+  @shortdoc "Runs bounded StrangerTalks model-assisted operations"
 
   @moduledoc """
-  Operational entry point for non-public StrangerTalks agents.
+  Operational entry point for the remaining non-public model-assisted services.
 
-      mix strangertalks.agents learning [limit]
       mix strangertalks.agents safety REPORT_ID
       mix strangertalks.agents trends LANGUAGE "signal one" "signal two"
 
-  The command never exposes a public HTTP administration surface. Agent-specific authority limits
-  remain enforced by their owning modules.
+  The historical `learning` command is intentionally superseded for V1. Team 8
+  uses the deterministic, aggregate-only `mix strangertalks.intelligence` report
+  instead; V1 does not need a model to interpret its canonical operational
+  outcomes.
   """
 
-  alias StrangertalksNew.AgentSystems.{
-    LearningAdvisor,
-    SafetyReviewAssistant,
-    TrendBridgeResearch
-  }
+  alias StrangertalksNew.AgentSystems.{SafetyReviewAssistant, TrendBridgeResearch}
 
-  @impl Mix.Task
+  @impl true
   def run(args) do
     Mix.Task.run("app.start")
 
     result =
       case args do
-        ["learning"] ->
-          LearningAdvisor.advise_latest()
-
-        ["learning", limit] ->
-          with {integer, ""} <- Integer.parse(limit), do: LearningAdvisor.advise_latest(integer)
+        ["learning" | _rest] ->
+          {:error, :learning_advisor_superseded_by_team8_v1}
 
         ["safety", report_id] ->
           SafetyReviewAssistant.review_report(report_id)
