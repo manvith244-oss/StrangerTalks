@@ -1,0 +1,53 @@
+name: Conversation Regression Diagnostic
+
+on:
+  push:
+    branches:
+      - feature/instagram-chat-ui
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conversation-regression-file:
+    name: Conversation regression — ${{ matrix.test }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - instagram_chat_test.mjs
+          - reply_quote_test.mjs
+          - reaction_test.mjs
+          - message_edit_test.mjs
+          - message_unsend_test.mjs
+          - pin_test.mjs
+          - expressive_media_test.mjs
+          - voice_notes_test.mjs
+          - view_once_test.mjs
+          - live_call_test.mjs
+          - atmosphere_test.mjs
+          - prompt_cards_test.mjs
+          - companion_test.mjs
+          - presence_test.mjs
+    steps:
+      - name: Checkout exact diagnostic commit
+        uses: actions/checkout@v4
+
+      - name: Prove checkout identity
+        run: |
+          echo "DIAGNOSTIC_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Run ${{ matrix.test }}
+        run: node --test "test/js/${{ matrix.test }}"
