@@ -103,8 +103,7 @@ live = replace_between(
 """
 text = text[:screen_plan_start] + screen_plan + text[screen_plan_end:]
 
-# The admitted-call source change is a one-token semantic replacement inside a
-# known private function; avoid matching the whole formatted function body.
+# The admitted-call source change is a one-token semantic replacement inside a known private function.
 admitted_plan_start = text.index('server = replace_once(\n    server,\n    D(\'\'\'\n      defp admitted_call')
 admitted_plan_end = text.index('\n# Replace the entire request media handler', admitted_plan_start)
 admitted_plan = r'''admitted_call_old = '      call_pid(pid, message)'
@@ -115,13 +114,15 @@ server = server.replace(admitted_call_old, '      call_pid(pid, wrap_media_endpo
 '''
 text = text[:admitted_plan_start] + admitted_plan + text[admitted_plan_end:]
 
-# Screen Share server state is harmless legacy compatibility, but new requests
-# must not enter it. Keep this edit for a dedicated source pass after the core
-# authority remediation is green rather than making the current transform depend
-# on a long formatted Elixir handler match.
+# Defer the legacy Screen Share server-request rejection to the closure cleanup pass.
 request_plan_start = text.index('# Replace the entire request media handler so unknown/screen-share requests are rejected.')
 request_plan_end = text.index('server_path.write_text(server)', request_plan_start)
 text = text[:request_plan_start] + '# Screen Share server request rejection is applied in the closure cleanup pass.\n' + text[request_plan_end:]
+
+# C11 transformations replace whole functions; use formatter-independent function-name boundaries.
+text = text.replace("    '  def admit_and_reserve(state, conversation_id, call_attempt_id, now \\\\ nil) do',", "    '  def admit_and_reserve(',", 1)
+text = text.replace("    '  def admit_extension(state, call_attempt_id, now \\\\ nil) do',", "    '  def admit_extension(',", 1)
+text = text.replace("    '  def authorize_credentials(provider, _conversation_id, _participant_id, call_attempt_id, ttl) do',", "    '  def authorize_credentials(',", 1)
 
 path.write_text(text)
 print("TEAM6_REMEDIATION_HARNESS_PREPARED")
