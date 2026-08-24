@@ -16,7 +16,10 @@ config :strangertalks_new, StrangertalksNew.Repo,
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :strangertalks_new, StrangertalksNewWeb.Endpoint,
-  http: [ip: {127, 0, 0, 1}, port: 4002],
+  http: [
+    ip: {127, 0, 0, 1},
+    port: String.to_integer(System.get_env("PORT", "4002"))
+  ],
   secret_key_base: "mfafzOU4EbAel4JLxny9QB4VWYDuUr8ZpaIyBpUkWOQEgQi1RcRQKADLWXmTAOgj",
   server: false
 
