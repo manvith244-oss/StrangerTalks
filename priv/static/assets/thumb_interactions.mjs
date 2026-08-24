@@ -17,13 +17,7 @@ export function shouldSuppressMessageRelease(start, end, {viewportWidth, longPre
   const dx = end.x - start.x
   const dy = end.y - start.y
   const horizontalIntent = Math.abs(dx) > INTENT_DRIFT_PX && Math.abs(dx) > Math.abs(dy)
-
-  // Preserve native iOS/Android edge navigation. StrangerTalks must never turn
-  // a system-edge swipe into Reply or a reaction shortcut.
   if (horizontalIntent && isSystemEdgeStart(start.x, viewportWidth)) return true
-
-  // Once a hold has crossed the established message-action threshold, release
-  // belongs to that hold. It must not also become swipe-to-reply or double-tap.
   return elapsed >= longPressMs
 }
 
@@ -39,35 +33,21 @@ function installMessageGestureArbitration() {
   const list = document.querySelector("#messages")
   if (!list || list.dataset.thumbGestureArbitration === "true") return
   list.dataset.thumbGestureArbitration = "true"
-
   const starts = new Map()
-
   list.addEventListener("pointerdown", (event) => {
     if (event.pointerType === "mouse" || messageGestureIsInteractive(event)) return
     const message = event.target.closest?.(".message")
     if (!message) return
-    starts.set(event.pointerId, {
-      message,
-      time: performance.now(),
-      x: event.clientX,
-      y: event.clientY
-    })
+    starts.set(event.pointerId, {message, time: performance.now(), x: event.clientX, y: event.clientY})
   }, {capture: true, passive: true})
-
   list.addEventListener("pointerup", (event) => {
     const start = starts.get(event.pointerId)
     starts.delete(event.pointerId)
     if (!start || start.message !== event.target.closest?.(".message")) return
-
     const end = {time: performance.now(), x: event.clientX, y: event.clientY}
-    if (shouldSuppressMessageRelease(start, end, {viewportWidth: window.innerWidth})) {
-      event.stopPropagation()
-    }
+    if (shouldSuppressMessageRelease(start, end, {viewportWidth: window.innerWidth})) event.stopPropagation()
   }, {capture: true, passive: true})
-
-  list.addEventListener("pointercancel", (event) => {
-    starts.delete(event.pointerId)
-  }, {capture: true, passive: true})
+  list.addEventListener("pointercancel", (event) => starts.delete(event.pointerId), {capture: true, passive: true})
 }
 
 function closeComposerTray(form, plus) {
@@ -82,7 +62,6 @@ function installOutsideTapDismissal() {
   const plus = form?.querySelector(".ig-compose-plus")
   if (!form || form.dataset.thumbOutsideDismissal === "true") return
   form.dataset.thumbOutsideDismissal = "true"
-
   document.addEventListener("pointerdown", (event) => {
     if (!form.classList.contains("ig-tray-open") || form.contains(event.target)) return
     closeComposerTray(form, plus)
@@ -94,10 +73,9 @@ function installCoarsePointerTargets() {
   const style = document.createElement("style")
   style.dataset.thumbInteractionTargets = "true"
   style.textContent = `
+    body.st-chat-mode .conversation-head { z-index: 30; }
     body.st-chat-mode .overflow-menu #pinned-messages-control,
-    body.st-chat-mode .overflow-menu #quiet-mode-control {
-      display: block;
-    }
+    body.st-chat-mode .overflow-menu #quiet-mode-control { display: block !important; }
 
     @media (hover: none) and (pointer: coarse) {
       body.st-chat-mode .ig-chat-back,
@@ -111,7 +89,6 @@ function installCoarsePointerTargets() {
         min-width: ${COARSE_TARGET_PX}px;
         min-height: ${COARSE_TARGET_PX}px;
       }
-
       body.st-chat-mode .compose > .primary,
       body.st-chat-mode .voice-controls > button,
       body.st-chat-mode .voice-controls #expressive-open,
@@ -126,14 +103,9 @@ function installCoarsePointerTargets() {
       body.st-chat-mode .voice-sheet button,
       body.st-chat-mode .atmosphere-chooser button,
       body.st-chat-mode #report-form button,
-      body.st-chat-mode .prompt-helper button {
-        min-height: ${COARSE_TARGET_PX}px;
-      }
-
+      body.st-chat-mode .prompt-helper button { min-height: ${COARSE_TARGET_PX}px; }
       body.st-chat-mode .reaction-picker .reaction-btn,
-      body.st-chat-mode #reply-cancel {
-        min-width: ${COARSE_TARGET_PX}px;
-      }
+      body.st-chat-mode #reply-cancel { min-width: ${COARSE_TARGET_PX}px; }
     }
   `
   document.head.append(style)
@@ -142,12 +114,10 @@ function installCoarsePointerTargets() {
 export function bootThumbInteractions() {
   if (typeof document === "undefined") return
   installCoarsePointerTargets()
-
   const install = () => {
     installMessageGestureArbitration()
     installOutsideTapDismissal()
   }
-
   install()
   queueMicrotask(install)
 }
