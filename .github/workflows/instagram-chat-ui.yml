@@ -124,8 +124,14 @@ jobs:
           cat /tmp/strangertalks-browser.log
           exit 1
 
-      - name: Five-device responsive browser checks
+      - name: Responsive hostile-user browser checks
         run: node --test test/js/instagram_chat_browser_test.mjs
+
+      - name: Reset browser test data before full suite
+        run: |
+          mix ecto.drop --quiet
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
 
       - name: Full precommit
         run: mix precommit
