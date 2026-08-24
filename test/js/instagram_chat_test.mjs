@@ -3,6 +3,7 @@ import fs from "node:fs"
 import test from "node:test"
 import {
   composerVisualState,
+  isTapGesture,
   messageGrouping,
   normalizedViewportHeight,
   shouldTriggerQuickHeart
@@ -35,6 +36,14 @@ test("quick-heart requires a nearby second tap inside the gesture window", () =>
   assert.equal(shouldTriggerQuickHeart(null, {time: 1200, x: 40, y: 60}), false)
 })
 
+test("quick-heart only accepts actual taps, not swipes or long presses", () => {
+  const start = {time: 1000, x: 40, y: 60}
+  assert.equal(isTapGesture(start, {time: 1120, x: 44, y: 64}), true)
+  assert.equal(isTapGesture(start, {time: 1120, x: 80, y: 60}), false)
+  assert.equal(isTapGesture(start, {time: 1500, x: 41, y: 61}), false)
+  assert.equal(isTapGesture(null, {time: 1100, x: 40, y: 60}), false)
+})
+
 test("visual viewport height follows the live viewport even when a landscape keyboard leaves very little space", () => {
   assert.equal(normalizedViewportHeight(640.4, 800), 640)
   assert.equal(normalizedViewportHeight(undefined, 812), 812)
@@ -64,6 +73,13 @@ test("chat hardening covers short keyboards, landscape notches, iOS zoom and coa
   assert.match(moduleSource, /input\.style\.fontSize = "16px"/)
   assert.match(moduleSource, /\.reaction-picker \.reaction-btn[\s\S]*width: 44px/)
   assert.match(moduleSource, /\.message-action-btn,[\s\S]*min-height: 44px/)
+})
+
+test("programmatic prompt insertion and send clearing cannot desync composer visuals", () => {
+  assert.match(moduleSource, /observeProgrammaticComposerValue\(input, updateState\)/)
+  assert.match(moduleSource, /Object\.getOwnPropertyDescriptor\(HTMLTextAreaElement\.prototype, "value"\)/)
+  assert.match(moduleSource, /queueMicrotask\(onChange\)/)
+  assert.match(moduleSource, /input\.addEventListener\("focus", \(\) => \{\s*updateState\(\)/)
 })
 
 test("tray decoration is idempotent so its subtree observer cannot self-trigger forever", () => {
