@@ -162,6 +162,87 @@ defmodule StrangertalksNew.RecoveryRestartTest do
     send(channel, :stop)
   end
 
+  test "RecoverySweeper abandons durable ACTIVE Conversation when runtime is gone and nobody returns" do
+    fixture = conversation_fixture()
+    conversation_id = fixture.conversation.conversation_id
+
+    fixture.conversation
+    |> Conversation.changeset(%{
+      conversation_status: :ACTIVE,
+      created_at: DateTime.add(DateTime.utc_now(), -300, :second)
+    })
+    |> Repo.update!()
+
+    assert {:error, :not_started} = ConversationServer.lookup(conversation_id)
+
+    RecoverySweeper.sweep_orphans()
+
+    recovered = Repo.get!(Conversation, conversation_id)
+    assert recovered.conversation_status == :ABANDONED
+    assert recovered.ending_type == :TIMEOUT
+    assert recovered.ended_at
+    assert {:error, :not_started} = ConversationServer.lookup(conversation_id)
+  end
+
+  test "RecoverySweeper abandons durable PAUSED Conversation when runtime is gone and nobody returns" do
+    fixture = conversation_fixture()
+    conversation_id = fixture.conversation.conversation_id
+
+    fixture.conversation
+    |> Conversation.changeset(%{
+      conversation_status: :PAUSED,
+      created_at: DateTime.add(DateTime.utc_now(), -300, :second)
+    })
+    |> Repo.update!()
+
+    assert {:error, :not_started} = ConversationServer.lookup(conversation_id)
+
+    RecoverySweeper.sweep_orphans()
+
+    recovered = Repo.get!(Conversation, conversation_id)
+    assert recovered.conversation_status == :ABANDONED
+    assert recovered.ending_type == :TIMEOUT
+    assert recovered.ended_at
+    assert {:error, :not_started} = ConversationServer.lookup(conversation_id)
+  end
+
+  test "runtime restart racing orphan sweep always converges to one authority" do
+    for _ <- 1..12 do
+      fixture = conversation_fixture()
+      conversation_id = fixture.conversation.conversation_id
+
+      fixture.conversation
+      |> Conversation.changeset(%{conversation_status: :ACTIVE})
+      |> Repo.update!()
+
+      sweep = Task.async(&RecoverySweeper.sweep_orphans/0)
+      restart = Task.async(fn -> ConversationServer.ensure_started(conversation_id) end)
+
+      assert :ok = Task.await(sweep, :infinity)
+      restart_result = Task.await(restart, :infinity)
+      persisted = Repo.get!(Conversation, conversation_id)
+
+      case persisted.conversation_status do
+        :ABANDONED ->
+          assert persisted.ending_type == :TIMEOUT
+          assert {:error, :not_started} = ConversationServer.lookup(conversation_id)
+
+          assert restart_result in [{:error, :terminal_conversation}, {:error, :not_started}] or
+                   match?({:ok, _pid}, restart_result)
+
+        :ACTIVE ->
+          assert {:ok, pid} = ConversationServer.lookup(conversation_id)
+          assert Process.alive?(pid)
+
+          assert {:ok, _terminal} =
+                   ConversationServer.complete_conversation(conversation_id, fixture.a)
+
+        other ->
+          flunk("unexpected durable status after restart/sweep race: #{inspect(other)}")
+      end
+    end
+  end
+
   test "RecoverySweeper and SessionReconciliation produce one orphan transition" do
     fixture = conversation_fixture()
 
