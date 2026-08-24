@@ -58,6 +58,43 @@ function ensureStylesheet() {
   document.head.append(link)
 }
 
+function ensureInteractionHardeningStyles() {
+  if (document.querySelector('style[data-instagram-chat-hardening="true"]')) return
+  const style = document.createElement("style")
+  style.dataset.instagramChatHardening = "true"
+  style.textContent = `
+    @media (max-height: 520px) and (orientation: landscape) {
+      body.st-chat-mode .conversation-head {
+        padding-left: calc(10px + env(safe-area-inset-left, 0px));
+        padding-right: calc(10px + env(safe-area-inset-right, 0px));
+      }
+      body.st-chat-mode .conversation #messages {
+        padding-left: calc(12px + env(safe-area-inset-left, 0px));
+        padding-right: calc(12px + env(safe-area-inset-right, 0px));
+      }
+      body.st-chat-mode #message-form.composer {
+        padding-left: calc(8px + env(safe-area-inset-left, 0px));
+        padding-right: calc(8px + env(safe-area-inset-right, 0px));
+      }
+    }
+    @media (hover: none) and (pointer: coarse) {
+      body.st-chat-mode .reaction-picker .reaction-btn {
+        width: 44px;
+        height: 44px;
+        min-width: 44px;
+        min-height: 44px;
+      }
+      body.st-chat-mode .message-action-btn,
+      body.st-chat-mode #reply-cancel,
+      body.st-chat-mode #icebreaker-dismiss,
+      body.st-chat-mode .temporary-conversation-cue .text-action {
+        min-height: 44px;
+      }
+    }
+  `
+  document.head.append(style)
+}
+
 function iconButton(button, icon, label, extraClass = "") {
   if (!button) return
   button.innerHTML = ICONS[icon] || ""
@@ -364,6 +401,7 @@ export function bootInstagramChat() {
   document.documentElement.dataset.instagramChatBooted = "true"
 
   ensureStylesheet()
+  ensureInteractionHardeningStyles()
   setupVisualViewport()
   setupScreenState()
   setupHeader()
