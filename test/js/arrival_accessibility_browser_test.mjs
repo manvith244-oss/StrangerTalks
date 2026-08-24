@@ -49,30 +49,35 @@ test("keyboard activation reaches queue and focus follows the state change", {ti
   }
 })
 
-test("rapid repeated Door activation creates only one visible queue transition", {timeout: 45_000}, async () => {
+test("rapid repeated Door activation emits one queue join", {timeout: 45_000}, async () => {
   const browser = await chromium.launch({headless: true})
-  let session
+  const context = await browser.newContext({viewport: {width: 390, height: 844}})
+  const page = await context.newPage()
+  const errors = []
+  let queueJoinFrames = 0
+
   try {
-    session = await openReady(browser)
-    const page = session.page
-    let queueJoinFrames = 0
+    page.on("pageerror", error => errors.push(error.message))
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()) })
     page.on("websocket", websocket => {
       websocket.on("framesent", ({payload}) => {
         if (typeof payload === "string" && payload.includes('"queue:join"')) queueJoinFrames += 1
       })
     })
 
+    const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
+    assert.ok(response?.ok())
+    await page.locator("button.door").first().waitFor({state: "visible"})
+    await page.locator("#conversation-language").selectOption("en")
+
     const door = page.getByRole("button", {name: /Advice/})
-    await Promise.all([
-      door.click({clickCount: 2, delay: 10}).catch(() => {}),
-      page.waitForTimeout(50)
-    ])
+    await door.click({clickCount: 2, delay: 10})
     await waitQueued(page)
     await page.waitForTimeout(150)
     assert.equal(queueJoinFrames, 1, "only one queue:join is emitted for repeated activation")
-    assert.deepEqual(session.errors, [])
+    assert.deepEqual(errors, [])
   } finally {
-    await session?.context.close().catch(() => {})
+    await context.close().catch(() => {})
     await browser.close().catch(() => {})
   }
 })
