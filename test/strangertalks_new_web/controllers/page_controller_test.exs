@@ -11,7 +11,9 @@ defmodule StrangertalksNewWeb.PageControllerTest do
              "Normal messages are not permanently stored on StrangerTalks servers. Messages shown during this Conversation were temporarily cached on this device. You decide whether to keep them."
 
     assert body =~ "Saved only on this device unless you export an encrypted backup."
-    assert body =~ "/assets/app.js"
+    assert body =~ "/assets/expression_runtime.mjs"
+    assert body =~ "/assets/expression_surface.css"
+    refute body =~ ~r/<script[^>]+src="\/assets\/app\.js/
     refute body =~ "participant_id"
   end
 

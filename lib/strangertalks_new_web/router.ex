@@ -19,6 +19,8 @@ defmodule StrangertalksNewWeb.Router do
     pipe_through :api
 
     post "/participants", ParticipantController, :create
+    get "/gifs/status", GifController, :status
+    get "/gifs/search", GifController, :index
     get "/account/session", AccountController, :session
     delete "/account/session", AccountController, :logout
     delete "/account/sessions", AccountController, :logout_all
