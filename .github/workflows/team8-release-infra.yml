@@ -1,0 +1,214 @@
+name: Team 8 Release Infrastructure Gate
+
+on:
+  push:
+    branches:
+      - newteam/release-break
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-infra:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      TEST_DATABASE_URL: postgresql://strangertalks_local:strangertalks_test@127.0.0.1:5432/strangertalks_new_test
+      RESTORE_DATABASE_URL: postgresql://strangertalks_local:strangertalks_test@127.0.0.1:5432/team8_restore_test
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove checkout identity
+        run: |
+          set -euo pipefail
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          echo "EXPECTED_SHA=$GITHUB_SHA"
+          echo "CHECKED_OUT_SHA=$(git rev-parse HEAD)"
+
+      - name: Set up tested BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+
+      - name: Set up tested Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install clients and dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          elixir --version
+          node --version
+          psql --version
+
+      - name: Clean-tree and whitespace preflight
+        id: tree_pre
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Full Elixir precommit
+        id: precommit
+        continue-on-error: true
+        run: mix precommit
+
+      - name: Full JavaScript regressions
+        id: javascript
+        continue-on-error: true
+        run: node --test test/js/*.mjs
+
+      - name: Dependency security audits
+        id: security
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          mix hex.audit
+          npm audit --omit=dev --audit-level=high
+
+      - name: Exact-runtime production release build
+        id: release_build
+        continue-on-error: true
+        env:
+          MIX_ENV: prod
+        run: |
+          set -euo pipefail
+          rm -rf _build/prod
+          mix deps.get --only prod
+          mix deps.compile
+          mix compile --warnings-as-errors
+          mix assets.deploy
+          mix release --overwrite
+          test -x _build/prod/rel/strangertalks_new/bin/migrate
+          test -x _build/prod/rel/strangertalks_new/bin/strangertalks_new
+
+      - name: Migration and DB-backed readiness smoke
+        id: readiness
+        continue-on-error: true
+        env:
+          DATABASE_URL: postgresql://strangertalks_local:strangertalks_test@127.0.0.1:5432/strangertalks_new_test
+          SECRET_KEY_BASE: 6f8d8948de21f7683641d97ea2b6178e7c9e5af554ee4f2db5f6063aa8d1f165
+          PHX_HOST: localhost
+          PHX_SERVER: 'true'
+          PORT: '4000'
+          POOL_SIZE: '5'
+        run: |
+          set -euo pipefail
+          release=_build/prod/rel/strangertalks_new/bin/strangertalks_new
+          migrate=_build/prod/rel/strangertalks_new/bin/migrate
+          "$migrate"
+          "$migrate"
+          "$release" start >/tmp/team8-release.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:4000/health/ready >/tmp/team8-ready.json; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = '1'
+          grep -q '"status":"ready"' /tmp/team8-ready.json
+          curl --silent --fail http://127.0.0.1:4000/health/live
+
+      - name: Docker production build provenance
+        id: docker_build
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          grep -q '^ARG ELIXIR_VERSION=1.18.4$' Dockerfile
+          grep -q '^ARG OTP_VERSION=27.3.4$' Dockerfile
+          docker build --pull -t "strangertalks-team8:${GITHUB_SHA}" .
+          docker inspect "strangertalks-team8:${GITHUB_SHA}" >/dev/null
+
+      - name: Backup and isolated restore drill
+        id: backup_restore
+        continue-on-error: true
+        env:
+          DATABASE_URL: postgresql://strangertalks_local:strangertalks_test@127.0.0.1:5432/strangertalks_new_test
+          PGPASSWORD: strangertalks_test
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DROP TABLE IF EXISTS team8_restore_probe;
+          CREATE TABLE team8_restore_probe (id integer PRIMARY KEY, marker text NOT NULL);
+          INSERT INTO team8_restore_probe (id, marker) VALUES (1, 'team8-restore-proven');
+          SQL
+          bash ops/postgres_backup.sh /tmp/strangertalks-team8.dump
+          test -s /tmp/strangertalks-team8.dump
+          dropdb --if-exists -h 127.0.0.1 -U strangertalks_local team8_restore_test
+          createdb -h 127.0.0.1 -U strangertalks_local team8_restore_test
+          CONFIRM_RESTORE=RESTORE_STRANGERTALKS RESTORE_DATABASE_URL="$RESTORE_DATABASE_URL" bash ops/postgres_restore.sh /tmp/strangertalks-team8.dump
+          marker=$(psql "$RESTORE_DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT marker FROM team8_restore_probe WHERE id = 1")
+          test "$marker" = 'team8-restore-proven'
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'DROP TABLE team8_restore_probe'
+
+      - name: Final clean-tree proof
+        id: clean
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Publish Team 8 infrastructure summary
+        if: always()
+        run: |
+          cat <<EOF
+          TESTED_SHA=$GITHUB_SHA
+          tree_pre=${{ steps.tree_pre.outcome }}
+          precommit=${{ steps.precommit.outcome }}
+          javascript=${{ steps.javascript.outcome }}
+          security=${{ steps.security.outcome }}
+          release_build=${{ steps.release_build.outcome }}
+          readiness=${{ steps.readiness.outcome }}
+          docker_build=${{ steps.docker_build.outcome }}
+          backup_restore=${{ steps.backup_restore.outcome }}
+          clean=${{ steps.clean.outcome }}
+          EOF
+
+      - name: Fail closed on any release-infrastructure red
+        if: always()
+        run: |
+          set -euo pipefail
+          test "${{ steps.tree_pre.outcome }}" = success
+          test "${{ steps.precommit.outcome }}" = success
+          test "${{ steps.javascript.outcome }}" = success
+          test "${{ steps.security.outcome }}" = success
+          test "${{ steps.release_build.outcome }}" = success
+          test "${{ steps.readiness.outcome }}" = success
+          test "${{ steps.docker_build.outcome }}" = success
+          test "${{ steps.backup_restore.outcome }}" = success
+          test "${{ steps.clean.outcome }}" = success
