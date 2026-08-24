@@ -1,0 +1,36 @@
+name: Team 4 Dependency Refresh Probe
+
+on:
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+      - name: Refresh patched dependencies
+        run: mix deps.update bandit postgrex
+      - name: Audit refreshed dependencies
+        run: mix hex.audit
+      - name: Emit refreshed lockfile
+        run: |
+          echo '---BEGIN MIX.LOCK---'
+          cat mix.lock
+          echo '---END MIX.LOCK---'
