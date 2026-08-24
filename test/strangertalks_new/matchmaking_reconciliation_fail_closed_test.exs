@@ -7,6 +7,7 @@ defmodule StrangertalksNew.MatchmakingReconciliationFailClosedTest do
   alias StrangertalksNew.Participants
   alias StrangertalksNew.QueueEngine.QueueState
   alias StrangertalksNew.Repo
+  alias StrangertalksNew.SessionReconciliation
 
   setup do
     Agent.update(QueueState, fn _state -> %{} end)
@@ -55,6 +56,32 @@ defmodule StrangertalksNew.MatchmakingReconciliationFailClosedTest do
     queue_state = Agent.get(QueueState, & &1)
     assert Map.has_key?(queue_state, a.participant_id)
     assert Map.has_key?(queue_state, b.participant_id)
+  end
+
+  test "failed orphan terminalization keeps the durable Conversation authoritative" do
+    a = participant_fixture()
+    b = participant_fixture()
+    conversation = create_pending_conversation(a, b)
+
+    conversation
+    |> Conversation.changeset(%{created_at: DateTime.add(DateTime.utc_now(), -300, :second)})
+    |> Repo.update!()
+
+    force_conversation_update_failure!()
+
+    assert {:ok,
+            %{
+              canonical_state: :CONVERSATION,
+              conversation: %{conversation_id: conversation_id}
+            }} = SessionReconciliation.reconcile(a.participant_id)
+
+    assert conversation_id == conversation.conversation_id
+    assert Repo.get!(Conversation, conversation.conversation_id).conversation_status == :PENDING
+
+    assert {:error, :participant_busy} =
+             MatchmakingEngine.join_queue(a.participant_id, :EXPLORE, "en", nil, nil)
+
+    refute Agent.get(QueueState, &Map.has_key?(&1, a.participant_id))
   end
 
   defp participant_fixture do
@@ -119,5 +146,21 @@ defmodule StrangertalksNew.MatchmakingReconciliationFailClosedTest do
       })
 
     conversation
+  end
+
+  defp force_conversation_update_failure! do
+    Repo.query!("""
+    CREATE FUNCTION team2_fail_conversation_update() RETURNS trigger AS $$
+    BEGIN
+      RAISE EXCEPTION 'forced Team 2 conversation update failure';
+    END;
+    $$ LANGUAGE plpgsql
+    """)
+
+    Repo.query!("""
+    CREATE TRIGGER team2_fail_conversation_update_trigger
+    BEFORE UPDATE ON conversations
+    FOR EACH ROW EXECUTE FUNCTION team2_fail_conversation_update()
+    """)
   end
 end
