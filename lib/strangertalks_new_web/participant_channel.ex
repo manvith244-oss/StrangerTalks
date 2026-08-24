@@ -6,6 +6,7 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
   alias StrangertalksNew.QueueEngine.ParticipantConnectionTracker
   alias StrangertalksNew.QueueEngine.QueueState
   alias StrangertalksNew.RelationshipReconnections
+  alias StrangertalksNew.SessionReconciliation
 
   @matchmaking_topic "strangertalks:matchmaking"
   @doors %{
@@ -21,7 +22,7 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
       :ok = Phoenix.PubSub.subscribe(StrangertalksNew.PubSub, @matchmaking_topic)
       :ok = ParticipantConnectionTracker.register(participant_id, self())
 
-      case StrangertalksNew.SessionReconciliation.reconcile(participant_id) do
+      case SessionReconciliation.reconcile(participant_id) do
         {:ok, snapshot} ->
           {:ok, %{status: "connected", snapshot: snapshot}, socket}
 
@@ -252,8 +253,7 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
 
   def handle_in("session:reconcile", params, socket) when params == %{} do
     with :ok <- rate_limit(socket, :session_reconcile, 6, 30_000),
-         {:ok, snapshot} <-
-           StrangertalksNew.SessionReconciliation.reconcile(socket.assigns.participant_id) do
+         {:ok, snapshot} <- SessionReconciliation.reconcile(socket.assigns.participant_id) do
       {:reply, {:ok, %{snapshot: snapshot}}, socket}
     else
       {:error, {:rate_limited, _retry_after_ms} = reason} ->
@@ -289,7 +289,10 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
          participant_b_id, _score},
         socket
       ) do
-    if socket.assigns.participant_id in [participant_a_id, participant_b_id] do
+    participant_id = socket.assigns.participant_id
+
+    if participant_id in [participant_a_id, participant_b_id] and
+         canonical_conversation?(participant_id, conversation_id) do
       push(socket, "match_found", %{conversation_id: conversation_id, status: "matched"})
       push(socket, "queue:status", %{status: "matched"})
     end
@@ -351,7 +354,10 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
         {:bond_reconnect_matched, conversation_id, participant_a_id, participant_b_id},
         socket
       ) do
-    if socket.assigns.participant_id in [participant_a_id, participant_b_id] do
+    participant_id = socket.assigns.participant_id
+
+    if participant_id in [participant_a_id, participant_b_id] and
+         canonical_conversation?(participant_id, conversation_id) do
       push(socket, "match_found", %{
         conversation_id: conversation_id,
         status: "matched",
@@ -368,6 +374,29 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
   def terminate(_reason, socket) do
     ParticipantConnectionTracker.unregister(socket.assigns.participant_id, self())
     :ok
+  end
+
+  defp canonical_conversation?(participant_id, conversation_id) do
+    queued? = Agent.get(QueueState, &Map.has_key?(&1, participant_id))
+
+    if queued? do
+      false
+    else
+      case StrangertalksNew.StateInvariants.check_participant(participant_id) do
+        :ok ->
+          case StrangertalksNew.Repo.get(StrangertalksNew.Conversation, conversation_id) do
+            %StrangertalksNew.Conversation{} = conversation ->
+              conversation.conversation_status in [:PENDING, :ACTIVE, :PAUSED] and
+                participant_id in [conversation.participant_a_id, conversation.participant_b_id]
+
+            nil ->
+              false
+          end
+
+        _violation ->
+          false
+      end
+    end
   end
 
   defp door_from_string(door_type) do

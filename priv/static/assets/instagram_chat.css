@@ -1,0 +1,982 @@
+/* StrangerTalks Conversation — Instagram-inspired interaction shell.
+   Scoped to st-chat-mode so non-Conversation screens keep the existing product design. */
+
+:root {
+  --ig-chat-bg: #000;
+  --ig-chat-panel: #0b0b0d;
+  --ig-chat-surface: #1a1a1d;
+  --ig-chat-surface-2: #26262a;
+  --ig-chat-border: rgba(255, 255, 255, 0.11);
+  --ig-chat-text: #f5f5f5;
+  --ig-chat-muted: #a8a8ad;
+  --ig-chat-blue: #4b8cff;
+  --ig-chat-self-a: #7357ff;
+  --ig-chat-self-b: #3d78ff;
+  --ig-chat-danger: #ff5a67;
+  --ig-chat-header-h: 64px;
+  --ig-chat-composer-min-h: 58px;
+  --ig-chat-touch: 44px;
+  --ig-chat-max: 760px;
+  --ig-vh: 100dvh;
+}
+
+body.st-chat-mode {
+  overflow: hidden;
+  background: #08080a;
+}
+
+body.st-chat-mode .site-header,
+body.st-chat-mode #bottom-nav {
+  display: none !important;
+}
+
+body.st-chat-mode main {
+  width: 100%;
+  max-width: none;
+  height: var(--ig-vh);
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+}
+
+body.st-chat-mode [data-screen="conversation"].active {
+  position: relative;
+  display: flex;
+  width: 100%;
+  max-width: var(--ig-chat-max);
+  height: var(--ig-vh);
+  min-height: 0;
+  margin: 0 auto;
+  padding: 0;
+  overflow: hidden;
+  flex-direction: column;
+  color: var(--ig-chat-text);
+  background: color-mix(in srgb, var(--st-bg, #12141c) 24%, var(--ig-chat-bg));
+  border-inline: 1px solid transparent;
+  isolation: isolate;
+}
+
+body.st-chat-mode [data-screen="conversation"].active::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 15% 0%, rgba(115, 87, 255, 0.08), transparent 36%),
+    linear-gradient(180deg, rgba(255,255,255,0.018), transparent 28%);
+}
+
+/* Header */
+body.st-chat-mode .conversation-head {
+  position: relative;
+  z-index: 20;
+  flex: 0 0 auto;
+  min-height: calc(var(--ig-chat-header-h) + env(safe-area-inset-top, 0px));
+  padding: calc(8px + env(safe-area-inset-top, 0px)) 10px 8px;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--ig-chat-border);
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(22px) saturate(145%);
+  -webkit-backdrop-filter: blur(22px) saturate(145%);
+}
+
+body.st-chat-mode .ig-chat-back,
+body.st-chat-mode .conversation-head-actions > button,
+body.st-chat-mode .conversation-head-actions > details > summary {
+  display: inline-grid;
+  place-items: center;
+  width: var(--ig-chat-touch);
+  height: var(--ig-chat-touch);
+  min-width: var(--ig-chat-touch);
+  min-height: var(--ig-chat-touch);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  color: var(--ig-chat-text);
+  background: transparent;
+}
+
+body.st-chat-mode .ig-chat-back:hover,
+body.st-chat-mode .conversation-head-actions > button:hover,
+body.st-chat-mode .conversation-head-actions > details > summary:hover {
+  background: rgba(255,255,255,0.08);
+}
+
+body.st-chat-mode .ig-icon {
+  width: 23px;
+  height: 23px;
+  display: block;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+body.st-chat-mode .conversation-identity {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 10px;
+}
+
+body.st-chat-mode .conversation-identity .signature-ribbon {
+  display: grid;
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 30% 22%, rgba(255,255,255,.48), transparent 16%),
+    linear-gradient(145deg, #8e68ff, #4f82ff 54%, #2e3055);
+  box-shadow: inset 0 0 18px rgba(255,255,255,.08);
+}
+
+body.st-chat-mode .conversation-identity .signature-ribbon::after {
+  content: "";
+  width: 19px;
+  height: 19px;
+  border: 1.7px solid rgba(255,255,255,.9);
+  border-radius: 50% 48% 54% 46%;
+  transform: rotate(-14deg);
+}
+
+body.st-chat-mode .conversation-identity > div:last-child {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, auto) 1fr;
+  grid-template-areas:
+    "name context"
+    "presence presence";
+  align-items: center;
+  column-gap: 7px;
+}
+
+body.st-chat-mode .conversation-head h1 {
+  grid-area: name;
+  max-width: 14rem;
+  margin: 0;
+  overflow: hidden;
+  color: var(--ig-chat-text);
+  font-size: 15px;
+  font-weight: 720;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.st-chat-mode #conversation-door {
+  grid-area: context;
+  justify-self: start;
+  max-width: 9rem;
+  margin: 0;
+  padding: 2px 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  color: #c7c7cc;
+  background: rgba(255,255,255,.07);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+body.st-chat-mode #presence {
+  grid-area: presence;
+  min-height: 0;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--ig-chat-muted);
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.st-chat-mode .conversation-head-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0;
+}
+
+body.st-chat-mode .conversation-head-actions #pinned-messages-control,
+body.st-chat-mode .conversation-head-actions #quiet-mode-control {
+  display: none;
+}
+
+body.st-chat-mode .overflow {
+  position: static;
+}
+
+body.st-chat-mode .overflow-menu {
+  position: absolute;
+  z-index: 50;
+  top: calc(100% + 8px);
+  right: 10px;
+  display: grid;
+  width: min(19rem, calc(100vw - 20px));
+  max-height: min(70dvh, 32rem);
+  gap: 2px;
+  padding: 7px;
+  overflow-y: auto;
+  border: 1px solid var(--ig-chat-border);
+  border-radius: 18px;
+  background: rgba(28,28,31,.98);
+  box-shadow: 0 18px 50px rgba(0,0,0,.42);
+  backdrop-filter: blur(26px) saturate(150%);
+}
+
+body.st-chat-mode .overflow-menu button {
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  text-align: left;
+  background: transparent;
+}
+
+body.st-chat-mode .overflow-menu button:hover {
+  background: rgba(255,255,255,.07);
+}
+
+body.st-chat-mode .overflow-menu #block,
+body.st-chat-mode .overflow-menu #report-open,
+body.st-chat-mode .overflow-menu #end-conversation {
+  color: var(--ig-chat-danger);
+}
+
+body.st-chat-mode .ig-menu-divider {
+  height: 1px;
+  margin: 5px 7px;
+  background: var(--ig-chat-border);
+}
+
+body.st-chat-mode .atmosphere-toolbar {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Compact temporary-chat and starter surfaces */
+body.st-chat-mode .temporary-conversation-cue {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 12px;
+  border: 0;
+  border-bottom: 1px solid rgba(255,255,255,.055);
+  color: var(--ig-chat-muted);
+  background: rgba(0,0,0,.28);
+  font-size: 10.5px;
+  line-height: 1.2;
+}
+
+body.st-chat-mode .temporary-conversation-cue strong {
+  color: #d3d3d8;
+  font-weight: 650;
+}
+
+body.st-chat-mode .temporary-conversation-cue .text-action {
+  min-height: 24px;
+  padding: 0 4px;
+  border: 0;
+  color: #aebfff;
+  background: transparent;
+  font-size: inherit;
+  text-decoration: none;
+}
+
+body.st-chat-mode #icebreaker-card {
+  flex: 0 0 auto;
+  margin: 8px 12px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(115,87,255,.23);
+  border-radius: 16px;
+  background: rgba(79,62,139,.16);
+}
+
+body.st-chat-mode #icebreaker-card .eyebrow,
+body.st-chat-mode #icebreaker-card h2 {
+  display: none;
+}
+
+body.st-chat-mode #icebreaker-card p {
+  margin: 0;
+  color: #dedaf9;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+body.st-chat-mode #icebreaker-dismiss {
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+}
+
+body.st-chat-mode #typing {
+  flex: 0 0 auto;
+  min-height: 18px;
+  padding: 0 16px;
+  color: var(--ig-chat-muted);
+  font-size: 11px;
+}
+
+/* Timeline */
+body.st-chat-mode .message-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,.18) transparent;
+  scroll-padding-bottom: 18px;
+}
+
+body.st-chat-mode .conversation #messages {
+  display: flex;
+  min-height: 100%;
+  justify-content: flex-end;
+  gap: 2px;
+  margin: 0;
+  padding: 18px 12px 16px;
+}
+
+body.st-chat-mode .message {
+  position: relative;
+  max-width: min(76%, 31rem);
+  margin-block: 0;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 18px 18px 18px 5px;
+  color: var(--ig-chat-text);
+  background: var(--ig-chat-surface-2);
+  box-shadow: none;
+  font-size: 14px;
+  line-height: 1.35;
+  outline: none;
+  touch-action: pan-y;
+  transform-origin: center;
+}
+
+body.st-chat-mode .message.mine {
+  border-radius: 18px 18px 5px 18px;
+  background: linear-gradient(135deg, var(--ig-chat-self-a), var(--ig-chat-self-b));
+}
+
+body.st-chat-mode .message.ig-group-middle {
+  border-bottom-left-radius: 7px;
+  border-top-left-radius: 7px;
+}
+
+body.st-chat-mode .message.mine.ig-group-middle {
+  border-bottom-right-radius: 7px;
+  border-top-right-radius: 7px;
+}
+
+body.st-chat-mode .message.ig-group-start:not(.mine) { border-bottom-left-radius: 7px; }
+body.st-chat-mode .message.ig-group-end:not(.mine) { border-top-left-radius: 7px; }
+body.st-chat-mode .message.mine.ig-group-start { border-bottom-right-radius: 7px; }
+body.st-chat-mode .message.mine.ig-group-end { border-top-right-radius: 7px; }
+
+body.st-chat-mode .message.ig-group-start {
+  margin-top: 8px;
+}
+
+body.st-chat-mode .message.ig-heart-pop {
+  animation: ig-heart-pop 260ms ease-out;
+}
+
+@keyframes ig-heart-pop {
+  45% { transform: scale(1.04); }
+  100% { transform: scale(1); }
+}
+
+body.st-chat-mode .message p,
+body.st-chat-mode .message .message-text {
+  margin: 0;
+}
+
+body.st-chat-mode .message small,
+body.st-chat-mode .message .message-status {
+  display: none;
+  margin: 5px 2px 0;
+  color: rgba(255,255,255,.66);
+  font-size: 9.5px;
+  line-height: 1.2;
+  text-align: right;
+}
+
+body.st-chat-mode .message.ig-latest-own .message-status,
+body.st-chat-mode .message.ig-latest-own > small:last-child {
+  display: block;
+}
+
+body.st-chat-mode .message.mine.ig-latest-own .message-status,
+body.st-chat-mode .message.mine.ig-latest-own > small:last-child {
+  position: absolute;
+  top: calc(100% + 3px);
+  right: 4px;
+  width: max-content;
+  color: var(--ig-chat-muted);
+}
+
+body.st-chat-mode .message.mine.ig-latest-own {
+  margin-bottom: 16px;
+}
+
+body.st-chat-mode .reply-quote,
+body.st-chat-mode .reply-reference,
+body.st-chat-mode .message-reply-preview {
+  margin: -2px -4px 6px;
+  padding: 6px 8px;
+  border-left: 2px solid rgba(255,255,255,.6);
+  border-radius: 8px;
+  color: rgba(255,255,255,.78);
+  background: rgba(0,0,0,.16);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+body.st-chat-mode .message-reactions {
+  position: absolute;
+  right: 8px;
+  bottom: -10px;
+  z-index: 3;
+  display: flex;
+  gap: 2px;
+}
+
+body.st-chat-mode .message:not(.mine) .message-reactions {
+  right: auto;
+  left: 8px;
+}
+
+body.st-chat-mode .message-reactions button,
+body.st-chat-mode .message-reactions span {
+  min-width: 22px;
+  min-height: 20px;
+  padding: 1px 4px;
+  border: 2px solid #000;
+  border-radius: 999px;
+  background: #1b1b1e;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+body.st-chat-mode .message-actions-bar {
+  display: none;
+  position: absolute;
+  z-index: 31;
+  top: calc(100% + 8px);
+  left: 0;
+  width: max-content;
+  max-width: min(92vw, 22rem);
+  padding: 5px;
+  gap: 2px;
+  flex-wrap: wrap;
+  border: 1px solid var(--ig-chat-border);
+  border-radius: 14px;
+  background: rgba(31,31,34,.98);
+  box-shadow: 0 15px 42px rgba(0,0,0,.46);
+}
+
+body.st-chat-mode .message.mine .message-actions-bar {
+  right: 0;
+  left: auto;
+}
+
+body.st-chat-mode .message:hover .message-actions-bar,
+body.st-chat-mode .message:focus-within .message-actions-bar,
+body.st-chat-mode .message:has(.reaction-picker) .message-actions-bar {
+  display: flex;
+}
+
+body.st-chat-mode .message-action-btn {
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 9px;
+  color: #e6e6e9;
+  background: transparent;
+  font-size: 11px;
+}
+
+body.st-chat-mode .message-action-btn:hover {
+  background: rgba(255,255,255,.08);
+}
+
+body.st-chat-mode .unsend-action-btn,
+body.st-chat-mode .report-message-action-btn {
+  color: #ff7b84;
+}
+
+body.st-chat-mode .reaction-picker {
+  position: absolute;
+  z-index: 35;
+  bottom: calc(100% + 8px);
+  left: 0;
+  display: flex;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  padding: 5px 7px;
+  gap: 1px;
+  border: 1px solid var(--ig-chat-border);
+  border-radius: 999px;
+  background: rgba(31,31,34,.98);
+  box-shadow: 0 15px 42px rgba(0,0,0,.46);
+  backdrop-filter: blur(20px);
+}
+
+body.st-chat-mode .message.mine .reaction-picker {
+  right: 0;
+  left: auto;
+}
+
+body.st-chat-mode .reaction-picker .reaction-btn {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  min-height: 38px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 20px;
+}
+
+body.st-chat-mode .reaction-picker .reaction-btn:hover,
+body.st-chat-mode .reaction-picker .reaction-btn:focus-visible {
+  background: rgba(255,255,255,.1);
+  transform: scale(1.08);
+}
+
+body.st-chat-mode .voice-note {
+  min-width: min(72vw, 18rem);
+}
+
+body.st-chat-mode .voice-note audio {
+  width: 100%;
+  min-width: 0;
+  margin: 4px 0 0;
+}
+
+body.st-chat-mode .expressive-message img,
+body.st-chat-mode .expressive-message video,
+body.st-chat-mode .view-once-message img,
+body.st-chat-mode .view-once-message video {
+  max-width: min(70vw, 20rem);
+  border-radius: 14px;
+}
+
+body.st-chat-mode .new-messages {
+  position: absolute;
+  z-index: 12;
+  left: 50%;
+  bottom: calc(var(--ig-chat-composer-min-h) + 26px + env(safe-area-inset-bottom, 0px));
+  min-height: 34px;
+  padding: 5px 12px;
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 999px;
+  background: #f4f4f4;
+  color: #111;
+  font-size: 11px;
+  transform: translateX(-50%);
+  box-shadow: 0 8px 24px rgba(0,0,0,.3);
+}
+
+/* Composer */
+body.st-chat-mode #message-form.composer {
+  position: relative;
+  z-index: 25;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 7px 8px calc(7px + env(safe-area-inset-bottom, 0px));
+  border: 0;
+  border-top: 1px solid rgba(255,255,255,.07);
+  border-radius: 0;
+  background: rgba(0,0,0,.90);
+  backdrop-filter: blur(22px) saturate(145%);
+  -webkit-backdrop-filter: blur(22px) saturate(145%);
+}
+
+body.st-chat-mode .reply-staging {
+  display: flex;
+  margin: 0 4px 7px;
+  padding: 7px 8px 7px 10px;
+  align-items: center;
+  gap: 8px;
+  border-left: 2px solid #8a76ff;
+  border-radius: 9px;
+  background: rgba(255,255,255,.055);
+}
+
+body.st-chat-mode .reply-staging[hidden] { display: none; }
+
+body.st-chat-mode .reply-staging-content {
+  min-width: 0;
+  flex: 1;
+}
+
+body.st-chat-mode .reply-staging-content strong,
+body.st-chat-mode .reply-staging-content p {
+  overflow: hidden;
+  margin: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.st-chat-mode .reply-staging-content strong { font-size: 10.5px; color: #cfc8ff; }
+body.st-chat-mode .reply-staging-content p { margin-top: 2px; color: var(--ig-chat-muted); font-size: 10.5px; }
+
+body.st-chat-mode #reply-cancel {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+
+body.st-chat-mode .compose {
+  display: flex;
+  min-height: var(--ig-chat-composer-min-h);
+  align-items: flex-end;
+  gap: 2px;
+  padding: 5px;
+  border: 1px solid rgba(255,255,255,.19);
+  border-radius: 27px;
+  background: rgba(24,24,27,.90);
+}
+
+body.st-chat-mode .compose textarea {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 120px;
+  margin: 0;
+  padding: 11px 5px 9px;
+  resize: none;
+  overflow-y: auto;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  color: var(--ig-chat-text);
+  background: transparent;
+  box-shadow: none;
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+body.st-chat-mode .compose textarea::placeholder { color: #8f8f94; }
+
+body.st-chat-mode .ig-compose-icon,
+body.st-chat-mode .compose #voice-start,
+body.st-chat-mode .compose #view-once-picker-btn {
+  display: inline-grid;
+  flex: 0 0 var(--ig-chat-touch);
+  width: var(--ig-chat-touch);
+  height: var(--ig-chat-touch);
+  min-width: var(--ig-chat-touch);
+  min-height: var(--ig-chat-touch);
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  color: var(--ig-chat-text);
+  background: transparent;
+}
+
+body.st-chat-mode .compose #view-once-picker-btn {
+  color: white;
+  background: linear-gradient(145deg, #7d64ff, #4b86ff);
+}
+
+body.st-chat-mode .composer.has-text .compose #voice-start,
+body.st-chat-mode .composer.has-text .ig-compose-plus {
+  display: none;
+}
+
+body.st-chat-mode .compose > .primary {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--ig-chat-blue);
+  background: transparent;
+  font-size: 14px;
+  font-weight: 750;
+}
+
+body.st-chat-mode .composer:not(.has-text) .compose > .primary {
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.st-chat-mode .voice-controls {
+  display: none;
+  margin: 7px 0 0;
+  padding: 8px 4px 3px;
+  gap: 7px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+
+body.st-chat-mode .voice-controls::-webkit-scrollbar { display: none; }
+body.st-chat-mode .composer.ig-tray-open .voice-controls { display: flex; }
+
+body.st-chat-mode .voice-controls > button,
+body.st-chat-mode .voice-controls #expressive-open,
+body.st-chat-mode .voice-controls #companion-control {
+  display: inline-flex;
+  flex: 0 0 auto;
+  min-height: 42px;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 11px;
+  border: 0;
+  border-radius: 13px;
+  color: #e8e8eb;
+  background: rgba(255,255,255,.07);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+body.st-chat-mode #expressive-composer {
+  display: contents;
+}
+
+body.st-chat-mode #expressive-composer[hidden] { display: none; }
+
+body.st-chat-mode .voice-privacy {
+  display: none;
+  margin: 7px 5px 0;
+  color: var(--ig-chat-muted);
+  font-size: 9.5px;
+  line-height: 1.3;
+}
+
+body.st-chat-mode .composer.ig-tray-open .voice-privacy { display: block; }
+
+/* Bottom sheets / popovers */
+body.st-chat-mode .prompt-helper,
+body.st-chat-mode .companion-panel,
+body.st-chat-mode .expressive-picker,
+body.st-chat-mode .voice-sheet,
+body.st-chat-mode .atmosphere-chooser,
+body.st-chat-mode .pinned-panel,
+body.st-chat-mode #report-form {
+  border-color: var(--ig-chat-border);
+  color: var(--ig-chat-text);
+  background: rgba(24,24,27,.985);
+  box-shadow: 0 -12px 48px rgba(0,0,0,.42);
+}
+
+body.st-chat-mode .prompt-helper,
+body.st-chat-mode .companion-panel,
+body.st-chat-mode .expressive-picker {
+  max-height: min(58dvh, 34rem);
+  overflow-y: auto;
+}
+
+body.st-chat-mode .companion-panel {
+  margin-top: 8px;
+  border-radius: 18px;
+}
+
+body.st-chat-mode .companion-suggestion {
+  border-color: rgba(255,255,255,.1);
+  background: rgba(255,255,255,.045);
+}
+
+body.st-chat-mode .prompt-options,
+body.st-chat-mode .companion-suggestions {
+  gap: 7px;
+}
+
+body.st-chat-mode .prompt-helper button,
+body.st-chat-mode .companion-panel button,
+body.st-chat-mode .expressive-picker button,
+body.st-chat-mode .voice-sheet button,
+body.st-chat-mode .atmosphere-chooser button {
+  min-height: 42px;
+}
+
+body.st-chat-mode .pinned-panel {
+  z-index: 19;
+  margin: 0;
+  padding: 9px 12px;
+  border-width: 0 0 1px;
+  border-radius: 0;
+}
+
+/* Calls retain existing behavior but match the Conversation shell. */
+body.st-chat-mode .live-call-overlay,
+body.st-chat-mode .live-call-active-panel {
+  z-index: 80;
+}
+
+body.st-chat-mode .live-call-active-panel {
+  border: 1px solid var(--ig-chat-border);
+  background: rgba(15,15,18,.98);
+}
+
+/* Accessibility and interaction fidelity */
+body.st-chat-mode button:focus-visible,
+body.st-chat-mode textarea:focus-visible,
+body.st-chat-mode summary:focus-visible,
+body.st-chat-mode select:focus-visible,
+body.st-chat-mode .message:focus-visible {
+  outline: 2px solid #9cabff;
+  outline-offset: 2px;
+}
+
+body.st-chat-mode .ig-double-tap-hint {
+  position: absolute;
+  z-index: 5;
+  bottom: 10px;
+  left: 50%;
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: #ddd;
+  background: rgba(0,0,0,.6);
+  font-size: 9px;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+/* Tablet / desktop */
+@media (min-width: 768px) {
+  body.st-chat-mode {
+    padding: 18px;
+    background:
+      radial-gradient(circle at 50% 0%, rgba(105,84,255,.07), transparent 38rem),
+      #08080a;
+  }
+
+  body.st-chat-mode main {
+    height: calc(var(--ig-vh) - 36px);
+  }
+
+  body.st-chat-mode [data-screen="conversation"].active {
+    height: calc(var(--ig-vh) - 36px);
+    border: 1px solid var(--ig-chat-border);
+    border-radius: 20px;
+    box-shadow: 0 28px 80px rgba(0,0,0,.38);
+  }
+
+  body.st-chat-mode .conversation-head {
+    border-radius: 20px 20px 0 0;
+  }
+
+  body.st-chat-mode #message-form.composer {
+    border-radius: 0 0 20px 20px;
+  }
+
+  body.st-chat-mode .prompt-helper,
+  body.st-chat-mode .companion-panel,
+  body.st-chat-mode .expressive-picker {
+    max-height: min(48vh, 31rem);
+  }
+}
+
+@media (min-width: 1100px) {
+  :root { --ig-chat-max: 820px; }
+  body.st-chat-mode { padding: 24px; }
+  body.st-chat-mode main,
+  body.st-chat-mode [data-screen="conversation"].active {
+    height: calc(var(--ig-vh) - 48px);
+  }
+  body.st-chat-mode .conversation #messages { padding-inline: 20px; }
+  body.st-chat-mode .message { max-width: min(68%, 34rem); }
+}
+
+/* Small phones */
+@media (max-width: 390px) {
+  :root { --ig-chat-header-h: 58px; --ig-chat-touch: 42px; }
+  body.st-chat-mode .conversation-head { padding-inline: 5px; }
+  body.st-chat-mode .conversation-head-actions { gap: 0; }
+  body.st-chat-mode .conversation-identity .signature-ribbon { width: 36px; height: 36px; flex-basis: 36px; }
+  body.st-chat-mode .conversation-head h1 { max-width: 8rem; }
+  body.st-chat-mode #conversation-door { display: none; }
+  body.st-chat-mode .conversation-identity > div:last-child { grid-template-areas: "name" "presence"; grid-template-columns: minmax(0, 1fr); }
+  body.st-chat-mode .message { max-width: 82%; font-size: 13.5px; }
+  body.st-chat-mode .conversation #messages { padding-inline: 9px; }
+  body.st-chat-mode .compose { min-height: 54px; }
+  body.st-chat-mode .compose textarea { font-size: 16px; /* prevents iOS focus zoom */ }
+}
+
+/* Short landscape phones */
+@media (max-height: 520px) and (orientation: landscape) {
+  :root { --ig-chat-header-h: 50px; --ig-chat-composer-min-h: 50px; --ig-chat-touch: 40px; }
+  body.st-chat-mode .conversation-head { padding-top: calc(4px + env(safe-area-inset-top, 0px)); padding-bottom: 4px; }
+  body.st-chat-mode .conversation-identity .signature-ribbon { width: 34px; height: 34px; flex-basis: 34px; }
+  body.st-chat-mode .temporary-conversation-cue { display: none; }
+  body.st-chat-mode #icebreaker-card { margin-top: 4px; padding-block: 6px; }
+  body.st-chat-mode #typing { min-height: 14px; }
+  body.st-chat-mode #message-form.composer { padding-top: 4px; padding-bottom: calc(4px + env(safe-area-inset-bottom, 0px)); }
+  body.st-chat-mode .compose { min-height: 48px; }
+  body.st-chat-mode .compose textarea { min-height: 38px; padding-block: 8px; }
+}
+
+/* Keyboard-open mode keeps decorative surfaces from stealing vertical room. */
+body.st-chat-mode.ig-keyboard-open .temporary-conversation-cue,
+body.st-chat-mode.ig-keyboard-open #icebreaker-card:not(:focus-within) {
+  display: none !important;
+}
+
+/* Touch devices should not expose desktop hover menus accidentally. */
+@media (hover: none) and (pointer: coarse) {
+  body.st-chat-mode .message:hover .message-actions-bar { display: none; }
+  body.st-chat-mode .message:focus-within .message-actions-bar,
+  body.st-chat-mode .message:has(.reaction-picker) .message-actions-bar { display: flex; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.st-chat-mode *,
+  body.st-chat-mode *::before,
+  body.st-chat-mode *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  body.st-chat-mode .conversation-head,
+  body.st-chat-mode #message-form.composer,
+  body.st-chat-mode .compose,
+  body.st-chat-mode .overflow-menu,
+  body.st-chat-mode .reaction-picker {
+    border-color: rgba(255,255,255,.36);
+  }
+  body.st-chat-mode .message:not(.mine) { background: #2d2d31; }
+}

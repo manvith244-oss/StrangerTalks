@@ -1,0 +1,39 @@
+name: Team 6 Transform Smoke
+
+on:
+  push:
+    branches: [team6/voice-video-expression]
+    paths:
+      - "tmp/team6_direct_remediate.py"
+      - "tmp/team6_prepare_remediation.py"
+      - "tmp/team6_final_hardening.py"
+      - ".github/workflows/team6-transform-smoke.yml"
+  pull_request:
+    paths:
+      - "tmp/team6_direct_remediate.py"
+      - "tmp/team6_prepare_remediation.py"
+      - "tmp/team6_final_hardening.py"
+      - ".github/workflows/team6-transform-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  transform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: team6/voice-video-expression
+      - name: Prepare harness
+        run: python tmp/team6_prepare_remediation.py
+      - name: Transform canonical source in disposable runner
+        run: python tmp/team6_direct_remediate.py
+      - name: Final hardening in disposable runner
+        run: python tmp/team6_final_hardening.py
+      - name: JavaScript parse and diff integrity
+        run: |
+          node --check priv/static/assets/live_call.mjs
+          node --check priv/static/assets/app.js
+          node --check priv/static/assets/voice_notes.mjs
+          git diff --check

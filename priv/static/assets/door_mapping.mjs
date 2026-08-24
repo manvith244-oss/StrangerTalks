@@ -1,3 +1,5 @@
+import "./arrival_first_minute.mjs"
+
 // V1 presentation aliases for the existing canonical backend Door values.
 export const DOORS = Object.freeze([
   {label: "Deep Talk", value: "SOMETHING_REAL", description: "Talk about something real."},

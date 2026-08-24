@@ -10,7 +10,7 @@ import {
 import {
   MAX_VOICE_BYTES, MAX_VOICE_DURATION_MS, VOICE_WARNING_VERSION, baseMediaType,
   chronologicalTimeline, formatVoiceTime, nextPlaybackRate, selectVoiceMediaType, stopMediaTracks, validVoiceBlob,
-  voiceDraftMatchesRuntime,
+  voiceDraftMatchesRuntime, voiceCaptureStillAuthorized,
   warningAcknowledged
 } from "./voice_notes.mjs"
 import {createMatchedTransitionTracker, createReconnectCountdownController, reconnectDisplayState, reconnectStateRecord, remainingAvailabilitySeconds, unavailableReconnectState} from "./bond_reconnect.mjs"
@@ -83,7 +83,7 @@ const app = {
   account: {available: false, connected: false, revision: 0, passphrase: null, syncKey: null, envelope: null},
   matchedTransition: createMatchedTransitionTracker(),
   reconnectCountdown: createReconnectCountdownController(),
-  voice: {mediaType: null, recorder: null, stream: null, chunks: [], startedAt: 0, timer: null, stopTimer: null, activityFrame: null, discard: false, blob: null, objectUrl: null, voiceNoteId: null, durationMs: 0, originConversationId: null, originEpochId: null},
+  voice: {mediaType: null, recorder: null, stream: null, chunks: [], startedAt: 0, timer: null, stopTimer: null, activityFrame: null, discard: false, blob: null, objectUrl: null, voiceNoteId: null, durationMs: 0, originConversationId: null, originEpochId: null, captureRequestId: 0},
   voiceUrls: new Map(),
   pinnedMessages: {conversationId: null, epochId: null, items: [], revision: 0},
   pinMutationInFlight: false,
@@ -3529,8 +3529,26 @@ async function requestVoiceRecording() {
 async function startVoiceRecording() {
   $("#voice-warning").hidden = true; clearVoicePreview(); $("#voice-preview-status").textContent = ""
   if (!app.voice.mediaType || !navigator.mediaDevices?.getUserMedia) { announce("Voice recording is unavailable in this browser. Text messaging still works."); return }
+
+  const captureRequestId = ++app.voice.captureRequestId
+  const captureConversationId = app.conversationId
+  const captureEpochId = app.currentEpochId
+
   try {
     const stream = await navigator.mediaDevices.getUserMedia({audio: true})
+    if (!voiceCaptureStillAuthorized({
+      requestId: captureRequestId,
+      currentRequestId: app.voice.captureRequestId,
+      conversationId: captureConversationId,
+      currentConversationId: app.conversationId,
+      epochId: captureEpochId,
+      currentEpochId: app.currentEpochId,
+      conversationAvailable: Boolean(app.conversation)
+    })) {
+      stopMediaTracks(stream)
+      return
+    }
+
     const recorder = new MediaRecorder(stream, {mimeType: app.voice.mediaType, audioBitsPerSecond: 64_000})
     Object.assign(app.voice, {stream, recorder, chunks: [], startedAt: Date.now(), discard: false, originConversationId: app.conversationId, originEpochId: app.currentEpochId})
     recorder.addEventListener("dataavailable", ({data}) => { if (data.size) app.voice.chunks.push(data) })
@@ -3538,7 +3556,11 @@ async function startVoiceRecording() {
     recorder.start(); $("#voice-recording").hidden = false; $("#voice-recording-waveform")?.classList.add("active"); updateVoiceTimer()
     app.voice.timer = setInterval(updateVoiceTimer, 250)
     app.voice.stopTimer = setTimeout(() => { if (recorder.state === "recording") recorder.stop() }, MAX_VOICE_DURATION_MS)
-  } catch { closeVoiceStream(); announce("Microphone access was not granted. Text messaging is still available.") }
+  } catch {
+    if (app.voice.captureRequestId === captureRequestId) {
+      closeVoiceStream(); announce("Microphone access was not granted. Text messaging is still available.")
+    }
+  }
 }
 
 function updateVoiceTimer() {
@@ -3564,8 +3586,10 @@ function finishVoiceRecording() {
 }
 
 function cancelRecording() {
+  app.voice.captureRequestId++
   app.voice.discard = true
-  if (app.voice.recorder?.state === "recording") app.voice.recorder.stop(); else { closeVoiceStream(); clearVoicePreview() }
+  if (app.voice.recorder?.state === "recording") app.voice.recorder.stop()
+  else { closeVoiceStream(); clearVoicePreview() }
 }
 
 async function sendVoicePreview() {
@@ -4140,7 +4164,7 @@ $("#report-form").addEventListener("submit", async (event) => {
     handleDomainError(error, {fallbackMessage: "Could not submit the report. Please try again."})
   }
 })
-$("#block").addEventListener("click", async () => { if (confirm("Block this person from future matches? Reporting is separate.")) { await push(app.conversation, "conversation:block"); announce("This person is blocked from future matching.") } })
+$("#block").addEventListener("click", async () => { if (confirm("Block this person from future matches? Reporting is separate.")) { app.liveCall?.teardown("blocked_by_user"); cancelRecording(); await push(app.conversation, "conversation:block"); announce("This person is blocked from future matching.") } })
 $("#consent").addEventListener("click", async () => { const result = await push(app.conversation, "relationship:consent"); $("#consent-status").textContent = result.status === "created" ? "Bond created." : "Waiting for mutual consent."; if (result.relationship_id) rememberRelationship(result.relationship_id) })
 $("#history-summary-form").addEventListener("submit", async (event) => { event.preventDefault(); const text = $("#history-summary").value.trim(); const summaryId = `summary:${app.historyConversationId}`; if (text) await putRecord({id: summaryId, type: "summary", value: {conversation_id: app.historyConversationId, text}, updated_at: now()}); else { const prior = await getRecord(summaryId); if (prior) await putRecord(tombstoneFor(prior, now())) } const conversation = await getRecord(`conversation:${app.historyConversationId}`); await putRecord({...conversation, value: {...conversation.value, summary_id: text ? summaryId : null}, updated_at: now()}); await maybeAutoSync(); announce("Local summary updated.") })
 $("#history-memory").addEventListener("click", async () => { const text = prompt("Memory to save separately on this device:"); if (text?.trim()) { await putRecord({id: `memory:${crypto.randomUUID()}`, type: "memory", value: {text: text.trim(), conversation_id: app.historyConversationId}, updated_at: now()}); await offerContinuity(); await maybeAutoSync(); announce("Memory saved separately.") } })
@@ -4449,9 +4473,7 @@ $("#btn-call-return-to-voice")?.addEventListener("click", async () => {
   }
 })
 
-$("#btn-call-screen-share")?.addEventListener("click", async () => {
-  await app.liveCall?.requestMediaUpgrade("screen_share")
-})
+
 
 document.querySelectorAll(".btn-call-reaction")?.forEach((btn) => {
   btn.addEventListener("click", async () => {

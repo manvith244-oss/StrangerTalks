@@ -44,7 +44,12 @@ export async function mergeSyncRecords(local, remote, {restoreTombstones = false
   for (const candidate of remote) {
     const existing = merged.get(candidate.id)
     if (!existing) { merged.set(candidate.id, candidate); continue }
-    if (existing.deleted_at && !candidate.deleted_at && !restoreTombstones && Date.parse(existing.updated_at) >= Date.parse(candidate.updated_at)) continue
+    const existingDeleted = Boolean(existing.deleted_at)
+    const candidateDeleted = Boolean(candidate.deleted_at)
+    if (!restoreTombstones && existingDeleted !== candidateDeleted) {
+      merged.set(candidate.id, existingDeleted ? existing : candidate)
+      continue
+    }
     const candidateTime = Date.parse(candidate.updated_at)
     const existingTime = Date.parse(existing.updated_at)
     if (candidateTime > existingTime) merged.set(candidate.id, candidate)

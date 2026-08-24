@@ -58,6 +58,46 @@ end
 config :strangertalks_new, :google_continuity, google_continuity
 
 if config_env() == :prod do
+  turn_oracle_urls =
+    System.get_env("TURN_ORACLE_URLS", "")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+
+  turn_oracle_secret = System.get_env("TURN_ORACLE_SHARED_SECRET")
+  cloudflare_turn_key_id = System.get_env("CLOUDFLARE_TURN_KEY_ID")
+  cloudflare_turn_api_token = System.get_env("CLOUDFLARE_TURN_API_TOKEN")
+
+  turn_provider_credentials = %{}
+
+  turn_provider_credentials =
+    if turn_oracle_urls != [] and is_binary(turn_oracle_secret) and turn_oracle_secret != "" do
+      Map.put(turn_provider_credentials, :oracle, %{
+        strategy: :coturn_rest,
+        urls: turn_oracle_urls,
+        shared_secret: turn_oracle_secret
+      })
+    else
+      turn_provider_credentials
+    end
+
+  turn_provider_credentials =
+    if is_binary(cloudflare_turn_key_id) and cloudflare_turn_key_id != "" and
+         is_binary(cloudflare_turn_api_token) and cloudflare_turn_api_token != "" do
+      Map.put(turn_provider_credentials, :cloudflare, %{
+        strategy: :cloudflare_api,
+        key_id: cloudflare_turn_key_id,
+        api_token: cloudflare_turn_api_token,
+        endpoint: "https://rtc.live.cloudflare.com"
+      })
+    else
+      turn_provider_credentials
+    end
+
+  config :strangertalks_new, :turn_provider_credentials, turn_provider_credentials
+end
+
+if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||
       raise """

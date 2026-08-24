@@ -5,6 +5,7 @@ defmodule StrangertalksNew.Relationships do
   alias StrangertalksNew.RelationshipConsent
   alias StrangertalksNew.Conversation
   alias StrangertalksNew.Matching
+  alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.ParticipantActivityLock
   alias Ecto.Multi
 
@@ -48,144 +49,165 @@ defmodule StrangertalksNew.Relationships do
     do: {:error, :invalid_closure}
 
   def consent_to_relationship(conversation_id, participant_id) do
-    with %Conversation{} = conversation <- Repo.get(Conversation, conversation_id),
-         :ok <- authorize_member(conversation, participant_id),
-         :ok <- authorize_eligible_state(conversation) do
-      now = DateTime.utc_now()
-
-      Multi.new()
-      |> Multi.run(:conversation_lock, fn repo, _changes ->
-        case repo.one(
-               from c in Conversation,
-                 where: c.conversation_id == ^conversation_id,
-                 lock: "FOR UPDATE"
-             ) do
-          %Conversation{} = locked_conversation -> {:ok, locked_conversation}
-          nil -> {:error, :conversation_not_found}
+    case Repo.get(Conversation, conversation_id) do
+      %Conversation{} = conversation ->
+        with :ok <- authorize_member(conversation, participant_id) do
+          ParticipantActivityLock.with_participants(
+            [conversation.participant_a_id, conversation.participant_b_id],
+            fn -> consent_to_relationship_locked(conversation_id, participant_id) end
+          )
         end
-      end)
-      |> Multi.insert(
-        :consent_attempt,
+
+      nil ->
+        {:error, :conversation_not_found}
+    end
+  end
+
+  defp consent_to_relationship_locked(conversation_id, participant_id) do
+    now = DateTime.utc_now()
+
+    Multi.new()
+    |> Multi.run(:conversation_lock, fn repo, _changes ->
+      case repo.one(
+             from c in Conversation,
+               where: c.conversation_id == ^conversation_id,
+               lock: "FOR UPDATE"
+           ) do
+        %Conversation{} = locked_conversation ->
+          with :ok <- authorize_member(locked_conversation, participant_id),
+               :ok <- authorize_eligible_state(locked_conversation),
+               :ok <- authorize_safety_boundary(locked_conversation) do
+            {:ok, locked_conversation}
+          end
+
+        nil ->
+          {:error, :conversation_not_found}
+      end
+    end)
+    |> Multi.insert(
+      :consent_attempt,
+      fn %{conversation_lock: _conversation} ->
         RelationshipConsent.changeset(%RelationshipConsent{}, %{
           conversation_id: conversation_id,
           participant_id: participant_id,
           created_at: now
-        }),
-        on_conflict: :nothing,
-        conflict_target: [:conversation_id, :participant_id]
-      )
-      |> Multi.all(
-        :consents,
-        from(c in RelationshipConsent, where: c.conversation_id == ^conversation_id)
-      )
-      |> Multi.run(:relationship, fn repo, %{consents: consents} ->
-        if length(consents) == 2 do
-          {participant_a_id, participant_b_id} =
-            canonical_pair(conversation.participant_a_id, conversation.participant_b_id)
+        })
+      end,
+      on_conflict: :nothing,
+      conflict_target: [:conversation_id, :participant_id]
+    )
+    |> Multi.all(
+      :consents,
+      from(c in RelationshipConsent, where: c.conversation_id == ^conversation_id)
+    )
+    |> Multi.run(:relationship, fn repo, %{conversation_lock: conversation, consents: consents} ->
+      if length(consents) == 2 do
+        {participant_a_id, participant_b_id} =
+          canonical_pair(conversation.participant_a_id, conversation.participant_b_id)
 
-          match = repo.get!(Matching, conversation.match_id)
-          origin_doors = doors_by_participant(match)
+        match = repo.get!(Matching, conversation.match_id)
+        origin_doors = doors_by_participant(match)
 
-          attrs = %{
-            created_at: now,
-            updated_at: now,
-            accepted_at: now,
-            first_conversation_at: conversation.created_at,
-            last_conversation_at: conversation.ended_at,
-            last_activity_at: now,
-            relationship_status: :ACTIVE,
-            origin_door_type: conversation.door_type,
-            origin_participant_a_door_type: Map.fetch!(origin_doors, participant_a_id),
-            origin_participant_b_door_type: Map.fetch!(origin_doors, participant_b_id),
-            participant_a_id: participant_a_id,
-            participant_b_id: participant_b_id,
-            origin_conversation_id: conversation.conversation_id,
-            origin_match_id: conversation.match_id,
-            participant_a_accepted: true,
-            participant_b_accepted: true,
-            allow_reconnection: true,
-            reconnection_eligible: true,
-            participant_a_closed: false,
-            participant_b_closed: false,
-            participant_a_blocked: false,
-            participant_b_blocked: false,
-            conversation_count: 1,
-            memory_count: 0,
-            reconnection_count: 0,
-            shared_memory_count: 0,
-            private_note_count: 0
-          }
+        attrs = %{
+          created_at: now,
+          updated_at: now,
+          accepted_at: now,
+          first_conversation_at: conversation.created_at,
+          last_conversation_at: conversation.ended_at,
+          last_activity_at: now,
+          relationship_status: :ACTIVE,
+          origin_door_type: conversation.door_type,
+          origin_participant_a_door_type: Map.fetch!(origin_doors, participant_a_id),
+          origin_participant_b_door_type: Map.fetch!(origin_doors, participant_b_id),
+          participant_a_id: participant_a_id,
+          participant_b_id: participant_b_id,
+          origin_conversation_id: conversation.conversation_id,
+          origin_match_id: conversation.match_id,
+          participant_a_accepted: true,
+          participant_b_accepted: true,
+          allow_reconnection: true,
+          reconnection_eligible: true,
+          participant_a_closed: false,
+          participant_b_closed: false,
+          participant_a_blocked: false,
+          participant_b_blocked: false,
+          conversation_count: 1,
+          memory_count: 0,
+          reconnection_count: 0,
+          shared_memory_count: 0,
+          private_note_count: 0
+        }
 
-          existing_relationship =
-            repo.one(
-              from r in Relationship,
-                where:
-                  r.participant_a_id == ^participant_a_id and
-                    r.participant_b_id == ^participant_b_id
-            )
+        existing_relationship =
+          repo.one(
+            from r in Relationship,
+              where:
+                r.participant_a_id == ^participant_a_id and
+                  r.participant_b_id == ^participant_b_id
+          )
 
-          if existing_relationship do
-            {:ok, {existing_relationship, false}}
-          else
-            %Relationship{}
-            |> Relationship.changeset(attrs)
-            |> repo.insert(on_conflict: :nothing)
-            |> case do
-              {:ok, _} ->
-                {:ok,
-                 {repo.one!(
-                    from r in Relationship,
-                      where:
-                        r.participant_a_id == ^participant_a_id and
-                          r.participant_b_id == ^participant_b_id
-                  ), true}}
-
-              error ->
-                error
-            end
-          end
+        if existing_relationship do
+          {:ok, {existing_relationship, false}}
         else
-          {:ok, nil}
-        end
-      end)
-      |> Multi.run(:conversation_link, fn repo, %{relationship: relationship_result} ->
-        if relationship_result do
-          {relationship, _created?} = relationship_result
+          %Relationship{}
+          |> Relationship.changeset(attrs)
+          |> repo.insert(on_conflict: :nothing)
+          |> case do
+            {:ok, _} ->
+              {:ok,
+               {repo.one!(
+                  from r in Relationship,
+                    where:
+                      r.participant_a_id == ^participant_a_id and
+                        r.participant_b_id == ^participant_b_id
+                ), true}}
 
-          conversation
-          |> Conversation.changeset(%{
-            relationship_id: relationship.relationship_id,
-            relationship_created: true,
-            relationship_created_at_end: true
-          })
-          |> repo.update()
-        else
-          {:ok, conversation}
-        end
-      end)
-      |> Repo.transaction()
-      |> case do
-        {:ok, %{relationship: nil}} ->
-          {:ok, %{status: "waiting_for_mutual_consent"}}
-
-        {:ok, %{relationship: {relationship, created?}}} ->
-          if created? do
-            Phoenix.PubSub.broadcast(
-              StrangertalksNew.PubSub,
-              @topic,
-              {:relationship_created, relationship.relationship_id, conversation.participant_a_id,
-               conversation.participant_b_id}
-            )
+            error ->
+              error
           end
-
-          {:ok, %{status: "created", relationship_id: relationship.relationship_id}}
-
-        {:error, _operation, reason, _changes} ->
-          {:error, reason}
+        end
+      else
+        {:ok, nil}
       end
-    else
-      nil -> {:error, :conversation_not_found}
-      {:error, reason} -> {:error, reason}
+    end)
+    |> Multi.run(:conversation_link, fn repo,
+                                        %{
+                                          conversation_lock: conversation,
+                                          relationship: relationship_result
+                                        } ->
+      if relationship_result do
+        {relationship, _created?} = relationship_result
+
+        conversation
+        |> Conversation.changeset(%{
+          relationship_id: relationship.relationship_id,
+          relationship_created: true,
+          relationship_created_at_end: true
+        })
+        |> repo.update()
+      else
+        {:ok, conversation}
+      end
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{relationship: nil}} ->
+        {:ok, %{status: "waiting_for_mutual_consent"}}
+
+      {:ok, %{conversation_lock: conversation, relationship: {relationship, created?}}} ->
+        if created? do
+          Phoenix.PubSub.broadcast(
+            StrangertalksNew.PubSub,
+            @topic,
+            {:relationship_created, relationship.relationship_id, conversation.participant_a_id,
+             conversation.participant_b_id}
+          )
+        end
+
+        {:ok, %{status: "created", relationship_id: relationship.relationship_id}}
+
+      {:error, _operation, reason, _changes} ->
+        {:error, reason}
     end
   end
 
@@ -193,6 +215,15 @@ defmodule StrangertalksNew.Relationships do
     if participant_id in [conversation.participant_a_id, conversation.participant_b_id],
       do: :ok,
       else: {:error, :not_conversation_member}
+  end
+
+  defp authorize_safety_boundary(conversation) do
+    if MatchingRules.check_safety_veto?(
+         conversation.participant_a_id,
+         conversation.participant_b_id
+       ),
+       do: {:error, :relationship_unavailable},
+       else: :ok
   end
 
   defp close_relationship_locked(relationship_id, participant_id, closure_reason) do

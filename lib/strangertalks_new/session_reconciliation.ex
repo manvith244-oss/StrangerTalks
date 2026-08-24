@@ -130,8 +130,15 @@ defmodule StrangertalksNew.SessionReconciliation do
   defp evaluate_conversations(conversations) do
     Enum.reduce(conversations, {[], 0}, fn conv, {active_acc, orphan_count} ->
       if orphaned?(conv) do
-        abandon_orphaned_conversation(conv)
-        {active_acc, orphan_count + 1}
+        case abandon_orphaned_conversation(conv) do
+          {:ok, _updated} ->
+            {active_acc, orphan_count + 1}
+
+          {:error, _reason} ->
+            # Durable terminalization failed. Preserve the durable non-terminal row as
+            # authoritative so reconciliation fails closed instead of granting queue authority.
+            {[conv | active_acc], orphan_count}
+        end
       else
         {[conv | active_acc], orphan_count}
       end

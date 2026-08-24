@@ -41,14 +41,16 @@ test("unknown and malformed record types fail before mutation", async () => {
   await assert.rejects(() => mergeSyncRecords([], [{id: "bad", type: "future", updated_at: time}]), /invalid_sync_records/)
 })
 
-test("newest timestamp wins while tombstones block accidental restoration", async () => {
+test("tombstones remain authoritative over later stale live copies unless restore is explicit", async () => {
   const [old] = syncableRecords([{id: "memory:1", type: "memory", value: {text: "old"}, updated_at: time}])
   const newer = {...old, value: {text: "new"}, updated_at: "2026-08-06T01:00:00Z"}
   assert.deepEqual(await mergeSyncRecords([old], [newer]), [newer])
+
   const tombstone = tombstoneFor(newer, "2026-08-06T02:00:00Z")
-  const restored = {...newer, updated_at: "2026-08-06T03:00:00Z"}
-  assert.deepEqual(await mergeSyncRecords([tombstone], [restored]), [restored])
-  assert.deepEqual(await mergeSyncRecords([tombstone], [restored], {restoreTombstones: true}), [restored])
+  const staleDeviceCopy = {...newer, updated_at: "2026-08-06T03:00:00Z"}
+  assert.deepEqual(await mergeSyncRecords([tombstone], [staleDeviceCopy]), [tombstone])
+  assert.deepEqual(await mergeSyncRecords([staleDeviceCopy], [tombstone]), [tombstone])
+  assert.deepEqual(await mergeSyncRecords([tombstone], [staleDeviceCopy], {restoreTombstones: true}), [staleDeviceCopy])
 })
 
 test("strict sync validation rejects unknown settings, future dates, duplicate IDs and security fields", () => {

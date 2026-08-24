@@ -32,7 +32,8 @@ defmodule StrangertalksNew.C11Policy do
           quarantine_until: integer() | nil,
           usage_snapshot: map() | nil,
           usage_snapshot_at: integer() | nil,
-          usage_max_staleness_ms: integer()
+          usage_max_staleness_ms: integer(),
+          provider_credentials: map()
         }
 
   @doc """
@@ -73,7 +74,13 @@ defmodule StrangertalksNew.C11Policy do
       quarantine_until: Keyword.get(opts, :quarantine_until, nil),
       usage_snapshot: snapshot,
       usage_snapshot_at: snapshot_at,
-      usage_max_staleness_ms: Keyword.get(opts, :usage_max_staleness_ms, 60_000)
+      usage_max_staleness_ms: Keyword.get(opts, :usage_max_staleness_ms, 60_000),
+      provider_credentials:
+        Keyword.get(
+          opts,
+          :provider_credentials,
+          Application.get_env(:strangertalks_new, :turn_provider_credentials, %{})
+        )
     }
   end
 
@@ -180,19 +187,18 @@ defmodule StrangertalksNew.C11Policy do
   def admit_and_reserve(state, conversation_id, call_attempt_id, now \\ nil) do
     current_time = now || System.monotonic_time(:millisecond)
     state = cleanup_expired_exposures(state, current_time)
+    oracle_ready = state.primary_available and provider_configured?(state, :oracle)
+    cloudflare_ready = state.fallback_available and provider_configured?(state, :cloudflare)
 
     cond do
-      # 0. Production unverified quotas must fail closed
       not state.quotas_verified ->
         {:error, :unverified_provider_quotas, state}
 
-      # 0b. Production unverified credential TTL must fail closed
       is_nil(state.credential_ttl_seconds) or not is_integer(state.credential_ttl_seconds) or
           state.credential_ttl_seconds <= 0 ->
         {:error, :unverified_credential_ttl, state}
 
-      # 1. Oracle Primary is safe and preferred
-      state.primary_available ->
+      oracle_ready ->
         reservation = %{
           provider: :oracle,
           reserved_at: current_time,
@@ -201,19 +207,15 @@ defmodule StrangertalksNew.C11Policy do
           call_attempt_id: call_attempt_id
         }
 
-        updated_state = put_in(state.active_reservations[call_attempt_id], reservation)
-        {:ok, :oracle, updated_state}
+        {:ok, :oracle, put_in(state.active_reservations[call_attempt_id], reservation)}
 
-      # 2. Check quarantine for fallback
-      quarantined?(state, current_time) ->
+      cloudflare_ready and quarantined?(state, current_time) ->
         {:error, :quarantine_active, state}
 
-      # 3. Check fallback usage snapshot validity
-      stale_or_missing_snapshot?(state, current_time) ->
+      cloudflare_ready and stale_or_missing_snapshot?(state, current_time) ->
         {:error, :stale_usage_snapshot, state}
 
-      # 4. Fallback is available, check capacity bounds
-      state.fallback_available and safe_capacity_available?(state) ->
+      cloudflare_ready and safe_capacity_available?(state) ->
         reservation = %{
           provider: :cloudflare,
           reserved_at: current_time,
@@ -222,10 +224,12 @@ defmodule StrangertalksNew.C11Policy do
           call_attempt_id: call_attempt_id
         }
 
-        updated_state = put_in(state.active_reservations[call_attempt_id], reservation)
-        {:ok, :cloudflare, updated_state}
+        {:ok, :cloudflare, put_in(state.active_reservations[call_attempt_id], reservation)}
 
-      # 5. No capacity or no provider available
+      (state.primary_available and not provider_configured?(state, :oracle)) or
+          (state.fallback_available and not provider_configured?(state, :cloudflare)) ->
+        {:error, :provider_not_configured, state}
+
       true ->
         {:error, :capacity_busy, state}
     end
@@ -247,20 +251,21 @@ defmodule StrangertalksNew.C11Policy do
           nil ->
             {:error, :no_active_reservation, state}
 
-          %{provider: :oracle} = res ->
-            updated_res = %{res | expires_at: current_time + state.credential_ttl_seconds * 1000}
-            {:ok, :oracle, put_in(state.active_reservations[call_attempt_id], updated_res)}
+          %{provider: provider} = reservation when provider in [:oracle, :cloudflare] ->
+            cond do
+              not provider_configured?(state, provider) ->
+                {:error, :provider_not_configured, state}
 
-          %{provider: :cloudflare} = res ->
-            if stale_or_missing_snapshot?(state, current_time) do
-              {:error, :stale_usage_snapshot, state}
-            else
-              updated_res = %{
-                res
-                | expires_at: current_time + state.credential_ttl_seconds * 1000
-              }
+              provider == :cloudflare and stale_or_missing_snapshot?(state, current_time) ->
+                {:error, :stale_usage_snapshot, state}
 
-              {:ok, :cloudflare, put_in(state.active_reservations[call_attempt_id], updated_res)}
+              true ->
+                updated = %{
+                  reservation
+                  | expires_at: current_time + state.credential_ttl_seconds * 1000
+                }
+
+                {:ok, provider, put_in(state.active_reservations[call_attempt_id], updated)}
             end
         end
     end
@@ -302,57 +307,122 @@ defmodule StrangertalksNew.C11Policy do
     if is_nil(ttl) or not is_integer(ttl) or ttl <= 0 do
       {:error, :unverified_credential_ttl}
     else
-      case provider do
-        :oracle ->
-          opaque_token = :crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false)
-          username = "#{System.system_time(:second) + ttl}:#{opaque_token}"
-          password = :crypto.mac(:hmac, :sha, "coturn_ephemeral_key", username) |> Base.encode64()
+      config = provider_config(provider)
 
-          {:ok,
-           %{
-             provider: :oracle,
-             ice_servers: [
-               %{
-                 urls: [
-                   "turn:relay.strangertalks.internal:3478?transport=udp",
-                   "turn:relay.strangertalks.internal:3478?transport=tcp"
-                 ],
-                 username: username,
-                 credential: password
-               }
-             ],
-             ice_transport_policy: "relay",
-             ttl_seconds: ttl,
-             call_attempt_id: call_attempt_id
-           }}
-
-        :cloudflare ->
-          opaque_token = :crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false)
-          username = "cf_turn_#{System.system_time(:second) + ttl}_#{opaque_token}"
-
-          password =
-            :crypto.mac(:hmac, :sha256, "cf_ephemeral_secret", username) |> Base.encode64()
-
-          {:ok,
-           %{
-             provider: :cloudflare,
-             ice_servers: [
-               %{
-                 urls: [
-                   "turn:turn.cloudflare.com:3478?transport=udp",
-                   "turns:turn.cloudflare.com:5349?transport=tcp"
-                 ],
-                 username: username,
-                 credential: password
-               }
-             ],
-             ice_transport_policy: "relay",
-             ttl_seconds: ttl,
-             call_attempt_id: call_attempt_id
-           }}
-      end
+      if valid_provider_config?(provider, config),
+        do: issue_provider_credentials(provider, config, call_attempt_id, ttl),
+        else: {:error, :provider_not_configured}
     end
   end
+
+  defp issue_provider_credentials(:oracle, config, call_attempt_id, ttl) do
+    opaque_token = :crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false)
+    username = "#{System.system_time(:second) + ttl}:#{opaque_token}"
+    credential = :crypto.mac(:hmac, :sha, config.shared_secret, username) |> Base.encode64()
+
+    {:ok,
+     %{
+       provider: :oracle,
+       ice_servers: [%{urls: config.urls, username: username, credential: credential}],
+       ice_transport_policy: "relay",
+       ttl_seconds: ttl,
+       call_attempt_id: call_attempt_id
+     }}
+  end
+
+  defp issue_provider_credentials(:cloudflare, config, call_attempt_id, ttl) do
+    result =
+      case Map.get(config, :client) do
+        client when is_atom(client) ->
+          if function_exported?(client, :generate_ice_servers, 2),
+            do: client.generate_ice_servers(config, ttl),
+            else: {:error, :provider_credential_unavailable}
+
+        _ ->
+          endpoint = Map.get(config, :endpoint, "https://rtc.live.cloudflare.com")
+
+          url =
+            "#{String.trim_trailing(endpoint, "/")}/v1/turn/keys/#{URI.encode(config.key_id)}/credentials/generate-ice-servers"
+
+          case Req.post(url,
+                 headers: [{"authorization", "Bearer #{config.api_token}"}],
+                 json: %{ttl: ttl},
+                 receive_timeout: 5_000
+               ) do
+            {:ok, %Req.Response{status: 201, body: body}} ->
+              {:ok, Map.get(body, "iceServers") || Map.get(body, :iceServers) || []}
+
+            _ ->
+              {:error, :provider_credential_unavailable}
+          end
+      end
+
+    with {:ok, servers} <- result,
+         relay_servers when relay_servers != [] <- relay_only_ice_servers(servers) do
+      {:ok,
+       %{
+         provider: :cloudflare,
+         ice_servers: relay_servers,
+         ice_transport_policy: "relay",
+         ttl_seconds: ttl,
+         call_attempt_id: call_attempt_id
+       }}
+    else
+      _ -> {:error, :provider_credential_unavailable}
+    end
+  end
+
+  defp relay_only_ice_servers(servers) when is_list(servers) do
+    Enum.flat_map(servers, fn server ->
+      urls =
+        (Map.get(server, "urls") || Map.get(server, :urls) || [])
+        |> List.wrap()
+        |> Enum.filter(fn url ->
+          is_binary(url) and
+            (String.starts_with?(url, "turn:") or String.starts_with?(url, "turns:"))
+        end)
+
+      username = Map.get(server, "username") || Map.get(server, :username)
+      credential = Map.get(server, "credential") || Map.get(server, :credential)
+
+      if urls != [] and is_binary(username) and username != "" and is_binary(credential) and
+           credential != "",
+         do: [%{urls: urls, username: username, credential: credential}],
+         else: []
+    end)
+  end
+
+  defp relay_only_ice_servers(_), do: []
+
+  defp provider_config(provider) do
+    Application.get_env(:strangertalks_new, :turn_provider_credentials, %{}) |> Map.get(provider)
+  end
+
+  defp provider_configured?(state, provider),
+    do: valid_provider_config?(provider, Map.get(state.provider_credentials, provider))
+
+  defp valid_provider_config?(:oracle, %{
+         strategy: :coturn_rest,
+         urls: urls,
+         shared_secret: secret
+       }) do
+    is_list(urls) and urls != [] and
+      Enum.all?(urls, fn url ->
+        is_binary(url) and
+          (String.starts_with?(url, "turn:") or String.starts_with?(url, "turns:"))
+      end) and
+      is_binary(secret) and secret != ""
+  end
+
+  defp valid_provider_config?(:cloudflare, %{
+         strategy: :cloudflare_api,
+         key_id: key_id,
+         api_token: token
+       }) do
+    is_binary(key_id) and key_id != "" and is_binary(token) and token != ""
+  end
+
+  defp valid_provider_config?(_, _), do: false
 
   # --- Internal Helpers ---
 
