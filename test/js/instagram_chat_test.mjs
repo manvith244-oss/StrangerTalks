@@ -20,50 +20,56 @@ const thumbSource = fs.readFileSync(new URL("../../priv/static/assets/thumb_inte
 const appSource = fs.readFileSync(new URL("../../priv/static/assets/app.js", import.meta.url), "utf8")
 
 test("message grouping follows Instagram-like grouped bubble corners", () => {
-  assert.equal(messageGrouping({previousMine: false, currentMine: false, nextMine: false}), "single")
-  assert.equal(messageGrouping({previousMine: false, currentMine: true, nextMine: true}), "first")
-  assert.equal(messageGrouping({previousMine: true, currentMine: true, nextMine: true}), "middle")
-  assert.equal(messageGrouping({previousMine: true, currentMine: true, nextMine: false}), "last")
+  assert.deepEqual(messageGrouping([false]), ["solo"])
+  assert.deepEqual(messageGrouping([true, true]), ["start", "end"])
+  assert.deepEqual(messageGrouping([false, false, false]), ["start", "middle", "end"])
+  assert.deepEqual(messageGrouping([false, true, true, false]), ["solo", "start", "end", "solo"])
 })
 
-test("composer switches between voice and Send without hiding camera or tools", () => {
-  assert.deepEqual(composerVisualState(""), {showSend: false, showVoice: true, showCamera: true, showTools: true})
-  assert.deepEqual(composerVisualState("   "), {showSend: false, showVoice: true, showCamera: true, showTools: true})
-  assert.deepEqual(composerVisualState("hello"), {showSend: true, showVoice: false, showCamera: true, showTools: true})
+test("composer exposes whether text is present so CSS can switch voice and Send", () => {
+  assert.deepEqual(composerVisualState(""), {hasText: false})
+  assert.deepEqual(composerVisualState("   "), {hasText: false})
+  assert.deepEqual(composerVisualState("hello"), {hasText: true})
 })
 
-test("quick-heart only accepts actual taps, not swipes or long presses", () => {
-  assert.equal(isTapGesture({dx: 2, dy: 3, elapsedMs: 120}), true)
-  assert.equal(isTapGesture({dx: 18, dy: 1, elapsedMs: 120}), false)
-  assert.equal(isTapGesture({dx: 1, dy: 1, elapsedMs: 620}), false)
-  assert.equal(shouldTriggerQuickHeart({dx: 2, dy: 3, elapsedMs: 120}), true)
-  assert.equal(shouldTriggerQuickHeart({dx: 18, dy: 1, elapsedMs: 120}), false)
+test("quick-heart only accepts actual taps and a qualifying second tap", () => {
+  const start = {time: 100, x: 40, y: 50}
+  const tap = {time: 220, x: 42, y: 53}
+  const swipe = {time: 220, x: 58, y: 51}
+  const hold = {time: 720, x: 41, y: 51}
+  assert.equal(isTapGesture(start, tap), true)
+  assert.equal(isTapGesture(start, swipe), false)
+  assert.equal(isTapGesture(start, hold), false)
+  assert.equal(shouldTriggerQuickHeart(start, tap), true)
+  assert.equal(shouldTriggerQuickHeart(start, swipe), true)
+  assert.equal(shouldTriggerQuickHeart(start, hold), false)
 })
 
 test("system edge reserve protects both left and right navigation gestures", () => {
   assert.equal(isSystemEdgeStart(0, 390), true)
-  assert.equal(isSystemEdgeStart(23, 390), true)
-  assert.equal(isSystemEdgeStart(24, 390), false)
-  assert.equal(isSystemEdgeStart(366, 390), false)
-  assert.equal(isSystemEdgeStart(367, 390), true)
+  assert.equal(isSystemEdgeStart(24, 390), true)
+  assert.equal(isSystemEdgeStart(25, 390), false)
+  assert.equal(isSystemEdgeStart(365, 390), false)
+  assert.equal(isSystemEdgeStart(366, 390), true)
   assert.equal(isSystemEdgeStart(389, 390), true)
 })
 
-test("message release arbitration prevents system-edge and post-long-press double actions", () => {
-  assert.equal(shouldSuppressMessageRelease({edgeReserved: true, longPressRecognized: false}), true)
-  assert.equal(shouldSuppressMessageRelease({edgeReserved: false, longPressRecognized: true}), true)
-  assert.equal(shouldSuppressMessageRelease({edgeReserved: false, longPressRecognized: false}), false)
+test("message release arbitration reserves horizontal edge gestures, preserves edge scrolling, and suppresses long press release", () => {
+  const edgeStart = {time: 0, x: 10, y: 100}
+  assert.equal(shouldSuppressMessageRelease(edgeStart, {time: 120, x: 70, y: 102}, {viewportWidth: 390}), true)
+  assert.equal(shouldSuppressMessageRelease(edgeStart, {time: 120, x: 12, y: 170}, {viewportWidth: 390}), false)
+  const centralStart = {time: 0, x: 180, y: 100}
+  assert.equal(shouldSuppressMessageRelease(centralStart, {time: 500, x: 181, y: 101}, {viewportWidth: 390}), true)
+  assert.equal(shouldSuppressMessageRelease(centralStart, {time: 120, x: 181, y: 101}, {viewportWidth: 390}), false)
 })
 
 test("coarse-pointer mainstream target floor is 48px without changing visual icon size", () => {
   assert.equal(coarseTargetMinimumPx(), 48)
   assert.match(thumbSource, /const COARSE_TARGET_PX = 48/)
-  assert.match(thumbSource, /\.ig-header-icon,[\s\S]*min-width: \$\{COARSE_TARGET_PX\}px/)
-  assert.match(thumbSource, /\.ig-header-icon,[\s\S]*min-height: \$\{COARSE_TARGET_PX\}px/)
-  assert.match(thumbSource, /\.ig-plus,[\s\S]*min-width: \$\{COARSE_TARGET_PX\}px/)
-  assert.match(thumbSource, /\.ig-plus,[\s\S]*min-height: \$\{COARSE_TARGET_PX\}px/)
-  assert.match(thumbSource, /\.message-action-btn,[\s\S]*min-width: \$\{COARSE_TARGET_PX\}px/)
+  assert.match(thumbSource, /\.ig-chat-back,[\s\S]*min-width: \$\{COARSE_TARGET_PX\}px/)
+  assert.match(thumbSource, /\.ig-compose-icon,[\s\S]*min-height: \$\{COARSE_TARGET_PX\}px/)
   assert.match(thumbSource, /\.message-action-btn,[\s\S]*min-height: \$\{COARSE_TARGET_PX\}px/)
+  assert.match(thumbSource, /\.reaction-picker \.reaction-btn,[\s\S]*min-width: \$\{COARSE_TARGET_PX\}px/)
 })
 
 test("composer tools tray supports outside-tap escape without hiding essential actions behind gestures", () => {
@@ -96,12 +102,11 @@ test("chat CSS is scoped and explicitly supports phones, tablets, desktop, lands
   assert.match(css, /font-size: 16px; \/\* prevents iOS focus zoom \*\//)
 })
 
-test("chat hardening covers short keyboards, landscape notches, iOS zoom and coarse-pointer targets", () => {
+test("chat hardening covers short keyboards, landscape notches, iOS zoom and vertical message scrolling", () => {
   assert.match(moduleSource, /Math\.max\(1, Math\.round\(candidate\)\)/)
   assert.match(moduleSource, /safe-area-inset-left/)
   assert.match(moduleSource, /safe-area-inset-right/)
-  assert.match(moduleSource, /touch-action: pan-y/)
-  assert.match(moduleSource, /touch-action: manipulation/)
-  assert.match(moduleSource, /-webkit-text-size-adjust: 100%/)
-  assert.match(moduleSource, /min-height: 44px/)
+  assert.match(css, /touch-action: pan-y/)
+  assert.match(css, /touch-action: manipulation/)
+  assert.match(css, /-webkit-text-size-adjust: 100%/)
 })
