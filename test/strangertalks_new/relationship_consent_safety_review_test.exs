@@ -249,7 +249,8 @@ defmodule StrangertalksNew.RelationshipConsentSafetyReviewTest do
         send(parent, {:dismiss_ready, self()})
 
         receive do
-          :go -> SafetyReviews.dismiss_review(review.safety_review_id, "dismiss-first", "dismiss path")
+          :go ->
+            SafetyReviews.dismiss_review(review.safety_review_id, "dismiss-first", "dismiss path")
         end
       end)
 

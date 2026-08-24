@@ -69,7 +69,10 @@ defmodule StrangertalksNew.Team4SafetyBoundaryTest do
     assert terminal.safety_flagged == true
     assert terminal.conversation_completed == false
 
-    assert_eventually(fn -> ConversationServer.lookup(conversation_id) == {:error, :not_started} end)
+    assert_eventually(fn ->
+      ConversationServer.lookup(conversation_id) == {:error, :not_started}
+    end)
+
     assert {:error, :terminal_conversation} = ConversationServer.ensure_started(conversation_id)
 
     assert {:error, :conversation_unavailable} =
@@ -172,8 +175,12 @@ defmodule StrangertalksNew.Team4SafetyBoundaryTest do
                0
              )
 
-    assert {:ok, _result} = ConversationServer.complete_conversation(conversation_id, a.participant_id)
-    assert_eventually(fn -> ConversationServer.lookup(conversation_id) == {:error, :not_started} end)
+    assert {:ok, _result} =
+             ConversationServer.complete_conversation(conversation_id, a.participant_id)
+
+    assert_eventually(fn ->
+      ConversationServer.lookup(conversation_id) == {:error, :not_started}
+    end)
 
     assert {:ok, report} =
              Reports.submit_conversation_report(
