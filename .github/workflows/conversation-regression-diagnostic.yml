@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feature/instagram-chat-ui
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
   workflow_dispatch:
 
 permissions:
@@ -34,11 +37,14 @@ jobs:
     steps:
       - name: Checkout exact diagnostic commit
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Prove checkout identity
         run: |
-          echo "DIAGNOSTIC_COMMIT=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          echo "EXPECTED_DIAGNOSTIC_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "ACTUAL_DIAGNOSTIC_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
 
       - name: Set up Node
         uses: actions/setup-node@v4
