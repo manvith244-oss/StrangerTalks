@@ -136,6 +136,22 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Stop Phoenix browser server
+        run: |
+          if [ -f /tmp/strangertalks-browser.pid ]; then
+            pid="$(cat /tmp/strangertalks-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                break
+              fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then
+              kill -9 "$pid" 2>/dev/null || true
+            fi
+          fi
+
       - name: Reset browser test data before full suite
         run: |
           mix ecto.drop --quiet
