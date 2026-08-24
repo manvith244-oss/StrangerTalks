@@ -112,7 +112,7 @@ defmodule StrangertalksNew.NormalMediaStoreTest do
   test "owner process death removes every binary for that Conversation", %{
     conversation_id: conversation_id
   } do
-    owner = spawn(fn -> Process.sleep(:infinity) end)
+    owner = spawn(fn -> receive do: (:stop -> :ok) end)
     sender_id = Ecto.UUID.generate()
     message_id = Ecto.UUID.generate()
 
