@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - team9/release-performance-production-2026-08-24
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
   workflow_dispatch:
 
 permissions:
