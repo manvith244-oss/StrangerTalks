@@ -1,5 +1,5 @@
 defmodule StrangertalksNew.Application do
-  # See https://elixir-lang.org/getting-started/mix-otp/supervisor-and-application.html
+  # See https://elixir.hexdocs.pm/Application.html
   # for more information on OTP Applications
   @moduledoc false
 
