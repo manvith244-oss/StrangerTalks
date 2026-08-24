@@ -96,6 +96,7 @@ jobs:
           node --test \
             test/js/local_data_test.mjs \
             test/js/team7_retention_race_test.mjs \
+            test/js/team7_backup_import_test.mjs \
             test/js/atomic_restore_test.mjs \
             test/js/restoration_validation_test.mjs \
             test/js/encrypted_sync_test.mjs \
