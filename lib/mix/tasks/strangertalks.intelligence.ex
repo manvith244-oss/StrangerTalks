@@ -22,7 +22,7 @@ defmodule Mix.Tasks.Strangertalks.Intelligence do
 
     with {:ok, hours} <- parse_hours(args),
          to <- DateTime.utc_now(),
-         from <- DateTime.add(to, -hours, :hour),
+         from <- DateTime.add(to, -(hours * 60 * 60), :second),
          {:ok, metrics} <- V1Metrics.snapshot(from, to),
          {:ok, recommendations} <- V1Recommendations.analyze(metrics) do
       Mix.shell().info(
