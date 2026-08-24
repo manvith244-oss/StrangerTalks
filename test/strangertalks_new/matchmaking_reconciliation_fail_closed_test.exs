@@ -119,33 +119,32 @@ defmodule StrangertalksNew.MatchmakingReconciliationFailClosedTest do
         learning_processed: false
       })
 
-    {:ok, conversation} =
-      StrangertalksNew.Conversations.create_conversation(%{
-        created_at: now,
-        match_id: match.match_id,
-        participant_a_id: a.participant_id,
-        participant_b_id: b.participant_id,
-        conversation_status: :PENDING,
-        door_type: :EXPLORE,
-        message_count: 0,
-        voice_note_count: 0,
-        bridge_shown: false,
-        bridge_used: false,
-        bridge_ignored: false,
-        conversation_completed: false,
-        memory_created: false,
-        relationship_created: false,
-        reconnected_later: false,
-        memory_count: 0,
-        relationship_created_at_end: false,
-        report_count: 0,
-        block_count: 0,
-        safety_flagged: false,
-        learning_processed: false,
-        duration_seconds: 0
-      })
-
-    conversation
+    %Conversation{}
+    |> Conversation.changeset(%{
+      created_at: now,
+      match_id: match.match_id,
+      participant_a_id: a.participant_id,
+      participant_b_id: b.participant_id,
+      conversation_status: :PENDING,
+      door_type: :EXPLORE,
+      message_count: 0,
+      voice_note_count: 0,
+      bridge_shown: false,
+      bridge_used: false,
+      bridge_ignored: false,
+      conversation_completed: false,
+      memory_created: false,
+      relationship_created: false,
+      reconnected_later: false,
+      memory_count: 0,
+      relationship_created_at_end: false,
+      report_count: 0,
+      block_count: 0,
+      safety_flagged: false,
+      learning_processed: false,
+      duration_seconds: 0
+    })
+    |> Repo.insert!()
   end
 
   defp force_conversation_update_failure! do
