@@ -86,6 +86,130 @@ defmodule StrangertalksNew.Team4SafetyBoundaryTest do
     assert MatchingRules.check_safety_veto?(a.participant_id, b.participant_id)
   end
 
+  test "BLOCK-MEDIA active Voice authority dies with the blocked Conversation" do
+    %{conversation: conversation, a: a, b: b} = queue_match()
+    conversation_id = conversation.conversation_id
+    activate_conversation(conversation_id, a.participant_id, b.participant_id)
+
+    assert {:ok, pending} =
+             ConversationServer.initiate_call(
+               conversation_id,
+               a.participant_id,
+               self(),
+               "team4-a",
+               :voice
+             )
+
+    assert {:ok, %{status: "ACTIVE"}} =
+             ConversationServer.accept_call(
+               conversation_id,
+               b.participant_id,
+               self(),
+               "team4-b",
+               pending.call_attempt_id
+             )
+
+    assert {:ok, _block} =
+             MatchingRules.block_conversation_participant(conversation_id, a.participant_id)
+
+    assert_eventually(fn ->
+      ConversationServer.lookup(conversation_id) == {:error, :not_started}
+    end)
+
+    assert {:error, :terminal_conversation} = ConversationServer.ensure_started(conversation_id)
+
+    assert {:error, :conversation_unavailable} =
+             ConversationServer.signal_call(
+               conversation_id,
+               b.participant_id,
+               self(),
+               "team4-b",
+               pending.call_attempt_id,
+               1,
+               %{"type" => "ice", "candidate" => "stale-after-block"}
+             )
+  end
+
+  test "BLOCK-MEDIA Video connecting authority cannot survive Block" do
+    %{conversation: conversation, a: a, b: b} = queue_match()
+    conversation_id = conversation.conversation_id
+    activate_conversation(conversation_id, a.participant_id, b.participant_id)
+
+    assert {:ok, pending} =
+             ConversationServer.initiate_call(
+               conversation_id,
+               a.participant_id,
+               self(),
+               "team4-video-a",
+               :video
+             )
+
+    assert pending.status == "PENDING"
+    assert pending.call_type == "video"
+
+    assert {:ok, _block} =
+             MatchingRules.block_conversation_participant(conversation_id, b.participant_id)
+
+    assert_eventually(fn ->
+      ConversationServer.lookup(conversation_id) == {:error, :not_started}
+    end)
+
+    assert {:error, :terminal_conversation} = ConversationServer.ensure_started(conversation_id)
+
+    assert {:error, :conversation_unavailable} =
+             ConversationServer.accept_call(
+               conversation_id,
+               b.participant_id,
+               self(),
+               "team4-video-b",
+               pending.call_attempt_id
+             )
+  end
+
+  test "END-MEDIA active Voice authority dies with Conversation End" do
+    %{conversation: conversation, a: a, b: b} = queue_match()
+    conversation_id = conversation.conversation_id
+    activate_conversation(conversation_id, a.participant_id, b.participant_id)
+
+    assert {:ok, pending} =
+             ConversationServer.initiate_call(
+               conversation_id,
+               a.participant_id,
+               self(),
+               "team4-end-a",
+               :voice
+             )
+
+    assert {:ok, %{status: "ACTIVE"}} =
+             ConversationServer.accept_call(
+               conversation_id,
+               b.participant_id,
+               self(),
+               "team4-end-b",
+               pending.call_attempt_id
+             )
+
+    assert {:ok, %{status: "ended"}} =
+             ConversationServer.complete_conversation(conversation_id, a.participant_id)
+
+    assert_eventually(fn ->
+      ConversationServer.lookup(conversation_id) == {:error, :not_started}
+    end)
+
+    assert {:error, :terminal_conversation} = ConversationServer.ensure_started(conversation_id)
+
+    assert {:error, :conversation_unavailable} =
+             ConversationServer.signal_call(
+               conversation_id,
+               b.participant_id,
+               self(),
+               "team4-end-b",
+               pending.call_attempt_id,
+               1,
+               %{"type" => "ice", "candidate" => "stale-after-end"}
+             )
+  end
+
   test "REPORT-BLOCK both orderings preserve one-way safety authority without changing report evidence" do
     %{conversation: conversation, a: a, b: b} = queue_match()
     conversation_id = conversation.conversation_id
@@ -260,6 +384,31 @@ defmodule StrangertalksNew.Team4SafetyBoundaryTest do
 
     assert report_v2.reporter_context == "message v2"
     refute report_v2.reporter_context =~ "v1"
+  end
+
+  defp activate_conversation(conversation_id, participant_a_id, participant_b_id) do
+    _pid = start_supervised!({ConversationServer, %{conversation_id: conversation_id}})
+
+    assert {:ok, _} =
+             ConversationServer.sync_and_register_channel(
+               conversation_id,
+               participant_a_id,
+               self(),
+               nil,
+               0
+             )
+
+    assert {:ok, _} =
+             ConversationServer.sync_and_register_channel(
+               conversation_id,
+               participant_b_id,
+               self(),
+               nil,
+               0
+             )
+
+    assert Repo.get!(Conversation, conversation_id).conversation_status == :ACTIVE
+    :ok
   end
 
   defp queue_match do
