@@ -232,7 +232,7 @@ test("keyboard, Escape, reduced motion, forced contrast and 200 percent zoom ret
     await info.focus()
     await page.keyboard.press("Enter")
     await page.keyboard.press("Escape")
-    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Conversation info and safety")
+    assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("aria-label")), "Conversation actions")
 
     const input = page.locator("#message-input")
     await input.focus()
