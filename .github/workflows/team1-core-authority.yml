@@ -69,6 +69,7 @@ jobs:
       - name: Focused hostile concurrency and fail-closed regressions
         run: |
           mix test \
+            test/strangertalks_new/matchmaking_core_authority_test.exs \
             test/strangertalks_new/matchmaking_hostile_concurrency_test.exs \
             test/strangertalks_new/matchmaking_reconciliation_fail_closed_test.exs \
             --trace
