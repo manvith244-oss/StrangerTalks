@@ -19,6 +19,7 @@ defmodule StrangertalksNew.Application do
        strategy: :one_for_one, name: StrangertalksNew.ConversationDynamicSupervisor},
       StrangertalksNew.ConversationLifecycle.VoiceNoteStore,
       StrangertalksNew.ConversationLifecycle.ViewOnceMediaStore,
+      StrangertalksNew.ConversationLifecycle.NormalMediaStore,
       StrangertalksNew.RateLimiter,
 
       # Queue Engine Processes (Must boot before the Web Endpoint)
