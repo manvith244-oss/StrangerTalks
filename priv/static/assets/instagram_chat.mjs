@@ -46,7 +46,7 @@ export function shouldTriggerQuickHeart(previousTap, currentTap) {
 export function normalizedViewportHeight(visualHeight, fallbackHeight) {
   const candidate = Number.isFinite(visualHeight) && visualHeight > 0 ? visualHeight : fallbackHeight
   if (!Number.isFinite(candidate) || candidate <= 0) return 720
-  return Math.max(240, Math.round(candidate))
+  return Math.max(1, Math.round(candidate))
 }
 
 function ensureStylesheet() {
