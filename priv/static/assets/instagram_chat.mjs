@@ -72,6 +72,22 @@ function ensureInteractionHardeningStyles() {
   const style = document.createElement("style")
   style.dataset.instagramChatHardening = "true"
   style.textContent = `
+    body.st-chat-mode .voice-sheet,
+    body.st-chat-mode .atmosphere-chooser,
+    body.st-chat-mode #report-form,
+    body.st-chat-mode .live-call-active-panel {
+      min-height: 0;
+      max-height: min(68vh, 34rem);
+      max-height: min(68dvh, 34rem);
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+    body.st-chat-mode .conversation-head .overflow-menu {
+      max-height: calc(var(--ig-vh, 100vh) - 84px);
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
+    }
     @media (max-height: 520px) and (orientation: landscape) {
       body.st-chat-mode .conversation-head {
         padding-left: calc(10px + env(safe-area-inset-left, 0px));
@@ -84,6 +100,12 @@ function ensureInteractionHardeningStyles() {
       body.st-chat-mode #message-form.composer {
         padding-left: calc(8px + env(safe-area-inset-left, 0px));
         padding-right: calc(8px + env(safe-area-inset-right, 0px));
+      }
+      body.st-chat-mode .voice-sheet,
+      body.st-chat-mode .atmosphere-chooser,
+      body.st-chat-mode #report-form,
+      body.st-chat-mode .live-call-active-panel {
+        max-height: calc(var(--ig-vh, 100vh) - 112px);
       }
     }
     @media (hover: none) and (pointer: coarse) {
@@ -185,6 +207,7 @@ function setupHeader() {
   if (summary) {
     summary.innerHTML = ICONS.info
     summary.setAttribute("aria-label", "Conversation info and safety")
+    summary.setAttribute("aria-expanded", String(Boolean(overflow?.open)))
     summary.title = "Conversation info and safety"
   }
 
@@ -215,6 +238,21 @@ function setupHeader() {
     divider.setAttribute("role", "separator")
     menu.insertBefore(divider, firstDanger)
   }
+
+  overflow?.addEventListener("toggle", () => {
+    summary?.setAttribute("aria-expanded", String(overflow.open))
+  })
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !overflow?.open) return
+    overflow.open = false
+    summary?.focus()
+  })
+
+  document.addEventListener("pointerdown", (event) => {
+    if (!overflow?.open || overflow.contains(event.target)) return
+    overflow.open = false
+  }, {passive: true})
 }
 
 function setupTemporaryCue() {
@@ -275,7 +313,7 @@ function setupComposer() {
 
   if (photo && photo.parentElement !== compose) {
     compose.insertBefore(photo, input)
-    iconButton(photo, "camera", "Send a view-once photo")
+    iconButton(photo, "camera", "Choose a view-once photo")
   }
 
   if (voice && voice.parentElement !== compose) {
