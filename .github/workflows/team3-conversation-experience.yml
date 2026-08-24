@@ -119,7 +119,7 @@ jobs:
           exit 1
 
       - name: Team 3 Conversation browser attacks
-        run: node --test test/js/team3_conversation_experience_e2e_test.mjs
+        run: node --test test/js/team3_conversation_experience_gate_test.mjs
 
       - name: Existing real-stack browser regression
         run: node --test test/js/browser_e2e_test.mjs
