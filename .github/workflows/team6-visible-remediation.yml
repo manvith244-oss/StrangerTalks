@@ -67,7 +67,8 @@ jobs:
             config/runtime.exs config/test.exs \
             test/support/turn_credential_test_client.ex \
             test/strangertalks_new/team6_media_authority_test.exs \
-            test/strangertalks_new/team6_turn_provider_test.exs
+            test/strangertalks_new/team6_turn_provider_test.exs \
+            test/strangertalks_new/conversation_live_call_test.exs
       - name: Focused JavaScript media proof
         run: |
           node --test \
@@ -98,6 +99,7 @@ jobs:
             lib/strangertalks_new/conversation_lifecycle/conversation_server.ex lib/strangertalks_new/c11_policy.ex \
             config/runtime.exs config/test.exs test/support/turn_credential_test_client.ex \
             test/js/team6_media_gate_test.mjs test/js/team6_voice_note_permission_test.mjs test/js/team6_media_privacy_test.mjs \
-            test/strangertalks_new/team6_media_authority_test.exs test/strangertalks_new/team6_turn_provider_test.exs
+            test/strangertalks_new/team6_media_authority_test.exs test/strangertalks_new/team6_turn_provider_test.exs \
+            test/strangertalks_new/conversation_live_call_test.exs
           git commit -m "fix(team6): close provider-independent media authority gaps [skip ci]"
           git push origin HEAD:team6/voice-video-expression
