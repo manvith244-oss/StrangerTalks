@@ -1,0 +1,117 @@
+name: Team 1 Core Authority & Matchmaking
+
+on:
+  push:
+    branches:
+      - newteam/core-authority
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+
+concurrency:
+  group: team1-core-authority-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  core-authority:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      TEAM1_START_SHA: e938cdd6e806cc5d05837a9c97755477be95bb27
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Prove checkout identity
+        run: |
+          echo "EXPECTED_TEAM1_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "ACTUAL_TEAM1_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          git merge-base --is-ancestor "$TEAM1_START_SHA" HEAD
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex, Rebar, and dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Focused hostile concurrency and fail-closed regressions
+        run: |
+          mix test \
+            test/strangertalks_new/matchmaking_hostile_concurrency_test.exs \
+            test/strangertalks_new/matchmaking_reconciliation_fail_closed_test.exs \
+            --trace
+
+      - name: Core matchmaking authority regressions
+        run: |
+          mix test \
+            test/strangertalks_new/matchmaking_engine_test.exs \
+            test/strangertalks_new/participant_activity_lock_test.exs \
+            test/strangertalks_new_web/channels/participant_match_transition_authority_test.exs \
+            --trace
+
+      - name: Relevant reconnect safety and channel integration
+        run: |
+          mix test \
+            test/strangertalks_new/relationship_reconnections_test.exs \
+            test/strangertalks_new/team4_safety_boundary_test.exs \
+            test/strangertalks_new/security_adversarial_test.exs \
+            test/strangertalks_new_web/channels/participant_channel_test.exs \
+            --trace
+
+      - name: Reset test database before repository gate
+        run: |
+          mix ecto.drop --quiet
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Full repository precommit
+        run: mix precommit
+
+      - name: Diff integrity
+        run: |
+          git diff --check "$TEAM1_START_SHA"...HEAD
+          git diff --check
+
+      - name: Prove final checkout clean
+        run: |
+          git status --short --branch
+          git status --porcelain | tee /tmp/team1-status
+          test ! -s /tmp/team1-status
+
+      - name: Record exact tested commit
+        run: |
+          echo "TEAM1_EXPECTED_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "TEAM1_CHECKED_OUT_COMMIT=$(git rev-parse HEAD)"
+          echo "TEAM1_TESTED_COMMIT=$(git rev-parse HEAD)"
