@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import {readFile} from "node:fs/promises"
 import {
   createGifSearchGuard,
   gifSearchPath,
@@ -7,7 +8,20 @@ import {
   sanitizeGifResults,
   sendWithSameIdentityRetry,
   validGifResult
-} from "../../priv/static/assets/expression_surface.mjs"
+} from "../../priv/static/assets/expression_surface_core.mjs"
+
+const indexHtml = await readFile(new URL("../../priv/static/index.html", import.meta.url), "utf8")
+const runtimeSource = await readFile(new URL("../../priv/static/assets/expression_runtime.mjs", import.meta.url), "utf8")
+const pageController = await readFile(new URL("../../lib/strangertalks_new_web/controllers/page_controller.ex", import.meta.url), "utf8")
+
+test("Team 10 has one formatting-independent canonical loader and no PageController surgery", () => {
+  assert.equal((indexHtml.match(/expression_runtime\.mjs/g) || []).length, 1)
+  assert.equal((indexHtml.match(/<script[^>]+\/assets\/app\.js/g) || []).length, 0)
+  assert.equal((runtimeSource.match(/await import\(APP_ENTRY\)/g) || []).length, 1)
+  assert.match(runtimeSource, /const APP_ENTRY = "\/assets\/app\.js\?v=20260807_v2"/)
+  assert.doesNotMatch(pageController, /String\.replace|@app_script|@expression_script/)
+  assert.match(pageController, /send_file/)
+})
 
 test("emoji insertion behaves like text editing at start, middle, end and selection", () => {
   assert.deepEqual(insertEmojiIntoDraft("hello", 0, 0, "❤️"), {value: "❤️hello", caret: 2})
@@ -24,12 +38,13 @@ test("emoji insertion preserves multiline text and ordinary unicode", () => {
   assert.equal(insertEmojiIntoDraft("native 😊 input", 15, 15, "👍").value, "native 😊 input👍")
 })
 
-test("GIF search path contains only the explicit query parameter", () => {
-  const path = gifSearchPath(" happy dance ")
+test("GIF search request contains only explicit query plus current Conversation authority", () => {
+  const path = gifSearchPath(" happy dance ", "conversation-123")
   const url = new URL(path, "https://strangertalks.local")
-  assert.deepEqual([...url.searchParams.keys()], ["q"])
+  assert.deepEqual([...url.searchParams.keys()].sort(), ["conversation_id", "q"])
   assert.equal(url.searchParams.get("q"), "happy dance")
-  assert.doesNotMatch(path, /participant|conversation|safety|memory|door|language/i)
+  assert.equal(url.searchParams.get("conversation_id"), "conversation-123")
+  assert.doesNotMatch(path, /participant|safety|memory|door|language|token/i)
 })
 
 test("GIF request guard rejects stale query and Conversation A to B responses", () => {
