@@ -12,7 +12,8 @@ defmodule StrangertalksNew.AnalyticsRecords do
   alias StrangertalksNew.Repo
 
   @doc "Legacy writer is deliberately disabled for V1."
-  def create_analytics_record(_attrs \\ %{}), do: {:error, :legacy_analytics_record_write_disabled}
+  def create_analytics_record(_attrs \\ %{}),
+    do: {:error, :legacy_analytics_record_write_disabled}
 
   def get_analytics_record(id), do: Repo.get(AnalyticsRecord, id)
 
