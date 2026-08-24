@@ -33,13 +33,13 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      TEAM2_FINAL_SHA: a767746138c8f79a8853173b1b8c2a29591205cf
+      TEAM2_FINAL_SHA: 57b2c9663eebb74b40347d7f19cabc2b31b3a5ca
 
     steps:
       - name: Checkout exact Team 2 SHA
         uses: actions/checkout@v4
         with:
-          ref: a767746138c8f79a8853173b1b8c2a29591205cf
+          ref: 57b2c9663eebb74b40347d7f19cabc2b31b3a5ca
 
       - name: Prove exact checkout identity
         run: |
