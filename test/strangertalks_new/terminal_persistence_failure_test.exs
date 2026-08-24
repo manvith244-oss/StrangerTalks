@@ -1,14 +1,77 @@
 defmodule StrangertalksNew.TerminalPersistenceFailureTest do
   use StrangertalksNew.DataCase, async: false
 
+  import Ecto.Query
+
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
+  alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.QueueEngine.QueueState
   alias StrangertalksNew.{Conversation, Repo}
 
   setup do
     Agent.update(QueueState, fn _ -> %{} end)
     :ok
+  end
+
+  test "Block transaction failure rolls back BoundaryBlock and resumes the still-active runtime" do
+    %{conversation: conversation, a: a, b: b} = queue_match()
+    conversation_id = conversation.conversation_id
+    pid = start_supervised!({ConversationServer, %{conversation_id: conversation_id}})
+
+    assert {:ok, _} =
+             ConversationServer.sync_and_register_channel(
+               conversation_id,
+               a.participant_id,
+               self(),
+               nil,
+               0
+             )
+
+    assert {:ok, _} =
+             ConversationServer.sync_and_register_channel(
+               conversation_id,
+               b.participant_id,
+               self(),
+               nil,
+               0
+             )
+
+    # Break only a changeset-required durable field after the runtime has loaded its
+    # valid copy. BoundaryBlock insertion can succeed first, but the terminal
+    # Conversation changeset must then fail inside the same transaction.
+    assert {1, nil} =
+             Repo.update_all(
+               from(c in Conversation, where: c.conversation_id == ^conversation_id),
+               set: [message_count: nil]
+             )
+
+    assert {:error, %Ecto.Changeset{valid?: false}} =
+             MatchingRules.block_conversation_participant(conversation_id, a.participant_id)
+
+    # The failed terminal write rolls back the preceding BoundaryBlock insert. No
+    # durable safety authority may be reported when terminal persistence failed.
+    refute MatchingRules.check_safety_veto?(a.participant_id, b.participant_id)
+
+    durable = Repo.get!(Conversation, conversation_id)
+    assert durable.conversation_status == :ACTIVE
+    assert durable.ended_at == nil
+    assert durable.ending_type == nil
+    assert durable.ending_initiator == nil
+
+    # The suspended runtime is resumed rather than killed or left inert. Its valid
+    # in-memory Conversation remains ACTIVE and retains mutation authority because
+    # the durable Block transaction did not commit.
+    assert Process.alive?(pid)
+    assert {:ok, %{lifecycle_status: :ACTIVE}} = ConversationServer.inspect_state(conversation_id)
+
+    assert {:ok, %{status: "sent"}} =
+             ConversationServer.append_message(
+               conversation_id,
+               a.participant_id,
+               Ecto.UUID.generate(),
+               "transaction rollback keeps the original Conversation active"
+             )
   end
 
   test "End persistence failure reports ending, emits no terminal authority, then converges only after durable retry" do
