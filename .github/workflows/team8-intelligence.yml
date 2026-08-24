@@ -1,10 +1,10 @@
-name: Team 8 Intelligence Closure Gate
+name: Team 7 Intelligence & Privacy Closure Gate
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - team8/intelligence-learning-analytics-2026-08-24
+      - newteam/intelligence
   pull_request:
     branches:
       - release/prep-2026-08-22
@@ -51,7 +51,7 @@ jobs:
       EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
     steps:
-      - name: Checkout exact Team 8 candidate
+      - name: Checkout exact Team 7 candidate
         uses: actions/checkout@v4
         with:
           ref: ${{ env.EXPECTED_SHA }}
@@ -80,7 +80,7 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
 
-      - name: Focused Team 8 regressions
+      - name: Focused Team 7 privacy and intelligence regressions
         id: focused
         continue-on-error: true
         shell: bash
@@ -94,9 +94,26 @@ jobs:
             test/strangertalks_new/learning_record_test.exs \
             test/strangertalks_new/agent_systems_remediation_test.exs \
             test/strangertalks_new/agent_systems_functional_test.exs \
-            2>&1 | tee /tmp/team8-focused.log
+            2>&1 | tee /tmp/team7-focused.log
           code=${PIPESTATUS[0]}
-          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/team8-focused.log | tail -1 || true)
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/team7-focused.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Core product smoke without intelligence dependency
+        id: smoke
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix test \
+            test/strangertalks_new/matchmaking_engine_test.exs \
+            test/strangertalks_new/conversation_delivery_test.exs \
+            2>&1 | tee /tmp/team7-core-smoke.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/team7-core-smoke.log | tail -1 || true)
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
           exit "$code"
@@ -108,9 +125,9 @@ jobs:
         run: |
           set +e
           set -o pipefail
-          mix precommit 2>&1 | tee /tmp/team8-precommit.log
+          mix precommit 2>&1 | tee /tmp/team7-precommit.log
           code=${PIPESTATUS[0]}
-          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/team8-precommit.log | tail -1 || true)
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/team7-precommit.log | tail -1 || true)
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
           exit "$code"
@@ -145,30 +162,32 @@ jobs:
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit "$code"
 
-      - name: Publish exact-SHA Team 8 status
+      - name: Publish exact-SHA Team 7 status
         if: always() && github.event_name == 'push'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           FOCUSED_EXIT: ${{ steps.focused.outputs.exit_code }}
           FOCUSED_SUMMARY: ${{ steps.focused.outputs.summary }}
+          SMOKE_EXIT: ${{ steps.smoke.outputs.exit_code }}
+          SMOKE_SUMMARY: ${{ steps.smoke.outputs.summary }}
           FULL_EXIT: ${{ steps.full.outputs.exit_code }}
           FULL_SUMMARY: ${{ steps.full.outputs.summary }}
           DIFF_EXIT: ${{ steps.diffcheck.outputs.exit_code }}
           CLEAN_EXIT: ${{ steps.clean.outputs.exit_code }}
         run: |
           state=success
-          for value in "$FOCUSED_EXIT" "$FULL_EXIT" "$DIFF_EXIT" "$CLEAN_EXIT"; do
+          for value in "$FOCUSED_EXIT" "$SMOKE_EXIT" "$FULL_EXIT" "$DIFF_EXIT" "$CLEAN_EXIT"; do
             if [ "$value" != "0" ]; then state=failure; fi
           done
 
-          description="focused ${FOCUSED_SUMMARY:-missing}; full ${FULL_SUMMARY:-missing}; diff ${DIFF_EXIT:-missing}; clean ${CLEAN_EXIT:-missing}"
+          description="focused ${FOCUSED_SUMMARY:-missing}; smoke ${SMOKE_SUMMARY:-missing}; full ${FULL_SUMMARY:-missing}; diff ${DIFF_EXIT:-missing}; clean ${CLEAN_EXIT:-missing}"
           description=$(printf '%s' "$description" | cut -c1-140)
 
           gh api --method POST \
             "repos/$GITHUB_REPOSITORY/statuses/$EXPECTED_SHA" \
             -f state="$state" \
-            -f context="team8-intelligence-closure" \
+            -f context="team7-intelligence-privacy-closure" \
             -f description="$description" \
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
@@ -178,12 +197,14 @@ jobs:
         env:
           CHECKED_OUT_SHA: ${{ steps.identity.outputs.checked_out_sha }}
           FOCUSED_EXIT: ${{ steps.focused.outputs.exit_code }}
+          SMOKE_EXIT: ${{ steps.smoke.outputs.exit_code }}
           FULL_EXIT: ${{ steps.full.outputs.exit_code }}
           DIFF_EXIT: ${{ steps.diffcheck.outputs.exit_code }}
           CLEAN_EXIT: ${{ steps.clean.outputs.exit_code }}
         run: |
           test "$CHECKED_OUT_SHA" = "$EXPECTED_SHA"
           test "$FOCUSED_EXIT" = "0"
+          test "$SMOKE_EXIT" = "0"
           test "$FULL_EXIT" = "0"
           test "$DIFF_EXIT" = "0"
           test "$CLEAN_EXIT" = "0"
