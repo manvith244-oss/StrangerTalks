@@ -3,7 +3,7 @@ import fs from "node:fs"
 import test from "node:test"
 import {chromium} from "playwright"
 
-const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://127.0.0.1:4002"
+const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4002"
 const SCREENSHOT_DIR = "tmp/chat-ui-screenshots"
 fs.mkdirSync(SCREENSHOT_DIR, {recursive: true})
 
@@ -191,20 +191,30 @@ for (const device of DEVICES) {
       assert.equal(layout.companionLoaded, true)
       assert.deepEqual(layout.grouped, ["ig-group-start", "ig-group-end", "ig-group-start", "ig-group-end", "ig-group-solo"])
 
+      await page.screenshot({
+        path: `${SCREENSHOT_DIR}/${screenshotName(device.name)}-baseline.png`,
+        fullPage: false
+      })
+
       const info = page.locator(".conversation-head-actions .overflow")
       const infoSummary = info.locator("summary")
       await infoSummary.click()
-      assert.equal(await info.evaluate((details) => details.open), true)
-      assert.equal(await infoSummary.getAttribute("aria-expanded"), "true")
+      await page.waitForFunction(() => {
+        const details = document.querySelector(".conversation-head-actions .overflow")
+        const summary = details?.querySelector("summary")
+        return Boolean(details?.open) && summary?.getAttribute("aria-expanded") === "true"
+      })
       await page.keyboard.press("Escape")
-      assert.equal(await info.evaluate((details) => details.open), false)
-      assert.equal(await infoSummary.getAttribute("aria-expanded"), "false")
-      assert.equal(await infoSummary.evaluate((summary) => document.activeElement === summary), true)
+      await page.waitForFunction(() => {
+        const details = document.querySelector(".conversation-head-actions .overflow")
+        const summary = details?.querySelector("summary")
+        return !details?.open && summary?.getAttribute("aria-expanded") === "false" && document.activeElement === summary
+      })
 
       await infoSummary.click()
-      assert.equal(await info.evaluate((details) => details.open), true)
+      await page.waitForFunction(() => document.querySelector(".conversation-head-actions .overflow")?.open === true)
       await page.locator("#messages").click({position: {x: 4, y: 4}})
-      assert.equal(await info.evaluate((details) => details.open), false)
+      await page.waitForFunction(() => document.querySelector(".conversation-head-actions .overflow")?.open === false)
 
       await page.click(".ig-compose-plus")
       assert.equal(await page.locator("#message-form").evaluate((form) => form.classList.contains("ig-tray-open")), true)
@@ -250,7 +260,7 @@ for (const device of DEVICES) {
       }
 
       await page.screenshot({
-        path: `${SCREENSHOT_DIR}/${screenshotName(device.name)}.png`,
+        path: `${SCREENSHOT_DIR}/${screenshotName(device.name)}-stress.png`,
         fullPage: false
       })
     } finally {
