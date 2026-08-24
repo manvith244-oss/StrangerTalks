@@ -377,16 +377,25 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
   end
 
   defp canonical_conversation?(participant_id, conversation_id) do
-    case SessionReconciliation.reconcile(participant_id) do
-      {:ok,
-       %{
-         canonical_state: :CONVERSATION,
-         conversation: %{conversation_id: ^conversation_id}
-       }} ->
-        true
+    queued? = Agent.get(QueueState, &Map.has_key?(&1, participant_id))
 
-      _ ->
-        false
+    if queued? do
+      false
+    else
+      case StrangertalksNew.StateInvariants.check_participant(participant_id) do
+        :ok ->
+          case StrangertalksNew.Repo.get(StrangertalksNew.Conversation, conversation_id) do
+            %StrangertalksNew.Conversation{} = conversation ->
+              conversation.conversation_status in [:PENDING, :ACTIVE, :PAUSED] and
+                participant_id in [conversation.participant_a_id, conversation.participant_b_id]
+
+            nil ->
+              false
+          end
+
+        _violation ->
+          false
+      end
     end
   end
 
