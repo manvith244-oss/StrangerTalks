@@ -9,7 +9,7 @@ on:
       - release/prep-2026-08-22
 
 concurrency:
-  group: team6-product-ux-${{ github.event.pull_request.head.sha || github.sha }}
+  group: team6-product-ux-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
