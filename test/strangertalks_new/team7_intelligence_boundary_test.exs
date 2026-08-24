@@ -29,6 +29,26 @@ defmodule StrangertalksNew.Team7IntelligenceBoundaryTest do
     assert result.requires_review == true
   end
 
+  test "generated recommendations route to durable owner domains, never numeric teams" do
+    snapshot =
+      canonical_snapshot("2026-08-23T00:00:00Z", "2026-08-24T00:00:00Z")
+      |> put_in([:system, :technical_disconnects], 1)
+      |> put_in([:human_outcomes, :reports_submitted], 1)
+
+    assert {:ok, result} = V1Recommendations.analyze(snapshot)
+    assert length(result.recommendations) == 2
+
+    refute Enum.any?(result.recommendations, fn recommendation ->
+             Regex.match?(~r/\bTeam\s+\d+\b/i, recommendation.suggested_change)
+           end)
+
+    reliability = Enum.find(result.recommendations, &(&1.area == "conversation_reliability"))
+    safety = Enum.find(result.recommendations, &(&1.area == "safety_observation"))
+
+    assert reliability.suggested_change =~ "Conversation Reliability owner"
+    assert safety.suggested_change =~ "Safety/Terminal owner"
+  end
+
   defp canonical_snapshot(from, to) do
     %{
       schema_version: V1Metrics.schema_version(),
