@@ -162,6 +162,28 @@ defmodule StrangertalksNew.RecoveryRestartTest do
     send(channel, :stop)
   end
 
+  test "RecoverySweeper abandons durable ACTIVE Conversation when runtime is gone and nobody returns" do
+    fixture = conversation_fixture()
+    conversation_id = fixture.conversation.conversation_id
+
+    fixture.conversation
+    |> Conversation.changeset(%{
+      conversation_status: :ACTIVE,
+      created_at: DateTime.add(DateTime.utc_now(), -300, :second)
+    })
+    |> Repo.update!()
+
+    assert {:error, :not_started} = ConversationServer.lookup(conversation_id)
+
+    RecoverySweeper.sweep_orphans()
+
+    recovered = Repo.get!(Conversation, conversation_id)
+    assert recovered.conversation_status == :ABANDONED
+    assert recovered.ending_type == :TIMEOUT
+    assert recovered.ended_at
+    assert {:error, :not_started} = ConversationServer.lookup(conversation_id)
+  end
+
   test "RecoverySweeper and SessionReconciliation produce one orphan transition" do
     fixture = conversation_fixture()
 
