@@ -1,0 +1,45 @@
+name: Team 6 Media Gate
+
+on:
+  push:
+    branches:
+      - team6/voice-video-expression
+  pull_request:
+    paths:
+      - "priv/static/assets/live_call.mjs"
+      - "priv/static/assets/voice_notes.mjs"
+      - "priv/static/assets/view_once.mjs"
+      - "test/js/live_call_test.mjs"
+      - "test/js/voice_notes_test.mjs"
+      - "test/js/view_once_test.mjs"
+      - "test/js/team6_media_gate_test.mjs"
+      - ".github/workflows/team6-media-gate.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  media-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Exact checkout
+        run: |
+          echo "tested_sha=$(git rev-parse HEAD)"
+          git status --porcelain
+      - name: Focused Team 6 JavaScript regressions
+        run: |
+          node --test \
+            test/js/voice_notes_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/team6_media_gate_test.mjs
+      - name: Diff hygiene
+        run: git diff --check
+      - name: Clean tree
+        run: test -z "$(git status --porcelain)"
