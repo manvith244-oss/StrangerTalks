@@ -122,7 +122,7 @@ defmodule StrangertalksNew.Intelligence.V1Recommendations do
             technical_disconnects: disconnects,
             failed_conversations: failures
           },
-          "Team 5 should inspect the underlying reliability failures and regressions before any product-policy change.",
+          "The Conversation Reliability owner should inspect the underlying reliability failures and regressions before any product-policy change.",
           "operational"
         )
         | recommendations
@@ -146,7 +146,7 @@ defmodule StrangertalksNew.Intelligence.V1Recommendations do
             reports_submitted: reports,
             block_terminated_conversations: blocks
           },
-          "Team 4 should review the aggregate incidence and canonical safety records. Do not weaken or automatically retune safety boundaries from this recommendation.",
+          "The Safety/Terminal owner should review the aggregate incidence and canonical safety records. Do not weaken or automatically retune safety boundaries from this recommendation.",
           "safety"
         )
         | recommendations
