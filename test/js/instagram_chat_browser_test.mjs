@@ -138,6 +138,14 @@ for (const device of DEVICES) {
       assert.equal(await page.locator(".ig-compose-plus").getAttribute("aria-expanded"), "false")
       assert.equal(await page.locator("#message-form .compose > .primary").evaluate((button) => getComputedStyle(button).pointerEvents !== "none"), true)
 
+      await page.evaluate(() => { document.querySelector("#message-input").value = "" })
+      await page.waitForFunction(() => !document.querySelector("#message-form").classList.contains("has-text"))
+      assert.equal(await page.locator(".ig-compose-plus").evaluate((button) => getComputedStyle(button).display !== "none"), true)
+
+      await page.evaluate(() => { document.querySelector("#message-input").value = "Prompt-filled draft" })
+      await page.waitForFunction(() => document.querySelector("#message-form").classList.contains("has-text"))
+      assert.equal(await page.locator("#message-form .compose > .primary").evaluate((button) => getComputedStyle(button).pointerEvents !== "none"), true)
+
       await page.evaluate(() => {
         const item = document.createElement("li")
         item.className = "message mine message-unsent"
