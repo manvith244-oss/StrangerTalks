@@ -121,12 +121,14 @@ defmodule StrangertalksNew.MatchmakingHostileConcurrencyTest do
     assert_receive {:match_event, :match_created, _match_id, ^authoritative_conversation_id,
                     participant_a_id, participant_b_id, _score}
 
-    assert a.participant_id in [participant_a_id, participant_b_id]
-    refute_receive {:match_event, :match_created, _match_id, _conversation_id, ^a.participant_id,
-                    _peer_id, _score}, 50
+    a_id = a.participant_id
+    assert a_id in [participant_a_id, participant_b_id]
 
-    refute_receive {:match_event, :match_created, _match_id, _conversation_id, _peer_id,
-                    ^a.participant_id, _score}, 50
+    refute_receive {:match_event, :match_created, _match_id, _conversation_id, ^a_id, _peer_id,
+                    _score}, 50
+
+    refute_receive {:match_event, :match_created, _match_id, _conversation_id, _peer_id, ^a_id,
+                    _score}, 50
   end
 
   test "burst joins plus concurrent evaluators produce exactly one Conversation per participant pair" do
