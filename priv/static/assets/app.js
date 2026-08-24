@@ -815,13 +815,23 @@ async function joinConversation(id) {
   app.conversation.on("call:reaction", (payload) => coord.handleReaction(payload))
 
   app.conversation.on("conversation:ended", async () => {
+    if (app.conversationId !== id) return
     app.liveCall?.teardown()
     closeViewOnceModal()
     clearViewOncePreview()
     cancelMessageEdit({restoreFocus: false})
     closeMessageUnsend({restoreFocus: false})
+    closeReactionPicker()
+    closeReportForm()
+    $("#report-form")?.reset()
     cancelRecording()
     cancelReplyStaging()
+    $("#message-form")?.classList.remove("ig-tray-open")
+    const composerInput = $("#message-input")
+    if (composerInput) {
+      composerInput.value = ""
+      composerInput.dispatchEvent(new Event("input", {bubbles: true}))
+    }
     resetPinnedMessages()
     app.peerPresence = null
     renderPresenceText()
@@ -834,6 +844,7 @@ async function joinConversation(id) {
     app.messageAvailability.clear()
     await markConversationEnded()
     show("ended")
+    $("#consent")?.focus()
     announce("Conversation ended. Choose what this device should retain.")
   })
 
