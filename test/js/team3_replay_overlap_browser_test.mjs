@@ -160,3 +160,74 @@ test("live arrival overlapping replay is represented exactly once in canonical s
     await browser.close()
   }
 })
+
+test("replay resumes after a second disconnect without duplicating the already-applied prefix", {timeout: 35_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  const contextA = await browser.newContext()
+  const contextB = await browser.newContext()
+  const pageA = await contextA.newPage()
+  const pageB = await contextB.newPage()
+
+  try {
+    const {b, conversationId, epochId} = await establish(pageA, pageB)
+
+    await pageB.evaluate(() => window.__team3_overlap.socket.disconnect())
+    await pageB.waitForFunction(() => window.__team3_overlap.socket.isConnected() === false)
+
+    const first = crypto.randomUUID()
+    const firstAccepted = await push(pageA, "conversation", "message:send", {
+      client_message_id: first,
+      content: "first replay generation"
+    })
+    assert.equal(firstAccepted.kind, "ok")
+    assert.equal(firstAccepted.value.sequence, 1)
+
+    await bootstrap(pageB, b)
+    const firstReplay = await joinConversation(pageB, conversationId, epochId, 0)
+    assert.equal(firstReplay.kind, "ok")
+    assert.deepEqual(
+      (firstReplay.value.messages || []).map((message) => [message.sequence, message.client_message_id]),
+      [[1, first]]
+    )
+
+    const firstProgress = await push(pageB, "conversation", "delivery:progress", {
+      epoch_id: firstReplay.value.epoch_id,
+      highest_contiguous_sequence: 1
+    })
+    assert.equal(firstProgress.kind, "ok")
+    assert.equal(firstProgress.value.highest_contiguous_sequence, 1)
+
+    await pageB.evaluate(() => window.__team3_overlap.socket.disconnect())
+    await pageB.waitForFunction(() => window.__team3_overlap.socket.isConnected() === false)
+
+    const second = crypto.randomUUID()
+    const secondAccepted = await push(pageA, "conversation", "message:send", {
+      client_message_id: second,
+      content: "second replay generation"
+    })
+    assert.equal(secondAccepted.kind, "ok")
+    assert.equal(secondAccepted.value.sequence, 2)
+
+    await bootstrap(pageB, b)
+    const resumed = await joinConversation(pageB, conversationId, firstReplay.value.epoch_id, 1)
+    assert.equal(resumed.kind, "ok")
+
+    const replayed = resumed.value.messages || []
+    assert.deepEqual(
+      replayed.map((message) => [message.sequence, message.client_message_id]),
+      [[2, second]]
+    )
+    assert.equal(replayed.filter((message) => message.client_message_id === first).length, 0)
+
+    const secondProgress = await push(pageB, "conversation", "delivery:progress", {
+      epoch_id: resumed.value.epoch_id,
+      highest_contiguous_sequence: 2
+    })
+    assert.equal(secondProgress.kind, "ok")
+    assert.equal(secondProgress.value.highest_contiguous_sequence, 2)
+  } finally {
+    await contextA.close()
+    await contextB.close()
+    await browser.close()
+  }
+})
