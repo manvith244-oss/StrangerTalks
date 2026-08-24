@@ -5,10 +5,12 @@ on:
     branches: [team6/voice-video-expression]
     paths:
       - "tmp/team6_direct_remediate.py"
+      - "tmp/team6_prepare_remediation.py"
       - ".github/workflows/team6-visible-remediation.yml"
   pull_request:
     paths:
       - "tmp/team6_direct_remediate.py"
+      - "tmp/team6_prepare_remediation.py"
       - ".github/workflows/team6-visible-remediation.yml"
 
 permissions:
@@ -49,6 +51,8 @@ jobs:
       - run: mix deps.get
       - run: npm ci
       - run: mix ecto.create && mix ecto.migrate
+      - name: Prepare remediation harness
+        run: python tmp/team6_prepare_remediation.py
       - name: Apply direct source remediation in runner
         run: python tmp/team6_direct_remediate.py
       - name: Format canonical Elixir changes
