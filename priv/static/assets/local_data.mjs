@@ -241,6 +241,12 @@ export function chooseConversationRetention(records, conversationId, choice, {su
 export function preserveTerminalRetentionDecisions(current, incoming) {
   const next = new Map(incoming.map((record) => [record.id, record]))
 
+  for (const currentRecord of current) {
+    if (currentRecord.type !== "sync_tombstone") continue
+    const proposed = next.get(currentRecord.id)
+    if (!proposed || proposed.type !== "sync_tombstone") next.set(currentRecord.id, currentRecord)
+  }
+
   for (const conversation of current) {
     if (conversation.type !== "local_conversation" || !TERMINAL_RETENTION_STATUSES.has(conversation.value?.status)) continue
     const proposed = next.get(conversation.id)
@@ -463,11 +469,10 @@ function validBackupRecord(record) {
       BACKUP_TOMBSTONE_CATEGORIES.has(value.previous_category)
   }
   if (record.type === "local_conversation") {
-    return onlyKeys(value, BACKUP_CONVERSATION_KEYS) &&
+    const knownShape = onlyKeys(value, BACKUP_CONVERSATION_KEYS) &&
       nonEmptyString(value.conversation_id) &&
-      record.id === `conversation:${value.conversation_id}` &&
-      TERMINAL_RETENTION_STATUSES.has(value.status) ||
-      (onlyKeys(value, BACKUP_CONVERSATION_KEYS) && nonEmptyString(value.conversation_id) && record.id === `conversation:${value.conversation_id}` && value.status === "temporary")
+      record.id === `conversation:${value.conversation_id}`
+    return knownShape && (TERMINAL_RETENTION_STATUSES.has(value.status) || value.status === "temporary")
   }
   if (record.type === "local_message") {
     const messageId = value?.client_message_id || value?.message_id
