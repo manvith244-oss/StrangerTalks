@@ -5,7 +5,6 @@ defmodule StrangertalksNew.IntelligenceV1Test do
 
   alias StrangertalksNew.{
     AnalyticsRecord,
-    Conversation,
     Conversations,
     LearningRecord,
     Matches,
@@ -13,7 +12,8 @@ defmodule StrangertalksNew.IntelligenceV1Test do
     Relationship,
     Relationships,
     Repo,
-    Report
+    Report,
+    Telemetry
   }
 
   test "zero-data snapshot is bounded, aggregate-only and creates no analytics history" do
@@ -121,6 +121,22 @@ defmodule StrangertalksNew.IntelligenceV1Test do
              })
   end
 
+  test "existing telemetry strips private content, identifiers and credentials" do
+    sanitized =
+      Telemetry.sanitize_metadata(%{
+        participant_id: Ecto.UUID.generate(),
+        conversation_id: Ecto.UUID.generate(),
+        match_id: Ecto.UUID.generate(),
+        content: "private Conversation text",
+        audio: <<1, 2, 3>>,
+        authorization: "Bearer private-token",
+        door_type: :EXPLORE,
+        result: :success
+      })
+
+    assert sanitized == %{door_type: :EXPLORE, result: :success}
+  end
+
   test "recommendations are deterministic evidence packets with zero mutation authority" do
     snapshot = %{
       schema_version: V1Metrics.schema_version(),
@@ -150,6 +166,18 @@ defmodule StrangertalksNew.IntelligenceV1Test do
     assert length(first.recommendations) == 2
     assert Enum.all?(first.recommendations, &(&1.mutation_authority == false))
     assert Enum.all?(first.recommendations, &(&1.requires_review == true))
+
+    concurrent_results =
+      1..20
+      |> Task.async_stream(
+        fn _ -> V1Recommendations.analyze(snapshot) end,
+        ordered: false,
+        max_concurrency: 10,
+        timeout: 5_000
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert Enum.all?(concurrent_results, &(&1 == {:ok, first}))
   end
 
   test "reporting window rejects unbounded scans" do
