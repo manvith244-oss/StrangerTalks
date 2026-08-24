@@ -125,7 +125,10 @@ jobs:
           exit 1
 
       - name: Responsive hostile-user browser checks
-        run: node --test test/js/instagram_chat_browser_test.mjs
+        run: |
+          node --test \
+            test/js/instagram_chat_browser_test.mjs \
+            test/js/instagram_chat_report_browser_test.mjs
 
       - name: Upload rendered Conversation screenshots
         if: always()
