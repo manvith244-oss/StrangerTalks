@@ -5,6 +5,11 @@ on:
     branches: [newteam/terminal-truth]
     paths:
       - "team2-terminal-patches/**"
+  pull_request:
+    branches: [release/prep-2026-08-22]
+    paths:
+      - "team2-terminal-patches/**"
+      - ".github/workflows/team2-apply-terminal-patches.yml"
 
 permissions:
   contents: write
