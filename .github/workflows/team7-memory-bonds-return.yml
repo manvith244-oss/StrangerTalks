@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - team7/memory-bonds-return-2026-08-24
+      - newteam/continuity
   pull_request:
     branches:
       - release/prep-2026-08-22
@@ -161,6 +162,17 @@ jobs:
             cat /tmp/team7-matrix.log
           else
             cat /tmp/team7-matrix.log
+            exit 1
+          fi
+
+      - name: Team 5 real browser continuity attacks
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test test/js/team5_continuity_browser_attack_test.mjs > /tmp/team5-browser-continuity.log 2>&1; then
+            cat /tmp/team5-browser-continuity.log
+          else
+            cat /tmp/team5-browser-continuity.log
             exit 1
           fi
 
