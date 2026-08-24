@@ -19,6 +19,8 @@ defmodule StrangertalksNewWeb.Router do
     pipe_through :api
 
     post "/participants", ParticipantController, :create
+    get "/gifs/status", GifController, :status
+    get "/gifs/search", GifController, :index
     get "/account/session", AccountController, :session
     delete "/account/session", AccountController, :logout
     delete "/account/sessions", AccountController, :logout_all
@@ -46,6 +48,21 @@ defmodule StrangertalksNewWeb.Router do
 
     get "/conversations/:conversation_id/view-once/:client_message_id",
         ViewOnceMediaController,
+        :show,
+        log: false
+
+    get "/conversations/:conversation_id/normal-media",
+        NormalMediaController,
+        :index,
+        log: false
+
+    post "/conversations/:conversation_id/normal-media/:client_message_id/:kind",
+         NormalMediaController,
+         :create,
+         log: false
+
+    get "/conversations/:conversation_id/normal-media/:client_message_id",
+        NormalMediaController,
         :show,
         log: false
 

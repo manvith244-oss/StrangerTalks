@@ -41,7 +41,7 @@ V1 Team 8 aggregate queries may read only the following canonical fields for the
 | --- | --- | --- | --- |
 | Match | `created_at`, `participant_a_door_type`, `participant_b_door_type`, `queue_duration_seconds` | throughput, same/cross-Door counts, successful-match wait | IDs are used only by the database as row keys; never selected into output |
 | Conversation | `created_at`, `ended_at`, `ending_type`, `conversation_status` | creation, natural end, disconnect, failed, block-terminal counts | no participant/message/content fields selected |
-| Relationship | `created_at` | count explicit mutual continuation | no participant, Memory, note, summary or strength fields selected |
+| Relationship | `created_at`, `accepted_at`, `participant_a_accepted`, `participant_b_accepted` | count only explicit mutual continuation | acceptance state is used only as a row-level inclusion gate; participant IDs, Memory, notes, summaries and strength fields are not selected |
 | Report | `created_at` | count aggregate safety-boundary use | no reporter, target, message, evidence/context or media selected |
 | Telemetry | bounded numeric measurements + low-cardinality enum metadata already accepted by `Telemetry` | live observability | IDs/content/secrets stripped before emission |
 
@@ -102,7 +102,7 @@ The executable dictionary lives in `V1Metrics.metric_dictionary/0`; these are th
 | `natural_ends` | Conversations ending `NATURAL_END` | non-safety terminal outcome | not automatically positive |
 | `technical_disconnects` | Conversations ending `DISCONNECT` | technical-survival signal | not participant rejection |
 | `failed_conversations` | terminal rows with status `FAILED` | reliability failure | no automatic product change |
-| `voluntary_relationships_created` | Relationship rows created after domain mutual-consent gate | explicit continuation signal | not relationship-strength profiling |
+| `voluntary_relationships_created` | Relationship rows created after verified mutual acceptance | explicit continuation signal | not relationship-strength profiling |
 | `reports_submitted` | canonical Report rows created | aggregate report-boundary use | no evidence exposure or automatic punishment |
 | `block_terminated_conversations` | Conversations ending `BLOCK` | in-Conversation block boundary use | not every BoundaryBlock from every surface |
 

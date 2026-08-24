@@ -334,7 +334,7 @@ defmodule StrangertalksNew.C11Policy do
     result =
       case Map.get(config, :client) do
         client when is_atom(client) ->
-          if function_exported?(client, :generate_ice_servers, 2),
+          if Code.ensure_loaded?(client) and function_exported?(client, :generate_ice_servers, 2),
             do: client.generate_ice_servers(config, ttl),
             else: {:error, :provider_credential_unavailable}
 

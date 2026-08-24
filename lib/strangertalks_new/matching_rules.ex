@@ -104,6 +104,7 @@ defmodule StrangertalksNew.MatchingRules do
               {:ok, block} ->
                 terminate_suspended_runtime(suspended_runtime)
                 stop_conversation_runtime(conversation_id)
+                broadcast_block_terminal_authority(conversation_id)
                 {:ok, block}
 
               {:error, reason} ->
@@ -142,6 +143,14 @@ defmodule StrangertalksNew.MatchingRules do
       conversation_completed: false,
       safety_flagged: true
     })
+  end
+
+  defp broadcast_block_terminal_authority(conversation_id) do
+    StrangertalksNewWeb.Endpoint.broadcast(
+      "conversation:#{conversation_id}",
+      "conversation:ended",
+      %{status: "ended", reason: "blocked"}
+    )
   end
 
   defp suspend_conversation_runtime(conversation_id) do
