@@ -227,8 +227,12 @@ jobs:
       - name: Full Elixir precommit
         run: mix precommit
 
-      - name: Diff check
-        run: git diff --check
+      - name: Diff checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code -- .
 
       - name: Prove final checkout clean
         shell: bash
