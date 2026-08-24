@@ -113,6 +113,42 @@ defmodule StrangertalksNew.AccountSyncTest do
     assert FakeDrive.state().file.envelope["content"]["ciphertext"] == "first"
   end
 
+  test "Device A -> Device B -> Device A canonical revisions reject the stale device write", %{
+    account: account
+  } do
+    # Device A establishes R1.
+    assert {:ok, %{revision: 1}} =
+             AccountSync.put(account.account_id, 0, envelope(0, "device-a-r1"))
+
+    # Device B downloads R1, makes a legitimate change, and establishes R2.
+    assert {:ok, %{status: "ready", revision: 1}} = AccountSync.get(account.account_id)
+
+    assert {:ok, %{revision: 2}} =
+             AccountSync.put(account.account_id, 1, envelope(1, "device-b-r2"))
+
+    # Device A receives the canonical R2 and then establishes R3 (for example a
+    # tombstone-bearing encrypted snapshot).
+    assert {:ok, %{status: "ready", revision: 2}} = AccountSync.get(account.account_id)
+
+    assert {:ok, %{revision: 3}} =
+             AccountSync.put(account.account_id, 2, envelope(2, "device-a-r3-tombstone"))
+
+    # Device B still believes R2 is current. Its stale upload must conflict and
+    # must not overwrite the canonical R3 file.
+    assert {:error, :sync_conflict} =
+             AccountSync.put(account.account_id, 2, envelope(2, "device-b-stale-r3"))
+
+    assert {:ok,
+            %{
+              status: "ready",
+              revision: 3,
+              envelope: %{"content" => %{"ciphertext" => "device-a-r3-tombstone"}}
+            }} = AccountSync.get(account.account_id)
+
+    assert FakeDrive.state().file.id == "app-data-only-file"
+    assert Repo.get!(AccountSyncState, account.account_id).last_known_revision == 3
+  end
+
   test "server stores metadata but never the encrypted envelope or access token", %{
     account: account
   } do
