@@ -2,7 +2,6 @@ defmodule StrangertalksNewWeb.NormalMediaController do
   use StrangertalksNewWeb, :controller
 
   alias StrangertalksNew.Conversations
-  alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNew.ConversationLifecycle.NormalMediaStore
   alias StrangertalksNew.ConversationLifecycle.ViewOnceMediaValidator
   alias StrangertalksNewWeb.ParticipantToken
@@ -24,17 +23,13 @@ defmodule StrangertalksNewWeb.NormalMediaController do
            {:ok, binary, conn} <- read_limited_body(conn),
            {:ok, metadata} <- ViewOnceMediaValidator.validate(binary),
            :ok <- validate_kind(kind, metadata.media_type),
-           {:ok, owner_pid} <- ConversationServer.ensure_started(conversation_id),
-           {:ok, anchor_sequence} <- conversation_order_anchor(conversation_id, participant_id),
            {:ok, media, disposition} <-
              NormalMediaStore.put_media(
                conversation_id,
                participant_id,
                client_message_id,
                binary,
-               metadata,
-               owner_pid,
-               anchor_sequence
+               metadata
              ),
            {:ok, _conversation} <- active_conversation(conversation_id, participant_id) do
         {:ok, conn, media, disposition}
@@ -109,40 +104,6 @@ defmodule StrangertalksNewWeb.NormalMediaController do
 
       conversation ->
         {:ok, conversation}
-    end
-  end
-
-  # This call is serialized by the live ConversationServer. Therefore next_sequence - 1 is an
-  # authoritative ordering boundary: every generic Conversation item accepted before this call is
-  # on or before the anchor, and every generic item accepted after it is after the anchor.
-  defp conversation_order_anchor(conversation_id, participant_id) do
-    case ConversationServer.inspect_state(conversation_id) do
-      {:ok, state} ->
-        conversation = Map.get(state, :conversation)
-        next_sequence = Map.get(state, :next_sequence)
-
-        cond do
-          is_nil(conversation) ->
-            {:error, :conversation_unavailable}
-
-          participant_id not in [conversation.participant_a_id, conversation.participant_b_id] ->
-            {:error, :not_conversation_member}
-
-          not is_nil(Map.get(state, :terminal_intent)) ->
-            {:error, :conversation_terminating}
-
-          conversation.conversation_status not in [:PENDING, :ACTIVE, :PAUSED] ->
-            {:error, :conversation_inactive}
-
-          not is_integer(next_sequence) or next_sequence < 1 ->
-            {:error, :normal_media_order_unavailable}
-
-          true ->
-            {:ok, next_sequence - 1}
-        end
-
-      {:error, reason} ->
-        {:error, reason}
     end
   end
 
