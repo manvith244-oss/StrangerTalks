@@ -8,6 +8,10 @@ defmodule StrangertalksNew.GifProviderTest do
     def search("empty"), do: {:ok, []}
     def search("error"), do: {:error, :provider_error}
     def search("rate"), do: {:error, :rate_limited}
+    def search("timeout") do
+      Process.sleep(100)
+      {:ok, []}
+    end
 
     def search("malformed") do
       {:ok,
@@ -38,7 +42,9 @@ defmodule StrangertalksNew.GifProviderTest do
     end
 
     def search(query) do
-      send(self(), {:provider_query, query})
+      if pid = Application.get_env(:strangertalks_new, :gif_provider_test_pid) do
+        send(pid, {:provider_query, query})
+      end
 
       {:ok,
        [
@@ -57,12 +63,18 @@ defmodule StrangertalksNew.GifProviderTest do
   setup do
     old_adapter = Application.get_env(:strangertalks_new, :gif_provider_adapter)
     old_hosts = Application.get_env(:strangertalks_new, :gif_media_hosts)
+    old_timeout = Application.get_env(:strangertalks_new, :gif_provider_timeout_ms)
+    old_test_pid = Application.get_env(:strangertalks_new, :gif_provider_test_pid)
     Application.put_env(:strangertalks_new, :gif_provider_adapter, FakeProvider)
     Application.put_env(:strangertalks_new, :gif_media_hosts, ["media.example.test"])
+    Application.put_env(:strangertalks_new, :gif_provider_timeout_ms, 25)
+    Application.put_env(:strangertalks_new, :gif_provider_test_pid, self())
 
     on_exit(fn ->
       restore_env(:gif_provider_adapter, old_adapter)
       restore_env(:gif_media_hosts, old_hosts)
+      restore_env(:gif_provider_timeout_ms, old_timeout)
+      restore_env(:gif_provider_test_pid, old_test_pid)
     end)
 
     :ok
@@ -84,10 +96,11 @@ defmodule StrangertalksNew.GifProviderTest do
     assert canonical.label == "Happy dance"
   end
 
-  test "empty, provider error, rate limit, malformed payload and non-allowlisted media remain bounded" do
+  test "empty, provider error, rate limit, malformed payload, timeout and non-allowlisted media remain bounded" do
     assert {:ok, []} = GifProvider.search("empty")
     assert {:error, :provider_error} = GifProvider.search("error")
     assert {:error, :rate_limited} = GifProvider.search("rate")
+    assert {:error, :provider_timeout} = GifProvider.search("timeout")
     assert {:error, :malformed_provider_response} = GifProvider.search("malformed")
     assert {:error, :malformed_provider_response} = GifProvider.search("wrong-host")
     assert {:error, :invalid_query} = GifProvider.search("")
