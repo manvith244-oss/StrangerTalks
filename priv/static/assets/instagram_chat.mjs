@@ -330,7 +330,7 @@ function refreshMessageDecorations() {
     message.classList.add(`ig-group-${groups[index]}`)
   })
 
-  const latestOwn = [...messages].reverse().find((message) => message.classList.contains("mine"))
+  const latestOwn = [...messages].reverse().find((message) => message.classList.contains("mine") && !message.classList.contains("message-unsent"))
   latestOwn?.classList.add("ig-latest-own")
 }
 
