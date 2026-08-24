@@ -124,10 +124,15 @@ text = text.replace("    '  def admit_and_reserve(state, conversation_id, call_a
 text = text.replace("    '  def admit_extension(state, call_attempt_id, now \\\\ nil) do',", "    '  def admit_extension(',", 1)
 text = text.replace("    '  def authorize_credentials(provider, _conversation_id, _participant_id, call_attempt_id, ttl) do',", "    '  def authorize_credentials(',", 1)
 
-# Preserve valid boundaries when the direct script inserts server and test blocks.
+# Preserve valid boundaries when the direct script inserts server helpers/gates and tests.
 text = text.replace(
     '    server = replace_once(server, get_call_marker, gate + get_call_marker, "authoritative media handle gate")',
     '    server = replace_once(server, get_call_marker, gate + "\\n\\n" + get_call_marker, "authoritative media handle gate")',
+    1,
+)
+text = text.replace(
+    '    server = replace_once(server, admitted_marker, helpers + admitted_marker, "authoritative media helpers")',
+    '    server = replace_once(server, admitted_marker, helpers + "\\n\\n" + admitted_marker, "authoritative media helpers")',
     1,
 )
 text = text.replace(
