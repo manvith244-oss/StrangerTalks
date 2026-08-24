@@ -171,18 +171,37 @@ defmodule StrangertalksNew.RelationshipConsentSafetyReviewTest do
              SafetyReviews.dismiss_review(review.safety_review_id, "different", nil)
   end
 
+  test "concurrent identical terminal SafetyReview retries converge idempotently" do
+    review = pending_review_fixture("HARASSMENT", "identical retry evidence")
+
+    results =
+      1..2
+      |> Task.async_stream(
+        fn _ ->
+          SafetyReviews.resolve_review(
+            review.safety_review_id,
+            :HIGH,
+            "same terminal decision",
+            "same trusted note"
+          )
+        end,
+        max_concurrency: 2,
+        timeout: :infinity
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert Enum.all?(results, &match?({:ok, %SafetyReview{status: :RESOLVED}}, &1))
+
+    persisted = Repo.get!(SafetyReview, review.safety_review_id)
+    assert persisted.status == :RESOLVED
+    assert persisted.severity_level == :HIGH
+    assert persisted.resolution == "same terminal decision"
+    assert persisted.review_notes == "same trusted note"
+    assert Repo.aggregate(SafetyEvent, :count) == 0
+  end
+
   test "conflicting concurrent terminal safety review decisions serialize to one winner" do
-    {conversation, participant_a, _participant_b} = completed_conversation_fixture()
-
-    assert {:ok, %Report{} = report} =
-             Reports.submit_conversation_report(
-               conversation.conversation_id,
-               participant_a.participant_id,
-               "THREATS",
-               "concurrent terminal decision evidence"
-             )
-
-    review = Repo.get_by!(SafetyReview, report_id: report.report_id)
+    review = pending_review_fixture("THREATS", "concurrent terminal decision evidence")
     parent = self()
 
     resolve_task =
@@ -214,28 +233,158 @@ defmodule StrangertalksNew.RelationshipConsentSafetyReviewTest do
     send(resolve_pid, :go)
     send(dismiss_pid, :go)
 
-    results = [Task.await(resolve_task, 5_000), Task.await(dismiss_task, 5_000)]
+    assert_one_terminal_winner(
+      review.safety_review_id,
+      Task.await(resolve_task, 5_000),
+      Task.await(dismiss_task, 5_000)
+    )
+  end
 
+  test "reverse-release dismiss versus resolve conflict still has one terminal winner" do
+    review = pending_review_fixture("SPAM", "reverse conflict evidence")
+    parent = self()
+
+    dismiss_task =
+      Task.async(fn ->
+        send(parent, {:dismiss_ready, self()})
+
+        receive do
+          :go -> SafetyReviews.dismiss_review(review.safety_review_id, "dismiss-first", "dismiss path")
+        end
+      end)
+
+    resolve_task =
+      Task.async(fn ->
+        send(parent, {:resolve_ready, self()})
+
+        receive do
+          :go ->
+            SafetyReviews.resolve_review(
+              review.safety_review_id,
+              :MEDIUM,
+              "resolve-second",
+              "resolve path"
+            )
+        end
+      end)
+
+    assert_receive {:dismiss_ready, dismiss_pid}, 1_000
+    assert_receive {:resolve_ready, resolve_pid}, 1_000
+    send(dismiss_pid, :go)
+    Process.sleep(5)
+    send(resolve_pid, :go)
+
+    assert_one_terminal_winner(
+      review.safety_review_id,
+      Task.await(dismiss_task, 5_000),
+      Task.await(resolve_task, 5_000)
+    )
+  end
+
+  test "failed terminal update rolls back cleanly and a later retry remains safe" do
+    review = pending_review_fixture("MALICIOUS_LINKS", "rollback evidence")
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      CREATE OR REPLACE FUNCTION team4_fail_safety_review_update()
+      RETURNS trigger AS $$
+      BEGIN
+        RAISE EXCEPTION 'team4 forced safety review update failure';
+      END;
+      $$ LANGUAGE plpgsql
+      """,
+      []
+    )
+
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      """
+      CREATE TRIGGER team4_fail_safety_review_update
+      BEFORE UPDATE ON safety_reviews
+      FOR EACH ROW EXECUTE FUNCTION team4_fail_safety_review_update()
+      """,
+      []
+    )
+
+    try do
+      assert_raise Postgrex.Error, fn ->
+        SafetyReviews.resolve_review(
+          review.safety_review_id,
+          :LOW,
+          "must roll back",
+          "must not persist"
+        )
+      end
+    after
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "DROP TRIGGER IF EXISTS team4_fail_safety_review_update ON safety_reviews",
+        []
+      )
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "DROP FUNCTION IF EXISTS team4_fail_safety_review_update()",
+        []
+      )
+    end
+
+    rolled_back = Repo.get!(SafetyReview, review.safety_review_id)
+    assert rolled_back.status == :PENDING
+    assert is_nil(rolled_back.severity_level)
+    assert is_nil(rolled_back.resolution)
+    assert is_nil(rolled_back.review_notes)
+    assert is_nil(rolled_back.reviewed_at)
+    assert Repo.aggregate(SafetyEvent, :count) == 0
+
+    assert {:ok, retried} =
+             SafetyReviews.resolve_review(
+               review.safety_review_id,
+               :LOW,
+               "retry succeeds",
+               "trusted after rollback"
+             )
+
+    assert retried.status == :RESOLVED
+    assert retried.resolution == "retry succeeds"
+  end
+
+  defp assert_one_terminal_winner(review_id, first_result, second_result) do
+    results = [first_result, second_result]
     assert Enum.count(results, &match?({:ok, %SafetyReview{}}, &1)) == 1
+    assert Enum.count(results, &match?({:error, :conflicting_terminal_decision}, &1)) == 1
 
-    assert Enum.count(
-             results,
-             &match?({:error, :conflicting_terminal_decision}, &1)
-           ) == 1
-
-    persisted = Repo.get!(SafetyReview, review.safety_review_id)
+    persisted = Repo.get!(SafetyReview, review_id)
+    assert persisted.status in [:RESOLVED, :DISMISSED]
 
     case persisted.status do
       :RESOLVED ->
-        assert persisted.severity_level == :CRITICAL
-        assert persisted.resolution == "escalate"
+        assert persisted.severity_level in [:MEDIUM, :CRITICAL]
+        assert persisted.resolution in ["escalate", "resolve-second"]
         assert persisted.review_notes == "resolve path"
 
       :DISMISSED ->
         assert is_nil(persisted.severity_level)
-        assert persisted.resolution == "dismiss"
+        assert persisted.resolution in ["dismiss", "dismiss-first"]
         assert persisted.review_notes == "dismiss path"
     end
+
+    assert Repo.aggregate(SafetyEvent, :count) == 0
+  end
+
+  defp pending_review_fixture(category, evidence) do
+    {conversation, participant_a, _participant_b} = completed_conversation_fixture()
+
+    assert {:ok, %Report{} = report} =
+             Reports.submit_conversation_report(
+               conversation.conversation_id,
+               participant_a.participant_id,
+               category,
+               evidence
+             )
+
+    Repo.get_by!(SafetyReview, report_id: report.report_id)
   end
 
   defp completed_conversation_fixture do
