@@ -85,11 +85,16 @@ test("dedupe retains one logical media item and its original canonical anchor", 
   assert.deepEqual(items.map((item) => item.client_message_id), ["m1", "m2"])
 })
 
-test("server ordering comes from the live Conversation sequence boundary, not clocks or polling", () => {
-  assert.match(controllerSource, /ConversationServer\.inspect_state\(conversation_id\)/)
-  assert.match(controllerSource, /next_sequence - 1/)
+test("server ordering uses an atomic live Conversation sequence boundary, not clocks or polling", () => {
+  assert.match(storeSource, /ConversationServer\.lookup\(conversation_id\)/)
+  assert.match(storeSource, /:sys\.suspend\(pid\)/)
+  assert.match(storeSource, /:sys\.get_state\(owner_pid, @system_timeout_ms\)/)
+  assert.match(storeSource, /next_sequence - 1/)
+  assert.match(storeSource, /after\s+safe_resume\(owner_pid\)/s)
   assert.match(storeSource, /anchor_sequence/)
   assert.match(storeSource, /anchor_ordinal/)
+  assert.match(controllerSource, /NormalMediaStore\.put_media/)
+  assert.doesNotMatch(controllerSource, /ConversationServer\.inspect_state/)
   assert.match(runtimeSource, /compareTimelineKeys/)
   assert.doesNotMatch(runtimeSource, /Date\.now\(\)/)
   assert.doesNotMatch(runtimeSource, /insertBefore\(/)
