@@ -5,6 +5,7 @@ import {
   gifSearchPath,
   insertEmojiIntoDraft,
   sanitizeGifResults,
+  sendWithSameIdentityRetry,
   validGifResult
 } from "../../priv/static/assets/expression_surface.mjs"
 
@@ -42,13 +43,47 @@ test("GIF request guard rejects stale query and Conversation A to B responses", 
   assert.equal(guard.isCurrent(dog, "conversation-a"), false)
 })
 
-test("GIF result validation rejects dangerous URLs, malformed dimensions and long labels", () => {
-  const valid = {id: "1", provider: "fake", media_url: "https://media.example.test/a.gif", label: "Happy dance", width: 320, height: 240}
+test("GIF result validation rejects unsigned, dangerous and malformed provider payloads", () => {
+  const valid = {
+    id: "1",
+    provider: "fake",
+    reference: "signed-server-reference",
+    media_url: "https://media.example.test/a.gif",
+    label: "Happy dance",
+    width: 320,
+    height: 240
+  }
   assert.equal(validGifResult(valid), true)
+  assert.equal(validGifResult({...valid, reference: ""}), false)
+  assert.equal(validGifResult({...valid, provider: ""}), false)
   assert.equal(validGifResult({...valid, media_url: "javascript:alert(1)"}), false)
   assert.equal(validGifResult({...valid, media_url: "data:text/html,hi"}), false)
   assert.equal(validGifResult({...valid, width: 0}), false)
   assert.equal(validGifResult({...valid, height: 5000}), false)
   assert.equal(validGifResult({...valid, label: "x".repeat(161)}), false)
   assert.deepEqual(sanitizeGifResults([valid, {...valid, id: "2", media_url: "file:///etc/passwd"}]), [valid])
+})
+
+test("same-identity retry retries timeout once without mutating payload identity", async () => {
+  const payload = {client_message_id: "same-id", message_id: "same-id", expressive_id: "warm-wave"}
+  const seen = []
+  const reply = await sendWithSameIdentityRetry(async (attemptPayload) => {
+    seen.push({...attemptPayload})
+    if (seen.length === 1) throw {reason: "timeout"}
+    return {status: "sent"}
+  }, payload)
+
+  assert.deepEqual(reply, {status: "sent"})
+  assert.deepEqual(seen, [payload, payload])
+})
+
+test("same-identity retry does not retry non-timeout failures", async () => {
+  let attempts = 0
+  await assert.rejects(
+    sendWithSameIdentityRetry(async () => {
+      attempts += 1
+      throw {reason: "invalid_payload"}
+    }, {client_message_id: "same-id"})
+  )
+  assert.equal(attempts, 1)
 })
