@@ -1,0 +1,250 @@
+name: Team 9 Normal Media Sharing Proof
+
+on:
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+
+concurrency:
+  group: team9-normal-media-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  normal-media-sharing:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+
+    steps:
+      - name: Checkout exact Team 9 commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "EXPECTED_TEAM9_COMMIT=$expected"
+          echo "CHECKED_OUT_TEAM9_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$expected"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Prepare database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Elixir formatting gate
+        id: format
+        continue-on-error: true
+        run: mix format --check-formatted
+
+      - name: Focused normal media backend attacks
+        id: focused_backend
+        continue-on-error: true
+        run: |
+          mix test \
+            test/strangertalks_new/normal_media_store_test.exs \
+            test/strangertalks_new_web/controllers/normal_media_controller_test.exs
+
+      - name: Normal media client attacks
+        id: focused_js
+        continue-on-error: true
+        run: node --test test/js/normal_media_test.mjs
+
+      - name: Team 4 shared media regressions
+        id: team4_media
+        continue-on-error: true
+        run: |
+          mix test test/strangertalks_new_web/controllers/view_once_media_controller_test.exs
+          node --test \
+            test/js/view_once_test.mjs \
+            test/js/team6_media_gate_test.mjs \
+            test/js/team6_media_privacy_test.mjs
+
+      - name: Start Phoenix real stack
+        id: phoenix
+        continue-on-error: true
+        run: |
+          mix run --no-start -e '
+            repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNew.Repo,
+              repo_config
+              |> Keyword.put(:pool, DBConnection.ConnectionPool)
+              |> Keyword.put(:pool_size, 20)
+            )
+            endpoint_config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNewWeb.Endpoint,
+              endpoint_config
+              |> Keyword.put(:server, true)
+              |> Keyword.put(:http, [ip: {127, 0, 0, 1}, port: 4000])
+            )
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/team9-phoenix.log 2>&1 &
+          echo $! > /tmp/team9-phoenix.pid
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$(cat /tmp/team9-phoenix.pid)" 2>/dev/null; then
+              echo "Phoenix exited before becoming ready."
+              cat /tmp/team9-phoenix.log
+              exit 1
+            fi
+            if curl -fsS http://localhost:4000/ >/dev/null; then
+              echo "Team 9 browser endpoint is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Phoenix did not become ready."
+          cat /tmp/team9-phoenix.log
+          exit 1
+
+      - name: Real browser normal media hostile proof
+        id: browser
+        continue-on-error: true
+        run: node --test test/js/normal_media_browser_test.mjs
+
+      - name: Existing real-stack browser regression
+        id: existing_browser
+        continue-on-error: true
+        run: node --test test/js/browser_e2e_test.mjs
+
+      - name: Upload Team 9 browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: team9-normal-media-browser-${{ github.event.pull_request.head.sha || github.sha }}
+          path: /tmp/team9-normal-media-browser
+          if-no-files-found: ignore
+
+      - name: Stop Phoenix real stack
+        if: always()
+        run: |
+          if [ -f /tmp/team9-phoenix.pid ]; then
+            pid="$(cat /tmp/team9-phoenix.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                break
+              fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then
+              kill -9 "$pid" 2>/dev/null || true
+            fi
+          fi
+
+      - name: Reset database before full regression
+        run: |
+          mix ecto.drop --quiet
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Full precommit
+        id: precommit
+        continue-on-error: true
+        run: mix precommit
+
+      - name: Whitespace integrity
+        id: whitespace
+        continue-on-error: true
+        run: git diff --check
+
+      - name: Prove final checkout clean
+        id: clean_tree
+        continue-on-error: true
+        run: |
+          git status --short --branch
+          git status --porcelain | tee /tmp/team9-status
+          test ! -s /tmp/team9-status
+
+      - name: Record exact Team 9 tested commit
+        run: |
+          echo "EXPECTED_TEAM9_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "CHECKED_OUT_TEAM9_COMMIT=$(git rev-parse HEAD)"
+          echo "TEAM9_NORMAL_MEDIA_TESTED_COMMIT=$(git rev-parse HEAD)"
+          echo "FORMAT_OUTCOME=${{ steps.format.outcome }}"
+          echo "FOCUSED_BACKEND_OUTCOME=${{ steps.focused_backend.outcome }}"
+          echo "FOCUSED_JS_OUTCOME=${{ steps.focused_js.outcome }}"
+          echo "TEAM4_MEDIA_OUTCOME=${{ steps.team4_media.outcome }}"
+          echo "PHOENIX_OUTCOME=${{ steps.phoenix.outcome }}"
+          echo "BROWSER_OUTCOME=${{ steps.browser.outcome }}"
+          echo "EXISTING_BROWSER_OUTCOME=${{ steps.existing_browser.outcome }}"
+          echo "PRECOMMIT_OUTCOME=${{ steps.precommit.outcome }}"
+          echo "WHITESPACE_OUTCOME=${{ steps.whitespace.outcome }}"
+          echo "CLEAN_TREE_OUTCOME=${{ steps.clean_tree.outcome }}"
+
+      - name: Enforce complete Team 9 closure outcomes
+        run: |
+          failed=0
+          for pair in \
+            "format=${{ steps.format.outcome }}" \
+            "focused_backend=${{ steps.focused_backend.outcome }}" \
+            "focused_js=${{ steps.focused_js.outcome }}" \
+            "team4_media=${{ steps.team4_media.outcome }}" \
+            "phoenix=${{ steps.phoenix.outcome }}" \
+            "browser=${{ steps.browser.outcome }}" \
+            "existing_browser=${{ steps.existing_browser.outcome }}" \
+            "precommit=${{ steps.precommit.outcome }}" \
+            "whitespace=${{ steps.whitespace.outcome }}" \
+            "clean_tree=${{ steps.clean_tree.outcome }}"
+          do
+            echo "$pair"
+            case "$pair" in
+              *=success) ;;
+              *) failed=1 ;;
+            esac
+          done
+          test "$failed" -eq 0
+
+      - name: Phoenix log on failure
+        if: failure()
+        run: cat /tmp/team9-phoenix.log || true
