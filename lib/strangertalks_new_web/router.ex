@@ -49,6 +49,21 @@ defmodule StrangertalksNewWeb.Router do
         :show,
         log: false
 
+    get "/conversations/:conversation_id/normal-media",
+        NormalMediaController,
+        :index,
+        log: false
+
+    post "/conversations/:conversation_id/normal-media/:client_message_id/:kind",
+         NormalMediaController,
+         :create,
+         log: false
+
+    get "/conversations/:conversation_id/normal-media/:client_message_id",
+        NormalMediaController,
+        :show,
+        log: false
+
     # 1T Private Save / Reflection
     get "/reflections", ReflectionController, :index
     post "/reflections", ReflectionController, :create
