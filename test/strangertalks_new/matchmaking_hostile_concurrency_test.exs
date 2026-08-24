@@ -30,9 +30,18 @@ defmodule StrangertalksNew.MatchmakingHostileConcurrencyTest do
 
     Agent.update(QueueState, fn state ->
       state
-      |> Map.update!(a.participant_id, &Map.put(&1, :queue_entry_time, DateTime.add(now, -3, :second)))
-      |> Map.update!(b.participant_id, &Map.put(&1, :queue_entry_time, DateTime.add(now, -2, :second)))
-      |> Map.update!(c.participant_id, &Map.put(&1, :queue_entry_time, DateTime.add(now, -1, :second)))
+      |> Map.update!(
+        a.participant_id,
+        &Map.put(&1, :queue_entry_time, DateTime.add(now, -3, :second))
+      )
+      |> Map.update!(
+        b.participant_id,
+        &Map.put(&1, :queue_entry_time, DateTime.add(now, -2, :second))
+      )
+      |> Map.update!(
+        c.participant_id,
+        &Map.put(&1, :queue_entry_time, DateTime.add(now, -1, :second))
+      )
     end)
 
     queue_state = Agent.get(QueueState, & &1)
@@ -194,15 +203,23 @@ defmodule StrangertalksNew.MatchmakingHostileConcurrencyTest do
         nil -> flunk("contender exited before reaching participant serialization")
       end
 
-    waiting_on_lock? =
+    waiting_in_global_lock? =
       Enum.any?(stacktrace, fn
-        {ParticipantActivityLock, :acquire, _arity, _location} -> true
-        {ParticipantActivityLock, :with_participants, _arity, _location} -> true
+        {:global, function, _arity, _location} when function in [:random_sleep, :set_lock, :trans] ->
+          true
+
+        _frame ->
+          false
+      end)
+
+    inside_matchmaking_admission? =
+      Enum.any?(stacktrace, fn
+        {MatchmakingEngine, :persist_match_and_conversation, 3, _location} -> true
         _frame -> false
       end)
 
     cond do
-      waiting_on_lock? ->
+      waiting_in_global_lock? and inside_matchmaking_admission? ->
         :ok
 
       System.monotonic_time(:millisecond) >= deadline ->
