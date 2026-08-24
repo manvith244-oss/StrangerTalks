@@ -124,9 +124,13 @@ jobs:
             test/js/team3_conversation_hostile_test.mjs
 
       - name: Existing real-stack browser regression
+        id: existing_browser
+        continue-on-error: true
         run: node --test test/js/browser_e2e_test.mjs
 
       - name: Conversation interaction regressions
+        id: interaction
+        continue-on-error: true
         run: |
           node --test \
             test/js/instagram_chat_test.mjs \
@@ -168,6 +172,8 @@ jobs:
           mix ecto.migrate --quiet
 
       - name: Focused Conversation backend regressions
+        id: focused_backend
+        continue-on-error: true
         run: |
           mix test \
             test/strangertalks_new/conversation_lifecycle_test.exs \
@@ -182,12 +188,18 @@ jobs:
             test/strangertalks_new/recovery_restart_test.exs
 
       - name: Full precommit
+        id: precommit
+        continue-on-error: true
         run: mix precommit
 
       - name: Whitespace integrity
+        id: whitespace
+        continue-on-error: true
         run: git diff --check
 
       - name: Prove final checkout clean
+        id: clean_tree
+        continue-on-error: true
         run: |
           git status --short --branch
           git status --porcelain | tee /tmp/team3-status
@@ -198,13 +210,33 @@ jobs:
           echo "EXPECTED_TEAM3_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
           echo "CHECKED_OUT_TEAM3_COMMIT=$(git rev-parse HEAD)"
           echo "TEAM3_CONVERSATION_EXPERIENCE_TESTED_COMMIT=$(git rev-parse HEAD)"
+          echo "HARDENED_BROWSER_OUTCOME=${{ steps.hardened_browser.outcome }}"
+          echo "EXISTING_BROWSER_OUTCOME=${{ steps.existing_browser.outcome }}"
+          echo "INTERACTION_OUTCOME=${{ steps.interaction.outcome }}"
+          echo "FOCUSED_BACKEND_OUTCOME=${{ steps.focused_backend.outcome }}"
+          echo "PRECOMMIT_OUTCOME=${{ steps.precommit.outcome }}"
+          echo "WHITESPACE_OUTCOME=${{ steps.whitespace.outcome }}"
+          echo "CLEAN_TREE_OUTCOME=${{ steps.clean_tree.outcome }}"
 
-      - name: Preserve hardened browser failure as closure blocker
-        if: steps.hardened_browser.outcome != 'success'
+      - name: Enforce complete Team 3 closure outcomes
         run: |
-          echo "HARDENED_TEAM3_BROWSER_OUTCOME=${{ steps.hardened_browser.outcome }}"
-          echo "Independent closure evidence completed, but hardened Team 3 browser proof remains red."
-          exit 1
+          failed=0
+          for pair in \
+            "hardened_browser=${{ steps.hardened_browser.outcome }}" \
+            "existing_browser=${{ steps.existing_browser.outcome }}" \
+            "interaction=${{ steps.interaction.outcome }}" \
+            "focused_backend=${{ steps.focused_backend.outcome }}" \
+            "precommit=${{ steps.precommit.outcome }}" \
+            "whitespace=${{ steps.whitespace.outcome }}" \
+            "clean_tree=${{ steps.clean_tree.outcome }}"
+          do
+            echo "$pair"
+            case "$pair" in
+              *=success) ;;
+              *) failed=1 ;;
+            esac
+          done
+          test "$failed" -eq 0
 
       - name: Phoenix log on failure
         if: failure()
