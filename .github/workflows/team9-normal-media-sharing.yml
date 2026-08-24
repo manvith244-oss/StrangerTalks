@@ -16,6 +16,7 @@ permissions:
 jobs:
   normal-media-sharing:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -96,7 +97,7 @@ jobs:
         continue-on-error: true
         run: node --test test/js/normal_media_test.mjs
 
-      - name: Team 4 shared media regressions
+      - name: Team 4 View Once and View Twice regressions
         id: team4_media
         continue-on-error: true
         run: |
@@ -105,6 +106,15 @@ jobs:
             test/js/view_once_test.mjs \
             test/js/team6_media_gate_test.mjs \
             test/js/team6_media_privacy_test.mjs
+
+      - name: Team 3 Conversation ordering and replay regressions
+        id: team3_backend
+        continue-on-error: true
+        run: |
+          mix test \
+            test/strangertalks_new/conversation_lifecycle_test.exs \
+            test/strangertalks_new/conversation_delivery_test.exs \
+            test/strangertalks_new/recovery_restart_test.exs
 
       - name: Start Phoenix real stack
         id: phoenix
@@ -151,6 +161,14 @@ jobs:
         id: browser
         continue-on-error: true
         run: node --test test/js/normal_media_browser_test.mjs
+
+      - name: Team 3 real-stack replay and hostile regressions
+        id: team3_browser
+        continue-on-error: true
+        run: |
+          node --test \
+            test/js/team3_conversation_experience_gate_test.mjs \
+            test/js/team3_conversation_hostile_test.mjs
 
       - name: Existing real-stack browser regression
         id: existing_browser
@@ -215,8 +233,10 @@ jobs:
           echo "FOCUSED_BACKEND_OUTCOME=${{ steps.focused_backend.outcome }}"
           echo "FOCUSED_JS_OUTCOME=${{ steps.focused_js.outcome }}"
           echo "TEAM4_MEDIA_OUTCOME=${{ steps.team4_media.outcome }}"
+          echo "TEAM3_BACKEND_OUTCOME=${{ steps.team3_backend.outcome }}"
           echo "PHOENIX_OUTCOME=${{ steps.phoenix.outcome }}"
           echo "BROWSER_OUTCOME=${{ steps.browser.outcome }}"
+          echo "TEAM3_BROWSER_OUTCOME=${{ steps.team3_browser.outcome }}"
           echo "EXISTING_BROWSER_OUTCOME=${{ steps.existing_browser.outcome }}"
           echo "PRECOMMIT_OUTCOME=${{ steps.precommit.outcome }}"
           echo "WHITESPACE_OUTCOME=${{ steps.whitespace.outcome }}"
@@ -230,8 +250,10 @@ jobs:
             "focused_backend=${{ steps.focused_backend.outcome }}" \
             "focused_js=${{ steps.focused_js.outcome }}" \
             "team4_media=${{ steps.team4_media.outcome }}" \
+            "team3_backend=${{ steps.team3_backend.outcome }}" \
             "phoenix=${{ steps.phoenix.outcome }}" \
             "browser=${{ steps.browser.outcome }}" \
+            "team3_browser=${{ steps.team3_browser.outcome }}" \
             "existing_browser=${{ steps.existing_browser.outcome }}" \
             "precommit=${{ steps.precommit.outcome }}" \
             "whitespace=${{ steps.whitespace.outcome }}" \
