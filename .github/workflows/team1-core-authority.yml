@@ -7,6 +7,7 @@ on:
   pull_request:
     branches:
       - release/prep-2026-08-22
+      - newteam/core-authority-ci-base
   workflow_dispatch:
 
 concurrency:
