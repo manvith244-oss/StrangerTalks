@@ -5,7 +5,8 @@ defmodule StrangertalksNew.GifProvider do
   The browser supplies only the explicit search query. Provider credentials and
   provider-specific request construction stay behind the configured adapter.
   Search results receive short-lived signed references so chat sends never trust
-  an arbitrary browser-supplied media URL.
+  an arbitrary browser-supplied media URL. External media is accepted only from
+  the server-configured provider host allowlist.
   """
 
   @max_query_length 80
@@ -17,7 +18,7 @@ defmodule StrangertalksNew.GifProvider do
   @reference_max_age 600
 
   def configured? do
-    adapter() != StrangertalksNew.GifProvider.Disabled
+    adapter() != StrangertalksNew.GifProvider.Disabled and allowed_media_hosts() != []
   end
 
   def status, do: %{available: configured?()}
@@ -122,12 +123,23 @@ defmodule StrangertalksNew.GifProvider do
 
   defp safe_https_url?(url) when is_binary(url) do
     case URI.parse(url) do
-      %URI{scheme: "https", host: host} when is_binary(host) and host != "" -> true
-      _ -> false
+      %URI{scheme: "https", host: host} when is_binary(host) and host != "" ->
+        String.downcase(host) in allowed_media_hosts()
+
+      _ ->
+        false
     end
   end
 
   defp safe_https_url?(_), do: false
+
+  defp allowed_media_hosts do
+    :strangertalks_new
+    |> Application.get_env(:gif_media_hosts, [])
+    |> Enum.filter(&is_binary/1)
+    |> Enum.map(&String.downcase/1)
+    |> Enum.uniq()
+  end
 
   defp adapter do
     Application.get_env(
