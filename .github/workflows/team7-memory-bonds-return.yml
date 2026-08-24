@@ -134,6 +134,9 @@ jobs:
           cat /tmp/team7-browser.log
           exit 1
 
+      - name: Team 7 continuity browser matrix
+        run: node --test test/js/team7_continuity_browser_test.mjs
+
       - name: Existing end-to-end browser proof
         run: node --test test/js/browser_e2e_test.mjs
 
