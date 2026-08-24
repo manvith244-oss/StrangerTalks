@@ -2,10 +2,14 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
   @moduledoc """
   Volatile, conversation-scoped storage for ordinary photo and video messages.
 
-  Normal media is intentionally reopenable while the live Conversation remains available,
-  but it is never promoted to permanent history. Binaries remain private to this supervised
-  process and are removed when the owning Conversation process dies or durable Conversation
-  authority becomes terminal.
+  Normal media is reopenable while the live Conversation remains available, but it is never
+  promoted to permanent history. Binaries remain private to this supervised process and are
+  removed when the owning Conversation process dies or durable Conversation authority becomes
+  terminal.
+
+  Ordering is anchored to the authoritative Conversation message sequence. A normal-media item
+  records the last generic Conversation sequence accepted before its own acceptance plus a
+  store-issued ordinal for media accepted at that same boundary.
   """
 
   use GenServer
@@ -23,12 +27,22 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  def put_media(conversation_id, sender_id, client_message_id, binary, metadata, owner_pid)
+  def put_media(
+        conversation_id,
+        sender_id,
+        client_message_id,
+        binary,
+        metadata,
+        owner_pid,
+        anchor_sequence
+      )
       when is_binary(conversation_id) and is_binary(sender_id) and is_binary(client_message_id) and
-             is_binary(binary) and is_map(metadata) and is_pid(owner_pid) do
+             is_binary(binary) and is_map(metadata) and is_pid(owner_pid) and
+             is_integer(anchor_sequence) and anchor_sequence >= 0 do
     GenServer.call(
       __MODULE__,
-      {:put_media, conversation_id, sender_id, client_message_id, binary, metadata, owner_pid}
+      {:put_media, conversation_id, sender_id, client_message_id, binary, metadata, owner_pid,
+       anchor_sequence}
     )
   end
 
@@ -62,7 +76,7 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
        media: %{},
        total_bytes: 0,
        conversation_bytes: %{},
-       next_sequence: %{},
+       next_anchor_ordinal: %{},
        owners: %{},
        monitors: %{}
      }}
@@ -70,7 +84,8 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
 
   @impl true
   def handle_call(
-        {:put_media, conversation_id, sender_id, client_message_id, binary, metadata, owner_pid},
+        {:put_media, conversation_id, sender_id, client_message_id, binary, metadata, owner_pid,
+         anchor_sequence},
         _from,
         state
       ) do
@@ -80,7 +95,8 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
 
     case Map.get(state.media, key) do
       %{sender_id: ^sender_id, content_hash: ^content_hash} = existing ->
-        {:reply, {:ok, public_entry(existing, sender_id), :duplicate}, ensure_owner(state, conversation_id, owner_pid)}
+        state = ensure_owner(state, conversation_id, owner_pid)
+        {:reply, {:ok, public_entry(existing, sender_id), :duplicate}, state}
 
       nil ->
         global_limit =
@@ -110,7 +126,8 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
             {:reply, {:error, :normal_media_global_capacity}, state}
 
           true ->
-            sequence = Map.get(state.next_sequence, conversation_id, 1)
+            ordinal_key = {conversation_id, anchor_sequence}
+            anchor_ordinal = Map.get(state.next_anchor_ordinal, ordinal_key, 1)
             inserted_at = DateTime.utc_now()
 
             entry = %{
@@ -124,7 +141,8 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
               height: Map.get(metadata, :height),
               duration_seconds: Map.get(metadata, :duration_seconds),
               content_hash: content_hash,
-              sequence: sequence,
+              anchor_sequence: anchor_sequence,
+              anchor_ordinal: anchor_ordinal,
               inserted_at: inserted_at
             }
 
@@ -146,7 +164,7 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
       state.media
       |> Map.values()
       |> Enum.filter(&(&1.conversation_id == conversation_id))
-      |> Enum.sort_by(& &1.sequence)
+      |> Enum.sort_by(&{&1.anchor_sequence, &1.anchor_ordinal})
       |> Enum.map(&public_entry(&1, participant_id))
 
     {:reply, {:ok, items}, state}
@@ -154,11 +172,8 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
 
   def handle_call({:fetch_media, conversation_id, client_message_id}, _from, state) do
     case Map.get(state.media, {conversation_id, client_message_id}) do
-      nil ->
-        {:reply, {:error, :media_unavailable}, state}
-
-      entry ->
-        {:reply, {:ok, entry.binary, entry.media_type}, state}
+      nil -> {:reply, {:error, :media_unavailable}, state}
+      entry -> {:reply, {:ok, entry.binary, entry.media_type}, state}
     end
   end
 
@@ -234,6 +249,7 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
   defp put_entry(state, key, entry) do
     conversation_id = entry.conversation_id
     current_bytes = Map.get(state.conversation_bytes, conversation_id, 0)
+    ordinal_key = {conversation_id, entry.anchor_sequence}
 
     %{
       state
@@ -241,7 +257,8 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
         total_bytes: state.total_bytes + entry.byte_size,
         conversation_bytes:
           Map.put(state.conversation_bytes, conversation_id, current_bytes + entry.byte_size),
-        next_sequence: Map.put(state.next_sequence, conversation_id, entry.sequence + 1)
+        next_anchor_ordinal:
+          Map.put(state.next_anchor_ordinal, ordinal_key, entry.anchor_ordinal + 1)
     }
   end
 
@@ -278,6 +295,13 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
       end)
       |> Map.new()
 
+    next_anchor_ordinal =
+      state.next_anchor_ordinal
+      |> Enum.reject(fn {{stored_conversation_id, _anchor}, _ordinal} ->
+        stored_conversation_id == conversation_id
+      end)
+      |> Map.new()
+
     removed_bytes = Map.get(state.conversation_bytes, conversation_id, 0)
 
     {owners, monitors} =
@@ -295,7 +319,7 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
       | media: media,
         total_bytes: max(0, state.total_bytes - removed_bytes),
         conversation_bytes: Map.delete(state.conversation_bytes, conversation_id),
-        next_sequence: Map.delete(state.next_sequence, conversation_id),
+        next_anchor_ordinal: next_anchor_ordinal,
         owners: owners,
         monitors: monitors
     }
@@ -309,7 +333,8 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
       width: entry.width,
       height: entry.height,
       duration_seconds: entry.duration_seconds,
-      sequence: entry.sequence,
+      anchor_sequence: entry.anchor_sequence,
+      anchor_ordinal: entry.anchor_ordinal,
       sent_at: DateTime.to_iso8601(entry.inserted_at),
       mine: entry.sender_id == participant_id,
       kind: if(String.starts_with?(entry.media_type, "image/"), do: "photo", else: "video")
