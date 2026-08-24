@@ -183,7 +183,8 @@ jobs:
           set -euo pipefail
           node --test \
             test/js/conversation_reliability_browser_test.mjs \
-            test/js/team3_channel_reliability_browser_test.mjs
+            test/js/team3_channel_reliability_browser_test.mjs \
+            test/js/team3_replay_overlap_browser_test.mjs
 
       - name: Production client browser reliability regressions
         shell: bash
