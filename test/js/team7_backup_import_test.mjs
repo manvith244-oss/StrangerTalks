@@ -84,7 +84,8 @@ test("backup rejects duplicate IDs, malformed IDs, malformed timestamps and malf
   ]
 
   for (const records of invalidPayloads) {
-    await assert.rejects(() => decryptBackup(await rawEnvelope(records), "backup-passphrase"), /invalid_backup/)
+    const envelope = await rawEnvelope(records)
+    await assert.rejects(() => decryptBackup(envelope, "backup-passphrase"), /invalid_backup/)
   }
 })
 
