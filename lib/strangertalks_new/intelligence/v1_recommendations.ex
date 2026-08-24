@@ -11,24 +11,88 @@ defmodule StrangertalksNew.Intelligence.V1Recommendations do
 
   @logic_version "team8-v1-recommendations-1"
 
+  @system_keys MapSet.new([
+                 :matches_created,
+                 :same_door_matches,
+                 :cross_door_matches,
+                 :average_queue_time_seconds,
+                 :conversations_started,
+                 :natural_ends,
+                 :technical_disconnects,
+                 :failed_conversations
+               ])
+
+  @outcome_keys MapSet.new([
+                  :voluntary_relationships_created,
+                  :reports_submitted,
+                  :block_terminated_conversations
+                ])
+
   def logic_version, do: @logic_version
 
-  @doc "Build reviewed observations from one privacy-safe aggregate snapshot."
+  @doc "Build reviewed observations from one canonical privacy-safe aggregate snapshot."
   def analyze(snapshot) when is_map(snapshot) do
-    if V1Metrics.safe_output?(snapshot) do
-      {:ok,
-       %{
-         logic_version: @logic_version,
-         mutation_authority: false,
-         requires_review: true,
-         recommendations: build_recommendations(snapshot)
-       }}
-    else
-      {:error, :unsafe_analytics_input}
+    cond do
+      not V1Metrics.safe_output?(snapshot) ->
+        {:error, :unsafe_analytics_input}
+
+      not canonical_snapshot?(snapshot) ->
+        {:error, :invalid_analytics_input}
+
+      true ->
+        {:ok,
+         %{
+           logic_version: @logic_version,
+           mutation_authority: false,
+           requires_review: true,
+           recommendations: build_recommendations(snapshot)
+         }}
     end
   end
 
   def analyze(_snapshot), do: {:error, :invalid_analytics_input}
+
+  defp canonical_snapshot?(%{
+         schema_version: schema_version,
+         window: window,
+         system: system,
+         human_outcomes: outcomes
+       } = snapshot) do
+    MapSet.new(Map.keys(snapshot)) ==
+      MapSet.new([:schema_version, :window, :system, :human_outcomes]) and
+      schema_version == V1Metrics.schema_version() and
+      valid_window?(window) and
+      valid_metric_map?(system, @system_keys, [:average_queue_time_seconds]) and
+      valid_metric_map?(outcomes, @outcome_keys, [])
+  end
+
+  defp canonical_snapshot?(_snapshot), do: false
+
+  defp valid_window?(%{from: from, to: to} = window) do
+    MapSet.new(Map.keys(window)) == MapSet.new([:from, :to]) and
+      valid_iso8601?(from) and valid_iso8601?(to)
+  end
+
+  defp valid_window?(_window), do: false
+
+  defp valid_iso8601?(value) when is_binary(value) do
+    match?({:ok, %DateTime{}, _offset}, DateTime.from_iso8601(value))
+  end
+
+  defp valid_iso8601?(_value), do: false
+
+  defp valid_metric_map?(metrics, allowed_keys, numeric_keys) when is_map(metrics) do
+    MapSet.new(Map.keys(metrics)) == allowed_keys and
+      Enum.all?(metrics, fn {key, value} ->
+        if key in numeric_keys do
+          is_number(value) and value >= 0
+        else
+          is_integer(value) and value >= 0
+        end
+      end)
+  end
+
+  defp valid_metric_map?(_metrics, _allowed_keys, _numeric_keys), do: false
 
   defp build_recommendations(%{system: system, human_outcomes: outcomes, window: window}) do
     []
@@ -36,8 +100,6 @@ defmodule StrangertalksNew.Intelligence.V1Recommendations do
     |> maybe_add_safety(outcomes, window)
     |> Enum.reverse()
   end
-
-  defp build_recommendations(_snapshot), do: []
 
   defp maybe_add_reliability(recommendations, system, window) do
     disconnects = Map.get(system, :technical_disconnects, 0)
@@ -103,8 +165,8 @@ defmodule StrangertalksNew.Intelligence.V1Recommendations do
   end
 
   defp stable_id(area, window) do
-    from = Map.get(window, :from) || Map.get(window, "from") || "unknown"
-    to = Map.get(window, :to) || Map.get(window, "to") || "unknown"
+    from = Map.get(window, :from)
+    to = Map.get(window, :to)
 
     :crypto.hash(:sha256, Enum.join([@logic_version, area, from, to], "|"))
     |> Base.encode16(case: :lower)
