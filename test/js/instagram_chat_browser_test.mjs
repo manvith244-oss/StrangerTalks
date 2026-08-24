@@ -137,6 +137,24 @@ for (const device of DEVICES) {
       assert.equal(await page.locator("#message-form").evaluate((form) => form.classList.contains("ig-tray-open")), false)
       assert.equal(await page.locator(".ig-compose-plus").getAttribute("aria-expanded"), "false")
       assert.equal(await page.locator("#message-form .compose > .primary").evaluate((button) => getComputedStyle(button).pointerEvents !== "none"), true)
+
+      await page.evaluate(() => {
+        const item = document.createElement("li")
+        item.className = "message mine message-unsent"
+        item.dataset.messageId = "visual-unsent"
+        item.tabIndex = 0
+        const content = document.createElement("span")
+        content.className = "message-content"
+        content.textContent = "Message unsent"
+        const status = document.createElement("small")
+        status.className = "message-status"
+        status.textContent = "Delivered"
+        item.append(content, status)
+        document.querySelector("#messages").append(item)
+      })
+      await page.waitForFunction(() => document.querySelector('[data-message-id="visual-3"]')?.classList.contains("ig-latest-own"))
+      assert.equal(await page.locator('[data-message-id="visual-unsent"]').evaluate((item) => item.classList.contains("ig-latest-own")), false)
+      assert.equal(await page.locator('[data-message-id="visual-3"]').evaluate((item) => item.classList.contains("ig-latest-own")), true)
     } finally {
       await context.close()
       await browser.close()
