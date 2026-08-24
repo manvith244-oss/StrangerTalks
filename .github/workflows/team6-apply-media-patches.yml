@@ -5,6 +5,11 @@ on:
     branches: [team6/voice-video-expression]
     paths:
       - "team6-patches/**"
+      - ".github/workflows/team6-apply-media-patches.yml"
+  pull_request:
+    paths:
+      - "team6-patches/**"
+      - ".github/workflows/team6-apply-media-patches.yml"
 
 permissions:
   contents: write
@@ -41,6 +46,7 @@ jobs:
             test/js/team6_media_gate_test.mjs
           git diff --check
       - name: Commit proven application
+        if: github.event_name == 'push'
         run: |
           git config user.name "team6-media-bot"
           git config user.email "team6-media-bot@users.noreply.github.com"
