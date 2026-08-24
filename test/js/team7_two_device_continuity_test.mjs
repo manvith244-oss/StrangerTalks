@@ -19,8 +19,7 @@ function isolatedDevice(seed = []) {
     get records() { return structuredClone(records) },
     adapter: {
       async run(operations) {
-        const next = structuredClone(records)
-        let staged = next
+        let staged = structuredClone(records)
         for (const operation of operations) {
           if (operation.action === "clear") staged = []
           else if (operation.action === "put") {
@@ -35,6 +34,13 @@ function isolatedDevice(seed = []) {
       }
     }
   }
+}
+
+async function replaceSyncedSubset(device, syncedRecords) {
+  const local = device.records
+  const selectedIds = new Set(syncableRecords(local).map(({id}) => id))
+  const next = [...local.filter((record) => !selectedIds.has(record.id)), ...syncedRecords]
+  await atomicReplaceRecords(next, device.adapter)
 }
 
 function approvedSeed() {
@@ -158,18 +164,21 @@ test("Device A -> Device B -> Device A continuity uses the real encrypted-sync a
       ? {...record, value: {...record.value, text: "memory updated on B"}, updated_at: t(2)}
       : record
   )
-  const r2 = await encryptSyncWithKey(bR2Records, unlockedB.syncKey, r1, 2)
+  await replaceSyncedSubset(deviceB, bR2Records)
+  const r2 = await encryptSyncWithKey(syncableRecords(deviceB.records), unlockedB.syncKey, r1, 2)
 
-  // DEVICE A receives/decrypts R2 and uses the actual merge contract.
+  // DEVICE A receives/decrypts R2 and uses the same selected-subset merge contract as the client.
   const remoteR2 = await decryptSyncWithKey(r2, keyA)
   const mergedA = await mergeSyncRecords(syncableRecords(deviceA.records), remoteR2)
-  await atomicReplaceRecords(mergedA, deviceA.adapter)
+  await replaceSyncedSubset(deviceA, mergedA)
   assert.equal(byId(deviceA.records, "memory:m1").value.text, "memory updated on B")
+  assert.equal(forbiddenSeed().every(({id}) => byId(deviceA.records, id)), true, "non-sync local state was not silently deleted")
 
   // A deletes Memory and independently updates the summary, then produces R3.
-  const liveMemoryA = byId(deviceA.records, "memory:m1")
+  const selectedA = syncableRecords(deviceA.records)
+  const liveMemoryA = byId(selectedA, "memory:m1")
   const tombstone = tombstoneFor(liveMemoryA, t(3))
-  const aR3Records = deviceA.records
+  const aR3Records = selectedA
     .filter(({id}) => id !== "memory:m1")
     .map((record) =>
       record.id === "summary:kept-1"
@@ -177,11 +186,12 @@ test("Device A -> Device B -> Device A continuity uses the real encrypted-sync a
         : record
     )
     .concat(tombstone)
-  const r3 = await encryptSyncWithKey(aR3Records, keyA, r2, 3)
+  await replaceSyncedSubset(deviceA, aR3Records)
+  const r3 = await encryptSyncWithKey(syncableRecords(deviceA.records), keyA, r2, 3)
 
   // B is stale: it edits the deleted Memory with an even newer timestamp and also
   // performs an unrelated legitimate Bond/private-metadata update.
-  const staleB = deviceB.records.map((record) => {
+  const staleB = syncableRecords(deviceB.records).map((record) => {
     if (record.id === "memory:m1") {
       return {...record, value: {...record.value, text: "stale B resurrection attempt"}, updated_at: t(8)}
     }
@@ -193,7 +203,7 @@ test("Device A -> Device B -> Device A continuity uses the real encrypted-sync a
 
   const remoteR3 = await decryptSyncWithKey(r3, unlockedB.syncKey)
   const convergedB = await mergeSyncRecords(staleB, remoteR3)
-  await atomicReplaceRecords(convergedB, deviceB.adapter)
+  await replaceSyncedSubset(deviceB, convergedB)
 
   const memoryWinner = byId(deviceB.records, "memory:m1")
   assert.equal(memoryWinner.type, "sync_tombstone")
@@ -201,12 +211,15 @@ test("Device A -> Device B -> Device A continuity uses the real encrypted-sync a
   assert.equal(byId(deviceB.records, "relationship:r1").value.private_label, "Quiet Nova")
   assert.equal(byId(deviceB.records, "summary:kept-1").value.text, "summary updated on A")
 
-  // A final round-trip proves a tombstone-bearing converged state remains encrypted
-  // and cannot silently reintroduce forbidden categories.
-  const bR4 = await encryptSyncWithKey(deviceB.records, unlockedB.syncKey, r3, 4)
+  // B's converged R4 contains the tombstone and unrelated legitimate update.
+  const bR4 = await encryptSyncWithKey(syncableRecords(deviceB.records), unlockedB.syncKey, r3, 4)
   const remoteR4 = await decryptSyncWithKey(bR4, keyA)
-  const convergedA = await mergeSyncRecords(deviceA.records, remoteR4)
-  assert.equal(byId(convergedA, "memory:m1").type, "sync_tombstone")
-  assert.equal(byId(convergedA, "relationship:r1").value.private_label, "Quiet Nova")
-  assert.equal(convergedA.some(({id}) => forbiddenIds.has(id)), false)
+  const selectedAAfterR3 = syncableRecords(deviceA.records)
+  const convergedA = await mergeSyncRecords(selectedAAfterR3, remoteR4)
+  await replaceSyncedSubset(deviceA, convergedA)
+
+  assert.equal(byId(deviceA.records, "memory:m1").type, "sync_tombstone")
+  assert.equal(byId(deviceA.records, "relationship:r1").value.private_label, "Quiet Nova")
+  assert.equal(syncableRecords(deviceA.records).some(({id}) => forbiddenIds.has(id)), false)
+  assert.equal(forbiddenSeed().every(({id}) => byId(deviceA.records, id)), true, "excluded local categories stayed local")
 })
