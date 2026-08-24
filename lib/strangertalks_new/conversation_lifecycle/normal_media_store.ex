@@ -7,19 +7,22 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
   removed when the owning Conversation process dies or durable Conversation authority becomes
   terminal.
 
-  Ordering is anchored to the authoritative Conversation message sequence. A normal-media item
-  records the last generic Conversation sequence accepted before its own acceptance plus a
-  store-issued ordinal for media accepted at that same boundary.
+  Ordering is anchored to the live ConversationServer's canonical message sequence. For a new
+  normal-media acceptance, this store serializes media accepts and briefly suspends the owning
+  ConversationServer while it reads the exact `next_sequence` boundary and installs the media
+  entry. Generic Conversation acceptance therefore cannot advance inside that critical section.
   """
 
   use GenServer
 
   alias StrangertalksNew.Conversations
+  alias StrangertalksNew.ConversationLifecycle.ConversationServer
 
   @default_global_limit 67_108_864
   @default_conversation_limit 20_971_520
   @max_item_bytes 5_242_880
   @sweep_interval_ms 15_000
+  @system_timeout_ms 5_000
 
   def max_item_bytes, do: @max_item_bytes
 
@@ -27,22 +30,12 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  def put_media(
-        conversation_id,
-        sender_id,
-        client_message_id,
-        binary,
-        metadata,
-        owner_pid,
-        anchor_sequence
-      )
+  def put_media(conversation_id, sender_id, client_message_id, binary, metadata)
       when is_binary(conversation_id) and is_binary(sender_id) and is_binary(client_message_id) and
-             is_binary(binary) and is_map(metadata) and is_pid(owner_pid) and
-             is_integer(anchor_sequence) and anchor_sequence >= 0 do
+             is_binary(binary) and is_map(metadata) do
     GenServer.call(
       __MODULE__,
-      {:put_media, conversation_id, sender_id, client_message_id, binary, metadata, owner_pid,
-       anchor_sequence}
+      {:put_media, conversation_id, sender_id, client_message_id, binary, metadata}
     )
   end
 
@@ -84,8 +77,7 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
 
   @impl true
   def handle_call(
-        {:put_media, conversation_id, sender_id, client_message_id, binary, metadata, owner_pid,
-         anchor_sequence},
+        {:put_media, conversation_id, sender_id, client_message_id, binary, metadata},
         _from,
         state
       ) do
@@ -95,63 +87,28 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
 
     case Map.get(state.media, key) do
       %{sender_id: ^sender_id, content_hash: ^content_hash} = existing ->
-        state = ensure_owner(state, conversation_id, owner_pid)
         {:reply, {:ok, public_entry(existing, sender_id), :duplicate}, state}
 
       nil ->
-        global_limit =
-          Application.get_env(
-            :strangertalks_new,
-            :normal_media_global_byte_limit,
-            @default_global_limit
-          )
+        case capacity_check(state, conversation_id, size) do
+          :ok ->
+            case accept_at_conversation_boundary(
+                   state,
+                   conversation_id,
+                   sender_id,
+                   client_message_id,
+                   binary,
+                   metadata
+                 ) do
+              {:ok, media, next_state} ->
+                {:reply, {:ok, public_entry(media, sender_id), :created}, next_state}
 
-        conversation_limit =
-          Application.get_env(
-            :strangertalks_new,
-            :normal_media_conversation_byte_limit,
-            @default_conversation_limit
-          )
+              {:error, reason} ->
+                {:reply, {:error, reason}, state}
+            end
 
-        conversation_bytes = Map.get(state.conversation_bytes, conversation_id, 0)
-
-        cond do
-          size == 0 or size > @max_item_bytes ->
-            {:reply, {:error, :normal_media_too_large}, state}
-
-          conversation_bytes + size > conversation_limit ->
-            {:reply, {:error, :normal_media_conversation_capacity}, state}
-
-          state.total_bytes + size > global_limit ->
-            {:reply, {:error, :normal_media_global_capacity}, state}
-
-          true ->
-            ordinal_key = {conversation_id, anchor_sequence}
-            anchor_ordinal = Map.get(state.next_anchor_ordinal, ordinal_key, 1)
-            inserted_at = DateTime.utc_now()
-
-            entry = %{
-              conversation_id: conversation_id,
-              client_message_id: client_message_id,
-              sender_id: sender_id,
-              binary: binary,
-              media_type: Map.fetch!(metadata, :media_type),
-              byte_size: size,
-              width: Map.get(metadata, :width),
-              height: Map.get(metadata, :height),
-              duration_seconds: Map.get(metadata, :duration_seconds),
-              content_hash: content_hash,
-              anchor_sequence: anchor_sequence,
-              anchor_ordinal: anchor_ordinal,
-              inserted_at: inserted_at
-            }
-
-            state =
-              state
-              |> ensure_owner(conversation_id, owner_pid)
-              |> put_entry(key, entry)
-
-            {:reply, {:ok, public_entry(entry, sender_id), :created}, state}
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
         end
 
       _conflicting_existing ->
@@ -220,6 +177,138 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
     state = Enum.reduce(inactive_ids, state, &drop_conversation(&2, &1))
     Process.send_after(self(), :sweep_inactive, @sweep_interval_ms)
     {:noreply, state}
+  end
+
+  defp capacity_check(state, conversation_id, size) do
+    global_limit =
+      Application.get_env(
+        :strangertalks_new,
+        :normal_media_global_byte_limit,
+        @default_global_limit
+      )
+
+    conversation_limit =
+      Application.get_env(
+        :strangertalks_new,
+        :normal_media_conversation_byte_limit,
+        @default_conversation_limit
+      )
+
+    conversation_bytes = Map.get(state.conversation_bytes, conversation_id, 0)
+
+    cond do
+      size == 0 or size > @max_item_bytes ->
+        {:error, :normal_media_too_large}
+
+      conversation_bytes + size > conversation_limit ->
+        {:error, :normal_media_conversation_capacity}
+
+      state.total_bytes + size > global_limit ->
+        {:error, :normal_media_global_capacity}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp accept_at_conversation_boundary(
+         state,
+         conversation_id,
+         sender_id,
+         client_message_id,
+         binary,
+         metadata
+       ) do
+    with {:ok, owner_pid} <- ConversationServer.lookup(conversation_id),
+         :ok <- safe_suspend(owner_pid) do
+      try do
+        conversation_state = :sys.get_state(owner_pid, @system_timeout_ms)
+
+        with {:ok, anchor_sequence} <-
+               canonical_anchor(conversation_state, sender_id) do
+          ordinal_key = {conversation_id, anchor_sequence}
+          anchor_ordinal = Map.get(state.next_anchor_ordinal, ordinal_key, 1)
+          inserted_at = DateTime.utc_now()
+
+          entry = %{
+            conversation_id: conversation_id,
+            client_message_id: client_message_id,
+            sender_id: sender_id,
+            binary: binary,
+            media_type: Map.fetch!(metadata, :media_type),
+            byte_size: byte_size(binary),
+            width: Map.get(metadata, :width),
+            height: Map.get(metadata, :height),
+            duration_seconds: Map.get(metadata, :duration_seconds),
+            content_hash: Map.fetch!(metadata, :content_hash),
+            anchor_sequence: anchor_sequence,
+            anchor_ordinal: anchor_ordinal,
+            inserted_at: inserted_at
+          }
+
+          next_state =
+            state
+            |> ensure_owner(conversation_id, owner_pid)
+            |> put_entry({conversation_id, client_message_id}, entry)
+
+          {:ok, entry, next_state}
+        end
+      catch
+        :exit, _reason -> {:error, :conversation_unavailable}
+      after
+        safe_resume(owner_pid)
+      end
+    else
+      {:error, :not_started} -> {:error, :conversation_unavailable}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp canonical_anchor(conversation_state, sender_id) do
+    conversation = Map.get(conversation_state, :conversation)
+    lifecycle_status = Map.get(conversation_state, :lifecycle_status)
+    terminal_intent = Map.get(conversation_state, :terminal_intent)
+    next_sequence = Map.get(conversation_state, :next_sequence)
+
+    cond do
+      is_nil(conversation) ->
+        {:error, :conversation_unavailable}
+
+      sender_id not in [conversation.participant_a_id, conversation.participant_b_id] ->
+        {:error, :not_conversation_member}
+
+      lifecycle_status != :ACTIVE or not is_nil(terminal_intent) ->
+        {:error, :conversation_terminating}
+
+      conversation.conversation_status not in [:PENDING, :ACTIVE] ->
+        {:error, :conversation_inactive}
+
+      not is_integer(next_sequence) or next_sequence < 1 ->
+        {:error, :normal_media_order_unavailable}
+
+      true ->
+        {:ok, next_sequence - 1}
+    end
+  end
+
+  defp safe_suspend(pid) do
+    try do
+      :sys.suspend(pid)
+    catch
+      :exit, _reason -> {:error, :conversation_unavailable}
+    end
+  end
+
+  defp safe_resume(pid) do
+    if Process.alive?(pid) do
+      try do
+        :sys.resume(pid)
+      catch
+        :exit, _reason -> :ok
+      end
+    else
+      :ok
+    end
   end
 
   defp ensure_owner(state, conversation_id, owner_pid) do
