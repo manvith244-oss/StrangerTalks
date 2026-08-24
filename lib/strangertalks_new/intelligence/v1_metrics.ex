@@ -20,11 +20,11 @@ defmodule StrangertalksNew.Intelligence.V1Metrics do
     continuity_id account_id bond_id relationship_id persistent_device_id device_id
     conversation_id match_id message_id report_id reported_message_id boundary_block_id safety_review_id
     reporting_participant_id reported_participant_id voice_note_id memory_id reflection_id
-    reporter_context report_evidence safety_evidence safety_review_evidence boundary_block_details raw_safety_payload
-    content text body message_text conversation_text reply_text reply_snippet unsent_message_text draft_text draft_body
+    reporter_context report_evidence safety_evidence safety_review_evidence review_notes boundary_block_details raw_safety_payload
+    content text body message message_text conversation_text reply reply_text reply_snippet unsent_text unsent_message_text draft draft_text draft_body
     audio audio_bytes voice_note_bytes voice_note_transcript transcript captions
-    call_audio call_audio_metadata voice_call_audio audio_track_id media_device_id
-    video video_bytes video_blob video_frames video_call_content media_blob media_frames reported_media
+    call_audio call_audio_metadata call_participant_audio voice_call_audio audio_track_id media_device_id
+    video video_bytes video_blob video_frames video_call_content media media_blob media_frames reported_media
     memory_text reflection_text kept_conversation_content bond_private_content encrypted_backup_content
     retained_summary retained_summaries private_summary summary_text learning_summary private_memory_payload
     authorization oauth_token access_token refresh_token session_token session_id cookie token
@@ -265,7 +265,13 @@ defmodule StrangertalksNew.Intelligence.V1Metrics do
 
   defp contains_forbidden_key?(_value), do: false
 
-  defp normalize_key(key) when is_atom(key), do: Atom.to_string(key)
-  defp normalize_key(key) when is_binary(key), do: String.downcase(key)
+  defp normalize_key(key) when is_atom(key) or is_binary(key) do
+    key
+    |> to_string()
+    |> String.replace(~r/([a-z0-9])([A-Z])/, "\\1_\\2")
+    |> String.downcase()
+    |> String.replace(~r/[-.\s]+/, "_")
+  end
+
   defp normalize_key(_key), do: "__unsupported_key__"
 end
