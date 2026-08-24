@@ -2,9 +2,12 @@ const DB_NAME = "strangertalks-local-v1"
 const STORE = "records"
 const BACKUP_VERSION = 2
 const PREVIOUS_BACKUP_VERSION = 1
+const BACKUP_ITERATIONS = 210000
+const MAX_RECORD_ID_LENGTH = 256
 const APPROVED_VOICE_TYPES = new Set(["audio/webm", "audio/ogg", "audio/mp4"])
 const TERMINAL_RETENTION_STATUSES = new Set(["kept", "summary_only", "faded"])
 const BACKUP_RECORD_TYPES = new Set(["identity", "settings", "local_conversation", "local_message", "local_voice_note", "sync_cursor", "summary", "memory", "relationship", "sync_tombstone"])
+const BACKUP_TOMBSTONE_CATEGORIES = new Set(["kept_conversations", "kept_messages", "summaries", "memories", "bonds", "bond_nicknames", "abstract_signature_seeds", "accessibility_settings", "privacy_settings", "user_preferences", "tombstones"])
 
 export function signatureSeedFor(conversationId) {
   let hash = 2166136261
@@ -322,18 +325,23 @@ export function mergeRecords(current, imported, {restoreTombstones = false} = {}
 }
 
 export function validEnvelope(envelope) {
-  return [PREVIOUS_BACKUP_VERSION, BACKUP_VERSION].includes(envelope?.version) && envelope.kdf === "PBKDF2-SHA256" && envelope.cipher === "AES-GCM" &&
-    typeof envelope.salt === "string" && typeof envelope.iv === "string" && typeof envelope.ciphertext === "string"
+  return [PREVIOUS_BACKUP_VERSION, BACKUP_VERSION].includes(envelope?.version) &&
+    envelope.kdf === "PBKDF2-SHA256" &&
+    envelope.iterations === BACKUP_ITERATIONS &&
+    envelope.cipher === "AES-GCM" &&
+    [envelope.salt, envelope.iv, envelope.ciphertext].every((value) => typeof value === "string" && value.length > 0)
 }
 
 export async function encryptBackup(records, passphrase) {
   if (!passphrase) throw new Error("passphrase_required")
+  const serializedRecords = await serializeBackupRecords(records)
+  if (!validBackupRecords(serializedRecords)) throw new Error("invalid_backup")
   const salt = crypto.getRandomValues(new Uint8Array(16))
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const key = await deriveKey(passphrase, salt, ["encrypt"])
-  const plaintext = new TextEncoder().encode(JSON.stringify({records: await serializeBackupRecords(records)}))
+  const plaintext = new TextEncoder().encode(JSON.stringify({records: serializedRecords}))
   const ciphertext = await crypto.subtle.encrypt({name: "AES-GCM", iv}, key, plaintext)
-  return {version: BACKUP_VERSION, kdf: "PBKDF2-SHA256", iterations: 210000, cipher: "AES-GCM", salt: encode(salt), iv: encode(iv), ciphertext: encode(new Uint8Array(ciphertext))}
+  return {version: BACKUP_VERSION, kdf: "PBKDF2-SHA256", iterations: BACKUP_ITERATIONS, cipher: "AES-GCM", salt: encode(salt), iv: encode(iv), ciphertext: encode(new Uint8Array(ciphertext))}
 }
 
 export async function decryptBackup(envelope, passphrase) {
@@ -345,7 +353,7 @@ export async function decryptBackup(envelope, passphrase) {
   const payload = JSON.parse(new TextDecoder().decode(plaintext))
   if (!Array.isArray(payload.records)) throw new Error("invalid_backup")
   const records = await deserializeBackupRecords(payload.records, envelope.version)
-  if (records.some((record) => !validBackupRecord(record))) throw new Error("invalid_backup")
+  if (!validBackupRecords(records)) throw new Error("invalid_backup")
   return records
 }
 
@@ -355,7 +363,7 @@ export async function putRecord(record) { if (!validRecord(record)) throw new Er
 export async function deleteRecord(id) { return request("readwrite", (store) => store.delete(id)) }
 export async function clearRecords() { return request("readwrite", (store) => store.clear()) }
 export async function importRecords(imported) {
-  if (!Array.isArray(imported) || imported.some((record) => !validBackupRecord(record))) throw new Error("invalid_record")
+  if (!validBackupRecords(imported)) throw new Error("invalid_record")
   const merged = mergeRecords(await listRecords(), imported)
   return replaceRecords(merged)
 }
@@ -420,12 +428,41 @@ function indexedDbAdapter(indexedDb) {
   })}
 }
 
-function validRecord(record) { return record && typeof record.id === "string" && typeof record.type === "string" && !Number.isNaN(Date.parse(record.updated_at)) }
+function validRecord(record) {
+  return record &&
+    typeof record.id === "string" &&
+    record.id.trim().length > 0 &&
+    record.id.length <= MAX_RECORD_ID_LENGTH &&
+    typeof record.type === "string" &&
+    record.type.trim().length > 0 &&
+    !Number.isNaN(Date.parse(record.updated_at))
+}
+
+function validBackupRecords(records) {
+  if (!Array.isArray(records)) return false
+  const ids = new Set()
+  return records.every((record) => {
+    if (!validBackupRecord(record) || ids.has(record.id)) return false
+    ids.add(record.id)
+    return true
+  })
+}
+
 function validBackupRecord(record) {
   if (!validRecord(record) || !BACKUP_RECORD_TYPES.has(record.type)) return false
-  if (record.type === "sync_tombstone") return record.category === "tombstones" && record.deleted_at && !Number.isNaN(Date.parse(record.deleted_at))
-  return true
+  if (record.type !== "sync_tombstone") return true
+  return record.category === "tombstones" &&
+    typeof record.deleted_at === "string" &&
+    !Number.isNaN(Date.parse(record.deleted_at)) &&
+    record.value &&
+    typeof record.value === "object" &&
+    !Array.isArray(record.value) &&
+    typeof record.value.previous_type === "string" &&
+    record.value.previous_type.trim().length > 0 &&
+    typeof record.value.previous_category === "string" &&
+    BACKUP_TOMBSTONE_CATEGORIES.has(record.value.previous_category)
 }
+
 async function serializeBackupRecords(records) {
   const keptIds = new Set(keptConversations(records).map(({value}) => value.conversation_id))
   const selected = records.filter((record) => BACKUP_RECORD_TYPES.has(record.type) && (record.type !== "local_voice_note" || keptIds.has(record.value.conversation_id)))
@@ -453,7 +490,7 @@ async function deserializeBackupRecords(records, version) {
     return {...record, value: {...record.value, encoded_audio: undefined, blob: new Blob([bytes], {type: audio.media_type})}}
   }))
 }
-async function deriveKey(passphrase, salt, usages) { const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]); return crypto.subtle.deriveKey({name: "PBKDF2", hash: "SHA-256", salt, iterations: 210000}, material, {name: "AES-GCM", length: 256}, false, usages) }
+async function deriveKey(passphrase, salt, usages) { const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]); return crypto.subtle.deriveKey({name: "PBKDF2", hash: "SHA-256", salt, iterations: BACKUP_ITERATIONS}, material, {name: "AES-GCM", length: 256}, false, usages) }
 function encode(bytes) { let binary = ""; bytes.forEach((byte) => { binary += String.fromCharCode(byte) }); return btoa(binary) }
 function decode(value) { const binary = atob(value); return Uint8Array.from(binary, (char) => char.charCodeAt(0)) }
 
