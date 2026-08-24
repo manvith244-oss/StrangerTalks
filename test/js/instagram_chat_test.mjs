@@ -35,10 +35,11 @@ test("quick-heart requires a nearby second tap inside the gesture window", () =>
   assert.equal(shouldTriggerQuickHeart(null, {time: 1200, x: 40, y: 60}), false)
 })
 
-test("visual viewport height prefers the live visual viewport and fails safely", () => {
+test("visual viewport height follows the live viewport even when a landscape keyboard leaves very little space", () => {
   assert.equal(normalizedViewportHeight(640.4, 800), 640)
   assert.equal(normalizedViewportHeight(undefined, 812), 812)
-  assert.equal(normalizedViewportHeight(120, 812), 240)
+  assert.equal(normalizedViewportHeight(120, 812), 120)
+  assert.equal(normalizedViewportHeight(1, 812), 1)
   assert.equal(normalizedViewportHeight(undefined, undefined), 720)
 })
 
