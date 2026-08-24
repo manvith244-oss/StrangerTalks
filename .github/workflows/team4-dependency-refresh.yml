@@ -6,7 +6,7 @@ on:
       - release/prep-2026-08-22
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   refresh:
@@ -29,10 +29,18 @@ jobs:
         run: mix deps.update bandit postgrex
       - name: Fetch complete refreshed dependency set
         run: mix deps.get
-      - name: Emit refreshed lockfile
-        run: |
-          echo '---BEGIN MIX.LOCK---'
-          cat mix.lock
-          echo '---END MIX.LOCK---'
       - name: Audit refreshed dependencies
         run: mix hex.audit
+      - name: Commit exact refreshed lockfile
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if git diff --quiet -- mix.lock; then
+            echo "Lockfile already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mix.lock
+          git commit -m "Patch vulnerable Bandit and Postgrex"
+          git push origin HEAD:"${HEAD_REF}"
