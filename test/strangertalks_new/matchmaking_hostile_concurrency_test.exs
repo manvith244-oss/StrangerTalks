@@ -125,7 +125,8 @@ defmodule StrangertalksNew.MatchmakingHostileConcurrencyTest do
               conversation: %{conversation_id: authoritative_conversation_id}
             }} = SessionReconciliation.reconcile(a.participant_id)
 
-    assert authoritative_conversation_id == hd(authoritative_conversations_involving_a).conversation_id
+    assert authoritative_conversation_id ==
+             hd(authoritative_conversations_involving_a).conversation_id
 
     assert_receive {:match_event, :match_created, _match_id, ^authoritative_conversation_id,
                     participant_a_id, participant_b_id, _score}
@@ -134,10 +135,12 @@ defmodule StrangertalksNew.MatchmakingHostileConcurrencyTest do
     assert a_id in [participant_a_id, participant_b_id]
 
     refute_receive {:match_event, :match_created, _match_id, _conversation_id, ^a_id, _peer_id,
-                    _score}, 50
+                    _score},
+                   50
 
     refute_receive {:match_event, :match_created, _match_id, _conversation_id, _peer_id, ^a_id,
-                    _score}, 50
+                    _score},
+                   50
   end
 
   test "burst joins plus concurrent evaluators produce exactly one Conversation per participant pair" do
@@ -205,7 +208,8 @@ defmodule StrangertalksNew.MatchmakingHostileConcurrencyTest do
 
     waiting_in_global_lock? =
       Enum.any?(stacktrace, fn
-        {:global, function, _arity, _location} when function in [:random_sleep, :set_lock, :trans] ->
+        {:global, function, _arity, _location}
+        when function in [:random_sleep, :set_lock, :trans] ->
           true
 
         _frame ->
