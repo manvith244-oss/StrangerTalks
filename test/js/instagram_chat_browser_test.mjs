@@ -33,6 +33,12 @@ async function prepareConversation(page) {
   await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
   await page.waitForFunction(() => document.documentElement.dataset.instagramChatBooted === "true")
   await page.waitForFunction(() => document.querySelector("#doors")?.children.length > 0)
+  // The app creates/loads identity and then performs a participant-channel reconcile.
+  // Let that legitimate bootstrap navigation settle before installing the synthetic
+  // Conversation fixture, otherwise a late reconcile can correctly return the app
+  // to Doors in the middle of the layout attack.
+  await page.waitForTimeout(1000)
+  await page.waitForFunction(() => document.querySelector('[data-screen="doors"]')?.classList.contains("active"))
 
   await page.evaluate(() => {
     document.querySelectorAll("[data-screen]").forEach((screen) => screen.classList.remove("active"))
@@ -74,6 +80,8 @@ async function prepareConversation(page) {
   await page.waitForFunction(() => document.body.classList.contains("st-chat-mode"))
   await page.waitForFunction(() => getComputedStyle(document.querySelector(".site-header")).display === "none")
   await page.waitForFunction(() => document.querySelector("#messages > .message.ig-group-start"))
+  await page.waitForTimeout(250)
+  assert.equal(await page.locator('[data-screen="conversation"]').evaluate((screen) => screen.classList.contains("active")), true)
 }
 
 async function assertShortPanelsStayEscapable(page, device) {
