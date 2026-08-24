@@ -127,6 +127,15 @@ jobs:
       - name: Responsive hostile-user browser checks
         run: node --test test/js/instagram_chat_browser_test.mjs
 
+      - name: Upload rendered Conversation screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conversation-first-1k-screenshots-${{ github.event.pull_request.head.sha || github.sha }}
+          path: tmp/chat-ui-screenshots
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Reset browser test data before full suite
         run: |
           mix ecto.drop --quiet
