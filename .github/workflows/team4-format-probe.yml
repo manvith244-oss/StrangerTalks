@@ -21,6 +21,12 @@ jobs:
         with:
           elixir-version: "1.18.4"
           otp-version: "27.3.4"
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+      - name: Fetch formatter dependencies
+        run: mix deps.get
       - name: Format Team 4 Elixir tests
         run: mix format test/strangertalks_new/relationship_consent_safety_review_test.exs test/strangertalks_new/team4_safety_boundary_test.exs
       - name: Commit exact formatter output
