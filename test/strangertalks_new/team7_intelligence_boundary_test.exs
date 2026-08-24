@@ -3,6 +3,12 @@ defmodule StrangertalksNew.Team7IntelligenceBoundaryTest do
 
   alias StrangertalksNew.Intelligence.{V1Metrics, V1Recommendations}
 
+  test "privacy guard rejects renamed stable participant identifiers" do
+    refute V1Metrics.safe_output?(%{"participant-id" => Ecto.UUID.generate()})
+    refute V1Metrics.safe_output?(%{"participantId" => Ecto.UUID.generate()})
+    refute V1Metrics.safe_output?(%{"raw.queue.participant.id" => Ecto.UUID.generate()})
+  end
+
   test "recommendations reject reversed evidence windows" do
     snapshot = canonical_snapshot("2026-08-25T00:00:00Z", "2026-08-24T00:00:00Z")
 
