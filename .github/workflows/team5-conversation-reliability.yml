@@ -1,0 +1,116 @@
+name: Team 5 Conversation Reliability Gate
+
+on:
+  push:
+    branches:
+      - team5/conversation-reliability-2026-08-24
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reliability:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact Team 5 HEAD
+        uses: actions/checkout@v4
+
+      - name: Record entry state
+        shell: bash
+        run: |
+          echo "BRANCH=${GITHUB_REF_NAME}"
+          echo "HEAD=${GITHUB_SHA}"
+          git status --porcelain
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install Elixir dependencies
+        run: mix deps.get
+
+      - name: Team 5 focused Elixir reliability tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(
+            find test/strangertalks_new test/strangertalks_new_web -type f \
+              \( -name '*conversation*test.exs' \
+                 -o -name '*recovery*test.exs' \
+                 -o -name '*presence*test.exs' \
+                 -o -name '*participant_channel_test.exs' \
+                 -o -name '*session_reconciliation*test.exs' \) \
+              -print | sort
+          )
+          printf 'Focused test files (%s):\n' "${#tests[@]}"
+          printf '%s\n' "${tests[@]}"
+          test "${#tests[@]}" -gt 0
+          mix test "${tests[@]}"
+
+      - name: Team 5 maintained JS realtime tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(
+            find test/js -maxdepth 1 -type f \
+              \( -name '*delivery*test.mjs' \
+                 -o -name '*reconnect*test.mjs' \
+                 -o -name '*presence*test.mjs' \
+                 -o -name '*message*test.mjs' \
+                 -o -name '*atomic_restore*test.mjs' \
+                 -o -name '*ephemeral_conversation*test.mjs' \) \
+              -print | sort
+          )
+          printf 'Realtime JS test files (%s):\n' "${#tests[@]}"
+          printf '%s\n' "${tests[@]}"
+          test "${#tests[@]}" -gt 0
+          node --test "${tests[@]}"
+
+      - name: Full Elixir precommit
+        run: mix precommit
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Prove final checkout clean
+        shell: bash
+        run: |
+          status=$(git status --porcelain)
+          printf '%s\n' "$status"
+          test -z "$status"
+
+      - name: Record exact tested commit
+        run: echo "TESTED_COMMIT=$GITHUB_SHA"
