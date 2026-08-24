@@ -25,6 +25,7 @@ defmodule StrangertalksNewWeb.NormalMediaController do
            {:ok, metadata} <- ViewOnceMediaValidator.validate(binary),
            :ok <- validate_kind(kind, metadata.media_type),
            {:ok, owner_pid} <- ConversationServer.ensure_started(conversation_id),
+           {:ok, anchor_sequence} <- conversation_order_anchor(conversation_id, participant_id),
            {:ok, media, disposition} <-
              NormalMediaStore.put_media(
                conversation_id,
@@ -32,7 +33,8 @@ defmodule StrangertalksNewWeb.NormalMediaController do
                client_message_id,
                binary,
                metadata,
-               owner_pid
+               owner_pid,
+               anchor_sequence
              ),
            {:ok, _conversation} <- active_conversation(conversation_id, participant_id) do
         {:ok, conn, media, disposition}
@@ -42,10 +44,6 @@ defmodule StrangertalksNewWeb.NormalMediaController do
       {:ok, conn, media, disposition} ->
         status = if disposition == :created, do: 201, else: 200
         conn |> put_status(status) |> json(Map.put(media, :idempotent, disposition == :duplicate))
-
-      {:error_after_store, reason} ->
-        _ = NormalMediaStore.delete_media(conversation_id, client_message_id)
-        error_response(conn, reason)
 
       error ->
         if stored?(conversation_id, client_message_id) and terminal_error?(error) do
@@ -114,6 +112,40 @@ defmodule StrangertalksNewWeb.NormalMediaController do
     end
   end
 
+  # This call is serialized by the live ConversationServer. Therefore next_sequence - 1 is an
+  # authoritative ordering boundary: every generic Conversation item accepted before this call is
+  # on or before the anchor, and every generic item accepted after it is after the anchor.
+  defp conversation_order_anchor(conversation_id, participant_id) do
+    case ConversationServer.inspect_state(conversation_id) do
+      {:ok, state} ->
+        conversation = Map.get(state, :conversation)
+        next_sequence = Map.get(state, :next_sequence)
+
+        cond do
+          is_nil(conversation) ->
+            {:error, :conversation_unavailable}
+
+          participant_id not in [conversation.participant_a_id, conversation.participant_b_id] ->
+            {:error, :not_conversation_member}
+
+          not is_nil(Map.get(state, :terminal_intent)) ->
+            {:error, :conversation_terminating}
+
+          conversation.conversation_status not in [:PENDING, :ACTIVE, :PAUSED] ->
+            {:error, :conversation_inactive}
+
+          not is_integer(next_sequence) or next_sequence < 1 ->
+            {:error, :normal_media_order_unavailable}
+
+          true ->
+            {:ok, next_sequence - 1}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   defp read_limited_body(conn) do
     max_bytes = NormalMediaStore.max_item_bytes()
 
@@ -165,10 +197,21 @@ defmodule StrangertalksNewWeb.NormalMediaController do
   end
 
   defp stored?(conversation_id, client_message_id) do
-    match?({:ok, _binary, _media_type}, NormalMediaStore.fetch_media(conversation_id, client_message_id))
+    match?(
+      {:ok, _binary, _media_type},
+      NormalMediaStore.fetch_media(conversation_id, client_message_id)
+    )
   end
 
-  defp terminal_error?({:error, reason}), do: reason in [:conversation_inactive, :conversation_not_found]
+  defp terminal_error?({:error, reason}) do
+    reason in [
+      :conversation_inactive,
+      :conversation_not_found,
+      :conversation_unavailable,
+      :conversation_terminating
+    ]
+  end
+
   defp terminal_error?(_error), do: false
 
   defp error_response(conn, error) do
@@ -181,12 +224,15 @@ defmodule StrangertalksNewWeb.NormalMediaController do
         :conversation_not_found -> {404, :conversation_not_found}
         :media_unavailable -> {404, :media_unavailable}
         :conversation_inactive -> {410, :conversation_inactive}
+        :conversation_unavailable -> {410, :conversation_inactive}
+        :conversation_terminating -> {410, :conversation_inactive}
         :normal_media_identity_conflict -> {409, :normal_media_identity_conflict}
         :normal_media_too_large -> {413, :normal_media_too_large}
         :view_once_photo_too_large -> {413, :normal_media_too_large}
         :view_once_video_too_large -> {413, :normal_media_too_large}
         :normal_media_conversation_capacity -> {503, :normal_media_capacity}
         :normal_media_global_capacity -> {503, :normal_media_capacity}
+        :normal_media_order_unavailable -> {503, :normal_media_order_unavailable}
         {:rate_limited, _retry_after_ms} -> {429, :rate_limited}
         :unsupported_media_type -> {415, :unsupported_media_type}
         :unsupported_video_codec -> {415, :unsupported_media_type}
