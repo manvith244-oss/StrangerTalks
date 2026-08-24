@@ -267,7 +267,7 @@ function setupTemporaryCue() {
 function decorateTrayControls() {
   trayButton(document.querySelector("#prompt-control"), "prompt", "Prompts")
   trayButton(document.querySelector("#view-once-video-picker-btn"), "gallery", "View-once video")
-  trayButton(document.querySelector("#expressive-open"), "magic", "GIFs & stickers")
+  trayButton(document.querySelector("#expressive-open"), "magic", "Stickers & expressions")
   trayButton(document.querySelector("#companion-control"), "magic", "Companion")
   trayButton(document.querySelector("#voice-warning-help"), "privacy", "Media privacy")
 }
