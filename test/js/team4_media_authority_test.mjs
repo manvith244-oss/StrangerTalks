@@ -132,3 +132,35 @@ test("T4-005: effects, reactions and camera capture cannot gain authority in CON
     else Object.defineProperty(globalThis, "navigator", {configurable: true, value: originalNavigator})
   }
 })
+
+
+function controllablePush() {
+  const handlers = new Map()
+  return { receive(kind, callback) { handlers.set(kind, callback); return this }, fire(kind, payload) { handlers.get(kind)?.(payload) } }
+}
+
+test("T4-006: late Accept success after terminal teardown is inert", async () => {
+  const push = controllablePush()
+  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push(event) { assert.equal(event, "call:accept"); return push }}})
+  coord.callAttemptId = "a1"; coord.role = "callee"; coord.status = CALL_STATUS.PENDING_INCOMING
+  const pending = coord.accept()
+  coord.teardown("blocked")
+  push.fire("ok", {call_attempt_id: "a1"})
+  const result = await pending
+  assert.equal(result.stale, true)
+  assert.equal(coord.callAttemptId, null)
+  assert.notEqual(coord.status, CALL_STATUS.CONNECTING)
+})
+
+test("T4-007: late Initiate success after terminal teardown cannot rebind attempt authority", async () => {
+  const push = controllablePush()
+  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push(event) { assert.equal(event, "call:initiate"); return push }}})
+  const pending = coord.initiate("voice")
+  coord.teardown("ended")
+  push.fire("ok", {call_attempt_id: "dead-attempt"})
+  const result = await pending
+  assert.equal(result.stale, true)
+  assert.equal(coord.callAttemptId, null)
+  assert.notEqual(coord.status, CALL_STATUS.CONNECTING)
+  assert.notEqual(coord.status, CALL_STATUS.ACTIVE)
+})

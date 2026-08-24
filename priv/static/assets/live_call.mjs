@@ -532,16 +532,25 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
     this.peerVoiceEffectActive = false
     this.notifyStateChange()
 
+    const initiationConversationId = this.conversationId
     return new Promise((resolve, reject) => {
       if (!this.channel) return reject(new Error("Channel unavailable"))
       this.channel.push("call:initiate", { call_type: callType })
         .receive("ok", (res) => {
+          const stillCurrent =
+            this.status === CALL_STATUS.PENDING_OUTGOING &&
+            this.role === "caller" &&
+            this.callAttemptId === null &&
+            this.conversationId === initiationConversationId
+          if (!stillCurrent) { resolve({ ...res, stale: true }); return }
           this.callAttemptId = res.call_attempt_id
           this.notifyStateChange()
           resolve(res)
         })
         .receive("error", (err) => {
-          this.teardown("initiate_failed")
+          if (this.status === CALL_STATUS.PENDING_OUTGOING && this.role === "caller" && this.callAttemptId === null && this.conversationId === initiationConversationId) {
+            this.teardown("initiate_failed")
+          }
           reject(err)
         })
     })
@@ -552,16 +561,23 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
       throw new Error("No pending incoming call")
     }
 
+    const acceptedAttemptId = this.callAttemptId
+    const acceptedConversationId = this.conversationId
     return new Promise((resolve, reject) => {
       if (!this.channel) return reject(new Error("Channel unavailable"))
-      this.channel.push("call:accept", { call_attempt_id: this.callAttemptId })
+      this.channel.push("call:accept", { call_attempt_id: acceptedAttemptId })
         .receive("ok", (res) => {
+          const stillCurrent = this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId
+          if (!stillCurrent) { resolve({ ...res, stale: true }); return }
           this.status = CALL_STATUS.CONNECTING
+          this.applyOutgoingAudioGate()
           this.notifyStateChange()
           resolve(res)
         })
         .receive("error", (err) => {
-          this.teardown("accept_failed")
+          if (this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId) {
+            this.teardown("accept_failed")
+          }
           reject(err)
         })
     })
