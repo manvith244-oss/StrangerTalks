@@ -79,8 +79,9 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
   const clearFeedback = () => setFeedback("")
 
   const queueDoorLabel = () => documentRef.querySelector("#queue-door")?.textContent?.trim() || "the same option"
+  const queueLanguageLabel = () => languageSelect.selectedOptions?.[0]?.textContent?.trim() || "your selected language"
   const restoreQueueCopy = () => {
-    if (queueLede) queueLede.textContent = `Looking for someone who chose ${queueDoorLabel()} too.`
+    if (queueLede) queueLede.textContent = `Looking for someone who chose ${queueDoorLabel()} in ${queueLanguageLabel()}.`
   }
 
   const setDoorBusy = (busy) => {
