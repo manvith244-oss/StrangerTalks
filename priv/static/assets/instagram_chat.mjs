@@ -106,7 +106,12 @@ function iconButton(button, icon, label, extraClass = "") {
 
 function trayButton(button, icon, label) {
   if (!button) return
-  button.innerHTML = `${ICONS[icon] || ""}<span>${label}</span>`
+  const currentLabel = button.querySelector(":scope > span")?.textContent
+  const alreadyDecorated = button.dataset.igTrayLabel === label && Boolean(button.querySelector(":scope > .ig-icon")) && currentLabel === label
+  if (!alreadyDecorated) {
+    button.innerHTML = `${ICONS[icon] || ""}<span>${label}</span>`
+    button.dataset.igTrayLabel = label
+  }
   button.setAttribute("aria-label", label)
   button.title = label
   button.classList.add("ig-tray-button")
