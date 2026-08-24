@@ -271,7 +271,12 @@ function setupComposer() {
   if (expressive && expressive.parentElement !== controls) controls.append(expressive)
 
   const updateState = () => {
-    form.classList.toggle("has-text", composerVisualState(input.value).hasText)
+    const state = composerVisualState(input.value)
+    form.classList.toggle("has-text", state.hasText)
+    if (state.hasText && form.classList.contains("ig-tray-open")) {
+      form.classList.remove("ig-tray-open")
+      plus.setAttribute("aria-expanded", "false")
+    }
     autosizeComposer(input)
   }
 
