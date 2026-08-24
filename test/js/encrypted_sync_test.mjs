@@ -70,3 +70,82 @@ test("equal timestamps use tombstone precedence and canonical SHA-256 tie breaki
   assert.deepEqual(forward, reverse)
   assert.deepEqual(await mergeSyncRecords([first], [tombstoneFor(first, time)], {validationNow: Date.parse(time)}), [tombstoneFor(first, time)])
 })
+
+test("duplicate bare IDs across different sync categories are rejected before merge", async () => {
+  const collisionMemory = {
+    id: "shared-id",
+    type: "memory",
+    category: "memories",
+    value: {text: "one"},
+    updated_at: time,
+    deleted_at: null
+  }
+  const collisionConversation = {
+    id: "shared-id",
+    type: "local_conversation",
+    category: "kept_conversations",
+    value: {conversation_id: "conversation-collision", status: "kept"},
+    updated_at: time,
+    deleted_at: null
+  }
+
+  assert.equal(validateSyncRecords([collisionMemory, collisionConversation], Date.parse(time)), false)
+  await assert.rejects(
+    () => mergeSyncRecords([], [collisionMemory, collisionConversation], {validationNow: Date.parse(time)}),
+    /invalid_sync_records/
+  )
+})
+
+test("View Once and View Twice message records never enter encrypted retained sync", () => {
+  const ephemeralMessages = [
+    "view_once_photo",
+    "view_twice_photo",
+    "view_once_video",
+    "view_twice_video"
+  ].map((type, index) => ({
+    id: `message:1:ephemeral-${index}`,
+    type: "local_message",
+    value: {
+      conversation_id: "1",
+      type,
+      content: "must-not-sync",
+      view_once_state: "unviewed",
+      presentation_limit: type.includes("twice") ? 2 : 1,
+      media_type: type.includes("video") ? "video/mp4" : "image/jpeg",
+      byte_size: 512
+    },
+    updated_at: time
+  }))
+
+  const records = syncableRecords([kept, message, ...ephemeralMessages])
+  assert.deepEqual(records.map(({id}) => id), ["conversation:1", "message:1"])
+  assert.equal(JSON.stringify(records).includes("must-not-sync"), false)
+
+  const forged = {
+    ...ephemeralMessages[0],
+    category: "kept_messages",
+    deleted_at: null
+  }
+  assert.equal(validateSyncRecords([forged], Date.parse(time)), false)
+})
+
+test("approved retained categories reject unexpected operational or media-shaped fields", () => {
+  const [memory] = syncableRecords([{id: "memory:strict", type: "memory", value: {text: "safe"}, updated_at: time}])
+  const [bond] = syncableRecords([{id: "relationship:strict", type: "relationship", value: {relationship_id: "strict", status: "created"}, updated_at: time}])
+  const [textMessage] = syncableRecords([kept, {...message, id: "message:strict"}]).filter(({id}) => id === "message:strict")
+
+  assert.equal(validateSyncRecords([{...memory, value: {...memory.value, raw_call_media: "bytes"}}], Date.parse(time)), false)
+  assert.equal(validateSyncRecords([{...bond, value: {...bond.value, turn_credentials: "secret"}}], Date.parse(time)), false)
+  assert.equal(validateSyncRecords([{...textMessage, value: {...textMessage.value, queue_attempt_id: "old-attempt"}}], Date.parse(time)), false)
+})
+
+test("tampered sync IVs and malformed envelope versions fail closed", async () => {
+  const records = syncableRecords([kept, message])
+  const envelope = await encryptSync(records, "recovery words")
+  const mutateBase64 = (value) => `${value.slice(0, -2)}AA`
+
+  await assert.rejects(() => decryptSync({...envelope, content: {...envelope.content, iv: mutateBase64(envelope.content.iv)}}, "recovery words"))
+  await assert.rejects(() => decryptSync({...envelope, key_wrap: {...envelope.key_wrap, iv: mutateBase64(envelope.key_wrap.iv)}}, "recovery words"))
+  assert.equal(validSyncEnvelope({...envelope, version: 99}), false)
+  await assert.rejects(() => decryptSync({...envelope, version: 99}, "recovery words"), /invalid_sync_envelope/)
+})
