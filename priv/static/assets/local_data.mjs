@@ -4,6 +4,7 @@ const BACKUP_VERSION = 2
 const PREVIOUS_BACKUP_VERSION = 1
 const APPROVED_VOICE_TYPES = new Set(["audio/webm", "audio/ogg", "audio/mp4"])
 const TERMINAL_RETENTION_STATUSES = new Set(["kept", "summary_only", "faded"])
+const BACKUP_RECORD_TYPES = new Set(["identity", "settings", "local_conversation", "local_message", "local_voice_note", "sync_cursor", "summary", "memory", "relationship", "sync_tombstone"])
 
 export function signatureSeedFor(conversationId) {
   let hash = 2166136261
@@ -301,11 +302,21 @@ export function deleteAllKeptConversations(records, {deleteSummaries = false} = 
   })
 }
 
-export function mergeRecords(current, imported) {
+export function mergeRecords(current, imported, {restoreTombstones = false} = {}) {
   const merged = new Map(current.map((record) => [record.id, record]))
   for (const record of imported) {
     const existing = merged.get(record.id)
-    if (!existing || Date.parse(record.updated_at) > Date.parse(existing.updated_at)) merged.set(record.id, record)
+    if (!existing) {
+      merged.set(record.id, record)
+      continue
+    }
+    const existingTombstone = existing.type === "sync_tombstone"
+    const importedTombstone = record.type === "sync_tombstone"
+    if (!restoreTombstones && existingTombstone !== importedTombstone) {
+      merged.set(record.id, existingTombstone ? existing : record)
+      continue
+    }
+    if (Date.parse(record.updated_at) > Date.parse(existing.updated_at)) merged.set(record.id, record)
   }
   return [...merged.values()]
 }
@@ -334,7 +345,7 @@ export async function decryptBackup(envelope, passphrase) {
   const payload = JSON.parse(new TextDecoder().decode(plaintext))
   if (!Array.isArray(payload.records)) throw new Error("invalid_backup")
   const records = await deserializeBackupRecords(payload.records, envelope.version)
-  if (records.some((record) => !validRecord(record))) throw new Error("invalid_backup")
+  if (records.some((record) => !validBackupRecord(record))) throw new Error("invalid_backup")
   return records
 }
 
@@ -344,7 +355,7 @@ export async function putRecord(record) { if (!validRecord(record)) throw new Er
 export async function deleteRecord(id) { return request("readwrite", (store) => store.delete(id)) }
 export async function clearRecords() { return request("readwrite", (store) => store.clear()) }
 export async function importRecords(imported) {
-  if (!Array.isArray(imported) || imported.some((record) => !validRecord(record))) throw new Error("invalid_record")
+  if (!Array.isArray(imported) || imported.some((record) => !validBackupRecord(record))) throw new Error("invalid_record")
   const merged = mergeRecords(await listRecords(), imported)
   return replaceRecords(merged)
 }
@@ -410,9 +421,14 @@ function indexedDbAdapter(indexedDb) {
 }
 
 function validRecord(record) { return record && typeof record.id === "string" && typeof record.type === "string" && !Number.isNaN(Date.parse(record.updated_at)) }
+function validBackupRecord(record) {
+  if (!validRecord(record) || !BACKUP_RECORD_TYPES.has(record.type)) return false
+  if (record.type === "sync_tombstone") return record.category === "tombstones" && record.deleted_at && !Number.isNaN(Date.parse(record.deleted_at))
+  return true
+}
 async function serializeBackupRecords(records) {
   const keptIds = new Set(keptConversations(records).map(({value}) => value.conversation_id))
-  const selected = records.filter((record) => record.type !== "bond_reconnect_state" && (record.type !== "local_voice_note" || keptIds.has(record.value.conversation_id)))
+  const selected = records.filter((record) => BACKUP_RECORD_TYPES.has(record.type) && (record.type !== "local_voice_note" || keptIds.has(record.value.conversation_id)))
   return Promise.all(selected.map(async (record) => {
     if (record.type !== "local_voice_note") return record
     const bytes = await binaryBytes(record.value.blob)
