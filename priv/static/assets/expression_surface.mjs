@@ -1,55 +1,55 @@
-export function insertEmojiIntoDraft(value, selectionStart, selectionEnd, emoji) {
-  const source = String(value ?? "")
-  const token = String(emoji ?? "")
-  const start = Math.max(0, Math.min(Number.isInteger(selectionStart) ? selectionStart : source.length, source.length))
-  const endCandidate = Number.isInteger(selectionEnd) ? selectionEnd : start
-  const end = Math.max(start, Math.min(endCandidate, source.length))
-  const nextValue = source.slice(0, start) + token + source.slice(end)
-  return {value: nextValue, caret: start + token.length}
-}
+import {Socket} from "/vendor/phoenix.mjs"
+import {getRecord} from "./local_data.mjs"
 
-export function createGifSearchGuard() {
-  let generation = 0
-  return {
-    begin(conversationId, query) {
-      generation += 1
-      return Object.freeze({generation, conversationId, query})
-    },
-    invalidate() {
-      generation += 1
-      return generation
-    },
-    isCurrent(token, conversationId) {
-      return Boolean(token) && token.generation === generation && token.conversationId === conversationId
+export {
+  createGifSearchGuard,
+  gifSearchPath,
+  insertEmojiIntoDraft,
+  sanitizeGifResults,
+  sendWithSameIdentityRetry,
+  validGifResult
+} from "./expression_surface_core.mjs"
+
+const IDENTITY_KEY = "strangertalks.identity.v1"
+const GIF_SEARCH_PATH = "/api/gifs/search"
+
+let currentConversationId = null
+
+if (!Socket.prototype.__team10GifAuthorityPatched) {
+  Socket.prototype.__team10GifAuthorityPatched = true
+  const originalChannel = Socket.prototype.channel
+
+  Socket.prototype.channel = function(topic, params) {
+    const channel = originalChannel.call(this, topic, params)
+    if (typeof topic === "string" && topic.startsWith("conversation:")) {
+      currentConversationId = topic.slice("conversation:".length)
     }
+    return channel
   }
 }
 
-export function gifSearchPath(query) {
-  const params = new URLSearchParams({q: String(query ?? "").trim()})
-  return `/api/gifs/search?${params.toString()}`
-}
+if (!globalThis.__team10GifFetchPatched && typeof globalThis.fetch === "function") {
+  globalThis.__team10GifFetchPatched = true
+  const originalFetch = globalThis.fetch.bind(globalThis)
 
-export function validGifResult(result) {
-  if (!result || typeof result !== "object") return false
-  if (typeof result.id !== "string" || result.id.length < 1 || result.id.length > 200) return false
-  if (typeof result.provider !== "string" || result.provider.length < 1 || result.provider.length > 40) return false
-  if (typeof result.reference !== "string" || result.reference.length < 1 || result.reference.length > 4096) return false
-  if (typeof result.media_url !== "string" || !result.media_url.startsWith("https://")) return false
-  if (!Number.isInteger(result.width) || result.width < 1 || result.width > 4096) return false
-  if (!Number.isInteger(result.height) || result.height < 1 || result.height > 4096) return false
-  return typeof result.label === "string" && result.label.length > 0 && result.label.length <= 160
-}
+  globalThis.fetch = async function(input, init = {}) {
+    const rawUrl = typeof input === "string" || input instanceof URL ? String(input) : input?.url
+    if (!rawUrl) return originalFetch(input, init)
 
-export function sanitizeGifResults(results) {
-  return Array.isArray(results) ? results.filter(validGifResult) : []
-}
+    const url = new URL(rawUrl, globalThis.location?.origin || "http://localhost")
+    if (url.pathname !== GIF_SEARCH_PATH || (globalThis.location?.origin && url.origin !== globalThis.location.origin)) {
+      return originalFetch(input, init)
+    }
 
-export async function sendWithSameIdentityRetry(pushOnce, payload) {
-  try {
-    return await pushOnce(payload)
-  } catch (error) {
-    if (error?.reason !== "timeout") throw error
-    return pushOnce(payload)
+    if (currentConversationId) url.searchParams.set("conversation_id", currentConversationId)
+
+    const identity = await getRecord(IDENTITY_KEY).catch(() => null)
+    const participantToken = identity?.value?.token
+    const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined))
+    if (typeof participantToken === "string" && participantToken) {
+      headers.set("authorization", `Bearer ${participantToken}`)
+    }
+
+    return originalFetch(url.toString(), {...init, headers})
   }
 }
