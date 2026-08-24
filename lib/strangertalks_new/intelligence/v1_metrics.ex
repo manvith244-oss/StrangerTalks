@@ -15,36 +15,22 @@ defmodule StrangertalksNew.Intelligence.V1Metrics do
   @schema_version "team8-v1-metrics-1"
   @max_window_seconds 31 * 24 * 60 * 60
 
-  @forbidden_output_keys MapSet.new([
-                           :participant_id,
-                           :participant_a_id,
-                           :participant_b_id,
-                           :conversation_id,
-                           :match_id,
-                           :message_id,
-                           :reported_message_id,
-                           :reporting_participant_id,
-                           :reported_participant_id,
-                           :reporter_context,
-                           :deduplication_key,
-                           :content,
-                           :text,
-                           :body,
-                           :audio,
-                           :transcript,
-                           :token,
-                           :email,
-                           :name,
-                           :photo,
-                           :ip,
-                           :ip_address,
-                           :memory_text,
-                           :summary_text,
-                           :learning_summary,
-                           :keystroke_cadence,
-                           :keystroke_latency_variance,
-                           :readiness_score
-                         ])
+  @forbidden_output_keys MapSet.new(~w(
+    participant_id participant_a_id participant_b_id
+    conversation_id match_id message_id report_id reported_message_id
+    reporting_participant_id reported_participant_id voice_note_id memory_id reflection_id
+    reporter_context report_evidence safety_evidence
+    content text body message_text conversation_text
+    audio audio_bytes voice_note_bytes voice_note_transcript transcript
+    call_audio call_audio_metadata call_participant_audio audio_track_id media_device_id
+    memory_text reflection_text private_summary summary_text learning_summary
+    authorization oauth_token access_token refresh_token session_token session_id cookie token
+    email name photo
+    ip ip_address device_fingerprint fingerprint
+    keystroke_cadence keystroke_latency_variance
+    readiness_score emotional_state emotion_label personality_label vulnerability_label
+    biometric_id face_id voice_id voiceprint
+  ))
 
   @metric_dictionary [
     %{
@@ -260,8 +246,7 @@ defmodule StrangertalksNew.Intelligence.V1Metrics do
 
   defp contains_forbidden_key?(map) when is_map(map) do
     Enum.any?(map, fn {key, value} ->
-      normalized_key = normalize_key(key)
-      MapSet.member?(@forbidden_output_keys, normalized_key) or contains_forbidden_key?(value)
+      MapSet.member?(@forbidden_output_keys, normalize_key(key)) or contains_forbidden_key?(value)
     end)
   end
 
@@ -270,15 +255,7 @@ defmodule StrangertalksNew.Intelligence.V1Metrics do
 
   defp contains_forbidden_key?(_value), do: false
 
-  defp normalize_key(key) when is_atom(key), do: key
-
-  defp normalize_key(key) when is_binary(key) do
-    try do
-      String.to_existing_atom(key)
-    rescue
-      ArgumentError -> :unknown_external_key
-    end
-  end
-
-  defp normalize_key(_key), do: :unknown_external_key
+  defp normalize_key(key) when is_atom(key), do: Atom.to_string(key)
+  defp normalize_key(key) when is_binary(key), do: String.downcase(key)
+  defp normalize_key(_key), do: "__unsupported_key__"
 end
