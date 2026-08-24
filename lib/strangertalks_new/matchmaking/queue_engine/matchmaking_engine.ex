@@ -303,12 +303,11 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   end
 
   @doc """
-  Runs the candidate evaluation pipeline. Iterates over active pools, calculates 
+  Runs the candidate evaluation pipeline. Iterates over active pools, calculates
   linear decay thresholds, enforces safety parameters, and forms matches.
   """
-  # V1 constraint: matching is serialized in this process, so one pairing and persistence
-  # operation completes before the next begins. Concurrent or multi-worker matching will
-  # require explicit participant reservation or database-level locking.
+  # V1 callers may evaluate concurrently. Every durable admission revalidates the current
+  # queue attempts, safety state and conversation activity under the same participant locks.
   def evaluate_pending_matches do
     state = Agent.get(QueueState, fn state -> state end)
 
@@ -589,7 +588,8 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   defp resolve_active_conversation(participant_id) do
     case StrangertalksNew.SessionReconciliation.reconcile(participant_id) do
       {:ok, %{canonical_state: :CONVERSATION, conversation: conv}} -> {:busy, conv}
-      _ -> :available
+      {:ok, _snapshot} -> :available
+      {:error, reason} -> {:busy, {:reconciliation_error, reason}}
     end
   end
 
