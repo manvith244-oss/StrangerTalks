@@ -1,5 +1,5 @@
 defmodule StrangertalksNew.Application do
-  # See https://elixir.hexdocs.pm/Application.html
+  # See https://elixir-lang.org/getting-started/mix-otp/supervisor-and-application.html
   # for more information on OTP Applications
   @moduledoc false
 
@@ -19,6 +19,7 @@ defmodule StrangertalksNew.Application do
        strategy: :one_for_one, name: StrangertalksNew.ConversationDynamicSupervisor},
       StrangertalksNew.ConversationLifecycle.VoiceNoteStore,
       StrangertalksNew.ConversationLifecycle.ViewOnceMediaStore,
+      StrangertalksNew.ConversationLifecycle.NormalMediaStore,
       StrangertalksNew.RateLimiter,
 
       # Queue Engine Processes (Must boot before the Web Endpoint)
