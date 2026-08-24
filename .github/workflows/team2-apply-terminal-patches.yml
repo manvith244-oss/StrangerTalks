@@ -1,0 +1,46 @@
+name: Team 2 Apply Terminal Patches
+
+on:
+  push:
+    branches: [newteam/terminal-truth]
+    paths:
+      - "team2-terminal-patches/**"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: newteam/terminal-truth
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply exact terminal patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          patches=(team2-terminal-patches/*.patch)
+          test "${#patches[@]}" -gt 0
+          for patch in "${patches[@]}"; do
+            git apply --check "$patch"
+            git apply "$patch"
+          done
+      - name: Prove terminal client contract
+        run: |
+          node --test test/js/terminal_truth_client_test.mjs
+          git diff --check
+      - name: Commit proven application
+        run: |
+          set -euo pipefail
+          git config user.name "team2-terminal-bot"
+          git config user.email "team2-terminal-bot@users.noreply.github.com"
+          git add priv/static/assets/app.js test/js/terminal_truth_client_test.mjs
+          git rm team2-terminal-patches/*.patch
+          git commit -m "fix(team2): scope terminal events and clear stale UI [skip ci]"
+          git push origin HEAD:newteam/terminal-truth
