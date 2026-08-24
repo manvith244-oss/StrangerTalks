@@ -1,8 +1,6 @@
 defmodule StrangertalksNew.TerminalPersistenceFailureTest do
   use StrangertalksNew.DataCase, async: false
 
-  import Ecto.Query
-
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.MatchingRules
@@ -37,17 +35,26 @@ defmodule StrangertalksNew.TerminalPersistenceFailureTest do
                0
              )
 
-    # Break only a changeset-required durable field after the runtime has loaded its
-    # valid copy. BoundaryBlock insertion can succeed first, but the terminal
-    # Conversation changeset must then fail inside the same transaction.
-    assert {1, nil} =
-             Repo.update_all(
-               from(c in Conversation, where: c.conversation_id == ^conversation_id),
-               set: [message_count: nil]
-             )
+    # Force only the terminal Conversation write to fail at the database boundary.
+    # The preceding BoundaryBlock insert can succeed, but the enclosing transaction
+    # must roll it back when ending_type=BLOCK is rejected.
+    Repo.query!("""
+    ALTER TABLE conversations
+    ADD CONSTRAINT team2_reject_block_terminal
+    CHECK (ending_type IS DISTINCT FROM 'BLOCK')
+    """)
 
-    assert {:error, %Ecto.Changeset{valid?: false}} =
-             MatchingRules.block_conversation_participant(conversation_id, a.participant_id)
+    block_result =
+      try do
+        MatchingRules.block_conversation_participant(conversation_id, a.participant_id)
+      after
+        Repo.query!("""
+        ALTER TABLE conversations
+        DROP CONSTRAINT team2_reject_block_terminal
+        """)
+      end
+
+    assert {:error, _reason} = block_result
 
     # The failed terminal write rolls back the preceding BoundaryBlock insert. No
     # durable safety authority may be reported when terminal persistence failed.
@@ -59,9 +66,9 @@ defmodule StrangertalksNew.TerminalPersistenceFailureTest do
     assert durable.ending_type == nil
     assert durable.ending_initiator == nil
 
-    # The suspended runtime is resumed rather than killed or left inert. Its valid
-    # in-memory Conversation remains ACTIVE and retains mutation authority because
-    # the durable Block transaction did not commit.
+    # The suspended runtime is resumed rather than killed or left inert. Because the
+    # Block transaction did not commit, the original active Conversation remains the
+    # canonical authority and can continue accepting normal mutations.
     assert Process.alive?(pid)
     assert {:ok, %{lifecycle_status: :ACTIVE}} = ConversationServer.inspect_state(conversation_id)
 
