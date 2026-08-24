@@ -57,6 +57,15 @@ test("chat CSS is scoped and explicitly supports phones, tablets, desktop, lands
   assert.match(css, /font-size: 16px; \/\* prevents iOS focus zoom \*\//)
 })
 
+test("chat hardening covers short keyboards, landscape notches, iOS zoom and coarse-pointer targets", () => {
+  assert.match(moduleSource, /Math\.max\(1, Math\.round\(candidate\)\)/)
+  assert.match(moduleSource, /safe-area-inset-left/)
+  assert.match(moduleSource, /safe-area-inset-right/)
+  assert.match(moduleSource, /input\.style\.fontSize = "16px"/)
+  assert.match(moduleSource, /\.reaction-picker \.reaction-btn[\s\S]*width: 44px/)
+  assert.match(moduleSource, /\.message-action-btn,[\s\S]*min-height: 44px/)
+})
+
 test("chat enhancement loads Companion and preserves human Send authority", () => {
   assert.match(moduleSource, /import "\.\/companion\.mjs"/)
   assert.match(moduleSource, /#bottom-nav \[data-go="chats"\]/)
