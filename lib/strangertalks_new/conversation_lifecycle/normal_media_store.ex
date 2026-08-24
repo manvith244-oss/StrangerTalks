@@ -87,7 +87,13 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
 
     case Map.get(state.media, key) do
       %{sender_id: ^sender_id, content_hash: ^content_hash} = existing ->
-        {:reply, {:ok, public_entry(existing, sender_id), :duplicate}, state}
+        case authorize_existing(conversation_id, sender_id) do
+          :ok ->
+            {:reply, {:ok, public_entry(existing, sender_id), :duplicate}, state}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
 
       nil ->
         case capacity_check(state, conversation_id, size) do
@@ -211,6 +217,27 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
     end
   end
 
+  defp authorize_existing(conversation_id, sender_id) do
+    with {:ok, owner_pid} <- ConversationServer.lookup(conversation_id),
+         :ok <- safe_suspend(owner_pid) do
+      try do
+        conversation_state = :sys.get_state(owner_pid, @system_timeout_ms)
+
+        case canonical_anchor(conversation_state, sender_id) do
+          {:ok, _anchor_sequence} -> :ok
+          {:error, reason} -> {:error, reason}
+        end
+      catch
+        :exit, _reason -> {:error, :conversation_unavailable}
+      after
+        safe_resume(owner_pid)
+      end
+    else
+      {:error, :not_started} -> {:error, :conversation_unavailable}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp accept_at_conversation_boundary(
          state,
          conversation_id,
@@ -224,8 +251,7 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
       try do
         conversation_state = :sys.get_state(owner_pid, @system_timeout_ms)
 
-        with {:ok, anchor_sequence} <-
-               canonical_anchor(conversation_state, sender_id) do
+        with {:ok, anchor_sequence} <- canonical_anchor(conversation_state, sender_id) do
           ordinal_key = {conversation_id, anchor_sequence}
           anchor_ordinal = Map.get(state.next_anchor_ordinal, ordinal_key, 1)
           inserted_at = DateTime.utc_now()
