@@ -85,9 +85,16 @@ jobs:
             test/strangertalks_new/team6_turn_provider_test.exs \
             test/strangertalks_new/conversation_live_call_test.exs \
             test/strangertalks_new/team6_media_authority_test.exs
-      - name: Integrity
+      - name: Team 6 materialization integrity
         run: |
-          mix format --check-formatted
+          mix format --check-formatted \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/c11_policy.ex \
+            config/runtime.exs config/test.exs \
+            test/support/turn_credential_test_client.ex \
+            test/strangertalks_new/team6_media_authority_test.exs \
+            test/strangertalks_new/team6_turn_provider_test.exs \
+            test/strangertalks_new/conversation_live_call_test.exs
           git diff --check
       - name: Commit proven canonical source on push
         if: github.event_name == 'push'
