@@ -61,8 +61,6 @@ function installMessageGestureArbitration() {
 
     const end = {time: performance.now(), x: event.clientX, y: event.clientY}
     if (shouldSuppressMessageRelease(start, end, {viewportWidth: window.innerWidth})) {
-      // Capture-phase suppression lets native/system handling continue while
-      // preventing the Conversation's later bubble handlers from double-firing.
       event.stopPropagation()
     }
   }, {capture: true, passive: true})
@@ -96,6 +94,11 @@ function installCoarsePointerTargets() {
   const style = document.createElement("style")
   style.dataset.thumbInteractionTargets = "true"
   style.textContent = `
+    body.st-chat-mode .overflow-menu #pinned-messages-control,
+    body.st-chat-mode .overflow-menu #quiet-mode-control {
+      display: block;
+    }
+
     @media (hover: none) and (pointer: coarse) {
       body.st-chat-mode .ig-chat-back,
       body.st-chat-mode .conversation-head-actions > button,
