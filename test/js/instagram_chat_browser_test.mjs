@@ -1,8 +1,12 @@
 import assert from "node:assert/strict"
+import fs from "node:fs"
 import test from "node:test"
 import {chromium} from "playwright"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://127.0.0.1:4002"
+const SCREENSHOT_DIR = "tmp/chat-ui-screenshots"
+fs.mkdirSync(SCREENSHOT_DIR, {recursive: true})
+
 const DEVICES = [
   {name: "tiny legacy phone", width: 320, height: 568, mobile: true, touch: true},
   {name: "small Android phone", width: 360, height: 740, mobile: true, touch: true},
@@ -12,6 +16,18 @@ const DEVICES = [
   {name: "tablet", width: 820, height: 1180, mobile: true, touch: true},
   {name: "desktop", width: 1440, height: 900, mobile: false, touch: false}
 ]
+
+const SHORT_PANEL_SELECTORS = [
+  "#voice-warning",
+  "#voice-preview",
+  "#view-once-preview",
+  "#atmosphere-chooser",
+  "#report-form"
+]
+
+function screenshotName(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+}
 
 async function prepareConversation(page) {
   await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
@@ -59,6 +75,54 @@ async function prepareConversation(page) {
   await page.waitForFunction(() => document.querySelector("#messages > .message.ig-group-start"))
 }
 
+async function assertShortPanelsStayEscapable(page, device) {
+  for (const selector of SHORT_PANEL_SELECTORS) {
+    const exists = await page.locator(selector).count()
+    if (!exists) continue
+
+    await page.evaluate(({selectors, active}) => {
+      for (const candidate of selectors) {
+        const panel = document.querySelector(candidate)
+        if (panel) panel.hidden = candidate !== active
+      }
+    }, {selectors: SHORT_PANEL_SELECTORS, active: selector})
+
+    const geometry = await page.locator(selector).evaluate((panel) => {
+      const rect = panel.getBoundingClientRect()
+      const style = getComputedStyle(panel)
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        height: rect.height,
+        overflowY: style.overflowY,
+        scrollHeight: panel.scrollHeight,
+        clientHeight: panel.clientHeight
+      }
+    })
+
+    assert.ok(geometry.top >= -1, `${device.name} ${selector} starts above viewport: ${geometry.top}`)
+    assert.ok(geometry.bottom <= device.height + 1, `${device.name} ${selector} ends below viewport: ${geometry.bottom}`)
+    assert.ok(["auto", "scroll"].includes(geometry.overflowY), `${device.name} ${selector} is not scrollable`)
+    if (geometry.scrollHeight > geometry.clientHeight + 1) {
+      assert.ok(geometry.clientHeight > 0, `${device.name} ${selector} has no usable scroll viewport`)
+    }
+
+    if (device.name === "phone landscape") {
+      await page.screenshot({
+        path: `${SCREENSHOT_DIR}/landscape-${screenshotName(selector)}.png`,
+        fullPage: false
+      })
+    }
+  }
+
+  await page.evaluate((selectors) => {
+    for (const selector of selectors) {
+      const panel = document.querySelector(selector)
+      if (panel) panel.hidden = true
+    }
+  }, SHORT_PANEL_SELECTORS)
+}
+
 for (const device of DEVICES) {
   test(`Conversation shell stays usable on ${device.name}`, async () => {
     const browser = await chromium.launch({headless: true})
@@ -99,6 +163,7 @@ for (const device of DEVICES) {
           voiceSize: Math.min(voiceRect.width, voiceRect.height),
           plusSize: Math.min(plusRect.width, plusRect.height),
           composerFontSize: Number.parseFloat(getComputedStyle(input).fontSize),
+          cameraLabel: camera.getAttribute("aria-label"),
           heading: heading.textContent,
           hasBack: Boolean(back),
           placeholder: input.getAttribute("placeholder"),
@@ -119,11 +184,27 @@ for (const device of DEVICES) {
       assert.ok(layout.voiceSize >= 40)
       assert.ok(layout.plusSize >= 40)
       if (device.mobile) assert.ok(layout.composerFontSize >= 16, `mobile composer font is ${layout.composerFontSize}px`)
+      assert.equal(layout.cameraLabel, "Choose a view-once photo")
       assert.equal(layout.heading, "Stranger")
       assert.equal(layout.hasBack, true)
       assert.equal(layout.placeholder, "Message…")
       assert.equal(layout.companionLoaded, true)
       assert.deepEqual(layout.grouped, ["ig-group-start", "ig-group-end", "ig-group-start", "ig-group-end", "ig-group-solo"])
+
+      const info = page.locator(".conversation-head-actions .overflow")
+      const infoSummary = info.locator("summary")
+      await infoSummary.click()
+      assert.equal(await info.evaluate((details) => details.open), true)
+      assert.equal(await infoSummary.getAttribute("aria-expanded"), "true")
+      await page.keyboard.press("Escape")
+      assert.equal(await info.evaluate((details) => details.open), false)
+      assert.equal(await infoSummary.getAttribute("aria-expanded"), "false")
+      assert.equal(await infoSummary.evaluate((summary) => document.activeElement === summary), true)
+
+      await infoSummary.click()
+      assert.equal(await info.evaluate((details) => details.open), true)
+      await page.locator("#messages").click({position: {x: 4, y: 4}})
+      assert.equal(await info.evaluate((details) => details.open), false)
 
       await page.click(".ig-compose-plus")
       assert.equal(await page.locator("#message-form").evaluate((form) => form.classList.contains("ig-tray-open")), true)
@@ -163,6 +244,15 @@ for (const device of DEVICES) {
       await page.waitForFunction(() => document.querySelector('[data-message-id="visual-3"]')?.classList.contains("ig-latest-own"))
       assert.equal(await page.locator('[data-message-id="visual-unsent"]').evaluate((item) => item.classList.contains("ig-latest-own")), false)
       assert.equal(await page.locator('[data-message-id="visual-3"]').evaluate((item) => item.classList.contains("ig-latest-own")), true)
+
+      if (["tiny legacy phone", "phone landscape"].includes(device.name)) {
+        await assertShortPanelsStayEscapable(page, device)
+      }
+
+      await page.screenshot({
+        path: `${SCREENSHOT_DIR}/${screenshotName(device.name)}.png`,
+        fullPage: false
+      })
     } finally {
       await context.close()
       await browser.close()
