@@ -82,9 +82,28 @@ defmodule StrangertalksNew.SafetyReviews do
   end
 
   defp transition(id, fun) do
-    case Repo.get(SafetyReview, id) do
-      nil -> {:error, :review_not_found}
-      review -> fun.(review)
+    Repo.transaction(fn ->
+      review =
+        from(review in SafetyReview,
+          where: review.safety_review_id == ^id,
+          lock: "FOR UPDATE"
+        )
+        |> Repo.one()
+
+      case review do
+        nil ->
+          Repo.rollback(:review_not_found)
+
+        review ->
+          case fun.(review) do
+            {:ok, transitioned_review} -> transitioned_review
+            {:error, reason} -> Repo.rollback(reason)
+          end
+      end
+    end)
+    |> case do
+      {:ok, review} -> {:ok, review}
+      {:error, reason} -> {:error, reason}
     end
   end
 
