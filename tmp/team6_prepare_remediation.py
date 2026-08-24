@@ -50,31 +50,41 @@ replacement = r"""if "canTransmitOutgoingAudio()" not in live:
 """
 text = text[:start] + replacement + text[end:]
 
-# Voice Expression must remain fail-closed when WebAudio is unavailable.
-# Remove the proposed fallback transformation that would have reopened raw
-# audio after the effect path had deliberately disabled it.
-fallback_marker = "live = replace_once(\n    live,\n    D('''\n        if (!AudioCtx || !this.rawAudioTrack) {"
-fallback_start = text.index(fallback_marker)
-fallback_end = text.index('\nlive = replace_once(', fallback_start + len(fallback_marker))
-text = (
-    text[:fallback_start]
-    + '# WebAudio-unavailable effect path stays fail-closed with raw audio disabled.\n'
-    + text[fallback_end + 1:]
+# Replace the entire temporary Voice Expression edit plan with a function-scoped
+# transformation. This avoids indentation-sensitive matching and preserves the
+# existing fail-closed no-AudioContext path: raw audio was disabled immediately
+# before effect setup and remains disabled when setup cannot be completed.
+effect_plan_start = text.index('# Preserve the existing effect graph')
+init_plan_start = text.index("live = replace_between(\n    live,\n    '  async initializeWebRTC", effect_plan_start)
+effect_plan = r'''# Voice Expression transmission authority is applied only to the track that is
+# about to become the sender. Never run the all-track gate before replaceTrack,
+# because the old sender may still reference raw microphone audio.
+effect_start = live.index('  async setVoiceExpression(preset = "plain") {')
+effect_end = live.index('  cleanupEffectGraph() {', effect_start)
+effect_source = live[effect_start:effect_end]
+
+plain_old = 'this.rawAudioTrack.enabled = !this.selfMuted'
+if effect_source.count(plain_old) != 1:
+    raise RuntimeError(f"plain effect gate: expected one match, found {effect_source.count(plain_old)}")
+effect_source = effect_source.replace(
+    plain_old,
+    'this.rawAudioTrack.enabled = this.canTransmitOutgoingAudio()',
+    1,
 )
 
-# Switching effect tracks must gate only the track being selected before
-# replaceTrack(). An all-track gate here could briefly reopen the old raw sender.
-plain_old = "          this.applyOutgoingAudioGate()\n          if (this.peerConnection) {"
-plain_new = "          this.rawAudioTrack.enabled = this.canTransmitOutgoingAudio()\n          if (this.peerConnection) {"
-if plain_old not in text:
-    raise RuntimeError("plain voice-expression proposed gate not found")
-text = text.replace(plain_old, plain_new, 1)
+processed_old = 'this.processedAudioTrack.enabled = !this.selfMuted'
+if effect_source.count(processed_old) != 1:
+    raise RuntimeError(f"processed effect gate: expected one match, found {effect_source.count(processed_old)}")
+effect_source = effect_source.replace(
+    processed_old,
+    'this.processedAudioTrack.enabled = this.canTransmitOutgoingAudio()',
+    1,
+)
 
-processed_old = "        this.applyOutgoingAudioGate()\n        if (this.peerConnection) {"
-processed_new = "        this.processedAudioTrack.enabled = this.canTransmitOutgoingAudio()\n        if (this.peerConnection) {"
-if processed_old not in text:
-    raise RuntimeError("processed voice-expression proposed gate not found")
-text = text.replace(processed_old, processed_new, 1)
+live = live[:effect_start] + effect_source + live[effect_end:]
+
+'''
+text = text[:effect_plan_start] + effect_plan + text[init_plan_start:]
 
 path.write_text(text)
 print("TEAM6_REMEDIATION_HARNESS_PREPARED")
