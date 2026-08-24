@@ -171,6 +171,73 @@ defmodule StrangertalksNew.RelationshipConsentSafetyReviewTest do
              SafetyReviews.dismiss_review(review.safety_review_id, "different", nil)
   end
 
+  test "conflicting concurrent terminal safety review decisions serialize to one winner" do
+    {conversation, participant_a, _participant_b} = completed_conversation_fixture()
+
+    assert {:ok, %Report{} = report} =
+             Reports.submit_conversation_report(
+               conversation.conversation_id,
+               participant_a.participant_id,
+               "THREATS",
+               "concurrent terminal decision evidence"
+             )
+
+    review = Repo.get_by!(SafetyReview, report_id: report.report_id)
+    parent = self()
+
+    resolve_task =
+      Task.async(fn ->
+        send(parent, {:ready, self()})
+
+        receive do
+          :go ->
+            SafetyReviews.resolve_review(
+              review.safety_review_id,
+              :CRITICAL,
+              "escalate",
+              "resolve path"
+            )
+        end
+      end)
+
+    dismiss_task =
+      Task.async(fn ->
+        send(parent, {:ready, self()})
+
+        receive do
+          :go -> SafetyReviews.dismiss_review(review.safety_review_id, "dismiss", "dismiss path")
+        end
+      end)
+
+    assert_receive {:ready, resolve_pid}, 1_000
+    assert_receive {:ready, dismiss_pid}, 1_000
+    send(resolve_pid, :go)
+    send(dismiss_pid, :go)
+
+    results = [Task.await(resolve_task, 5_000), Task.await(dismiss_task, 5_000)]
+
+    assert Enum.count(results, &match?({:ok, %SafetyReview{}}, &1)) == 1
+
+    assert Enum.count(
+             results,
+             &match?({:error, :conflicting_terminal_decision}, &1)
+           ) == 1
+
+    persisted = Repo.get!(SafetyReview, review.safety_review_id)
+
+    case persisted.status do
+      :RESOLVED ->
+        assert persisted.severity_level == :CRITICAL
+        assert persisted.resolution == "escalate"
+        assert persisted.review_notes == "resolve path"
+
+      :DISMISSED ->
+        assert is_nil(persisted.severity_level)
+        assert persisted.resolution == "dismiss"
+        assert persisted.review_notes == "dismiss path"
+    end
+  end
+
   defp completed_conversation_fixture do
     participant_a = participant_fixture()
     participant_b = participant_fixture()
