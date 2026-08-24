@@ -63,12 +63,13 @@ defmodule StrangertalksNew.GifProvider do
   def resolve_reference(_), do: {:error, :invalid_payload}
 
   defp call_adapter(query) do
-    task = Task.async(fn -> adapter().search(query) end)
+    task = Task.async(fn -> safe_adapter_search(query) end)
 
     result =
       case Task.yield(task, provider_timeout_ms()) || Task.shutdown(task, :brutal_kill) do
         {:ok, value} -> value
         nil -> {:error, :provider_timeout}
+        {:exit, _reason} -> {:error, :provider_error}
       end
 
     case result do
@@ -76,6 +77,10 @@ defmodule StrangertalksNew.GifProvider do
       {:error, reason} -> {:error, reason}
       _ -> {:error, :malformed_provider_response}
     end
+  end
+
+  defp safe_adapter_search(query) do
+    adapter().search(query)
   rescue
     _ -> {:error, :provider_error}
   catch
