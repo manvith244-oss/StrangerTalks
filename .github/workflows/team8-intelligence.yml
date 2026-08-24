@@ -15,6 +15,7 @@ on:
       - "lib/mix/tasks/strangertalks.intelligence.ex"
       - "lib/mix/tasks/strangertalks.agents.ex"
       - "test/strangertalks_new/intelligence_v1_test.exs"
+      - "test/strangertalks_new/intelligence_v1_hostile_test.exs"
       - "test/strangertalks_new/analytics_record_test.exs"
       - "test/strangertalks_new/learning_record_test.exs"
       - "docs/TEAM8_INTELLIGENCE_V1.md"
@@ -88,6 +89,7 @@ jobs:
           set -o pipefail
           mix test \
             test/strangertalks_new/intelligence_v1_test.exs \
+            test/strangertalks_new/intelligence_v1_hostile_test.exs \
             test/strangertalks_new/analytics_record_test.exs \
             test/strangertalks_new/learning_record_test.exs \
             test/strangertalks_new/agent_systems_remediation_test.exs \
