@@ -1,0 +1,97 @@
+name: Team 9 Prepare Exact Implementation
+
+on:
+  push:
+    branches:
+      - newteam/normal-media-sharing
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.actor != 'team9-normal-media-bot'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: newteam/normal-media-sharing
+          fetch-depth: 0
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Make ambiguous acknowledgement copy truthful
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path("priv/static/assets/normal_media_runtime.mjs"): [
+                  (
+                      'Send failed. Nothing was delivered here. You can retry.',
+                      'Send not confirmed. You can retry safely.'
+                  ),
+                  (
+                      'Media send failed. You can retry without creating a duplicate.',
+                      'Media send was not confirmed. Retrying uses the same message identity.'
+                  ),
+              ],
+              Path("test/js/normal_media_test.mjs"): [
+                  (
+                      'Media send failed\\. You can retry without creating a duplicate',
+                      'Media send was not confirmed\\. Retrying uses the same message identity'
+                  ),
+              ],
+              Path("test/js/normal_media_browser_test.mjs"): [
+                  ('hasText: "Send failed"', 'hasText: "Send not confirmed"'),
+              ],
+          }
+
+          for path, pairs in replacements.items():
+              text = path.read_text()
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f"missing expected text in {path}: {old}")
+                  text = text.replace(old, new)
+              path.write_text(text)
+          PY
+
+      - name: Format only Team 9 Elixir changes
+        run: |
+          mix format \
+            lib/strangertalks_new/application.ex \
+            lib/strangertalks_new/conversation_lifecycle/normal_media_store.ex \
+            lib/strangertalks_new_web/controllers/normal_media_controller.ex \
+            lib/strangertalks_new_web/router.ex \
+            test/strangertalks_new/normal_media_store_test.exs \
+            test/strangertalks_new_web/controllers/normal_media_controller_test.exs
+
+      - name: Focused static client proof
+        run: |
+          node --test test/js/normal_media_test.mjs
+          git diff --check
+
+      - name: Remove preparation workflow and commit exact result
+        run: |
+          git rm .github/workflows/team9-prepare.yml
+          git config user.name "team9-normal-media-bot"
+          git config user.email "team9-normal-media-bot@users.noreply.github.com"
+          git add \
+            priv/static/assets/normal_media_runtime.mjs \
+            test/js/normal_media_test.mjs \
+            test/js/normal_media_browser_test.mjs \
+            lib/strangertalks_new/application.ex \
+            lib/strangertalks_new/conversation_lifecycle/normal_media_store.ex \
+            lib/strangertalks_new_web/controllers/normal_media_controller.ex \
+            lib/strangertalks_new_web/router.ex \
+            test/strangertalks_new/normal_media_store_test.exs \
+            test/strangertalks_new_web/controllers/normal_media_controller_test.exs
+          git commit -m "fix(team9): format and harden acknowledgement truth"
+          git push origin HEAD:newteam/normal-media-sharing
