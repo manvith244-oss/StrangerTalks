@@ -134,6 +134,8 @@ for (const device of DEVICES) {
 
       await page.fill("#message-input", "hello")
       assert.equal(await page.locator("#message-form").evaluate((form) => form.classList.contains("has-text")), true)
+      assert.equal(await page.locator("#message-form").evaluate((form) => form.classList.contains("ig-tray-open")), false)
+      assert.equal(await page.locator(".ig-compose-plus").getAttribute("aria-expanded"), "false")
       assert.equal(await page.locator("#message-form .compose > .primary").evaluate((button) => getComputedStyle(button).pointerEvents !== "none"), true)
     } finally {
       await context.close()
