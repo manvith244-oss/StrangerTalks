@@ -104,6 +104,8 @@ defmodule StrangertalksNewWeb.NormalMediaControllerTest do
     assert payload["client_message_id"] == message_id
     assert payload["kind"] == "photo"
     assert payload["idempotent"] == false
+    assert payload["anchor_sequence"] == 0
+    assert payload["anchor_ordinal"] == 1
     refute Map.has_key?(payload, "filename")
 
     duplicate =
@@ -112,7 +114,10 @@ defmodule StrangertalksNewWeb.NormalMediaControllerTest do
       |> put_req_header("content-type", "application/octet-stream")
       |> post(path, media)
 
-    assert json_response(duplicate, 200)["idempotent"] == true
+    duplicate_payload = json_response(duplicate, 200)
+    assert duplicate_payload["idempotent"] == true
+    assert duplicate_payload["anchor_sequence"] == 0
+    assert duplicate_payload["anchor_ordinal"] == 1
 
     list =
       build_conn()
@@ -139,6 +144,130 @@ defmodule StrangertalksNewWeb.NormalMediaControllerTest do
     assert get_resp_header(second_open, "cache-control") == ["no-store, private"]
     assert get_resp_header(second_open, "x-content-type-options") == ["nosniff"]
     assert get_resp_header(second_open, "content-disposition") == ["inline"]
+  end
+
+  test "media accepted then text accepted anchors media before text", %{
+    conn: conn,
+    conversation: conversation,
+    sender_id: sender_id,
+    sender_token: token
+  } do
+    media_id = Ecto.UUID.generate()
+
+    media =
+      conn
+      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post(
+        "/api/conversations/#{conversation.conversation_id}/normal-media/#{media_id}/photo",
+        valid_jpeg()
+      )
+      |> json_response(201)
+
+    assert media["anchor_sequence"] == 0
+    assert {:ok, %{sequence: 1}} =
+             ConversationServer.append_message(
+               conversation.conversation_id,
+               sender_id,
+               Ecto.UUID.generate(),
+               "text after media"
+             )
+  end
+
+  test "text accepted then media accepted anchors text before media", %{
+    conn: conn,
+    conversation: conversation,
+    sender_id: sender_id,
+    sender_token: token
+  } do
+    assert {:ok, %{sequence: 1}} =
+             ConversationServer.append_message(
+               conversation.conversation_id,
+               sender_id,
+               Ecto.UUID.generate(),
+               "text before media"
+             )
+
+    media_id = Ecto.UUID.generate()
+
+    media =
+      conn
+      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post(
+        "/api/conversations/#{conversation.conversation_id}/normal-media/#{media_id}/photo",
+        valid_jpeg()
+      )
+      |> json_response(201)
+
+    assert media["anchor_sequence"] == 1
+    assert media["anchor_ordinal"] == 1
+  end
+
+  test "media1 text media2 keeps canonical boundaries and stable retry anchor", %{
+    conn: conn,
+    conversation: conversation,
+    sender_id: sender_id,
+    sender_token: token,
+    recipient_token: recipient_token
+  } do
+    first_id = Ecto.UUID.generate()
+    second_id = Ecto.UUID.generate()
+
+    first_path =
+      "/api/conversations/#{conversation.conversation_id}/normal-media/#{first_id}/photo"
+
+    first =
+      conn
+      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post(first_path, valid_jpeg())
+      |> json_response(201)
+
+    assert first["anchor_sequence"] == 0
+
+    assert {:ok, %{sequence: 1}} =
+             ConversationServer.append_message(
+               conversation.conversation_id,
+               sender_id,
+               Ecto.UUID.generate(),
+               "middle text"
+             )
+
+    second =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post(
+        "/api/conversations/#{conversation.conversation_id}/normal-media/#{second_id}/photo",
+        valid_jpeg(0x13)
+      )
+      |> json_response(201)
+
+    assert second["anchor_sequence"] == 1
+
+    retry =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{token}")
+      |> put_req_header("content-type", "application/octet-stream")
+      |> post(first_path, valid_jpeg())
+      |> json_response(200)
+
+    assert retry["idempotent"] == true
+    assert retry["anchor_sequence"] == 0
+    assert retry["anchor_ordinal"] == 1
+
+    items =
+      build_conn()
+      |> put_req_header("authorization", "Bearer #{recipient_token}")
+      |> get("/api/conversations/#{conversation.conversation_id}/normal-media")
+      |> json_response(200)
+      |> Map.fetch!("items")
+
+    assert Enum.map(items, &{&1["client_message_id"], &1["anchor_sequence"]}) == [
+             {first_id, 0},
+             {second_id, 1}
+           ]
   end
 
   test "server ignores declared MIME and rejects spoofed active content", %{
