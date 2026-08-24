@@ -96,6 +96,13 @@ server = replace_between(
 )
 server_path.write_text(server)
 
+# The direct remediation script is temporary Python that emits Elixir source.
+# Repair Python string escaping so Elixir default arguments retain two backslashes.
+c11_path = Path("lib/strangertalks_new/c11_policy.ex")
+c11 = c11_path.read_text()
+c11 = c11.replace("now \\ nil) do", "now \\\\ nil) do")
+c11_path.write_text(c11)
+
 runtime_path = Path("config/runtime.exs")
 runtime = runtime_path.read_text()
 turn_start = runtime.find('turn_oracle_urls = System.get_env("TURN_ORACLE_URLS"')
