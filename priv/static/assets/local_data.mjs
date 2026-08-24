@@ -299,7 +299,12 @@ export async function listRecords() { return request("readonly", (store) => stor
 export async function putRecord(record) { if (!validRecord(record)) throw new Error("invalid_record"); return request("readwrite", (store) => store.put(record)) }
 export async function deleteRecord(id) { return request("readwrite", (store) => store.delete(id)) }
 export async function clearRecords() { return request("readwrite", (store) => store.clear()) }
-export async function importRecords(imported) { const merged = mergeRecords(await listRecords(), imported); await clearRecords(); for (const record of merged) await putRecord(record); return merged }
+export async function importRecords(imported) {
+  if (!Array.isArray(imported) || imported.some((record) => !validRecord(record))) throw new Error("invalid_record")
+  const merged = mergeRecords(await listRecords(), imported)
+  await replaceRecords(merged)
+  return merged
+}
 export async function replaceRecords(records, indexedDb = indexedDB) {
   if (!Array.isArray(records) || records.some((record) => !validRecord(record))) throw new Error("invalid_record")
   return atomicReplaceRecords(records, indexedDbAdapter(indexedDb))
