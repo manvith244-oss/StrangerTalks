@@ -119,6 +119,8 @@ jobs:
           exit 1
 
       - name: Team 3 Conversation browser attacks
+        id: hardened_browser
+        continue-on-error: true
         run: node --test test/js/team3_conversation_experience_gate_test.mjs
 
       - name: Existing real-stack browser regression
@@ -192,7 +194,17 @@ jobs:
           test ! -s /tmp/team3-status
 
       - name: Record exact Team 3 tested commit
-        run: echo "TEAM3_CONVERSATION_EXPERIENCE_TESTED_COMMIT=$(git rev-parse HEAD)"
+        run: |
+          echo "EXPECTED_TEAM3_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "CHECKED_OUT_TEAM3_COMMIT=$(git rev-parse HEAD)"
+          echo "TEAM3_CONVERSATION_EXPERIENCE_TESTED_COMMIT=$(git rev-parse HEAD)"
+
+      - name: Preserve hardened browser failure as closure blocker
+        if: steps.hardened_browser.outcome != 'success'
+        run: |
+          echo "HARDENED_TEAM3_BROWSER_OUTCOME=${{ steps.hardened_browser.outcome }}"
+          echo "Independent closure evidence completed, but hardened Team 3 browser proof remains red."
+          exit 1
 
       - name: Phoenix log on failure
         if: failure()
