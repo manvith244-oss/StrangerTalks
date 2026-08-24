@@ -16,6 +16,7 @@ defmodule StrangertalksNew.GifProvider do
   @max_dimension 4096
   @reference_salt "gif-result-v1"
   @reference_max_age 600
+  @default_provider_timeout_ms 4_000
 
   def configured? do
     adapter() != StrangertalksNew.GifProvider.Disabled and allowed_media_hosts() != []
@@ -62,7 +63,15 @@ defmodule StrangertalksNew.GifProvider do
   def resolve_reference(_), do: {:error, :invalid_payload}
 
   defp call_adapter(query) do
-    case adapter().search(query) do
+    task = Task.async(fn -> adapter().search(query) end)
+
+    result =
+      case Task.yield(task, provider_timeout_ms()) || Task.shutdown(task, :brutal_kill) do
+        {:ok, value} -> value
+        nil -> {:error, :provider_timeout}
+      end
+
+    case result do
       {:ok, results} when is_list(results) -> normalize_results(results)
       {:error, reason} -> {:error, reason}
       _ -> {:error, :malformed_provider_response}
@@ -139,6 +148,13 @@ defmodule StrangertalksNew.GifProvider do
     |> Enum.filter(&is_binary/1)
     |> Enum.map(&String.downcase/1)
     |> Enum.uniq()
+  end
+
+  defp provider_timeout_ms do
+    case Application.get_env(:strangertalks_new, :gif_provider_timeout_ms, @default_provider_timeout_ms) do
+      value when is_integer(value) and value >= 25 and value <= 10_000 -> value
+      _ -> @default_provider_timeout_ms
+    end
   end
 
   defp adapter do
