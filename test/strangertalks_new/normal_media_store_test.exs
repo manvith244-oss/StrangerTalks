@@ -9,7 +9,7 @@ defmodule StrangertalksNew.NormalMediaStoreTest do
     {:ok, conversation_id: conversation_id}
   end
 
-  test "same logical upload is idempotent and conflicting content is rejected", %{
+  test "same logical upload is idempotent and preserves its original ordering anchor", %{
     conversation_id: conversation_id
   } do
     sender_id = Ecto.UUID.generate()
@@ -24,7 +24,8 @@ defmodule StrangertalksNew.NormalMediaStoreTest do
                message_id,
                binary,
                metadata,
-               self()
+               self(),
+               3
              )
 
     assert {:ok, second, :duplicate} =
@@ -34,11 +35,15 @@ defmodule StrangertalksNew.NormalMediaStoreTest do
                message_id,
                binary,
                metadata,
-               self()
+               self(),
+               99
              )
 
     assert first.client_message_id == second.client_message_id
-    assert first.sequence == second.sequence
+    assert first.anchor_sequence == 3
+    assert first.anchor_ordinal == 1
+    assert second.anchor_sequence == 3
+    assert second.anchor_ordinal == 1
 
     other = "different-media"
 
@@ -49,14 +54,12 @@ defmodule StrangertalksNew.NormalMediaStoreTest do
                message_id,
                other,
                metadata(other),
-               self()
+               self(),
+               3
              )
-
-    assert {:ok, items} = NormalMediaStore.list_media(conversation_id, sender_id)
-    assert Enum.map(items, & &1.client_message_id) == [message_id]
   end
 
-  test "two rapid media sends retain independent identities and order", %{
+  test "multiple media accepted at one Conversation boundary get deterministic ordinals", %{
     conversation_id: conversation_id
   } do
     sender_id = Ecto.UUID.generate()
@@ -70,7 +73,8 @@ defmodule StrangertalksNew.NormalMediaStoreTest do
                first_id,
                "first",
                metadata("first"),
-               self()
+               self(),
+               7
              )
 
     assert {:ok, second, :created} =
@@ -80,12 +84,50 @@ defmodule StrangertalksNew.NormalMediaStoreTest do
                second_id,
                "second",
                metadata("second"),
-               self()
+               self(),
+               7
              )
 
-    assert first.sequence < second.sequence
+    assert first.anchor_sequence == 7
+    assert second.anchor_sequence == 7
+    assert first.anchor_ordinal == 1
+    assert second.anchor_ordinal == 2
+
     assert {:ok, items} = NormalMediaStore.list_media(conversation_id, sender_id)
     assert Enum.map(items, & &1.client_message_id) == [first_id, second_id]
+  end
+
+  test "media at later Conversation boundaries sort after earlier anchors", %{
+    conversation_id: conversation_id
+  } do
+    sender_id = Ecto.UUID.generate()
+    later_id = Ecto.UUID.generate()
+    earlier_id = Ecto.UUID.generate()
+
+    assert {:ok, _later, :created} =
+             NormalMediaStore.put_media(
+               conversation_id,
+               sender_id,
+               later_id,
+               "later",
+               metadata("later"),
+               self(),
+               2
+             )
+
+    assert {:ok, _earlier, :created} =
+             NormalMediaStore.put_media(
+               conversation_id,
+               sender_id,
+               earlier_id,
+               "earlier",
+               metadata("earlier"),
+               self(),
+               1
+             )
+
+    assert {:ok, items} = NormalMediaStore.list_media(conversation_id, sender_id)
+    assert Enum.map(items, & &1.client_message_id) == [earlier_id, later_id]
   end
 
   test "media is isolated by Conversation id", %{conversation_id: conversation_id} do
@@ -102,7 +144,8 @@ defmodule StrangertalksNew.NormalMediaStoreTest do
                message_id,
                "private",
                metadata("private"),
-               self()
+               self(),
+               0
              )
 
     assert {:error, :media_unavailable} =
@@ -129,7 +172,8 @@ defmodule StrangertalksNew.NormalMediaStoreTest do
                message_id,
                "temporary",
                metadata("temporary"),
-               owner
+               owner,
+               0
              )
 
     assert {:ok, "temporary", "image/jpeg"} =
