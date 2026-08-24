@@ -17,6 +17,7 @@ import {
 const css = fs.readFileSync(new URL("../../priv/static/assets/instagram_chat.css", import.meta.url), "utf8")
 const moduleSource = fs.readFileSync(new URL("../../priv/static/assets/instagram_chat.mjs", import.meta.url), "utf8")
 const thumbSource = fs.readFileSync(new URL("../../priv/static/assets/thumb_interactions.mjs", import.meta.url), "utf8")
+const appSource = fs.readFileSync(new URL("../../priv/static/assets/app.js", import.meta.url), "utf8")
 
 test("composer uses Instagram-like text/voice state without treating whitespace as a message", () => {
   assert.deepEqual(composerVisualState(""), {hasText: false})
@@ -83,8 +84,8 @@ test("composer tools tray supports outside-tap escape without hiding essential a
   assert.match(thumbSource, /document\.addEventListener\("pointerdown"/)
   assert.match(thumbSource, /!form\.classList\.contains\("ig-tray-open"\) \|\| form\.contains\(event\.target\)/)
   assert.match(thumbSource, /form\.classList\.remove\("ig-tray-open"\)/)
-  assert.match(moduleSource, /\.reply-action-btn/)
-  assert.match(moduleSource, /\.react-action-btn/)
+  assert.match(appSource, /\.reply-action-btn/)
+  assert.match(appSource, /\.react-action-btn/)
 })
 
 test("visual viewport height follows the live viewport even when a landscape keyboard leaves very little space", () => {
