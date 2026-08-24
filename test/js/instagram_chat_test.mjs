@@ -8,9 +8,15 @@ import {
   normalizedViewportHeight,
   shouldTriggerQuickHeart
 } from "../../priv/static/assets/instagram_chat.mjs"
+import {
+  coarseTargetMinimumPx,
+  isSystemEdgeStart,
+  shouldSuppressMessageRelease
+} from "../../priv/static/assets/thumb_interactions.mjs"
 
 const css = fs.readFileSync(new URL("../../priv/static/assets/instagram_chat.css", import.meta.url), "utf8")
 const moduleSource = fs.readFileSync(new URL("../../priv/static/assets/instagram_chat.mjs", import.meta.url), "utf8")
+const thumbSource = fs.readFileSync(new URL("../../priv/static/assets/thumb_interactions.mjs", import.meta.url), "utf8")
 
 test("composer uses Instagram-like text/voice state without treating whitespace as a message", () => {
   assert.deepEqual(composerVisualState(""), {hasText: false})
@@ -44,6 +50,43 @@ test("quick-heart only accepts actual taps, not swipes or long presses", () => {
   assert.equal(isTapGesture(null, {time: 1100, x: 40, y: 60}), false)
 })
 
+test("system edge reserve protects both left and right navigation gestures", () => {
+  assert.equal(isSystemEdgeStart(0, 390), true)
+  assert.equal(isSystemEdgeStart(24, 390), true)
+  assert.equal(isSystemEdgeStart(25, 390), false)
+  assert.equal(isSystemEdgeStart(365, 390), false)
+  assert.equal(isSystemEdgeStart(366, 390), true)
+  assert.equal(isSystemEdgeStart(389, 390), true)
+})
+
+test("message release arbitration prevents system-edge and post-long-press double actions", () => {
+  const edgeStart = {time: 1000, x: 10, y: 300}
+  assert.equal(shouldSuppressMessageRelease(edgeStart, {time: 1180, x: 72, y: 304}, {viewportWidth: 390}), true)
+
+  const centerStart = {time: 1000, x: 180, y: 300}
+  assert.equal(shouldSuppressMessageRelease(centerStart, {time: 1180, x: 242, y: 304}, {viewportWidth: 390}), false)
+  assert.equal(shouldSuppressMessageRelease(centerStart, {time: 1520, x: 244, y: 304}, {viewportWidth: 390}), true)
+
+  const verticalScrollAtEdge = {time: 1000, x: 10, y: 300}
+  assert.equal(shouldSuppressMessageRelease(verticalScrollAtEdge, {time: 1180, x: 18, y: 365}, {viewportWidth: 390}), false)
+})
+
+test("coarse-pointer mainstream target floor is 48px without changing visual icon size", () => {
+  assert.equal(coarseTargetMinimumPx(), 48)
+  assert.match(thumbSource, /@media \(hover: none\) and \(pointer: coarse\)/)
+  assert.match(thumbSource, /\.ig-chat-back,[\s\S]*min-height: \$\{COARSE_TARGET_PX\}px/)
+  assert.match(thumbSource, /\.compose #view-once-picker-btn[\s\S]*min-width: \$\{COARSE_TARGET_PX\}px/)
+  assert.match(thumbSource, /\.message-action-btn,[\s\S]*min-height: \$\{COARSE_TARGET_PX\}px/)
+})
+
+test("composer tools tray supports outside-tap escape without hiding essential actions behind gestures", () => {
+  assert.match(thumbSource, /document\.addEventListener\("pointerdown"/)
+  assert.match(thumbSource, /!form\.classList\.contains\("ig-tray-open"\) \|\| form\.contains\(event\.target\)/)
+  assert.match(thumbSource, /form\.classList\.remove\("ig-tray-open"\)/)
+  assert.match(moduleSource, /\.reply-action-btn/)
+  assert.match(moduleSource, /\.react-action-btn/)
+})
+
 test("visual viewport height follows the live viewport even when a landscape keyboard leaves very little space", () => {
   assert.equal(normalizedViewportHeight(640.4, 800), 640)
   assert.equal(normalizedViewportHeight(undefined, 812), 812)
@@ -73,6 +116,7 @@ test("chat hardening covers short keyboards, landscape notches, iOS zoom and coa
   assert.match(moduleSource, /input\.style\.fontSize = "16px"/)
   assert.match(moduleSource, /\.reaction-picker \.reaction-btn[\s\S]*width: 44px/)
   assert.match(moduleSource, /\.message-action-btn,[\s\S]*min-height: 44px/)
+  assert.match(thumbSource, /COARSE_TARGET_PX = 48/)
 })
 
 test("short Conversation panels remain scrollable instead of clipping escape controls", () => {
