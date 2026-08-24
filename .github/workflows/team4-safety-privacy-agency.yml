@@ -67,6 +67,9 @@ jobs:
       - name: Install Elixir dependencies
         run: mix deps.get
 
+      - name: Reject retired or vulnerable Hex dependencies
+        run: mix hex.audit
+
       - name: Focused safety privacy agency Elixir attacks
         run: |
           mix test \
