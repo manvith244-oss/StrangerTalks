@@ -160,8 +160,12 @@ defmodule StrangertalksNew.ConversationLifecycle.RecoverySweeper do
                StrangertalksNew.ConversationDynamicSupervisor,
                pid
              ) do
-          :ok -> :ok
-          {:error, :not_found} -> :ok
+          :ok ->
+            :ok
+
+          {:error, :not_found} ->
+            :ok
+
           {:error, reason} ->
             Logger.warning("RecoverySweeper could not terminate terminal runtime",
               recovery_kind: :terminal_runtime_cleanup,
