@@ -32,8 +32,10 @@ jobs:
 
     env:
       MIX_ENV: test
+      PORT: "4002"
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
 
     steps:
       - name: Checkout exact Team 5 HEAD
@@ -44,9 +46,14 @@ jobs:
       - name: Record entry state
         shell: bash
         run: |
+          set -euo pipefail
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
           echo "EVENT_REF=${GITHUB_REF_NAME}"
-          echo "HEAD=$(git rev-parse HEAD)"
+          echo "EXPECTED_TEAM5_COMMIT=$expected"
+          echo "HEAD=$actual"
           echo "BRANCH=$(git branch --show-current)"
+          test "$actual" = "$expected"
           git status --porcelain
 
       - name: Set up BEAM
@@ -59,14 +66,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
 
       - name: Install Hex and Rebar
         run: |
           mix local.hex --force
           mix local.rebar --force
 
-      - name: Install Elixir dependencies
-        run: mix deps.get
+      - name: Install Elixir and browser dependencies
+        run: |
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
 
       - name: Prove committed Elixir formatting
         shell: bash
@@ -120,6 +131,82 @@ jobs:
           test "${#tests[@]}" -gt 0
           node --test "${tests[@]}"
 
+      - name: Prepare isolated browser reliability database
+        env:
+          MIX_TEST_PARTITION: _team5_browser
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix for real browser reliability proof
+        env:
+          MIX_TEST_PARTITION: _team5_browser
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/team5-browser-server.log 2>&1 &
+          echo $! > /tmp/team5-browser-server.pid
+
+          for attempt in $(seq 1 45); do
+            pid="$(cat /tmp/team5-browser-server.pid)"
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "Phoenix exited before becoming ready."
+              cat /tmp/team5-browser-server.log
+              exit 1
+            fi
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null; then
+              echo "Phoenix browser reliability endpoint is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "Phoenix did not become ready on the configured browser endpoint."
+          cat /tmp/team5-browser-server.log
+          exit 1
+
+      - name: Real two-browser Conversation reliability journey
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test test/js/conversation_reliability_browser_test.mjs
+
+      - name: Stop Phoenix browser reliability server
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f /tmp/team5-browser-server.pid ]; then
+            pid="$(cat /tmp/team5-browser-server.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                break
+              fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then
+              kill -9 "$pid" 2>/dev/null || true
+            fi
+          fi
+
+      - name: Browser server log on failure
+        if: failure()
+        run: cat /tmp/team5-browser-server.log || true
+
+      - name: Drop isolated browser reliability database
+        if: always()
+        env:
+          MIX_TEST_PARTITION: _team5_browser
+        run: mix ecto.drop --quiet || true
+
       - name: Full Elixir precommit
         run: mix precommit
 
@@ -130,14 +217,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "STATUS_SHORT_BRANCH:"
+          git status --short --branch
           status=$(git status --porcelain)
+          echo "STATUS_PORCELAIN:"
           printf '%s\n' "$status"
           if [ -n "$status" ]; then
-            echo "--- post-precommit diff begin ---"
+            echo "--- post-gate diff begin ---"
             git diff --no-ext-diff -- .
-            echo "--- post-precommit diff end ---"
+            echo "--- post-gate diff end ---"
             exit 1
           fi
 
       - name: Record exact tested commit
-        run: echo "TESTED_COMMIT=$(git rev-parse HEAD)"
+        run: echo "TEAM5_TESTED_COMMIT=$(git rev-parse HEAD)"
