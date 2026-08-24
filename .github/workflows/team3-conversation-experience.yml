@@ -1,9 +1,6 @@
 name: Team 3 Conversation Experience Proof
 
 on:
-  push:
-    branches:
-      - team3/conversation-experience-proof
   pull_request:
     branches:
       - feature/instagram-chat-ui
