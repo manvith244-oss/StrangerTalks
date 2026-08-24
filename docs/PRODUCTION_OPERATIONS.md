@@ -142,7 +142,7 @@ Example from a trusted operator environment with PostgreSQL client tools install
 
 ```bash
 DATABASE_URL='postgresql://...' \
-  ./ops/postgres_backup.sh /secure/path/strangertalks.dump
+  bash ops/postgres_backup.sh /secure/path/strangertalks.dump
 ```
 
 The backup file contains user data. Store it in an access-controlled, encrypted location outside the ephemeral Render web-service filesystem. Do not upload production dumps to GitHub Actions artifacts or source control merely for convenience.
@@ -154,7 +154,7 @@ Restore is deliberately guarded and destructive to the chosen target:
 ```bash
 RESTORE_DATABASE_URL='postgresql://...' \
 CONFIRM_RESTORE=RESTORE_STRANGERTALKS \
-  ./ops/postgres_restore.sh /secure/path/strangertalks.dump
+  bash ops/postgres_restore.sh /secure/path/strangertalks.dump
 ```
 
 Run drills only against an isolated target database unless an actual incident has been declared.
