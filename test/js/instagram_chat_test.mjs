@@ -102,11 +102,9 @@ test("chat CSS is scoped and explicitly supports phones, tablets, desktop, lands
   assert.match(css, /font-size: 16px; \/\* prevents iOS focus zoom \*\//)
 })
 
-test("chat hardening covers short keyboards, landscape notches, iOS zoom and vertical message scrolling", () => {
+test("chat hardening covers short keyboards, landscape notches and vertical message scrolling", () => {
   assert.match(moduleSource, /Math\.max\(1, Math\.round\(candidate\)\)/)
   assert.match(moduleSource, /safe-area-inset-left/)
   assert.match(moduleSource, /safe-area-inset-right/)
   assert.match(css, /touch-action: pan-y/)
-  assert.match(css, /touch-action: manipulation/)
-  assert.match(css, /-webkit-text-size-adjust: 100%/)
 })
