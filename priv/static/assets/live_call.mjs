@@ -52,7 +52,7 @@ export function attachMediaStream(element, stream, coordinator = null) {
 
   // Before canonical Accept / during ringing: remote playback cannot activate
   if (coordinator) {
-    const isPlaybackAllowed = [CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(coordinator.status)
+    const isPlaybackAllowed = coordinator.status === CALL_STATUS.ACTIVE
     if (!isPlaybackAllowed || !coordinator.callAttemptId) {
       if (element.srcObject) {
         element.srcObject = null
@@ -80,7 +80,7 @@ export function attachMediaStream(element, stream, coordinator = null) {
             if (
               coordinator.callAttemptId === currentAttemptId &&
               coordinator.playbackAttemptGeneration === currentGen &&
-              [CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(coordinator.status)
+              coordinator.status === CALL_STATUS.ACTIVE
             ) {
               coordinator.mediaReady = true
               coordinator.playbackBlocked = false
@@ -184,6 +184,9 @@ export class LiveCallCoordinator {
     this.pendingCandidates = []
     this.credentials = null
     this.connectingTimer = null
+    this.transportAudioTransceiver = null
+    this.transportVideoTransceiver = null
+    this.activeMediaAcquisitionGeneration = 0
   }
 
   setChannel(channel) {
@@ -255,6 +258,16 @@ mediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection = this.peer
     this.callAttemptId === callAttemptId &&
     this.mediaGeneration === mediaGeneration &&
     [CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status) &&
+    (!peerConnection || this.peerConnection === peerConnection)
+  )
+}
+
+activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection = this.peerConnection) {
+  return Boolean(
+    callAttemptId &&
+    this.callAttemptId === callAttemptId &&
+    this.mediaGeneration === mediaGeneration &&
+    this.status === CALL_STATUS.ACTIVE &&
     (!peerConnection || this.peerConnection === peerConnection)
   )
 }
@@ -352,7 +365,7 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
 }
 
   handleMediaRequested({ call_attempt_id, media_request_id, request_type, proposal, requester_id }) {
-    if (this.callAttemptId !== call_attempt_id) return
+    if (this.callAttemptId !== call_attempt_id || this.status !== CALL_STATUS.ACTIVE) return
     const mode = proposal?.mode === "REVEAL_TOGETHER" ? "REVEAL_TOGETHER" : "STANDARD_VIDEO"
     this.revealState = {
       mediaRequestId: media_request_id,
@@ -373,7 +386,7 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
   }
 
   handleMediaUpdated({ call_attempt_id, media_generation, active_media, return_to_voice, actor_id }) {
-    if (this.callAttemptId !== call_attempt_id) return
+    if (this.callAttemptId !== call_attempt_id || this.status !== CALL_STATUS.ACTIVE) return
     this.mediaGeneration = media_generation
 
     const hasVideo = active_media?.video && Object.keys(active_media.video).length > 0 && Object.values(active_media.video).some(Boolean)
@@ -452,7 +465,7 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
 
   handleReaction({ call_attempt_id, reaction_event_id, reaction, sender_id, timestamp }) {
     if (this.callAttemptId !== call_attempt_id) return
-    if (![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)) return
+    if (this.status !== CALL_STATUS.ACTIVE) return
     if (!REACTION_WHITELIST.includes(reaction)) return
 
     // In-RAM Deduplication
@@ -478,7 +491,7 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
   }
 
   handleRevealReady({ call_attempt_id, media_request_id, participant_id, ready }) {
-    if (this.callAttemptId !== call_attempt_id) return
+    if (this.callAttemptId !== call_attempt_id || this.status !== CALL_STATUS.ACTIVE) return
     if (this.revealState.mediaRequestId && this.revealState.mediaRequestId !== media_request_id) return
     if (participant_id !== this.participantId) {
       this.revealState.peerReady = Boolean(ready)
@@ -487,7 +500,7 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
   }
 
   handleRevealCommitted({ call_attempt_id, media_request_id }) {
-    if (this.callAttemptId !== call_attempt_id) return
+    if (this.callAttemptId !== call_attempt_id || this.status !== CALL_STATUS.ACTIVE) return
     if (this.revealState.mediaRequestId && this.revealState.mediaRequestId !== media_request_id) return
     if (!this.revealState.localReady || this.localVisualFloorClosed || this.revealState.mode !== "REVEAL_TOGETHER") {
       // Not Ready local privacy floor or stale/withdrawn ready: camera stays closed
@@ -602,7 +615,7 @@ async toggleMute() {
   // --- Return to Voice (Defect 1: 1Q-RTV-01) ---
 
   async returnToVoice() {
-    if (this.status !== CALL_STATUS.ACTIVE && this.status !== CALL_STATUS.CONNECTING) return
+    if (this.status !== CALL_STATUS.ACTIVE) return
     if (!this.callAttemptId) return
 
     // 1. Immediately establish document-RAM local visual privacy floor
@@ -663,7 +676,7 @@ async toggleMute() {
   }
 
   async acquireCameraStream() {
-    if (this.localVisualFloorClosed) return null
+    if (this.localVisualFloorClosed || this.status !== CALL_STATUS.ACTIVE || !this.callAttemptId) return null
     const currentGen = ++this.cameraAcquisitionGeneration
 
     if (!navigator.mediaDevices?.getUserMedia) return null
@@ -694,7 +707,7 @@ async toggleMute() {
   // --- Ephemeral Reactions (Defect 2: 1Q-DELIGHT-01) ---
 
   async sendReaction(reaction) {
-    if (![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status) || !this.callAttemptId) return
+    if (this.status !== CALL_STATUS.ACTIVE || !this.callAttemptId) return
     if (!REACTION_WHITELIST.includes(reaction)) {
       throw new Error("Invalid reaction: not in whitelist")
     }
@@ -761,7 +774,7 @@ async requestMediaUpgrade(requestType = "video_upgrade", proposal = {}) {
   // --- Reveal Together (Gap 1) ---
 
   async setRevealReady(mediaRequestId, ready = true) {
-    if (!this.callAttemptId) return
+    if (!this.callAttemptId || this.status !== CALL_STATUS.ACTIVE) return
     if (this.revealState.mediaRequestId && this.revealState.mediaRequestId !== mediaRequestId) return
     if (!this.revealState.mediaRequestId) {
       this.revealState.mediaRequestId = mediaRequestId
@@ -809,6 +822,7 @@ async requestMediaUpgrade(requestType = "video_upgrade", proposal = {}) {
   // --- Voice Expression V1 ---
 
   async setVoiceExpression(preset = "plain") {
+    if (this.status !== CALL_STATUS.ACTIVE || !this.callAttemptId) return
     if (!["plain", "warm_radio", "space_echo"].includes(preset)) preset = "plain"
     if (this.voiceEffectPreset === preset) return
     this.voiceEffectPreset = preset
@@ -976,6 +990,13 @@ async initializeWebRTC(isOfferSide = false) {
     peerConnection = new RTCPC(config)
     this.peerConnection = peerConnection
 
+    // CONNECTING establishes transport only. Hardware capture stays closed until ACTIVE.
+    if (!peerConnection.addTransceiver) {
+      throw new Error("WebRTC transceiver support is required for fail-closed media authority")
+    }
+    this.transportAudioTransceiver = peerConnection.addTransceiver("audio", {direction: "sendrecv"})
+    this.transportVideoTransceiver = peerConnection.addTransceiver("video", {direction: "sendrecv"})
+
     peerConnection.onicecandidate = (event) => {
       if (event.candidate && this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) {
         this.sendSignal(event.candidate)
@@ -984,11 +1005,13 @@ async initializeWebRTC(isOfferSide = false) {
 
     peerConnection.ontrack = (event) => {
       if (!this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) return
-      if (event.streams && event.streams[0]) this.onRemoteStream(event.streams[0])
-      else if (this.remoteStream && this.remoteStream.addTrack) {
+      if (event.streams && event.streams[0]) {
+        this.remoteStream = event.streams[0]
+      } else if (this.remoteStream && this.remoteStream.addTrack) {
         this.remoteStream.addTrack(event.track)
-        this.onRemoteStream(this.remoteStream)
       }
+      // Playback itself is ACTIVE-gated by attachMediaStream. Re-emit on ACTIVE below.
+      if (this.status === CALL_STATUS.ACTIVE) this.onRemoteStream(this.remoteStream)
     }
 
     peerConnection.oniceconnectionstatechange = () => {
@@ -996,31 +1019,13 @@ async initializeWebRTC(isOfferSide = false) {
       if (state === "connected" || state === "completed") {
         if (!this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) return
         this.status = CALL_STATUS.ACTIVE
-        if (this.callType === "video" && !this.localVisualFloorClosed) {
-          this.selfVideo = true
-          this.peerVideo = true
-        }
         this.applyOutgoingAudioGate()
         this.notifyStateChange()
+        if (this.remoteStream) this.onRemoteStream(this.remoteStream)
+        void this.activateLocalMedia(setupAttemptId, setupGeneration, peerConnection)
       } else if (state === "failed" && this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) {
         this.handleIceFailure()
       }
-    }
-
-    const needVideo = this.callType === "video" && !this.localVisualFloorClosed
-    if (navigator.mediaDevices?.getUserMedia) {
-      const acquiredStream = await navigator.mediaDevices.getUserMedia({audio: true, video: needVideo})
-      if (!this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) {
-        stopMediaTracks(acquiredStream)
-        return
-      }
-
-      this.localStream = acquiredStream
-      const audioTracks = acquiredStream.getAudioTracks ? acquiredStream.getAudioTracks() : []
-      if (audioTracks.length > 0) this.rawAudioTrack = audioTracks[0]
-      this.applyOutgoingAudioGate()
-      this.onLocalStream(acquiredStream)
-      for (const track of acquiredStream.getTracks()) peerConnection.addTrack(track, acquiredStream)
     }
 
     if (isOfferSide) {
@@ -1039,6 +1044,59 @@ async initializeWebRTC(isOfferSide = false) {
       this.teardown("connection_error")
     }
   }
+}
+
+async activateLocalMedia(callAttemptId, mediaGeneration, peerConnection) {
+  if (!this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)) return
+  if (!navigator.mediaDevices?.getUserMedia) return
+
+  const acquisitionGeneration = ++this.activeMediaAcquisitionGeneration
+  const needVideo = this.callType === "video" && !this.localVisualFloorClosed
+  let stream
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio: true, video: needVideo})
+  } catch (error) {
+    if (this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)) {
+      this.onError(error)
+      this.teardown("media_permission_failed")
+    }
+    return
+  }
+
+  if (
+    this.activeMediaAcquisitionGeneration !== acquisitionGeneration ||
+    !this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)
+  ) {
+    stopMediaTracks(stream)
+    return
+  }
+
+  this.localStream = stream
+  const audioTrack = stream.getAudioTracks?.()[0] || null
+  const videoTrack = stream.getVideoTracks?.()[0] || null
+  this.rawAudioTrack = audioTrack
+  this.rawCameraTrack = videoTrack
+  this.applyOutgoingAudioGate()
+
+  if (audioTrack && this.transportAudioTransceiver?.sender?.replaceTrack) {
+    await this.transportAudioTransceiver.sender.replaceTrack(audioTrack)
+  }
+  if (!this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)) {
+    stopMediaTracks(stream)
+    return
+  }
+
+  if (videoTrack && this.transportVideoTransceiver?.sender?.replaceTrack) {
+    await this.transportVideoTransceiver.sender.replaceTrack(videoTrack)
+  }
+  if (!this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)) {
+    stopMediaTracks(stream)
+    return
+  }
+
+  this.selfVideo = Boolean(videoTrack)
+  this.onLocalStream(stream)
+  this.notifyStateChange()
 }
 
 sendSignal(signal) {
@@ -1085,7 +1143,7 @@ async handleIceFailure() {
 
   async retryPlayback() {
     if (!this.remoteElement || !this.remoteStream) return
-    if (![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)) return
+    if (this.status !== CALL_STATUS.ACTIVE) return
     attachMediaStream(this.remoteElement, this.remoteStream, this)
   }
 
@@ -1136,6 +1194,9 @@ async handleIceFailure() {
     }
 
     this.pendingCandidates = []
+    this.transportAudioTransceiver = null
+    this.transportVideoTransceiver = null
+    this.activeMediaAcquisitionGeneration++
     this.presentedReactions.clear()
     this.callAttemptId = null
     this.role = null
