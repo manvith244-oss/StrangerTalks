@@ -75,7 +75,7 @@ text = text[:effect_plan_start] + effect_plan + text[init_plan_start:]
 # Replace the indentation-sensitive Screen Share edit plan with a complete public-method replacement.
 screen_plan_start = text.index('# Screen Share is frozen OUT OF V1.')
 screen_plan_end = text.index('live_path.write_text(live)', screen_plan_start)
-screen_plan = r'''# Screen Share is frozen OUT OF V1. Only Video upgrade is accepted by the public client method.
+screen_plan = r"""# Screen Share is frozen OUT OF V1. Only Video upgrade is accepted by the public client method.
 live = replace_between(
     live,
     '  async requestMediaUpgrade(requestType = "video_upgrade", proposal = {}) {',
@@ -100,7 +100,7 @@ live = replace_between(
     '''),
     "defer screen share client surface"
 )
-'''
+"""
 text = text[:screen_plan_start] + screen_plan + text[screen_plan_end:]
 
 path.write_text(text)
