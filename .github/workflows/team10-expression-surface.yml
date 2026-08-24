@@ -118,7 +118,10 @@ jobs:
           exit 1
 
       - name: Real Chromium Team 10 hostile proof
-        run: node --test test/js/team10_expression_browser_test.mjs
+        run: |
+          node --test \
+            test/js/team10_expression_browser_test.mjs \
+            test/js/team10_expression_actions_browser_test.mjs
 
       - name: Conversation and replay regressions
         run: |
