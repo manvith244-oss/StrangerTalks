@@ -5,6 +5,10 @@ on:
     branches: [newteam/expression-surface]
     paths:
       - "team10-patches/**"
+  pull_request:
+    branches: [release/prep-2026-08-22]
+    paths:
+      - "team10-patches/**"
 
 permissions:
   contents: write
