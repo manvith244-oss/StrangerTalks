@@ -106,6 +106,97 @@ defmodule StrangertalksNew.Team6MediaAuthorityTest do
     }
   end
 
+  test "stored authoritative endpoint accepts media-sensitive operations" do
+    %{conv: conv, p1: p1, p1_owner: owner, attempt: attempt} = active_call()
+
+    assert {:ok, %{provider: :oracle, call_attempt_id: ^attempt}} =
+             ConversationServer.request_call_credentials(
+               conv.conversation_id,
+               p1,
+               owner,
+               "p1-owner",
+               attempt
+             )
+
+    assert {:ok, %{is_muted: true}} =
+             ConversationServer.set_call_mute(
+               conv.conversation_id,
+               p1,
+               owner,
+               "p1-owner",
+               attempt,
+               true
+             )
+  end
+
+  test "correct endpoint PID with wrong or stale session is rejected" do
+    %{conv: conv, p1: p1, p1_owner: owner, attempt: attempt} = active_call()
+
+    assert {:error, :not_media_endpoint} =
+             ConversationServer.set_call_mute(
+               conv.conversation_id,
+               p1,
+               owner,
+               "p1-stale-session",
+               attempt,
+               true
+             )
+
+    assert {:error, :not_media_endpoint} =
+             ConversationServer.request_call_credentials(
+               conv.conversation_id,
+               p1,
+               owner,
+               "p1-stale-session",
+               attempt
+             )
+  end
+
+  test "correct session with wrong PID is rejected" do
+    %{conv: conv, p1: p1, attempt: attempt} = active_call()
+    sibling = endpoint()
+
+    assert {:error, :not_media_endpoint} =
+             ConversationServer.set_call_mute(
+               conv.conversation_id,
+               p1,
+               sibling,
+               "p1-owner",
+               attempt,
+               true
+             )
+
+    assert {:error, :not_media_endpoint} =
+             ConversationServer.request_call_credentials(
+               conv.conversation_id,
+               p1,
+               sibling,
+               "p1-owner",
+               attempt
+             )
+  end
+
+  test "Task process cannot become media endpoint by invoking the API" do
+    %{conv: conv, p1: p1, attempt: attempt} = active_call()
+
+    task =
+      Task.async(fn ->
+        ConversationServer.set_call_mute(
+          conv.conversation_id,
+          p1,
+          self(),
+          "p1-owner",
+          attempt,
+          true
+        )
+      end)
+
+    assert {:error, :not_media_endpoint} = Task.await(task)
+
+    assert {:ok, state} = ConversationServer.get_call_state(conv.conversation_id, p1)
+    assert state.self_muted == false
+  end
+
   test "sibling tab cannot mute or inject signaling for the authoritative media participant" do
     %{conv: conv, p1: p1, p1_owner: owner, attempt: attempt} = active_call()
     sibling = endpoint()
@@ -146,12 +237,21 @@ defmodule StrangertalksNew.Team6MediaAuthorityTest do
              )
   end
 
-  test "sibling tab cannot obtain relay credentials or control active media" do
+  test "sibling tab cannot obtain relay credentials, extend them, or control active media" do
     %{conv: conv, p1: p1, attempt: attempt} = active_call()
     sibling = endpoint()
 
     assert {:error, :not_media_endpoint} =
              ConversationServer.request_call_credentials(
+               conv.conversation_id,
+               p1,
+               sibling,
+               "p1-sibling",
+               attempt
+             )
+
+    assert {:error, :not_media_endpoint} =
+             ConversationServer.extend_call_credentials(
                conv.conversation_id,
                p1,
                sibling,
