@@ -4,10 +4,13 @@ on:
   push:
     branches:
       - newteam/media-expression-break
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
   workflow_dispatch:
 
 concurrency:
-  group: team11-media-expression-break-${{ github.sha }}
+  group: team11-media-expression-break-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: false
 
 permissions:
@@ -18,18 +21,19 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TEAM11_PRODUCT_BASELINE: e938cdd6e806cc5d05837a9c97755477be95bb27
+      EXPECTED_TEAM11_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout exact Team 11 commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.EXPECTED_TEAM11_SHA }}
           fetch-depth: 0
 
       - name: Prove checkout identity
         run: |
-          echo "EXPECTED_TEAM11_SHA=${{ github.sha }}"
+          echo "EXPECTED_TEAM11_SHA=$EXPECTED_TEAM11_SHA"
           echo "CHECKED_OUT_TEAM11_SHA=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_TEAM11_SHA"
 
       - name: Set up Node
         uses: actions/setup-node@v4
