@@ -33,6 +33,8 @@ export function gifSearchPath(query) {
 export function validGifResult(result) {
   if (!result || typeof result !== "object") return false
   if (typeof result.id !== "string" || result.id.length < 1 || result.id.length > 200) return false
+  if (typeof result.provider !== "string" || result.provider.length < 1 || result.provider.length > 40) return false
+  if (typeof result.reference !== "string" || result.reference.length < 1 || result.reference.length > 4096) return false
   if (typeof result.media_url !== "string" || !result.media_url.startsWith("https://")) return false
   if (!Number.isInteger(result.width) || result.width < 1 || result.width > 4096) return false
   if (!Number.isInteger(result.height) || result.height < 1 || result.height > 4096) return false
@@ -41,4 +43,13 @@ export function validGifResult(result) {
 
 export function sanitizeGifResults(results) {
   return Array.isArray(results) ? results.filter(validGifResult) : []
+}
+
+export async function sendWithSameIdentityRetry(pushOnce, payload) {
+  try {
+    return await pushOnce(payload)
+  } catch (error) {
+    if (error?.reason !== "timeout") throw error
+    return pushOnce(payload)
+  }
 }
