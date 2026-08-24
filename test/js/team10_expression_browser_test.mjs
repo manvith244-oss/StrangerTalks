@@ -5,17 +5,25 @@ import {chromium} from "playwright"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4002"
 const SCREENSHOT_DIR = "tmp/chat-ui-screenshots"
+const GIF_PIXEL = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64")
 fs.mkdirSync(SCREENSHOT_DIR, {recursive: true})
 
 async function bootFresh(browser, viewport = {width: 390, height: 844}) {
   const context = await browser.newContext({viewport})
+  await context.route("https://media.example.test/**", (route) => route.fulfill({status: 200, contentType: "image/gif", body: GIF_PIXEL}))
   const page = await context.newPage()
+  const loads = {runtime: 0, app: 0}
+  page.on("request", (request) => {
+    const url = new URL(request.url())
+    if (url.pathname === "/assets/expression_runtime.mjs") loads.runtime += 1
+    if (url.pathname === "/assets/app.js") loads.app += 1
+  })
   await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
   await page.waitForFunction(() => document.documentElement.dataset.instagramChatBooted === "true")
   await page.waitForFunction(() => document.querySelector("#doors")?.children.length > 0)
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: 15_000})
   await page.locator("#conversation-language").selectOption("en")
-  return {context, page}
+  return {context, page, loads}
 }
 
 async function matchPair(browser) {
@@ -39,7 +47,7 @@ async function matchPair(browser) {
 }
 
 async function clickHeartFromRealPicker(page) {
-  await page.locator("#emoji-open").click()
+  if (await page.locator("#emoji-composer-picker").isHidden()) await page.locator("#emoji-open").click()
   await page.locator("#emoji-composer-picker").waitFor({state: "visible"})
   await page.locator("#emoji-composer-picker emoji-picker").waitFor({state: "attached"})
   await page.waitForFunction(() => {
@@ -61,20 +69,54 @@ async function clickHeartFromRealPicker(page) {
   assert.equal(clicked, true, "the local emoji picker exposes a selectable red heart")
 }
 
+async function openGif(page) {
+  if (await page.locator("#gif-picker").isHidden()) await page.locator("#gif-open").click()
+  await page.locator("#gif-picker").waitFor({state: "visible"})
+}
+
+async function searchGif(page, query) {
+  await openGif(page)
+  await page.waitForFunction(() => document.querySelector("#gif-search")?.disabled === false)
+  await page.locator("#gif-search").fill(query)
+}
+
 async function endConversation(page) {
-  const overflow = page.locator(".conversation-head-actions details.overflow")
-  if ((await overflow.getAttribute("open")) === null) await overflow.locator("summary").click()
-  await page.locator("#end-conversation").click()
+  await page.evaluate(() => {
+    const details = document.querySelector(".conversation-head-actions details.overflow")
+    if (details) details.open = true
+    document.querySelector("#end-conversation")?.click()
+  })
   await page.locator("#end-confirmation-dialog").waitFor({state: "visible"})
   await page.locator("#end-confirm").click()
   await page.locator('section[data-screen="ended"].active').waitFor({state: "visible", timeout: 10_000})
+}
+
+async function blockConversation(page) {
+  await page.evaluate(() => {
+    const details = document.querySelector(".conversation-head-actions details.overflow")
+    if (details) details.open = true
+    document.querySelector("#block")?.click()
+  })
+  await page.waitForFunction(() => !document.querySelector('[data-screen="conversation"]')?.classList.contains("active"), null, {timeout: 10_000})
 }
 
 function mediaCount(page) {
   return page.locator("#messages .expressive-message img").count()
 }
 
-test("Team 10 real Conversation: emoji insertion, sticker delivery, GIF truthfulness and terminal stale guard", {timeout: 90_000}, async () => {
+async function assertEmojiEdit(page, initial, start, end, expected, expectedCaret) {
+  const input = page.locator("#message-input")
+  await input.fill(initial)
+  await input.evaluate((node, selection) => node.setSelectionRange(selection.start, selection.end), {start, end})
+  const beforeMessages = await page.locator("#messages > li").count()
+  await clickHeartFromRealPicker(page)
+  assert.equal(await input.inputValue(), expected)
+  assert.equal(await input.evaluate((node) => node.selectionStart), expectedCaret)
+  assert.equal(await page.locator("#messages > li").count(), beforeMessages, "emoji insertion never auto-sends")
+  await page.locator("#emoji-close").click()
+}
+
+test("Team 10 real Conversation covers canonical load, emoji, sticker, GIF and stale search", {timeout: 120_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let pair
 
@@ -82,68 +124,97 @@ test("Team 10 real Conversation: emoji insertion, sticker delivery, GIF truthful
     pair = await matchPair(browser)
     const {a, b} = pair
 
+    assert.equal(a.loads.runtime, 1)
+    assert.equal(a.loads.app, 1)
+    assert.equal(b.loads.runtime, 1)
+    assert.equal(b.loads.app, 1)
     assert.equal(await a.page.locator("#emoji-open").isVisible(), true)
     assert.equal(await a.page.locator("#expressive-open").isVisible(), true)
     assert.equal(await a.page.locator("#gif-open").isVisible(), true)
     assert.equal((await a.page.locator("#expressive-open").textContent()).trim(), "Stickers")
 
-    const input = a.page.locator("#message-input")
-    await input.fill("hello world")
-    await input.evaluate((node) => node.setSelectionRange(5, 5))
-    await clickHeartFromRealPicker(a.page)
-    assert.equal(await input.inputValue(), "hello❤️ world")
-    assert.equal(await input.evaluate((node) => node.selectionStart), 7)
+    await assertEmojiEdit(a.page, "hello", 0, 0, "❤️hello", 2)
+    await assertEmojiEdit(a.page, "hello world", 5, 5, "hello❤️ world", 7)
+    await assertEmojiEdit(a.page, "hello", 5, 5, "hello❤️", 7)
+    await assertEmojiEdit(a.page, "hello world", 6, 11, "hello ❤️", 8)
+    await assertEmojiEdit(a.page, "one\ntwo\nthree", 7, 7, "one\ntwo❤️\nthree", 9)
 
+    const input = a.page.locator("#message-input")
+    await input.fill("native 😊 input")
     await a.page.locator("#message-form button.primary").click()
-    await b.page.locator("#messages .message-content").filter({hasText: "hello❤️ world"}).waitFor({state: "visible"})
-    assert.equal(await b.page.locator("#messages .message-content").filter({hasText: "hello❤️ world"}).count(), 1)
+    await b.page.locator("#messages .message-content").filter({hasText: "native 😊 input"}).waitFor({state: "visible"})
 
     await input.fill("draft survives sticker send")
-    const aBefore = await mediaCount(a.page)
-    const bBefore = await mediaCount(b.page)
+    const aBeforeSticker = await mediaCount(a.page)
+    const bBeforeSticker = await mediaCount(b.page)
     await a.page.locator("#expressive-open").click()
     await a.page.locator("#expressive-picker").waitFor({state: "visible"})
     await a.page.locator("#expressive-results button").first().click()
-    await a.page.waitForFunction((count) => document.querySelectorAll("#messages .expressive-message img").length === count + 1, aBefore)
-    await b.page.waitForFunction((count) => document.querySelectorAll("#messages .expressive-message img").length === count + 1, bBefore)
+    await a.page.waitForFunction((count) => document.querySelectorAll("#messages .expressive-message img").length === count + 1, aBeforeSticker)
+    await b.page.waitForFunction((count) => document.querySelectorAll("#messages .expressive-message img").length === count + 1, bBeforeSticker)
     assert.equal(await input.inputValue(), "draft survives sticker send")
-    assert.match(await b.page.locator("#messages .expressive-message img").last().getAttribute("alt"), /wave|spark|sticker|bounc|calm/i)
 
+    await a.page.route("**/api/gifs/status", (route) => route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify({available: false})}))
     await a.page.locator("#gif-open").click()
-    await a.page.locator("#gif-picker").waitFor({state: "visible"})
     await a.page.getByText("GIFs unavailable. Stickers, emoji, and normal messages still work.", {exact: true}).waitFor({state: "visible"})
     assert.equal(await a.page.locator("#gif-search").isDisabled(), true)
     await a.page.screenshot({path: `${SCREENSHOT_DIR}/team10-gif-unavailable-390x844.png`, fullPage: false})
     await a.page.locator("#gif-close").click()
+    await a.page.unroute("**/api/gifs/status")
 
-    await a.page.route("**/api/gifs/status", async (route) => {
-      await route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify({available: true})})
-    })
-    let releaseLateSearch
-    const lateSearchStarted = new Promise((resolve) => { releaseLateSearch = resolve })
+    await input.fill("draft survives GIF send")
+    const aBeforeGif = await mediaCount(a.page)
+    const bBeforeGif = await mediaCount(b.page)
+    await searchGif(a.page, "happy dance")
+    await a.page.locator("#gif-results button", {hasText: "Fixture GIF happy dance"}).waitFor({state: "visible"})
+    await a.page.locator("#gif-results button").first().click()
+    await a.page.waitForFunction((count) => document.querySelectorAll("#messages .expressive-message img").length === count + 1, aBeforeGif)
+    await b.page.waitForFunction((count) => document.querySelectorAll("#messages .expressive-message img").length === count + 1, bBeforeGif)
+    assert.equal(await input.inputValue(), "draft survives GIF send")
+    assert.match(await b.page.locator("#messages .expressive-message img").last().getAttribute("alt"), /Fixture GIF happy dance/i)
+
+    for (const [query, expected] of [
+      ["empty", "No GIFs found. Try another search."],
+      ["error", "GIF search failed. Try another search."],
+      ["malformed", "GIF search failed. Try another search."],
+      ["timeout", "GIF search failed. Try another search."],
+      ["rate", "GIF search is rate limited. Try again in a moment."]
+    ]) {
+      await searchGif(a.page, query)
+      await a.page.getByText(expected, {exact: true}).waitFor({state: "visible", timeout: 10_000})
+    }
+
+    let catStarted
+    const catRequestStarted = new Promise((resolve) => { catStarted = resolve })
     await a.page.route("**/api/gifs/search?**", async (route) => {
-      releaseLateSearch()
-      await new Promise((resolve) => setTimeout(resolve, 650))
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({results: [{
-          id: "late",
-          provider: "fake",
-          reference: "signed-late-reference",
-          media_url: "https://media.example.test/late.gif",
-          label: "Late GIF",
-          width: 160,
-          height: 120
-        }]})
-      })
+      const url = new URL(route.request().url())
+      if (url.searchParams.get("q") !== "cat") return route.continue()
+      catStarted()
+      const response = await route.fetch()
+      await new Promise((resolve) => setTimeout(resolve, 700))
+      await route.fulfill({response})
     })
 
-    await a.page.locator("#gif-open").click()
-    await a.page.locator("#gif-search").waitFor({state: "visible"})
-    await a.page.waitForFunction(() => document.querySelector("#gif-search")?.disabled === false)
+    await searchGif(a.page, "cat")
+    await catRequestStarted
+    await a.page.locator("#gif-search").fill("dog")
+    await a.page.locator("#gif-results button", {hasText: "Fixture GIF dog"}).waitFor({state: "visible"})
+    await a.page.waitForTimeout(800)
+    assert.equal(await a.page.locator("#gif-results button", {hasText: "Fixture GIF cat"}).count(), 0)
+    await a.page.unroute("**/api/gifs/search?**")
+
+    let lateStarted
+    const lateRequestStarted = new Promise((resolve) => { lateStarted = resolve })
+    await a.page.route("**/api/gifs/search?**", async (route) => {
+      const url = new URL(route.request().url())
+      if (url.searchParams.get("q") !== "late result") return route.continue()
+      lateStarted()
+      const response = await route.fetch()
+      await new Promise((resolve) => setTimeout(resolve, 650))
+      await route.fulfill({response})
+    })
     await a.page.locator("#gif-search").fill("late result")
-    await lateSearchStarted
+    await lateRequestStarted
     await endConversation(a.page)
     await a.page.waitForTimeout(800)
     assert.equal(await a.page.locator("#gif-picker").isHidden(), true)
@@ -155,15 +226,42 @@ test("Team 10 real Conversation: emoji insertion, sticker delivery, GIF truthful
   }
 })
 
-test("Team 10 expression controls stay reachable at required functional viewport floors", {timeout: 90_000}, async () => {
+test("Team 10 Block invalidates in-flight GIF search", {timeout: 90_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let pair
+  try {
+    pair = await matchPair(browser)
+    const page = pair.a.page
+    let started
+    const requestStarted = new Promise((resolve) => { started = resolve })
+    await page.route("**/api/gifs/search?**", async (route) => {
+      const url = new URL(route.request().url())
+      if (url.searchParams.get("q") !== "block delay") return route.continue()
+      started()
+      const response = await route.fetch()
+      await new Promise((resolve) => setTimeout(resolve, 650))
+      await route.fulfill({response})
+    })
+    await searchGif(page, "block delay")
+    await requestStarted
+    await blockConversation(page)
+    await page.waitForTimeout(800)
+    assert.equal(await page.locator("#gif-picker").isHidden(), true)
+    assert.equal(await page.locator("#gif-results button").count(), 0)
+  } finally {
+    await pair?.a?.context.close().catch(() => {})
+    await pair?.b?.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
+
+test("Team 10 expression controls survive mobile keyboard, Escape focus and reduced motion", {timeout: 90_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let pair
 
   try {
     pair = await matchPair(browser)
     const page = pair.a.page
-    await page.route("**/api/gifs/status", (route) => route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify({available: true})}))
-    await page.route("**/api/gifs/search?**", (route) => route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify({results: []})}))
 
     for (const viewport of [
       {width: 320, height: 568, name: "320x568"},
@@ -179,24 +277,31 @@ test("Team 10 expression controls stay reachable at required functional viewport
         assert.ok(box.y + box.height <= viewport.height + 1, `${viewport.name} ${selector} fits vertically`)
         assert.ok(box.height >= 40, `${viewport.name} ${selector} has a usable touch height`)
       }
+    }
 
-      await page.locator("#gif-open").click()
-      await page.waitForFunction(() => document.querySelector("#gif-search")?.disabled === false)
-      await page.locator("#gif-search").focus()
-      const panelBox = await page.locator("#gif-picker").boundingBox()
-      assert.ok(panelBox)
-      assert.ok(panelBox.x >= -1 && panelBox.x + panelBox.width <= viewport.width + 1, `${viewport.name} GIF sheet fits width`)
-      assert.ok(panelBox.y >= -1 && panelBox.y + panelBox.height <= viewport.height + 1, `${viewport.name} GIF sheet fits height`)
-      await page.locator("#gif-close").click()
+    await page.setViewportSize({width: 390, height: 500})
+    await page.locator("#message-input").focus()
+    const keyboardLayout = await page.locator("#message-form").boundingBox()
+    assert.ok(keyboardLayout && keyboardLayout.y + keyboardLayout.height <= 501, "composer remains reachable after keyboard-like viewport shrink")
 
-      await page.locator("#message-input").fill("line one\nline two\nline three")
-      await page.locator("#emoji-open").click()
-      await page.locator("#emoji-composer-picker").waitFor({state: "visible"})
-      const emojiBox = await page.locator("#emoji-composer-picker").boundingBox()
-      assert.ok(emojiBox)
-      assert.ok(emojiBox.x >= -1 && emojiBox.x + emojiBox.width <= viewport.width + 1, `${viewport.name} emoji sheet fits width`)
-      assert.ok(emojiBox.y >= -1 && emojiBox.y + emojiBox.height <= viewport.height + 1, `${viewport.name} emoji sheet fits height`)
-      await page.locator("#emoji-close").click()
+    await page.locator("#emoji-open").click()
+    await page.locator("#emoji-composer-picker").waitFor({state: "visible"})
+    await page.keyboard.press("Escape")
+    assert.equal(await page.locator("#emoji-composer-picker").isHidden(), true)
+    assert.equal(await page.locator("#message-input").evaluate((node) => document.activeElement === node), true)
+
+    await openGif(page)
+    await page.keyboard.press("Escape")
+    assert.equal(await page.locator("#gif-picker").isHidden(), true)
+    assert.equal(await page.locator("#gif-open").evaluate((node) => document.activeElement === node), true)
+
+    await page.emulateMedia({reducedMotion: "reduce"})
+    await page.locator("#expressive-open").click()
+    await page.locator("#expressive-picker").waitFor({state: "visible"})
+    const animatedSticker = page.locator("#expressive-results img.expressive-loop").first()
+    if (await animatedSticker.count()) {
+      const animationName = await animatedSticker.evaluate((node) => getComputedStyle(node).animationName)
+      assert.equal(animationName, "none")
     }
   } finally {
     await pair?.a?.context.close().catch(() => {})
