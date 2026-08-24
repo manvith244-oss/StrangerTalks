@@ -127,3 +127,55 @@ test("voice-expression changes cannot open a CONNECTING microphone", async () =>
 
   assert.equal(audioTrack.enabled, false, "effect reset cannot bypass CONNECTING media gate")
 })
+test("late getUserMedia resolution cannot resurrect a terminal call", async () => {
+  const originalNavigator = globalThis.navigator
+  const originalRTC = globalThis.RTCPeerConnection
+  let resolveMedia
+  const stopped = []
+  const audioTrack = {kind: "audio", enabled: true, stop() { stopped.push("audio") }}
+  const stream = {getAudioTracks: () => [audioTrack], getTracks: () => [audioTrack]}
+  class FakePC { constructor() { this.iceConnectionState = "new"; this.senders = [] } addTrack(track) { this.senders.push({track}) } getSenders() { return this.senders } close() {} }
+  Object.defineProperty(globalThis, "navigator", {configurable: true, value: {mediaDevices: {getUserMedia: () => new Promise(resolve => { resolveMedia = resolve })}}})
+  globalThis.RTCPeerConnection = FakePC
+  const channel = {push() { return phoenixPushOk({ice_servers: [{urls: ["turn:relay.invalid:3478"]}]}) }}
+  try {
+    const coord = new LiveCallCoordinator({participantId: "user-1", conversationId: "conv-1", channel})
+    coord.callAttemptId = "attempt-1"; coord.role = "caller"; coord.status = CALL_STATUS.CONNECTING
+    const initializing = coord.initializeWebRTC(false)
+    await new Promise(resolve => setImmediate(resolve))
+    coord.teardown("conversation_ended")
+    resolveMedia(stream)
+    await initializing
+    assert.deepEqual(stopped, ["audio"])
+    assert.equal(coord.localStream, null)
+    assert.notEqual(coord.status, CALL_STATUS.ACTIVE)
+  } finally {
+    if (originalNavigator === undefined) delete globalThis.navigator
+    else Object.defineProperty(globalThis, "navigator", {configurable: true, value: originalNavigator})
+    if (originalRTC === undefined) delete globalThis.RTCPeerConnection
+    else globalThis.RTCPeerConnection = originalRTC
+  }
+})
+
+test("stale previous-attempt authority cannot become current", () => {
+  const coord = new LiveCallCoordinator({participantId: "user-1", conversationId: "conv-1"})
+  coord.callAttemptId = "attempt-new"; coord.mediaGeneration = 2; coord.status = CALL_STATUS.CONNECTING
+  assert.equal(coord.mediaAttemptIsCurrent("attempt-old", 2, null), false)
+  assert.equal(coord.mediaAttemptIsCurrent("attempt-new", 1, null), false)
+})
+
+test("terminal teardown stops local hardware and closes peer connection", () => {
+  const stopped = []; let closed = false
+  const audio = {kind: "audio", enabled: false, stop() { stopped.push("audio") }}
+  const video = {kind: "video", enabled: true, stop() { stopped.push("video") }}
+  const coord = new LiveCallCoordinator({participantId: "user-1", conversationId: "conv-1"})
+  coord.callAttemptId = "attempt"; coord.status = CALL_STATUS.CONNECTING
+  coord.localStream = {getTracks: () => [audio], getAudioTracks: () => [audio]}
+  coord.localCameraStream = {getTracks: () => [video]}
+  coord.peerConnection = {close() { closed = true }}
+  coord.teardown("blocked")
+  assert.deepEqual(stopped.sort(), ["audio", "video"])
+  assert.equal(closed, true)
+  assert.equal(coord.callAttemptId, null)
+  assert.equal(coord.status, CALL_STATUS.TERMINAL)
+})

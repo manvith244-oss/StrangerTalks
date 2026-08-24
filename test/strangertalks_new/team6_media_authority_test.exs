@@ -65,6 +65,7 @@ defmodule StrangertalksNew.Team6MediaAuthorityTest do
       })
 
     {:ok, server} = ConversationServer.ensure_started(conversation.conversation_id)
+
     on_exit(fn ->
       if Process.alive?(server) do
         DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, server)
@@ -95,7 +96,14 @@ defmodule StrangertalksNew.Team6MediaAuthorityTest do
         pending.call_attempt_id
       )
 
-    %{conv: conv, p1: p1, p2: p2, p1_owner: p1_owner, p2_owner: p2_owner, attempt: pending.call_attempt_id}
+    %{
+      conv: conv,
+      p1: p1,
+      p2: p2,
+      p1_owner: p1_owner,
+      p2_owner: p2_owner,
+      attempt: pending.call_attempt_id
+    }
   end
 
   test "sibling tab cannot mute or inject signaling for the authoritative media participant" do
@@ -195,6 +203,67 @@ defmodule StrangertalksNew.Team6MediaAuthorityTest do
                owner,
                "p1-owner",
                attempt
+             )
+  end
+
+  test "sibling tab cannot mutate effect or reaction state" do
+    %{conv: conv, p1: p1, attempt: attempt} = active_call()
+    sibling = endpoint()
+
+    assert {:error, :not_media_endpoint} =
+             ConversationServer.set_call_effect(
+               conv.conversation_id,
+               p1,
+               sibling,
+               "p1-sibling",
+               attempt,
+               true
+             )
+
+    assert {:error, :not_media_endpoint} =
+             ConversationServer.send_call_reaction(
+               conv.conversation_id,
+               p1,
+               sibling,
+               "p1-sibling",
+               attempt,
+               "rx-sibling",
+               "heart"
+             )
+  end
+
+  test "owner endpoint disappearance does not transfer media authority to sibling" do
+    %{conv: conv, p1: p1, p1_owner: owner, attempt: attempt} = active_call()
+    sibling = endpoint()
+    Process.exit(owner, :kill)
+    Process.sleep(20)
+
+    assert {:error, :not_media_endpoint} =
+             ConversationServer.set_call_mute(
+               conv.conversation_id,
+               p1,
+               sibling,
+               "p1-sibling",
+               attempt,
+               true
+             )
+
+    assert {:ok, state} = ConversationServer.get_call_state(conv.conversation_id, p1)
+    assert state.self_muted == false
+  end
+
+  test "authoritative endpoint cannot request deferred screen share" do
+    %{conv: conv, p1: p1, p1_owner: owner, attempt: attempt} = active_call()
+
+    assert {:error, :unsupported_media_type} =
+             ConversationServer.request_call_media(
+               conv.conversation_id,
+               p1,
+               owner,
+               "p1-owner",
+               attempt,
+               :screen_share,
+               %{}
              )
   end
 end
