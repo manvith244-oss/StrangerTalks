@@ -154,12 +154,15 @@ for (const device of DEVICES) {
         const plus = document.querySelector(".ig-compose-plus")
         const heading = document.querySelector(".conversation-head h1")
         const back = document.querySelector(".ig-chat-back")
+        const info = document.querySelector(".conversation-head-actions .overflow summary")
         const input = document.querySelector("#message-input")
         const conversationRect = conversation.getBoundingClientRect()
         const composerRect = composer.getBoundingClientRect()
         const cameraRect = camera.getBoundingClientRect()
         const voiceRect = voice.getBoundingClientRect()
         const plusRect = plus.getBoundingClientRect()
+        const backRect = back.getBoundingClientRect()
+        const infoRect = info.getBoundingClientRect()
 
         return {
           bodyMode: document.body.classList.contains("st-chat-mode"),
@@ -171,6 +174,8 @@ for (const device of DEVICES) {
           cameraSize: Math.min(cameraRect.width, cameraRect.height),
           voiceSize: Math.min(voiceRect.width, voiceRect.height),
           plusSize: Math.min(plusRect.width, plusRect.height),
+          backSize: Math.min(backRect.width, backRect.height),
+          infoSize: Math.min(infoRect.width, infoRect.height),
           composerFontSize: Number.parseFloat(getComputedStyle(input).fontSize),
           cameraLabel: camera.getAttribute("aria-label"),
           heading: heading.textContent,
@@ -189,9 +194,12 @@ for (const device of DEVICES) {
       assert.ok(layout.conversationWidth <= device.width)
       assert.ok(layout.conversationHeight <= device.height + 1)
       assert.ok(layout.composerBottom <= device.height + 1)
-      assert.ok(layout.cameraSize >= 40)
-      assert.ok(layout.voiceSize >= 40)
-      assert.ok(layout.plusSize >= 40)
+      const expectedTouchFloor = device.mobile ? 48 : 40
+      assert.ok(layout.cameraSize >= expectedTouchFloor, `${device.name} camera target is ${layout.cameraSize}px`)
+      assert.ok(layout.voiceSize >= expectedTouchFloor, `${device.name} voice target is ${layout.voiceSize}px`)
+      assert.ok(layout.plusSize >= expectedTouchFloor, `${device.name} tools target is ${layout.plusSize}px`)
+      assert.ok(layout.backSize >= expectedTouchFloor, `${device.name} back target is ${layout.backSize}px`)
+      assert.ok(layout.infoSize >= expectedTouchFloor, `${device.name} info target is ${layout.infoSize}px`)
       if (device.mobile) assert.ok(layout.composerFontSize >= 16, `mobile composer font is ${layout.composerFontSize}px`)
       assert.equal(layout.cameraLabel, "Choose a view-once photo")
       assert.equal(layout.heading, "Stranger")
@@ -213,6 +221,8 @@ for (const device of DEVICES) {
         const summary = details?.querySelector("summary")
         return Boolean(details?.open) && summary?.getAttribute("aria-expanded") === "true"
       })
+      const menuTargetFloor = await page.locator(".overflow-menu button").first().evaluate((button) => button.getBoundingClientRect().height)
+      if (device.mobile) assert.ok(menuTargetFloor >= 48, `${device.name} info menu target is ${menuTargetFloor}px`)
       await page.keyboard.press("Escape")
       await page.waitForFunction(() => {
         const details = document.querySelector(".conversation-head-actions .overflow")
@@ -228,7 +238,14 @@ for (const device of DEVICES) {
       await page.click(".ig-compose-plus")
       assert.equal(await page.locator("#message-form").evaluate((form) => form.classList.contains("ig-tray-open")), true)
       assert.equal(await page.locator("#ig-message-tools").evaluate((tray) => getComputedStyle(tray).display !== "none"), true)
+      const trayTargetFloor = await page.locator("#ig-message-tools button").first().evaluate((button) => button.getBoundingClientRect().height)
+      if (device.mobile) assert.ok(trayTargetFloor >= 48, `${device.name} tools tray target is ${trayTargetFloor}px`)
 
+      await page.locator("#messages").click({position: {x: 8, y: 8}})
+      await page.waitForFunction(() => !document.querySelector("#message-form").classList.contains("ig-tray-open"))
+      assert.equal(await page.locator(".ig-compose-plus").getAttribute("aria-expanded"), "false")
+
+      await page.click(".ig-compose-plus")
       await page.focus("#message-input")
       assert.equal(await page.locator("body").evaluate((body) => body.classList.contains("ig-keyboard-open")), true)
 
