@@ -2,7 +2,12 @@ const DB_NAME = "strangertalks-local-v1"
 const STORE = "records"
 const BACKUP_VERSION = 2
 const PREVIOUS_BACKUP_VERSION = 1
+const BACKUP_ITERATIONS = 210000
+const MAX_RECORD_ID_LENGTH = 256
 const APPROVED_VOICE_TYPES = new Set(["audio/webm", "audio/ogg", "audio/mp4"])
+const TERMINAL_RETENTION_STATUSES = new Set(["kept", "summary_only", "faded"])
+const BACKUP_RECORD_TYPES = new Set(["identity", "settings", "local_conversation", "local_message", "local_voice_note", "sync_cursor", "summary", "memory", "relationship", "sync_tombstone"])
+const BACKUP_TOMBSTONE_CATEGORIES = new Set(["kept_conversations", "kept_messages", "summaries", "memories", "bonds", "bond_nicknames", "abstract_signature_seeds", "accessibility_settings", "privacy_settings", "user_preferences", "tombstones"])
 
 export function signatureSeedFor(conversationId) {
   let hash = 2166136261
@@ -214,7 +219,8 @@ export function chooseConversationRetention(records, conversationId, choice, {su
   const conversationIdKey = `conversation:${conversationId}`
   const conversation = records.find(({id}) => id === conversationIdKey)
   if (!conversation) throw new Error("conversation_not_found")
-  if (!new Set(["kept", "summary_only", "faded"]).has(choice)) throw new Error("invalid_retention_choice")
+  if (conversation.value?.status !== "temporary") throw new Error("retention_already_decided")
+  if (!TERMINAL_RETENTION_STATUSES.has(choice)) throw new Error("invalid_retention_choice")
   if (choice === "summary_only" && !summaryText?.trim()) throw new Error("summary_required")
 
   const summaryId = `summary:${conversationId}`
@@ -227,6 +233,48 @@ export function chooseConversationRetention(records, conversationId, choice, {su
   }
   next.push({...conversation, value: {...conversation.value, status: choice, connection_state: "ended", ended_at: conversation.value.ended_at || timestamp, summary_id: choice === "summary_only" ? summaryId : choice === "faded" ? null : conversation.value.summary_id}, updated_at: timestamp})
   return next
+}
+
+export function preserveTerminalRetentionDecisions(current, incoming) {
+  const next = new Map(incoming.map((record) => [record.id, record]))
+
+  for (const conversation of current) {
+    if (conversation.type !== "local_conversation" || !TERMINAL_RETENTION_STATUSES.has(conversation.value?.status)) continue
+    const proposed = next.get(conversation.id)
+    if (!proposed || proposed.type !== "local_conversation" || proposed.value?.status === conversation.value.status) continue
+
+    const conversationId = conversation.value.conversation_id
+    next.delete(conversation.id)
+    next.delete(`summary:${conversationId}`)
+    for (const [id, record] of next.entries()) {
+      if (new Set(["local_message", "local_voice_note"]).has(record.type) && record.value?.conversation_id === conversationId) next.delete(id)
+    }
+
+    next.set(conversation.id, conversation)
+    if (conversation.value.status === "kept") {
+      for (const record of current) {
+        if (new Set(["local_message", "local_voice_note"]).has(record.type) && record.value?.conversation_id === conversationId) next.set(record.id, record)
+      }
+      const summary = current.find(({id}) => id === `summary:${conversationId}`)
+      if (summary) next.set(summary.id, summary)
+    } else if (conversation.value.status === "summary_only") {
+      const summary = current.find(({id}) => id === `summary:${conversationId}`)
+      if (summary) next.set(summary.id, summary)
+    }
+  }
+
+  for (const conversation of next.values()) {
+    if (conversation.type !== "local_conversation") continue
+    const conversationId = conversation.value?.conversation_id
+    if (conversation.value?.status === "summary_only" || conversation.value?.status === "faded") {
+      for (const [id, record] of next.entries()) {
+        if (new Set(["local_message", "local_voice_note"]).has(record.type) && record.value?.conversation_id === conversationId) next.delete(id)
+      }
+    }
+    if (conversation.value?.status === "faded") next.delete(`summary:${conversationId}`)
+  }
+
+  return [...next.values()]
 }
 
 export function keptConversations(records) {
@@ -257,28 +305,43 @@ export function deleteAllKeptConversations(records, {deleteSummaries = false} = 
   })
 }
 
-export function mergeRecords(current, imported) {
+export function mergeRecords(current, imported, {restoreTombstones = false} = {}) {
   const merged = new Map(current.map((record) => [record.id, record]))
   for (const record of imported) {
     const existing = merged.get(record.id)
-    if (!existing || Date.parse(record.updated_at) > Date.parse(existing.updated_at)) merged.set(record.id, record)
+    if (!existing) {
+      merged.set(record.id, record)
+      continue
+    }
+    const existingTombstone = existing.type === "sync_tombstone"
+    const importedTombstone = record.type === "sync_tombstone"
+    if (!restoreTombstones && existingTombstone !== importedTombstone) {
+      merged.set(record.id, existingTombstone ? existing : record)
+      continue
+    }
+    if (Date.parse(record.updated_at) > Date.parse(existing.updated_at)) merged.set(record.id, record)
   }
   return [...merged.values()]
 }
 
 export function validEnvelope(envelope) {
-  return [PREVIOUS_BACKUP_VERSION, BACKUP_VERSION].includes(envelope?.version) && envelope.kdf === "PBKDF2-SHA256" && envelope.cipher === "AES-GCM" &&
-    typeof envelope.salt === "string" && typeof envelope.iv === "string" && typeof envelope.ciphertext === "string"
+  return [PREVIOUS_BACKUP_VERSION, BACKUP_VERSION].includes(envelope?.version) &&
+    envelope.kdf === "PBKDF2-SHA256" &&
+    envelope.iterations === BACKUP_ITERATIONS &&
+    envelope.cipher === "AES-GCM" &&
+    [envelope.salt, envelope.iv, envelope.ciphertext].every((value) => typeof value === "string" && value.length > 0)
 }
 
 export async function encryptBackup(records, passphrase) {
   if (!passphrase) throw new Error("passphrase_required")
+  const serializedRecords = await serializeBackupRecords(records)
+  if (!validBackupRecords(serializedRecords)) throw new Error("invalid_backup")
   const salt = crypto.getRandomValues(new Uint8Array(16))
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const key = await deriveKey(passphrase, salt, ["encrypt"])
-  const plaintext = new TextEncoder().encode(JSON.stringify({records: await serializeBackupRecords(records)}))
+  const plaintext = new TextEncoder().encode(JSON.stringify({records: serializedRecords}))
   const ciphertext = await crypto.subtle.encrypt({name: "AES-GCM", iv}, key, plaintext)
-  return {version: BACKUP_VERSION, kdf: "PBKDF2-SHA256", iterations: 210000, cipher: "AES-GCM", salt: encode(salt), iv: encode(iv), ciphertext: encode(new Uint8Array(ciphertext))}
+  return {version: BACKUP_VERSION, kdf: "PBKDF2-SHA256", iterations: BACKUP_ITERATIONS, cipher: "AES-GCM", salt: encode(salt), iv: encode(iv), ciphertext: encode(new Uint8Array(ciphertext))}
 }
 
 export async function decryptBackup(envelope, passphrase) {
@@ -290,7 +353,7 @@ export async function decryptBackup(envelope, passphrase) {
   const payload = JSON.parse(new TextDecoder().decode(plaintext))
   if (!Array.isArray(payload.records)) throw new Error("invalid_backup")
   const records = await deserializeBackupRecords(payload.records, envelope.version)
-  if (records.some((record) => !validRecord(record))) throw new Error("invalid_backup")
+  if (!validBackupRecords(records)) throw new Error("invalid_backup")
   return records
 }
 
@@ -299,15 +362,48 @@ export async function listRecords() { return request("readonly", (store) => stor
 export async function putRecord(record) { if (!validRecord(record)) throw new Error("invalid_record"); return request("readwrite", (store) => store.put(record)) }
 export async function deleteRecord(id) { return request("readwrite", (store) => store.delete(id)) }
 export async function clearRecords() { return request("readwrite", (store) => store.clear()) }
-export async function importRecords(imported) { const merged = mergeRecords(await listRecords(), imported); await clearRecords(); for (const record of merged) await putRecord(record); return merged }
+export async function importRecords(imported) {
+  if (!validBackupRecords(imported)) throw new Error("invalid_record")
+  const merged = mergeRecords(await listRecords(), imported)
+  return replaceRecords(merged)
+}
 export async function replaceRecords(records, indexedDb = indexedDB) {
   if (!Array.isArray(records) || records.some((record) => !validRecord(record))) throw new Error("invalid_record")
-  return atomicReplaceRecords(records, indexedDbAdapter(indexedDb))
+  return guardedReplaceRecords(records, indexedDb)
 }
 
 export async function atomicReplaceRecords(records, adapter) {
   if (!Array.isArray(records) || records.some((record) => !validRecord(record))) throw new Error("invalid_record")
   return adapter.run([{action: "clear"}, ...records.map((record) => ({action: "put", record}))]).then(() => records)
+}
+
+function guardedReplaceRecords(records, indexedDb) {
+  return new Promise((resolve, reject) => {
+    const opening = indexedDb.open(DB_NAME, 1)
+    opening.onupgradeneeded = () => opening.result.createObjectStore(STORE, {keyPath: "id"})
+    opening.onerror = () => reject(opening.error)
+    opening.onsuccess = () => {
+      const database = opening.result
+      const transaction = database.transaction(STORE, "readwrite")
+      const store = transaction.objectStore(STORE)
+      const currentRequest = store.getAll()
+      let committed = null
+
+      currentRequest.onerror = () => transaction.abort()
+      currentRequest.onsuccess = () => {
+        try {
+          committed = preserveTerminalRetentionDecisions(currentRequest.result || [], records)
+          store.clear()
+          committed.forEach((record) => store.put(record))
+        } catch (_error) {
+          transaction.abort()
+        }
+      }
+      transaction.oncomplete = () => { database.close(); resolve(committed || records) }
+      transaction.onabort = () => { database.close(); reject(transaction.error || new Error("replace_aborted")) }
+      transaction.onerror = () => {}
+    }
+  })
 }
 
 function indexedDbAdapter(indexedDb) {
@@ -332,10 +428,44 @@ function indexedDbAdapter(indexedDb) {
   })}
 }
 
-function validRecord(record) { return record && typeof record.id === "string" && typeof record.type === "string" && !Number.isNaN(Date.parse(record.updated_at)) }
+function validRecord(record) {
+  return record &&
+    typeof record.id === "string" &&
+    record.id.trim().length > 0 &&
+    record.id.length <= MAX_RECORD_ID_LENGTH &&
+    typeof record.type === "string" &&
+    record.type.trim().length > 0 &&
+    !Number.isNaN(Date.parse(record.updated_at))
+}
+
+function validBackupRecords(records) {
+  if (!Array.isArray(records)) return false
+  const ids = new Set()
+  return records.every((record) => {
+    if (!validBackupRecord(record) || ids.has(record.id)) return false
+    ids.add(record.id)
+    return true
+  })
+}
+
+function validBackupRecord(record) {
+  if (!validRecord(record) || !BACKUP_RECORD_TYPES.has(record.type)) return false
+  if (record.type !== "sync_tombstone") return true
+  return record.category === "tombstones" &&
+    typeof record.deleted_at === "string" &&
+    !Number.isNaN(Date.parse(record.deleted_at)) &&
+    record.value &&
+    typeof record.value === "object" &&
+    !Array.isArray(record.value) &&
+    typeof record.value.previous_type === "string" &&
+    record.value.previous_type.trim().length > 0 &&
+    typeof record.value.previous_category === "string" &&
+    BACKUP_TOMBSTONE_CATEGORIES.has(record.value.previous_category)
+}
+
 async function serializeBackupRecords(records) {
   const keptIds = new Set(keptConversations(records).map(({value}) => value.conversation_id))
-  const selected = records.filter((record) => record.type !== "bond_reconnect_state" && (record.type !== "local_voice_note" || keptIds.has(record.value.conversation_id)))
+  const selected = records.filter((record) => BACKUP_RECORD_TYPES.has(record.type) && (record.type !== "local_voice_note" || keptIds.has(record.value.conversation_id)))
   return Promise.all(selected.map(async (record) => {
     if (record.type !== "local_voice_note") return record
     const bytes = await binaryBytes(record.value.blob)
@@ -360,7 +490,7 @@ async function deserializeBackupRecords(records, version) {
     return {...record, value: {...record.value, encoded_audio: undefined, blob: new Blob([bytes], {type: audio.media_type})}}
   }))
 }
-async function deriveKey(passphrase, salt, usages) { const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]); return crypto.subtle.deriveKey({name: "PBKDF2", hash: "SHA-256", salt, iterations: 210000}, material, {name: "AES-GCM", length: 256}, false, usages) }
+async function deriveKey(passphrase, salt, usages) { const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(passphrase), "PBKDF2", false, ["deriveKey"]); return crypto.subtle.deriveKey({name: "PBKDF2", hash: "SHA-256", salt, iterations: BACKUP_ITERATIONS}, material, {name: "AES-GCM", length: 256}, false, usages) }
 function encode(bytes) { let binary = ""; bytes.forEach((byte) => { binary += String.fromCharCode(byte) }); return btoa(binary) }
 function decode(value) { const binary = atob(value); return Uint8Array.from(binary, (char) => char.charCodeAt(0)) }
 
