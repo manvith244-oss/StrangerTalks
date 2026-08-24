@@ -27,13 +27,30 @@ test("an unlocked non-extractable key can update and reopen a later revision wit
   assert.deepEqual(unlocked.records, nextRecords)
 })
 
-test("only deliberately retained categories sync and voice data never does", () => {
-  const temporary = {...kept, id: "conversation:2", value: {conversation_id: "2", status: "temporary"}}
-  const voice = {id: "voice:1", type: "local_voice_note", value: {conversation_id: "1", blob: new Blob(["voice"])}, updated_at: time}
-  const identity = {id: "identity", type: "identity", value: {token: "secret"}, updated_at: time}
-  const records = syncableRecords([kept, message, temporary, voice, identity])
+test("actual retained sync payload excludes operational, safety, provider, media, analytics and learning authority", () => {
+  const denied = [
+    {...kept, id: "conversation:active", value: {conversation_id: "active", status: "temporary", runtime_authority: "must-not-sync"}},
+    {id: "queue:1", type: "queue_attempt", value: {queue_attempt_id: "q1"}, updated_at: time},
+    {id: "match:1", type: "match", value: {match_id: "m1"}, updated_at: time},
+    {id: "report:1", type: "report", value: {evidence: "private"}, updated_at: time},
+    {id: "safety-review:1", type: "safety_review", value: {status: "pending"}, updated_at: time},
+    {id: "boundary-block:1", type: "boundary_block", value: {blocked: true}, updated_at: time},
+    {id: "safety-event:1", type: "safety_event", value: {event: "block"}, updated_at: time},
+    {id: "identity", type: "identity", value: {provider_token: "provider-secret", access_token: "oauth-secret"}, updated_at: time},
+    {id: "turn:1", type: "turn_credentials", value: {username: "turn", credential: "secret"}, updated_at: time},
+    {id: "voice:1", type: "local_voice_note", value: {conversation_id: "1", blob: new Blob(["voice"])}, updated_at: time},
+    {id: "call:1", type: "live_call_state", value: {raw_call_media: "bytes", transport: "webrtc"}, updated_at: time},
+    {id: "analytics:1", type: "analytics_event", value: {metric: "private"}, updated_at: time},
+    {id: "learning:1", type: "learning_state", value: {recommendation: "private"}, updated_at: time},
+    {id: "message:1:view-once", type: "local_message", value: {conversation_id: "1", type: "view_once_photo", content: "ephemeral", view_once_state: "unviewed", presentation_limit: 1, media_type: "image/jpeg", byte_size: 512}, updated_at: time}
+  ]
+
+  const records = syncableRecords([kept, message, ...denied])
   assert.deepEqual(records.map(({id}) => id), ["conversation:1", "message:1"])
-  assert.equal(JSON.stringify(records).includes("secret"), false)
+  const payload = JSON.stringify(records)
+  for (const forbidden of ["runtime_authority", "queue_attempt_id", "match_id", "evidence", "blocked", "provider-secret", "oauth-secret", "turn", "raw_call_media", "webrtc", "analytics", "recommendation", "ephemeral"]) {
+    assert.equal(payload.includes(forbidden), false, `${forbidden} is absent from the actual serialized retained sync payload`)
+  }
 })
 
 test("unknown and malformed record types fail before mutation", async () => {
