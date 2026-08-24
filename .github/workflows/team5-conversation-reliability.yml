@@ -38,12 +38,15 @@ jobs:
     steps:
       - name: Checkout exact Team 5 HEAD
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Record entry state
         shell: bash
         run: |
-          echo "BRANCH=${GITHUB_REF_NAME}"
-          echo "HEAD=${GITHUB_SHA}"
+          echo "EVENT_REF=${GITHUB_REF_NAME}"
+          echo "HEAD=$(git rev-parse HEAD)"
+          echo "BRANCH=$(git branch --show-current)"
           git status --porcelain
 
       - name: Set up BEAM
@@ -111,9 +114,15 @@ jobs:
       - name: Prove final checkout clean
         shell: bash
         run: |
+          set -euo pipefail
           status=$(git status --porcelain)
           printf '%s\n' "$status"
-          test -z "$status"
+          if [ -n "$status" ]; then
+            echo "--- post-precommit diff begin ---"
+            git diff --no-ext-diff -- .
+            echo "--- post-precommit diff end ---"
+            exit 1
+          fi
 
       - name: Record exact tested commit
-        run: echo "TESTED_COMMIT=$GITHUB_SHA"
+        run: echo "TESTED_COMMIT=$(git rev-parse HEAD)"
