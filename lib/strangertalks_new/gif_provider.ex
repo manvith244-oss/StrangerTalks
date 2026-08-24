@@ -4,12 +4,17 @@ defmodule StrangertalksNew.GifProvider do
 
   The browser supplies only the explicit search query. Provider credentials and
   provider-specific request construction stay behind the configured adapter.
+  Search results receive short-lived signed references so chat sends never trust
+  an arbitrary browser-supplied media URL.
   """
 
   @max_query_length 80
   @max_results 24
   @max_label_length 160
+  @max_provider_length 40
   @max_dimension 4096
+  @reference_salt "gif-result-v1"
+  @reference_max_age 600
 
   def configured? do
     adapter() != StrangertalksNew.GifProvider.Disabled
@@ -29,6 +34,31 @@ defmodule StrangertalksNew.GifProvider do
   end
 
   def search(_), do: {:error, :invalid_query}
+
+  def resolve_reference(reference) when is_binary(reference) do
+    with {:ok, result} <-
+           Phoenix.Token.verify(
+             StrangertalksNewWeb.Endpoint,
+             @reference_salt,
+             reference,
+             max_age: @reference_max_age
+           ),
+         {:ok, item} <- normalize_result(result) do
+      {:ok,
+       %{
+         kind: "gif",
+         provider: item.provider,
+         asset_path: item.media_url,
+         label: item.label,
+         width: item.width,
+         height: item.height
+       }}
+    else
+      _ -> {:error, :invalid_payload}
+    end
+  end
+
+  def resolve_reference(_), do: {:error, :invalid_payload}
 
   defp call_adapter(query) do
     case adapter().search(query) do
@@ -51,23 +81,38 @@ defmodule StrangertalksNew.GifProvider do
     if Enum.any?(normalized, &match?({:error, _}, &1)) do
       {:error, :malformed_provider_response}
     else
-      {:ok, Enum.map(normalized, fn {:ok, item} -> item end)}
+      items = Enum.map(normalized, fn {:ok, item} -> Map.put(item, :reference, sign_result(item)) end)
+      {:ok, items}
     end
+  end
+
+  defp sign_result(item) do
+    Phoenix.Token.sign(StrangertalksNewWeb.Endpoint, @reference_salt, item)
   end
 
   defp normalize_result(result) when is_map(result) do
     id = result[:id] || result["id"]
+    provider = result[:provider] || result["provider"]
     media_url = result[:media_url] || result["media_url"]
     label = result[:label] || result["label"]
     width = result[:width] || result["width"]
     height = result[:height] || result["height"]
 
     with true <- is_binary(id) and byte_size(id) in 1..200,
+         true <- is_binary(provider) and String.length(provider) in 1..@max_provider_length,
          true <- safe_https_url?(media_url),
          true <- is_binary(label) and String.length(label) in 1..@max_label_length,
          true <- is_integer(width) and width in 1..@max_dimension,
          true <- is_integer(height) and height in 1..@max_dimension do
-      {:ok, %{id: id, media_url: media_url, label: label, width: width, height: height}}
+      {:ok,
+       %{
+         id: id,
+         provider: provider,
+         media_url: media_url,
+         label: label,
+         width: width,
+         height: height
+       }}
     else
       _ -> {:error, :malformed_provider_response}
     end
