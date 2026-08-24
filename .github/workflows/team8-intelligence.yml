@@ -1,6 +1,7 @@
 name: Team 8 Intelligence Closure Gate
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - team8/intelligence-learning-analytics-2026-08-24
@@ -46,10 +47,23 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 
     steps:
-      - name: Checkout exact HEAD
+      - name: Checkout exact Team 8 candidate
         uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+
+      - name: Prove checkout identity
+        id: identity
+        shell: bash
+        run: |
+          checked_out_sha=$(git rev-parse HEAD)
+          echo "EXPECTED_SHA=$EXPECTED_SHA"
+          echo "CHECKED_OUT_SHA=$checked_out_sha"
+          test "$checked_out_sha" = "$EXPECTED_SHA"
+          echo "checked_out_sha=$checked_out_sha" >> "$GITHUB_OUTPUT"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -150,7 +164,7 @@ jobs:
           description=$(printf '%s' "$description" | cut -c1-140)
 
           gh api --method POST \
-            "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" \
+            "repos/$GITHUB_REPOSITORY/statuses/$EXPECTED_SHA" \
             -f state="$state" \
             -f context="team8-intelligence-closure" \
             -f description="$description" \
@@ -160,13 +174,17 @@ jobs:
         if: always()
         shell: bash
         env:
+          CHECKED_OUT_SHA: ${{ steps.identity.outputs.checked_out_sha }}
           FOCUSED_EXIT: ${{ steps.focused.outputs.exit_code }}
           FULL_EXIT: ${{ steps.full.outputs.exit_code }}
           DIFF_EXIT: ${{ steps.diffcheck.outputs.exit_code }}
           CLEAN_EXIT: ${{ steps.clean.outputs.exit_code }}
         run: |
+          test "$CHECKED_OUT_SHA" = "$EXPECTED_SHA"
           test "$FOCUSED_EXIT" = "0"
           test "$FULL_EXIT" = "0"
           test "$DIFF_EXIT" = "0"
           test "$CLEAN_EXIT" = "0"
-          echo "TESTED_COMMIT=$GITHUB_SHA"
+          echo "EXPECTED_SHA=$EXPECTED_SHA"
+          echo "CHECKED_OUT_SHA=$CHECKED_OUT_SHA"
+          echo "TESTED_SHA=$CHECKED_OUT_SHA"
