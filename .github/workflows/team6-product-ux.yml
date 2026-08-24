@@ -7,13 +7,14 @@ on:
   pull_request:
     branches:
       - release/prep-2026-08-22
+  workflow_dispatch:
 
 concurrency:
   group: team6-product-ux-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   product-ux:
@@ -39,6 +40,7 @@ jobs:
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
       STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      TEAM6_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - name: Checkout exact event head
@@ -47,55 +49,14 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
-      - name: Apply Team 6 presentation corrections
+      - name: Prove exact checkout identity
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          index = Path("priv/static/index.html")
-          text = index.read_text()
-          replacements = [
-              ('<button id="leave-queue">Go back</button>', '<button id="leave-queue">Leave Queue</button>'),
-              ('<option>SPAM</option><option>HARASSMENT</option><option>SEXUAL_MISCONDUCT</option><option>MALICIOUS_LINKS</option><option>THREATS</option>', '<option value="SPAM">Spam</option><option value="HARASSMENT">Harassment</option><option value="SEXUAL_MISCONDUCT">Sexual misconduct</option><option value="MALICIOUS_LINKS">Malicious links</option><option value="THREATS">Threats</option>'),
-              ('aria-label="GIFs and stickers"', 'aria-label="Stickers and expressions"'),
-              ('>GIFs &amp; stickers</button>', '>Stickers &amp; expressions</button>'),
-              ('<h2 id="view-once-preview-title">Preview View-Once photo</h2><div id="view-once-preview-container"', '<h2 id="view-once-preview-title">Preview View-Once photo</h2><p class="ephemeral-choice-help">View Once can be opened one time. View Twice can be opened up to two times.</p><div id="view-once-preview-container"')
-          ]
-          for old, new in replacements:
-              if old in text:
-                  text = text.replace(old, new)
-              elif new not in text:
-                  raise SystemExit(f"expected Team 6 source anchor not found: {old}")
-          index.write_text(text)
-
-          chat = Path("priv/static/assets/instagram_chat.mjs")
-          text = chat.read_text()
-          old = 'trayButton(document.querySelector("#expressive-open"), "magic", "GIFs & stickers")'
-          new = 'trayButton(document.querySelector("#expressive-open"), "magic", "Stickers & expressions")'
-          if old in text:
-              text = text.replace(old, new)
-          elif new not in text:
-              raise SystemExit("expected expressive tray label anchor not found")
-          chat.write_text(text)
-          PY
-
-      - name: Materialize corrected source commit on branch push
-        if: github.event_name == 'push'
-        run: |
-          git config user.name "team6-product-ux"
-          git config user.email "team6-product-ux@users.noreply.github.com"
-          git add priv/static/index.html priv/static/assets/instagram_chat.mjs
-          if ! git diff --cached --quiet; then
-            git commit -m "fix(team6): clarify critical conversation UX states"
-          fi
-          echo "TEAM6_LOCAL_TEST_SHA=$(git rev-parse HEAD)"
-          git push origin HEAD:newteam/arrival-ux
-
-      - name: Assert PR source is already materialized
-        if: github.event_name == 'pull_request'
-        run: |
-          git diff --exit-code
-          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          checked_out="$(git rev-parse HEAD)"
+          echo "TEAM6_EXPECTED_SHA=$TEAM6_EXPECTED_SHA"
+          echo "TEAM6_CHECKED_OUT_SHA=$checked_out"
+          test "$checked_out" = "$TEAM6_EXPECTED_SHA"
+          git status --porcelain | tee /tmp/team6-initial-status
+          test ! -s /tmp/team6-initial-status
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -117,7 +78,7 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Focused UI and interaction JavaScript regressions
+      - name: Focused UI and interaction regressions
         run: |
           node --test --test-concurrency=1 \
             test/js/instagram_chat_test.mjs \
@@ -130,6 +91,10 @@ jobs:
             test/js/voice_notes_test.mjs \
             test/js/view_once_test.mjs \
             test/js/live_call_test.mjs \
+            test/js/team6_media_gate_test.mjs \
+            test/js/team6_media_privacy_test.mjs \
+            test/js/team6_voice_note_permission_test.mjs \
+            test/js/ephemeral_conversation_ux_test.mjs \
             test/js/atmosphere_test.mjs \
             test/js/prompt_cards_test.mjs \
             test/js/companion_test.mjs \
@@ -160,11 +125,24 @@ jobs:
           cat /tmp/team6-product-ux-browser.log
           exit 1
 
-      - name: Team 6 real-browser UX attack
+      - name: Real Arrival and accessibility browser proof
         run: |
           node --test --test-concurrency=1 \
             test/js/arrival_first_minute_browser_test.mjs \
             test/js/arrival_accessibility_browser_test.mjs \
+            test/js/team6_real_ux_browser_test.mjs
+
+      - name: Real integrated Conversation recovery and terminal proof
+        run: |
+          node --test --test-concurrency=1 \
+            --test-name-pattern='browser-layer disconnect recovers and catches up exactly once|Conversation end converges both clients and refresh cannot resurrect it|Feature 1D E2E-3: keyboard, focus, touch safety, and reduced motion|Feature 1H E2E-3: keyboard chooser remains functional across accessibility and responsive modes|Feature 1L E2E-2: reconnect, explicit end, and unrecoverable states remain semantically distinct|Feature 1L E2E-3: the real report flow shows safety lifetime limits without adding report fields|Feature 1O E2E-1: standard view-once cycle|Feature 1O\.1 E2E-1: standard view-twice cycle' \
+            test/js/browser_e2e_test.mjs
+
+      # The following tests deliberately install synthetic Conversation DOM state to
+      # attack layout. They are PRESENTATION FIXTURES only, not reachability proof.
+      - name: Presentation fixture layout regressions — not reachability proof
+        run: |
+          node --test --test-concurrency=1 \
             test/js/instagram_chat_browser_test.mjs \
             test/js/instagram_chat_report_browser_test.mjs \
             test/js/team6_product_ux_browser_test.mjs
@@ -175,6 +153,7 @@ jobs:
         with:
           name: team6-product-ux-screenshots-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
+            tmp/team6-real-ux-screenshots
             tmp/team6-product-ux-screenshots
             tmp/arrival-first-60-screenshots
             tmp/chat-ui-screenshots
@@ -185,7 +164,13 @@ jobs:
         if: always()
         run: |
           if [ -f /tmp/team6-product-ux-browser.pid ]; then
-            kill "$(cat /tmp/team6-product-ux-browser.pid)" 2>/dev/null || true
+            pid="$(cat /tmp/team6-product-ux-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
           fi
 
       - name: Reset browser data
@@ -194,15 +179,20 @@ jobs:
           mix ecto.create --quiet
           mix ecto.migrate --quiet
 
-      - name: Clean exact tree proof before full suite
-        run: |
-          git diff --check
-          git status --porcelain | tee /tmp/team6-status
-          test ! -s /tmp/team6-status
-          echo "TEAM6_TESTED_SHA=$(git rev-parse HEAD)"
-
       - name: Full repository precommit
         run: mix precommit
+
+      - name: Final clean tree and exact SHA proof
+        run: |
+          tested_sha="$(git rev-parse HEAD)"
+          git diff --check
+          git status --porcelain | tee /tmp/team6-final-status
+          test ! -s /tmp/team6-final-status
+          test "$tested_sha" = "$TEAM6_EXPECTED_SHA"
+          echo "TEAM6_EXPECTED_SHA=$TEAM6_EXPECTED_SHA"
+          echo "TEAM6_CHECKED_OUT_SHA=$tested_sha"
+          echo "TEAM6_TESTED_SHA=$tested_sha"
+          echo "TEAM6_FINAL_SHA=$tested_sha"
 
       - name: Browser log on failure
         if: failure()
