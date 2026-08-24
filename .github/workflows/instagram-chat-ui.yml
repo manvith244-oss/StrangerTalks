@@ -39,7 +39,7 @@ jobs:
       PORT: "4002"
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4002
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
 
     steps:
       - name: Checkout exact feature commit
@@ -114,7 +114,7 @@ jobs:
               cat /tmp/strangertalks-browser.log
               exit 1
             fi
-            if curl -fsS http://127.0.0.1:4002/ >/dev/null; then
+            if curl -fsS http://localhost:4002/ >/dev/null; then
               echo "Phoenix browser test endpoint is ready."
               exit 0
             fi
