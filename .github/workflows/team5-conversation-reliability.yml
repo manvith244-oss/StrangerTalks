@@ -68,6 +68,21 @@ jobs:
       - name: Install Elixir dependencies
         run: mix deps.get
 
+      - name: Prove committed Elixir formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix format
+          status=$(git status --porcelain)
+          if [ -n "$status" ]; then
+            echo "Formatter changed committed files:"
+            printf '%s\n' "$status"
+            echo "--- formatter diff begin ---"
+            git diff --no-ext-diff -- .
+            echo "--- formatter diff end ---"
+            exit 1
+          fi
+
       - name: Team 5 focused Elixir reliability tests
         shell: bash
         run: |
