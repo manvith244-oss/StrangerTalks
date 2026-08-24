@@ -3,12 +3,11 @@ from pathlib import Path
 path = Path("tmp/team6_direct_remediate.py")
 text = path.read_text()
 
-# 1. Replace the whitespace-sensitive notifyStateChange insertion with a
-# function-boundary insertion. This changes only the temporary execution
-# harness; production source is still mutated only after the script runs.
+# Replace the whitespace-sensitive helper insertion with a function-boundary
+# insertion. This mutates only the temporary remediation script.
 start = text.index('if "canTransmitOutgoingAudio()" not in live:')
 end = text.index('\nlive = replace_between(', start)
-replacement = r'''if "canTransmitOutgoingAudio()" not in live:
+replacement = r"""if "canTransmitOutgoingAudio()" not in live:
     helpers = D('''
       notifyStateChange() {
         this.onStateChange(this.getState())
@@ -48,28 +47,34 @@ replacement = r'''if "canTransmitOutgoingAudio()" not in live:
         helpers,
         "insert media authority helpers"
     )
-'''
+"""
 text = text[:start] + replacement + text[end:]
 
-# 2. Voice Expression must remain fail-closed when WebAudio is unavailable.
-# The old proposed harness would have re-opened raw audio in ACTIVE state.
-fallback_start = text.index('live = replace_once(\n    live,\n    D(\'\'\'\n        if (!AudioCtx || !this.rawAudioTrack) {')
-fallback_end = text.index('\nlive = replace_once(', fallback_start + 10)
-text = text[:fallback_start] + '# WebAudio-unavailable effect path already leaves raw audio disabled; preserve that fail-closed behavior.\n' + text[fallback_end + 1:]
+# Voice Expression must remain fail-closed when WebAudio is unavailable.
+# Remove the proposed fallback transformation that would have reopened raw
+# audio after the effect path had deliberately disabled it.
+fallback_marker = "live = replace_once(\n    live,\n    D('''\n        if (!AudioCtx || !this.rawAudioTrack) {"
+fallback_start = text.index(fallback_marker)
+fallback_end = text.index('\nlive = replace_once(', fallback_start + len(fallback_marker))
+text = (
+    text[:fallback_start]
+    + '# WebAudio-unavailable effect path stays fail-closed with raw audio disabled.\n'
+    + text[fallback_end + 1:]
+)
 
-# 3. Switching tracks must gate only the track being selected before
-# replaceTrack(); do not call the all-track gate while the old sender may still
-# reference raw audio.
-text = text.replace(
-    "          this.applyOutgoingAudioGate()\n          if (this.peerConnection) {",
-    "          this.rawAudioTrack.enabled = this.canTransmitOutgoingAudio()\n          if (this.peerConnection) {",
-    1,
-)
-text = text.replace(
-    "        this.applyOutgoingAudioGate()\n        if (this.peerConnection) {",
-    "        this.processedAudioTrack.enabled = this.canTransmitOutgoingAudio()\n        if (this.peerConnection) {",
-    1,
-)
+# Switching effect tracks must gate only the track being selected before
+# replaceTrack(). An all-track gate here could briefly reopen the old raw sender.
+plain_old = "          this.applyOutgoingAudioGate()\n          if (this.peerConnection) {"
+plain_new = "          this.rawAudioTrack.enabled = this.canTransmitOutgoingAudio()\n          if (this.peerConnection) {"
+if plain_old not in text:
+    raise RuntimeError("plain voice-expression proposed gate not found")
+text = text.replace(plain_old, plain_new, 1)
+
+processed_old = "        this.applyOutgoingAudioGate()\n        if (this.peerConnection) {"
+processed_new = "        this.processedAudioTrack.enabled = this.canTransmitOutgoingAudio()\n        if (this.peerConnection) {"
+if processed_old not in text:
+    raise RuntimeError("processed voice-expression proposed gate not found")
+text = text.replace(processed_old, processed_new, 1)
 
 path.write_text(text)
 print("TEAM6_REMEDIATION_HARNESS_PREPARED")
