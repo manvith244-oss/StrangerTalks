@@ -1,9 +1,16 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import {CALL_STATUS, LiveCallCoordinator} from "../../priv/static/assets/live_call.mjs"
-import {voiceCaptureStillAuthorized} from "../../priv/static/assets/voice_notes.mjs"
-import {viewOnceDraftMatchesRuntime} from "../../priv/static/assets/view_once.mjs"
+import {
+  CALL_STATUS,
+  LiveCallCoordinator
+} from "../../priv/static/assets/live_call.mjs"
+import {
+  voiceCaptureStillAuthorized
+} from "../../priv/static/assets/voice_notes.mjs"
+import {
+  viewOnceDraftMatchesRuntime
+} from "../../priv/static/assets/view_once.mjs"
 
 function deferredChannel() {
   const pushes = []
@@ -25,7 +32,12 @@ function deferredChannel() {
 
 function fakeStream({audio = false, video = false} = {}) {
   const tracks = []
-  const makeTrack = (kind) => ({kind, enabled: true, stopped: false, stop() { this.stopped = true }})
+  const makeTrack = (kind) => ({
+    kind,
+    enabled: true,
+    stopped: false,
+    stop() { this.stopped = true }
+  })
   if (audio) tracks.push(makeTrack("audio"))
   if (video) tracks.push(makeTrack("video"))
   return {
@@ -47,16 +59,31 @@ function installNavigator(value) {
 
 test("T11-CALL-001: late Accept success after terminal teardown cannot resurrect CONNECTING", async () => {
   const channel = deferredChannel()
-  const coordinator = new LiveCallCoordinator({channel, participantId: "callee", conversationId: "conversation-a"})
-  coordinator.handleIncomingCall({call_attempt_id: "call-a", caller_id: "caller", call_type: "voice"})
+  const coordinator = new LiveCallCoordinator({
+    channel,
+    participantId: "callee",
+    conversationId: "conversation-a"
+  })
+
+  coordinator.handleIncomingCall({
+    call_attempt_id: "call-a",
+    caller_id: "caller",
+    call_type: "voice"
+  })
   assert.equal(coordinator.status, CALL_STATUS.PENDING_INCOMING)
+
   const acceptPromise = coordinator.accept()
+  assert.equal(channel.pushes.length, 1)
   assert.equal(channel.pushes[0].event, "call:accept")
+  assert.equal(channel.pushes[0].payload.call_attempt_id, "call-a")
+
   coordinator.teardown("conversation_terminal")
   assert.equal(coordinator.status, CALL_STATUS.TERMINAL)
   assert.equal(coordinator.callAttemptId, null)
+
   channel.pushes[0].handlers.get("ok")({call_attempt_id: "call-a"})
   await acceptPromise
+
   const state = coordinator.getState()
   assert.equal(state.callAttemptId, null)
   assert.equal(state.hasActiveCall, false)
@@ -66,13 +93,24 @@ test("T11-CALL-001: late Accept success after terminal teardown cannot resurrect
 
 test("T11-CALL-002: late initiate success after terminal teardown cannot rebind stale call authority", async () => {
   const channel = deferredChannel()
-  const coordinator = new LiveCallCoordinator({channel, participantId: "caller", conversationId: "conversation-a"})
+  const coordinator = new LiveCallCoordinator({
+    channel,
+    participantId: "caller",
+    conversationId: "conversation-a"
+  })
+
   const initiatePromise = coordinator.initiate("voice")
+  assert.equal(channel.pushes.length, 1)
   assert.equal(channel.pushes[0].event, "call:initiate")
   assert.equal(coordinator.status, CALL_STATUS.PENDING_OUTGOING)
+
   coordinator.teardown("conversation_terminal")
+  assert.equal(coordinator.callAttemptId, null)
+  assert.equal(coordinator.status, CALL_STATUS.TERMINAL)
+
   channel.pushes[0].handlers.get("ok")({call_attempt_id: "late-call-a"})
   await initiatePromise
+
   const state = coordinator.getState()
   assert.equal(state.callAttemptId, null)
   assert.equal(state.hasActiveCall, false)
@@ -81,7 +119,16 @@ test("T11-CALL-002: late initiate success after terminal teardown cannot rebind 
 })
 
 test("T11-VOICE-001: voice permission authority is invalidated by terminal, request supersession, and Conversation A to B", () => {
-  const base = {requestId: 8, currentRequestId: 8, conversationId: "conversation-a", currentConversationId: "conversation-a", epochId: "epoch-a", currentEpochId: "epoch-a", conversationAvailable: true}
+  const base = {
+    requestId: 8,
+    currentRequestId: 8,
+    conversationId: "conversation-a",
+    currentConversationId: "conversation-a",
+    epochId: "epoch-a",
+    currentEpochId: "epoch-a",
+    conversationAvailable: true
+  }
+
   assert.equal(voiceCaptureStillAuthorized(base), true)
   assert.equal(voiceCaptureStillAuthorized({...base, conversationAvailable: false}), false)
   assert.equal(voiceCaptureStillAuthorized({...base, currentRequestId: 9}), false)
@@ -94,13 +141,19 @@ test("T11-VOICE-002: late camera permission after terminal teardown stops the ac
   const permission = new Promise((resolve) => { resolvePermission = resolve })
   const stream = fakeStream({video: true})
   const restoreNavigator = installNavigator({mediaDevices: {getUserMedia: () => permission}})
+
   try {
-    const coordinator = new LiveCallCoordinator({participantId: "participant-a", conversationId: "conversation-a"})
+    const coordinator = new LiveCallCoordinator({
+      participantId: "participant-a",
+      conversationId: "conversation-a"
+    })
     coordinator.callAttemptId = "call-a"
     coordinator.status = CALL_STATUS.ACTIVE
+
     const acquisition = coordinator.acquireCameraStream()
     coordinator.teardown("conversation_terminal")
     resolvePermission(stream)
+
     assert.equal(await acquisition, null)
     assert.equal(stream.tracks[0].stopped, true)
     assert.equal(coordinator.localCameraStream, null)
@@ -117,9 +170,11 @@ test("T11-CALL-003: CONNECTING keeps outgoing audio closed until ACTIVE authorit
   coordinator.localStream = stream
   coordinator.rawAudioTrack = stream.tracks[0]
   coordinator.status = CALL_STATUS.CONNECTING
+
   coordinator.applyOutgoingAudioGate()
   assert.equal(stream.tracks[0].enabled, false)
   assert.equal(coordinator.canTransmitOutgoingAudio(), false)
+
   coordinator.status = CALL_STATUS.ACTIVE
   coordinator.applyOutgoingAudioGate()
   assert.equal(stream.tracks[0].enabled, true)
