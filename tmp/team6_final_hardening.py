@@ -164,4 +164,128 @@ if 'test "malformed provider configuration fails closed"' not in turn:
     turn = turn[:pos] + "\n\n" + addition + turn[pos:]
 turn_path.write_text(turn)
 
+# Existing C11 concurrency tests predate one-authoritative-endpoint enforcement.
+# Keep their reservation/extension race intent, but make their later media-sensitive
+# calls use the same caller endpoint PID/session that initiated each call.
+live_call_test_path = Path("test/strangertalks_new/conversation_live_call_test.exs")
+live_call_test = live_call_test_path.read_text()
+
+admission_old = D('''
+      winner_p1 = if winner_conv == conv_a, do: a_p1, else: b_p1
+      winner_attempt = if winner_conv == conv_a, do: attempt_a, else: attempt_b
+      loser_p1 = if loser_conv == conv_a, do: a_p1, else: b_p1
+      loser_attempt = if loser_conv == conv_a, do: attempt_a, else: attempt_b
+
+      # Winning reservation is visible and permits credential authority
+      assert {:ok, creds} =
+               ConversationServer.request_call_credentials(
+                 winner_conv.conversation_id,
+                 winner_p1,
+                 self(),
+                 "s_win",
+                 winner_attempt
+               )
+''')
+admission_new = D('''
+      winner_p1 = if winner_conv == conv_a, do: a_p1, else: b_p1
+      winner_attempt = if winner_conv == conv_a, do: attempt_a, else: attempt_b
+      winner_session = if winner_conv == conv_a, do: "s_a1", else: "s_b1"
+      loser_p1 = if loser_conv == conv_a, do: a_p1, else: b_p1
+      loser_attempt = if loser_conv == conv_a, do: attempt_a, else: attempt_b
+      loser_session = if loser_conv == conv_a, do: "s_a1", else: "s_b1"
+
+      # Winning reservation is visible and permits credential authority from the stored caller endpoint.
+      assert {:ok, creds} =
+               ConversationServer.request_call_credentials(
+                 winner_conv.conversation_id,
+                 winner_p1,
+                 self(),
+                 winner_session,
+                 winner_attempt
+               )
+''')
+if admission_old not in live_call_test:
+    raise RuntimeError("C11 admission race endpoint fixture not found")
+live_call_test = live_call_test.replace(admission_old, admission_new, 1)
+live_call_test = live_call_test.replace(
+    D('''
+      # Loser is denied credentials (0 oversubscription)
+      assert {:error, _} =
+               ConversationServer.request_call_credentials(
+                 loser_conv.conversation_id,
+                 loser_p1,
+                 self(),
+                 "s_lose",
+                 loser_attempt
+               )
+    '''),
+    D('''
+      # Loser is denied credentials (0 oversubscription), even from its stored caller endpoint.
+      assert {:error, _} =
+               ConversationServer.request_call_credentials(
+                 loser_conv.conversation_id,
+                 loser_p1,
+                 self(),
+                 loser_session,
+                 loser_attempt
+               )
+    '''),
+    1,
+)
+
+extension_old = D('''
+      # Concurrent extension requests
+      task_a =
+        Task.async(fn ->
+          ConversationServer.extend_call_credentials(
+            conv_a.conversation_id,
+            a_p1,
+            self(),
+            "s_a1",
+            attempt_a
+          )
+        end)
+
+      task_b =
+        Task.async(fn ->
+          ConversationServer.extend_call_credentials(
+            conv_b.conversation_id,
+            b_p1,
+            self(),
+            "s_b1",
+            attempt_b
+          )
+        end)
+''')
+extension_new = D('''
+      # Concurrent extension requests use the stored caller endpoint, not each Task process PID.
+      caller_endpoint_pid = self()
+
+      task_a =
+        Task.async(fn ->
+          ConversationServer.extend_call_credentials(
+            conv_a.conversation_id,
+            a_p1,
+            caller_endpoint_pid,
+            "s_a1",
+            attempt_a
+          )
+        end)
+
+      task_b =
+        Task.async(fn ->
+          ConversationServer.extend_call_credentials(
+            conv_b.conversation_id,
+            b_p1,
+            caller_endpoint_pid,
+            "s_b1",
+            attempt_b
+          )
+        end)
+''')
+if extension_old not in live_call_test:
+    raise RuntimeError("C11 extension race endpoint fixture not found")
+live_call_test = live_call_test.replace(extension_old, extension_new, 1)
+live_call_test_path.write_text(live_call_test)
+
 print("TEAM6_FINAL_HARDENING_APPLIED")
