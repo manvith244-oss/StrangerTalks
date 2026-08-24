@@ -14,6 +14,14 @@ const IDENTITY_KEY = "strangertalks.identity.v1"
 const GIF_SEARCH_PATH = "/api/gifs/search"
 
 let currentConversationId = null
+let conversationGeneration = 0
+let stickerPickerAuthority = null
+
+function terminateBrowserExpressionAuthority() {
+  conversationGeneration += 1
+  currentConversationId = null
+  stickerPickerAuthority = null
+}
 
 if (!Socket.prototype.__team10GifAuthorityPatched) {
   Socket.prototype.__team10GifAuthorityPatched = true
@@ -22,10 +30,58 @@ if (!Socket.prototype.__team10GifAuthorityPatched) {
   Socket.prototype.channel = function(topic, params) {
     const channel = originalChannel.call(this, topic, params)
     if (typeof topic === "string" && topic.startsWith("conversation:")) {
+      conversationGeneration += 1
       currentConversationId = topic.slice("conversation:".length)
+      stickerPickerAuthority = null
     }
     return channel
   }
+}
+
+// Capture-phase authority guard runs before the base app's sticker click handler.
+// A selection belongs to the Conversation generation in which the picker opened;
+// an End/Block, sibling terminal update, or A→B transition invalidates it.
+document.addEventListener("click", (event) => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+
+  if (target.closest("#end-confirm, #block")) {
+    terminateBrowserExpressionAuthority()
+    return
+  }
+
+  if (target.closest("#expressive-open")) {
+    stickerPickerAuthority = currentConversationId
+      ? {conversationId: currentConversationId, generation: conversationGeneration}
+      : null
+    return
+  }
+
+  if (target.closest("#expressive-results button")) {
+    const valid = Boolean(
+      stickerPickerAuthority &&
+      currentConversationId &&
+      stickerPickerAuthority.conversationId === currentConversationId &&
+      stickerPickerAuthority.generation === conversationGeneration
+    )
+
+    if (!valid) {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      const status = document.querySelector("#expression-send-status")
+      if (status) {
+        status.textContent = "That sticker selection is no longer available in this Conversation."
+        status.hidden = false
+      }
+    }
+  }
+}, true)
+
+const expressiveComposer = document.querySelector("#expressive-composer")
+if (expressiveComposer) {
+  new MutationObserver(() => {
+    if (expressiveComposer.hidden) terminateBrowserExpressionAuthority()
+  }).observe(expressiveComposer, {attributes: true, attributeFilter: ["hidden"]})
 }
 
 if (!globalThis.__team10GifFetchPatched && typeof globalThis.fetch === "function") {
