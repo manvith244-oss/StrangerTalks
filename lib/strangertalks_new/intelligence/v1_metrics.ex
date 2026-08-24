@@ -70,10 +70,12 @@ defmodule StrangertalksNew.Intelligence.V1Metrics do
     },
     %{
       name: :average_queue_time_seconds,
-      definition: "Arithmetic mean of persisted queue_duration_seconds for Matches in the window.",
+      definition:
+        "Arithmetic mean of persisted queue_duration_seconds for Matches in the window.",
       source: "matches.queue_duration_seconds",
       interpretation: "Operational wait experienced by successfully matched attempts.",
-      non_goal: "Does not describe people who never produced a Match and is not a happiness score."
+      non_goal:
+        "Does not describe people who never produced a Match and is not a happiness score."
     },
     %{
       name: :conversations_started,
@@ -105,9 +107,11 @@ defmodule StrangertalksNew.Intelligence.V1Metrics do
     },
     %{
       name: :voluntary_relationships_created,
-      definition: "Canonical Relationship rows created after mutual consent inside the reporting window.",
+      definition:
+        "Canonical Relationship rows created after mutual consent inside the reporting window.",
       source: "relationships.created_at",
-      interpretation: "A strong explicit continuation signal because Relationship creation requires mutual consent.",
+      interpretation:
+        "A strong explicit continuation signal because Relationship creation requires mutual consent.",
       non_goal: "Must not be generalized into a psychological or relationship-strength score."
     },
     %{
