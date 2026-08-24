@@ -1,0 +1,101 @@
+name: Team 2 Final Closure Audit
+
+on:
+  push:
+    branches:
+      - audit/team2-final-closure
+
+permissions:
+  contents: read
+
+jobs:
+  team2-final:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      TEAM2_FINAL_SHA: a767746138c8f79a8853173b1b8c2a29591205cf
+
+    steps:
+      - name: Checkout exact Team 2 SHA
+        uses: actions/checkout@v4
+        with:
+          ref: a767746138c8f79a8853173b1b8c2a29591205cf
+
+      - name: Prove exact checkout identity
+        run: |
+          echo "TEAM2_EXPECTED_SHA=$TEAM2_FINAL_SHA"
+          echo "TEAM2_ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$TEAM2_FINAL_SHA"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install Elixir dependencies
+        run: mix deps.get
+
+      - name: Focused Team 2 matchmaking closure regressions
+        run: |
+          mix test \
+            test/strangertalks_new/matchmaking_engine_test.exs \
+            test/strangertalks_new/matchmaking_hostile_concurrency_test.exs \
+            test/strangertalks_new/matchmaking_reconciliation_fail_closed_test.exs \
+            test/strangertalks_new/relationship_reconnections_test.exs \
+            test/strangertalks_new/recovery_restart_test.exs \
+            test/strangertalks_new/security_adversarial_test.exs \
+            test/strangertalks_new/participant_activity_lock_test.exs \
+            test/strangertalks_new_web/channels/participant_channel_test.exs \
+            test/strangertalks_new_web/channels/participant_match_transition_authority_test.exs
+
+      - name: Full precommit
+        run: mix precommit
+
+      - name: Git diff check
+        run: git diff --check
+
+      - name: Formatter and tracked-worktree integrity
+        run: git diff --exit-code -- .
+
+      - name: Final branch-style status
+        run: git status --short --branch
+
+      - name: Final porcelain must be empty
+        shell: bash
+        run: |
+          status=$(git status --porcelain)
+          printf '%s' "$status"
+          test -z "$status"
+
+      - name: Record final exact Team 2 SHA
+        run: |
+          test "$(git rev-parse HEAD)" = "$TEAM2_FINAL_SHA"
+          echo "TEAM2_FINAL_TESTED_SHA=$(git rev-parse HEAD)"
