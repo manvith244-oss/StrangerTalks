@@ -27,10 +27,12 @@ jobs:
           mix local.rebar --force
       - name: Refresh patched dependencies
         run: mix deps.update bandit postgrex
-      - name: Audit refreshed dependencies
-        run: mix hex.audit
+      - name: Fetch complete refreshed dependency set
+        run: mix deps.get
       - name: Emit refreshed lockfile
         run: |
           echo '---BEGIN MIX.LOCK---'
           cat mix.lock
           echo '---END MIX.LOCK---'
+      - name: Audit refreshed dependencies
+        run: mix hex.audit
