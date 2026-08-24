@@ -6,11 +6,13 @@ on:
     paths:
       - "tmp/team6_direct_remediate.py"
       - "tmp/team6_prepare_remediation.py"
+      - "tmp/team6_final_hardening.py"
       - ".github/workflows/team6-visible-remediation.yml"
   pull_request:
     paths:
       - "tmp/team6_direct_remediate.py"
       - "tmp/team6_prepare_remediation.py"
+      - "tmp/team6_final_hardening.py"
       - ".github/workflows/team6-visible-remediation.yml"
 
 permissions:
@@ -55,6 +57,8 @@ jobs:
         run: python tmp/team6_prepare_remediation.py
       - name: Apply direct source remediation in runner
         run: python tmp/team6_direct_remediate.py
+      - name: Apply final provider-independent hardening
+        run: python tmp/team6_final_hardening.py
       - name: Format canonical Elixir changes
         run: |
           mix format \
@@ -90,7 +94,7 @@ jobs:
           git config user.name "team6-media-bot"
           git config user.email "team6-media-bot@users.noreply.github.com"
           git add \
-            priv/static/assets/live_call.mjs priv/static/assets/voice_notes.mjs priv/static/assets/app.js \
+            priv/static/index.html priv/static/assets/live_call.mjs priv/static/assets/voice_notes.mjs priv/static/assets/app.js \
             lib/strangertalks_new/conversation_lifecycle/conversation_server.ex lib/strangertalks_new/c11_policy.ex \
             config/runtime.exs config/test.exs test/support/turn_credential_test_client.ex \
             test/js/team6_media_gate_test.mjs test/js/team6_voice_note_permission_test.mjs test/js/team6_media_privacy_test.mjs \
