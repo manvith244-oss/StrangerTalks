@@ -44,3 +44,17 @@ config :strangertalks_new, :c11_policy,
   max_fallback_reservations: 10,
   credential_ttl_seconds: 300,
   usage_snapshot: %{usage_count: 0, budget_limit: 100}
+
+config :strangertalks_new, :turn_provider_credentials, %{
+  oracle: %{
+    strategy: :coturn_rest,
+    urls: ["turn:127.0.0.1:3478?transport=udp"],
+    shared_secret: "team6-test-only-coturn-secret"
+  },
+  cloudflare: %{
+    strategy: :cloudflare_api,
+    key_id: "team6-test-key-id",
+    api_token: "team6-test-token",
+    client: StrangertalksNew.TurnCredentialTestClient
+  }
+}

@@ -597,13 +597,17 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
         request_type,
         proposal
       ) do
-    admitted_call(
-      conversation_id,
-      {:request_call_media, participant_id, channel_pid, session_id, call_attempt_id,
-       request_type, proposal},
-      @mailbox_soft_limit,
-      :conversation_busy
-    )
+    if request_type in [:video_upgrade, "video_upgrade"] do
+      admitted_call(
+        conversation_id,
+        {:request_call_media, participant_id, channel_pid, session_id, call_attempt_id,
+         request_type, proposal},
+        @mailbox_soft_limit,
+        :conversation_busy
+      )
+    else
+      {:error, :unsupported_media_type}
+    end
   end
 
   def respond_call_media(
@@ -2956,6 +2960,30 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
               {:reply, {:error, :invalid_call_state}, state}
           end
       end
+    end
+  end
+
+  def handle_call(
+        {:authorized_media_action, participant_id, channel_pid, session_id, call_attempt_id,
+         message},
+        from,
+        state
+      ) do
+    case state.call_state do
+      %{call_attempt_id: ^call_attempt_id} = call ->
+        cond do
+          not member?(state, participant_id) ->
+            handle_call(message, from, state)
+
+          authoritative_media_endpoint?(call, participant_id, channel_pid, session_id) ->
+            handle_call(message, from, state)
+
+          true ->
+            {:reply, {:error, :not_media_endpoint}, state}
+        end
+
+      _ ->
+        handle_call(message, from, state)
     end
   end
 
@@ -5387,10 +5415,51 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     end
   end
 
+  defp authoritative_media_endpoint?(call, participant_id, channel_pid, session_id) do
+    cond do
+      participant_id == Map.get(call, :caller_id) ->
+        Map.get(call, :caller_endpoint_pid) == channel_pid and
+          Map.get(call, :caller_session_id) == session_id
+
+      participant_id == Map.get(call, :callee_id) ->
+        Map.get(call, :callee_endpoint_pid) == channel_pid and
+          Map.get(call, :callee_session_id) == session_id
+
+      true ->
+        false
+    end
+  end
+
+  @media_endpoint_actions [
+    :cancel_call,
+    :end_call,
+    :set_call_mute,
+    :set_call_effect,
+    :signal_call,
+    :request_call_media,
+    :respond_call_media,
+    :request_call_credentials,
+    :return_to_voice,
+    :send_call_reaction,
+    :set_reveal_ready,
+    :commit_call_extension
+  ]
+
+  defp wrap_media_endpoint_action(message) when is_tuple(message) and tuple_size(message) >= 5 do
+    if elem(message, 0) in @media_endpoint_actions do
+      {:authorized_media_action, elem(message, 1), elem(message, 2), elem(message, 3),
+       elem(message, 4), message}
+    else
+      message
+    end
+  end
+
+  defp wrap_media_endpoint_action(message), do: message
+
   defp admitted_call(conversation_id, message, mailbox_limit, pressure_error) do
     with {:ok, pid} <- lookup(conversation_id),
          :ok <- mailbox_admission(pid, mailbox_limit, pressure_error) do
-      call_pid(pid, message)
+      call_pid(pid, wrap_media_endpoint_action(message))
     else
       {:error, :not_started} -> {:error, :conversation_unavailable}
       {:error, reason} -> {:error, reason}

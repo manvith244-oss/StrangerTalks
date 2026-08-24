@@ -1,0 +1,56 @@
+name: Team 6 Apply Media Patches
+
+on:
+  push:
+    branches: [team6/voice-video-expression]
+    paths:
+      - "team6-patches/**"
+      - ".github/workflows/team6-apply-media-patches.yml"
+  pull_request:
+    paths:
+      - "team6-patches/**"
+      - ".github/workflows/team6-apply-media-patches.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: team6/voice-video-expression
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply exact Team 6 patches
+        run: |
+          shopt -s nullglob
+          patches=(team6-patches/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "No Team 6 patches to apply."
+            exit 0
+          fi
+          for patch in "${patches[@]}"; do
+            git apply --check "$patch"
+            git apply "$patch"
+          done
+      - name: Prove browser media boundary
+        run: |
+          node --test \
+            test/js/voice_notes_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/team6_media_gate_test.mjs
+          git diff --check
+      - name: Commit proven application
+        if: github.event_name == 'push'
+        run: |
+          git config user.name "team6-media-bot"
+          git config user.email "team6-media-bot@users.noreply.github.com"
+          git add priv/static/assets/live_call.mjs
+          git rm team6-patches/*.patch
+          git commit -m "fix(team6): enforce connecting media authority [skip ci]"
+          git push origin HEAD:team6/voice-video-expression

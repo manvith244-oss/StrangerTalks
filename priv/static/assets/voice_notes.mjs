@@ -56,3 +56,14 @@ export function chronologicalTimeline(records) {
     return aSequence - bSequence || String(a.value.sent_at).localeCompare(String(b.value.sent_at))
   })
 }
+export function voiceCaptureStillAuthorized({
+  requestId, currentRequestId, conversationId, currentConversationId,
+  epochId, currentEpochId, conversationAvailable
+}) {
+  return Boolean(
+    conversationAvailable &&
+    requestId === currentRequestId &&
+    conversationId && conversationId === currentConversationId &&
+    epochId && epochId === currentEpochId
+  )
+}

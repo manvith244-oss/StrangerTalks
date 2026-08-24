@@ -1,0 +1,213 @@
+name: Team 6 Remediate Media Gate V3
+
+on:
+  push:
+    branches: [team6/voice-video-expression]
+    paths: [".github/workflows/team6-remediate-media-gate-v3.yml"]
+  pull_request:
+    paths: [".github/workflows/team6-remediate-media-gate-v3.yml"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: team6-media-remediation-v3
+  cancel-in-progress: true
+
+jobs:
+  remediate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: team6/voice-video-expression
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply function-anchored Connecting media authority
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          path = Path("priv/static/assets/live_call.mjs")
+          text = path.read_text()
+
+          def sub1(pattern, replacement, label, flags=re.S):
+              global text
+              text, count = re.subn(pattern, replacement, text, count=1, flags=flags)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one match, found {count}")
+
+          sub1(
+              r'(notifyStateChange\(\)\s*\{\s*this\.onStateChange\(this\.getState\(\)\)\s*\})',
+              r'''\1
+
+  canTransmitOutgoingAudio() {
+    return Boolean(
+      this.callAttemptId &&
+      this.status === CALL_STATUS.ACTIVE &&
+      !this.selfMuted
+    )
+  }
+
+  applyOutgoingAudioGate() {
+    const enabled = this.canTransmitOutgoingAudio()
+    if (this.rawAudioTrack) this.rawAudioTrack.enabled = enabled
+    if (this.processedAudioTrack) this.processedAudioTrack.enabled = enabled
+    if (this.localStream?.getAudioTracks) {
+      for (const track of this.localStream.getAudioTracks()) track.enabled = enabled
+    }
+  }''',
+              "audio authority helper"
+          )
+
+          sub1(
+              r'(async handleCallAccepted\([^\n]+\)\s*\{\s*if \(this\.callAttemptId !== call_attempt_id\) return\s*this\.activeAt = active_at \|\| Math\.floor\(Date\.now\(\) / 1000\))\s*this\.status = CALL_STATUS\.ACTIVE\s*if \(this\.callType === "video" && !this\.localVisualFloorClosed\) \{\s*this\.selfVideo = true\s*this\.peerVideo = true\s*\}\s*this\.notifyStateChange\(\)',
+              r'''\1
+    // Server acceptance authorizes setup, not peer-audible transmission.
+    this.status = CALL_STATUS.CONNECTING
+    this.applyOutgoingAudioGate()
+    this.notifyStateChange()''',
+              "accepted call remains connecting"
+          )
+
+          sub1(
+              r'(handleMuteChanged\([^\n]+\)\s*\{\s*if \(this\.callAttemptId !== call_attempt_id\) return\s*if \(participant_id === this\.participantId\) \{\s*this\.selfMuted = is_muted)(\s*\} else \{)',
+              r'''\1
+      this.applyOutgoingAudioGate()\2''',
+              "server mute applies gate"
+          )
+
+          sub1(
+              r'// Update audio track enabled property\s*const activeTrack = this\.processedAudioTrack \|\| this\.rawAudioTrack\s*if \(activeTrack\) \{\s*activeTrack\.enabled = !targetMute\s*\}\s*if \(this\.localStream\) \{\s*for \(const track of this\.localStream\.getAudioTracks\(\)\) \{\s*track\.enabled = !targetMute\s*\}\s*\}',
+              '''// Mute intent never overrides the CONNECTING privacy gate.
+    this.applyOutgoingAudioGate()''',
+              "mute cannot bypass connecting"
+          )
+
+          sub1(
+              r'(if \(preset === "plain"\) \{\s*this\.cleanupEffectGraph\(\)\s*if \(this\.rawAudioTrack\) \{\s*)this\.rawAudioTrack\.enabled = !this\.selfMuted',
+              r'\1this.rawAudioTrack.enabled = this.canTransmitOutgoingAudio()',
+              "plain voice expression gate"
+          )
+
+          sub1(
+              r'(if \(!AudioCtx \|\| !this\.rawAudioTrack\) \{\s*this\.voiceEffectActive = true)(\s*this\.notifyStateChange\(\))',
+              r'''\1
+        this.applyOutgoingAudioGate()\2''',
+              "effect fallback gate"
+          )
+
+          sub1(
+              r'(this\.processedAudioTrack = this\.effectDestinationNode\.stream\.getAudioTracks\(\)\[0\]\s*if \(this\.processedAudioTrack\) \{\s*)this\.processedAudioTrack\.enabled = !this\.selfMuted',
+              r'''\1this.applyOutgoingAudioGate()''',
+              "processed voice expression gate"
+          )
+
+          sub1(
+              r'async initializeWebRTC\(isOfferSide = false\) \{\s*try \{\s*const creds = await this\.fetchCredentials\(\)',
+              '''async initializeWebRTC(isOfferSide = false) {
+    const setupAttemptId = this.callAttemptId
+    if (!setupAttemptId || ![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)) return
+
+    try {
+      const creds = await this.fetchCredentials()
+      if (
+        this.callAttemptId !== setupAttemptId ||
+        ![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)
+      ) return''',
+              "webrtc attempt snapshot"
+          )
+
+          sub1(
+              r'this\.peerConnection\.oniceconnectionstatechange = \(\) => \{\s*const state = this\.peerConnection\?\.iceConnectionState\s*if \(state === "connected" \|\| state === "completed"\) \{\s*this\.status = CALL_STATUS\.ACTIVE\s*this\.notifyStateChange\(\)\s*\} else if \(state === "failed"\) \{\s*this\.handleIceFailure\(\)\s*\}\s*\}',
+              '''this.peerConnection.oniceconnectionstatechange = () => {
+        const state = this.peerConnection?.iceConnectionState
+        if (state === "connected" || state === "completed") {
+          if (
+            this.callAttemptId !== setupAttemptId ||
+            ![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)
+          ) return
+          this.status = CALL_STATUS.ACTIVE
+          if (this.callType === "video" && !this.localVisualFloorClosed) {
+            this.selfVideo = true
+            this.peerVideo = true
+          }
+          this.applyOutgoingAudioGate()
+          this.notifyStateChange()
+        } else if (state === "failed") {
+          this.handleIceFailure()
+        }
+      }''',
+              "ice establishes authority"
+          )
+
+          sub1(
+              r'if \(navigator\.mediaDevices\?\.getUserMedia\) \{\s*this\.localStream = await navigator\.mediaDevices\.getUserMedia\(\{\s*audio: true,\s*video: needVideo\s*\}\)\s*const audioTracks = this\.localStream\.getAudioTracks \? this\.localStream\.getAudioTracks\(\) : \[\]\s*if \(audioTracks\.length > 0\) \{\s*this\.rawAudioTrack = audioTracks\[0\]\s*this\.rawAudioTrack\.enabled = !this\.selfMuted\s*\}\s*this\.onLocalStream\(this\.localStream\)\s*for \(const track of this\.localStream\.getTracks\(\)\) \{\s*this\.peerConnection\.addTrack\(track, this\.localStream\)\s*\}\s*\}',
+              '''if (navigator.mediaDevices?.getUserMedia) {
+        const acquiredStream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: needVideo
+        })
+
+        // Permission resolution is asynchronous. Terminal authority wins even if
+        // getUserMedia resolves after End, Block, or attempt replacement.
+        if (
+          this.callAttemptId !== setupAttemptId ||
+          ![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status) ||
+          !this.peerConnection
+        ) {
+          stopMediaTracks(acquiredStream)
+          return
+        }
+
+        this.localStream = acquiredStream
+        const audioTracks = this.localStream.getAudioTracks ? this.localStream.getAudioTracks() : []
+        if (audioTracks.length > 0) this.rawAudioTrack = audioTracks[0]
+        this.applyOutgoingAudioGate()
+        this.onLocalStream(this.localStream)
+
+        for (const track of this.localStream.getTracks()) {
+          this.peerConnection.addTrack(track, this.localStream)
+        }
+      }''',
+              "late microphone permission fails closed"
+          )
+
+          sub1(
+              r'async handleIceFailure\(\) \{\s*try \{\s*const creds = await this\.fetchCredentials\(\)\s*if \(this\.peerConnection && creds\?\.ice_servers\) \{',
+              '''async handleIceFailure() {
+    const recoveryAttemptId = this.callAttemptId
+    if (!recoveryAttemptId || ![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)) return
+
+    try {
+      const creds = await this.fetchCredentials()
+      if (
+        this.callAttemptId === recoveryAttemptId &&
+        [CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status) &&
+        this.peerConnection &&
+        creds?.ice_servers
+      ) {''',
+              "ice recovery cannot resurrect terminal"
+          )
+
+          path.write_text(text)
+
+      - name: Focused Team 6 regression proof
+        run: |
+          node --test \
+            test/js/voice_notes_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/team6_media_gate_test.mjs
+          git diff --check
+      - name: Commit remediation
+        run: |
+          test -n "$(git status --porcelain)"
+          git config user.name "team6-media-bot"
+          git config user.email "team6-media-bot@users.noreply.github.com"
+          git add priv/static/assets/live_call.mjs
+          git commit -m "fix(team6): fail closed during call connecting"
+          git push origin HEAD:team6/voice-video-expression

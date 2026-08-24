@@ -1,0 +1,32 @@
+diff --git a/priv/static/assets/app.js b/priv/static/assets/app.js
+--- a/priv/static/assets/app.js
++++ b/priv/static/assets/app.js
+@@ -1,4 +1,4 @@
+-  voice: {mediaType: null, recorder: null, stream: null, chunks: [], startedAt: 0, timer: null, stopTimer: null, activityFrame: null, discard: false, blob: null, objectUrl: null, voiceNoteId: null, durationMs: 0, originConversationId: null, originEpochId: null},
++  voice: {mediaType: null, recorder: null, stream: null, chunks: [], startedAt: 0, timer: null, stopTimer: null, activityFrame: null, discard: false, blob: null, objectUrl: null, voiceNoteId: null, durationMs: 0, originConversationId: null, originEpochId: null, captureRequestId: 0},
+@@ -1,10 +1,21 @@
+ async function startVoiceRecording() {
+   $("#voice-warning").hidden = true; clearVoicePreview(); $("#voice-preview-status").textContent = ""
+   if (!app.voice.mediaType || !navigator.mediaDevices?.getUserMedia) { announce("Voice recording is unavailable in this browser. Text messaging still works."); return }
++  const captureRequestId = ++app.voice.captureRequestId
++  const captureConversationId = app.conversationId
++  const captureEpochId = app.currentEpochId
+   try {
+     const stream = await navigator.mediaDevices.getUserMedia({audio: true})
++    if (
++      app.voice.captureRequestId !== captureRequestId ||
++      app.conversationId !== captureConversationId ||
++      app.currentEpochId !== captureEpochId ||
++      !app.conversation
++    ) {
++      stopMediaTracks(stream)
++      return
++    }
+     const recorder = new MediaRecorder(stream, {mimeType: app.voice.mediaType, audioBitsPerSecond: 64_000})
+     Object.assign(app.voice, {stream, recorder, chunks: [], startedAt: Date.now(), discard: false, originConversationId: app.conversationId, originEpochId: app.currentEpochId})
+@@ -1,6 +1,7 @@
+ function cancelRecording() {
++  app.voice.captureRequestId++
+   app.voice.discard = true
+   if (app.voice.recorder?.state === "recording") app.voice.recorder.stop(); else { closeVoiceStream(); clearVoicePreview() }
+ }

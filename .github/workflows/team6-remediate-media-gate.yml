@@ -1,0 +1,292 @@
+name: Team 6 Remediate Media Gate
+
+on:
+  push:
+    branches:
+      - team6/voice-video-expression
+    paths:
+      - ".github/workflows/team6-remediate-media-gate.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  remediate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: team6/voice-video-expression
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply fail-closed Connecting media authority
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("priv/static/assets/live_call.mjs")
+          text = path.read_text()
+
+          def replace_one(old, new, label):
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              text = text.replace(old, new, 1)
+
+          replace_one(
+          '''  notifyStateChange() {
+            this.onStateChange(this.getState())
+          }
+
+          // --- Channel Event Handlers ---''',
+          '''  notifyStateChange() {
+            this.onStateChange(this.getState())
+          }
+
+          canTransmitOutgoingAudio() {
+            return Boolean(
+              this.callAttemptId &&
+              this.status === CALL_STATUS.ACTIVE &&
+              !this.selfMuted
+            )
+          }
+
+          applyOutgoingAudioGate() {
+            const enabled = this.canTransmitOutgoingAudio()
+
+            if (this.rawAudioTrack) {
+              this.rawAudioTrack.enabled = enabled
+            }
+            if (this.processedAudioTrack) {
+              this.processedAudioTrack.enabled = enabled
+            }
+            if (this.localStream?.getAudioTracks) {
+              for (const track of this.localStream.getAudioTracks()) {
+                track.enabled = enabled
+              }
+            }
+          }
+
+          // --- Channel Event Handlers ---''',
+          "audio authority helper"
+          )
+
+          replace_one(
+          '''    this.activeAt = active_at || Math.floor(Date.now() / 1000)
+            this.status = CALL_STATUS.ACTIVE
+
+            if (this.callType === "video" && !this.localVisualFloorClosed) {
+              this.selfVideo = true
+              this.peerVideo = true
+            }
+
+            this.notifyStateChange()''',
+          '''    this.activeAt = active_at || Math.floor(Date.now() / 1000)
+            // Server acceptance authorizes transport setup, not peer-audible capture.
+            // The client remains CONNECTING until relay ICE establishes media authority.
+            this.status = CALL_STATUS.CONNECTING
+            this.applyOutgoingAudioGate()
+            this.notifyStateChange()''',
+          "accepted call stays connecting"
+          )
+
+          replace_one(
+          '''    // Update audio track enabled property
+            const activeTrack = this.processedAudioTrack || this.rawAudioTrack
+            if (activeTrack) {
+              activeTrack.enabled = !targetMute
+            }
+            if (this.localStream) {
+              for (const track of this.localStream.getAudioTracks()) {
+                track.enabled = !targetMute
+              }
+            }
+
+            this.notifyStateChange()''',
+          '''    // Mute intent never overrides the CONNECTING privacy gate.
+            this.applyOutgoingAudioGate()
+
+            this.notifyStateChange()''',
+          "mute cannot bypass media gate"
+          )
+
+          replace_one(
+          '''        this.rawAudioTrack.enabled = !this.selfMuted''',
+          '''        this.rawAudioTrack.enabled = this.canTransmitOutgoingAudio()''',
+          "plain voice effect gate"
+          )
+
+          replace_one(
+          '''      if (!AudioCtx || !this.rawAudioTrack) {
+                this.voiceEffectActive = true
+                this.notifyStateChange()
+                return
+              }''',
+          '''      if (!AudioCtx || !this.rawAudioTrack) {
+                this.voiceEffectActive = true
+                this.applyOutgoingAudioGate()
+                this.notifyStateChange()
+                return
+              }''',
+          "voice effect fallback gate"
+          )
+
+          replace_one(
+          '''      this.processedAudioTrack = this.effectDestinationNode.stream.getAudioTracks()[0]
+              if (this.processedAudioTrack) {
+                this.processedAudioTrack.enabled = !this.selfMuted''',
+          '''      this.processedAudioTrack = this.effectDestinationNode.stream.getAudioTracks()[0]
+              if (this.processedAudioTrack) {
+                this.applyOutgoingAudioGate()''',
+          "processed voice effect gate"
+          )
+
+          replace_one(
+          '''  async initializeWebRTC(isOfferSide = false) {
+            try {
+              const creds = await this.fetchCredentials()
+
+              const config = {''',
+          '''  async initializeWebRTC(isOfferSide = false) {
+            const setupAttemptId = this.callAttemptId
+            if (!setupAttemptId || ![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)) return
+
+            try {
+              const creds = await this.fetchCredentials()
+              if (
+                this.callAttemptId !== setupAttemptId ||
+                ![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)
+              ) return
+
+              const config = {''',
+          "webrtc attempt snapshot"
+          )
+
+          replace_one(
+          '''      this.peerConnection.oniceconnectionstatechange = () => {
+                const state = this.peerConnection?.iceConnectionState
+                if (state === "connected" || state === "completed") {
+                  this.status = CALL_STATUS.ACTIVE
+                  this.notifyStateChange()
+                } else if (state === "failed") {
+                  this.handleIceFailure()
+                }
+              }''',
+          '''      this.peerConnection.oniceconnectionstatechange = () => {
+                const state = this.peerConnection?.iceConnectionState
+                if (state === "connected" || state === "completed") {
+                  if (
+                    this.callAttemptId !== setupAttemptId ||
+                    ![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)
+                  ) return
+
+                  this.status = CALL_STATUS.ACTIVE
+                  if (this.callType === "video" && !this.localVisualFloorClosed) {
+                    this.selfVideo = true
+                    this.peerVideo = true
+                  }
+                  this.applyOutgoingAudioGate()
+                  this.notifyStateChange()
+                } else if (state === "failed") {
+                  this.handleIceFailure()
+                }
+              }''',
+          "ice establishes media authority"
+          )
+
+          replace_one(
+          '''      if (navigator.mediaDevices?.getUserMedia) {
+                this.localStream = await navigator.mediaDevices.getUserMedia({
+                  audio: true,
+                  video: needVideo
+                })
+
+                const audioTracks = this.localStream.getAudioTracks ? this.localStream.getAudioTracks() : []
+                if (audioTracks.length > 0) {
+                  this.rawAudioTrack = audioTracks[0]
+                  this.rawAudioTrack.enabled = !this.selfMuted
+                }
+
+                this.onLocalStream(this.localStream)
+
+                for (const track of this.localStream.getTracks()) {
+                  this.peerConnection.addTrack(track, this.localStream)
+                }
+              }''',
+          '''      if (navigator.mediaDevices?.getUserMedia) {
+                const acquiredStream = await navigator.mediaDevices.getUserMedia({
+                  audio: true,
+                  video: needVideo
+                })
+
+                // Permission resolution is asynchronous. End/Block/attempt replacement wins
+                // even if the browser resolves getUserMedia afterward.
+                if (
+                  this.callAttemptId !== setupAttemptId ||
+                  ![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status) ||
+                  !this.peerConnection
+                ) {
+                  stopMediaTracks(acquiredStream)
+                  return
+                }
+
+                this.localStream = acquiredStream
+                const audioTracks = this.localStream.getAudioTracks ? this.localStream.getAudioTracks() : []
+                if (audioTracks.length > 0) {
+                  this.rawAudioTrack = audioTracks[0]
+                }
+                // Capture may exist locally for setup, but peer transmission stays closed
+                // until the relay ICE connection establishes ACTIVE media authority.
+                this.applyOutgoingAudioGate()
+
+                this.onLocalStream(this.localStream)
+
+                for (const track of this.localStream.getTracks()) {
+                  this.peerConnection.addTrack(track, this.localStream)
+                }
+              }''',
+          "late getUserMedia fails closed"
+          )
+
+          replace_one(
+          '''  async handleIceFailure() {
+            try {
+              const creds = await this.fetchCredentials()
+              if (this.peerConnection && creds?.ice_servers) {''',
+          '''  async handleIceFailure() {
+            const recoveryAttemptId = this.callAttemptId
+            if (!recoveryAttemptId || ![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)) return
+
+            try {
+              const creds = await this.fetchCredentials()
+              if (
+                this.callAttemptId === recoveryAttemptId &&
+                [CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status) &&
+                this.peerConnection &&
+                creds?.ice_servers
+              ) {''',
+          "ice recovery cannot resurrect terminal call"
+          )
+
+          path.write_text(text)
+      - name: Focused Team 6 regression proof
+        run: |
+          node --test \
+            test/js/voice_notes_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/team6_media_gate_test.mjs
+          git diff --check
+      - name: Commit remediation
+        run: |
+          test -n "$(git status --porcelain)"
+          git config user.name "team6-media-bot"
+          git config user.email "team6-media-bot@users.noreply.github.com"
+          git add priv/static/assets/live_call.mjs
+          git commit -m "fix(team6): fail closed during call connecting"
+          git push origin HEAD:team6/voice-video-expression
+
+# Trigger revision: run after workflow exists on branch.
