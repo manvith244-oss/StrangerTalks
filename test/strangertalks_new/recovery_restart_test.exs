@@ -226,13 +226,16 @@ defmodule StrangertalksNew.RecoveryRestartTest do
         :ABANDONED ->
           assert persisted.ending_type == :TIMEOUT
           assert {:error, :not_started} = ConversationServer.lookup(conversation_id)
+
           assert restart_result in [{:error, :terminal_conversation}, {:error, :not_started}] or
                    match?({:ok, _pid}, restart_result)
 
         :ACTIVE ->
           assert {:ok, pid} = ConversationServer.lookup(conversation_id)
           assert Process.alive?(pid)
-          assert {:ok, _terminal} = ConversationServer.complete_conversation(conversation_id, fixture.a)
+
+          assert {:ok, _terminal} =
+                   ConversationServer.complete_conversation(conversation_id, fixture.a)
 
         other ->
           flunk("unexpected durable status after restart/sweep race: #{inspect(other)}")
