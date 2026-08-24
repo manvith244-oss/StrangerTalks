@@ -29,7 +29,7 @@ defmodule StrangertalksNew.Team7IntelligenceBoundaryTest do
     assert result.requires_review == true
   end
 
-  test "generated recommendations route to durable owner domains, never numeric teams" do
+  test "generated recommendations never contain obsolete numeric team routing" do
     snapshot =
       canonical_snapshot("2026-08-23T00:00:00Z", "2026-08-24T00:00:00Z")
       |> put_in([:system, :technical_disconnects], 1)
