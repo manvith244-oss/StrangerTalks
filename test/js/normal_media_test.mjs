@@ -3,10 +3,13 @@ import test from "node:test"
 import {readFileSync} from "node:fs"
 import {
   NORMAL_MEDIA_TYPES,
+  compareTimelineKeys,
   dedupeNormalMedia,
+  genericTimelineKey,
   normalMediaDraftMatchesRuntime,
   normalMediaKind,
   normalMediaLabel,
+  normalMediaTimelineKey,
   normalizeMediaType,
   validNormalMediaFile
 } from "../../priv/static/assets/normal_media.mjs"
@@ -17,6 +20,10 @@ const runtimeSource = readFileSync(
 )
 const controllerSource = readFileSync(
   new URL("../../lib/strangertalks_new_web/controllers/normal_media_controller.ex", import.meta.url),
+  "utf8"
+)
+const storeSource = readFileSync(
+  new URL("../../lib/strangertalks_new/conversation_lifecycle/normal_media_store.ex", import.meta.url),
   "utf8"
 )
 
@@ -47,13 +54,45 @@ test("draft authority is bound to its origin Conversation", () => {
   assert.equal(normalMediaDraftMatchesRuntime(null, "conversation-a"), false)
 })
 
-test("dedupe retains one logical media message and stable ordering", () => {
+test("media accepted then text accepted converges media before text", () => {
+  const media = normalMediaTimelineKey({anchor_sequence: 0, anchor_ordinal: 1})
+  const text = genericTimelineKey(1)
+  assert.ok(compareTimelineKeys(media, text) < 0)
+})
+
+test("text accepted then media accepted converges text before media", () => {
+  const text = genericTimelineKey(1)
+  const media = normalMediaTimelineKey({anchor_sequence: 1, anchor_ordinal: 1})
+  assert.ok(compareTimelineKeys(text, media) < 0)
+})
+
+test("media1 → text → media2 has one deterministic canonical order", () => {
+  const items = [
+    {id: "media2", key: normalMediaTimelineKey({anchor_sequence: 1, anchor_ordinal: 1})},
+    {id: "text", key: genericTimelineKey(1)},
+    {id: "media1", key: normalMediaTimelineKey({anchor_sequence: 0, anchor_ordinal: 1})}
+  ]
+  items.sort((a, b) => compareTimelineKeys(a.key, b.key))
+  assert.deepEqual(items.map(({id}) => id), ["media1", "text", "media2"])
+})
+
+test("dedupe retains one logical media item and its original canonical anchor", () => {
   const items = dedupeNormalMedia([
-    {client_message_id: "m2", sequence: 2, kind: "video"},
-    {client_message_id: "m1", sequence: 1, kind: "photo"},
-    {client_message_id: "m1", sequence: 1, kind: "photo", idempotent: true}
+    {client_message_id: "m2", anchor_sequence: 1, anchor_ordinal: 1, kind: "video"},
+    {client_message_id: "m1", anchor_sequence: 0, anchor_ordinal: 1, kind: "photo"},
+    {client_message_id: "m1", anchor_sequence: 0, anchor_ordinal: 1, kind: "photo", idempotent: true}
   ])
   assert.deepEqual(items.map((item) => item.client_message_id), ["m1", "m2"])
+})
+
+test("server ordering comes from the live Conversation sequence boundary, not clocks or polling", () => {
+  assert.match(controllerSource, /ConversationServer\.inspect_state\(conversation_id\)/)
+  assert.match(controllerSource, /next_sequence - 1/)
+  assert.match(storeSource, /anchor_sequence/)
+  assert.match(storeSource, /anchor_ordinal/)
+  assert.match(runtimeSource, /compareTimelineKeys/)
+  assert.doesNotMatch(runtimeSource, /Date\.now\(\)/)
+  assert.doesNotMatch(runtimeSource, /insertBefore\(/)
 })
 
 test("normal mode is explicitly labeled separately from limited-open modes", () => {
@@ -71,11 +110,18 @@ test("cancel and replacement revoke obsolete preview object URLs", () => {
   assert.match(runtimeSource, /clearPreview\(\{hide: false\}\)/)
 })
 
-test("lost acknowledgement retry reuses stable client media identity", () => {
+test("lost acknowledgement is described as ambiguous and retry reuses stable client media identity", () => {
   assert.match(runtimeSource, /clientMessageId: crypto\.randomUUID\(\)/)
   assert.match(runtimeSource, /draft\.clientMessageId/)
+  assert.match(runtimeSource, /Send not confirmed\. It may have been accepted/)
   assert.match(runtimeSource, /Retry send/)
-  assert.match(runtimeSource, /Media send failed\. You can retry without creating a duplicate/)
+  assert.doesNotMatch(runtimeSource, /Nothing was delivered/)
+})
+
+test("authoritative HTTP rejection is distinct from ambiguous transport failure", () => {
+  assert.match(runtimeSource, /Send rejected\. The server did not accept this media/)
+  assert.match(runtimeSource, /if \(!response\.ok\)/)
+  assert.match(runtimeSource, /catch \(_error\)/)
 })
 
 test("sender does not display Sent until authoritative HTTP success", () => {
@@ -83,7 +129,6 @@ test("sender does not display Sent until authoritative HTTP success", () => {
   const sentIndex = runtimeSource.indexOf('status.textContent = "Sent"')
   assert.ok(uploadIndex >= 0)
   assert.ok(sentIndex > uploadIndex)
-  assert.match(runtimeSource, /if \(!response\.ok\)/)
 })
 
 test("late callbacks are inert after Conversation authority changes", () => {
