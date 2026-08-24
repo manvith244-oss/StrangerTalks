@@ -363,7 +363,7 @@ test("two isolated browsers converge across disconnect, replay, reconnect and te
   }
 })
 
-test("hostile delayed ACK retry plus sibling tab still converges before terminal stale events", {timeout: 35_000}, async () => {
+test("hostile delayed ACK retry plus sibling tab still converges before terminal stale events", {timeout: 50_000}, async () => {
   const browser = await chromium.launch({headless: true})
   const contextA = await browser.newContext()
   const contextB = await browser.newContext()
@@ -377,43 +377,70 @@ test("hostile delayed ACK retry plus sibling tab still converges before terminal
   try {
     const {a, b, conversationId, epochId} = await establishConversation(pageA, pageB)
 
-    await disconnect(pageB)
-
     const h1 = crypto.randomUUID()
     const accepted1 = await pushConversation(pageA, "message:send", {
       client_message_id: h1,
       content: "T5-HOSTILE-M1"
     })
     assert.equal(accepted1.sequence, 1)
+    assert.equal(accepted1.status, "sent")
+
+    const initialH1 = await waitForMessage(pageB, h1)
+    assert.equal(initialH1.sequence, 1)
+    assert.equal(initialH1.content, "T5-HOSTILE-M1")
+
+    const preDisconnect = await pageB.evaluate((id) => {
+      const occurrences = window.__t5.events.messages.filter(
+        (entry) => entry.client_message_id === id
+      ).length
+      window.__t5.socket.disconnect()
+      return {occurrences}
+    }, h1)
+    assert.equal(preDisconnect.occurrences, 1, "retry fired before the deliberate disconnect barrier")
+    await pageB.waitForFunction(() => window.__t5.socket.isConnected() === false)
+
+    // The server retry interval is 5 seconds. H1 was accepted while B was connected,
+    // so that connected-delivery branch armed a legitimate retry generation before
+    // the disconnect barrier above. Let that generation fire while B is absent.
+    await pageB.waitForTimeout(5_500)
 
     await bootstrapParticipant(pageB, b.identity)
     const replayB = await joinConversation(pageB, conversationId, epochId, 0)
+    assert.deepEqual(messageIdsInSequence(replayB.messages || []), [h1])
     assertCanonicalMessage(replayB.messages || [], h1, 1, "T5-HOSTILE-M1")
 
-    pageA2 = await contextA.newPage()
-    failuresA2 = observeCritical(pageA2, "hostile-A2")
-    const sibling = await bootstrapParticipant(pageA2, a.identity)
-    assert.equal(sibling.identity.participant_id, a.identity.participant_id)
-    const siblingSync = await joinConversation(pageA2, conversationId, epochId, 0)
-    assert.equal(siblingSync.epoch_id, epochId)
-
+    // If the disconnected retry had incorrectly rescheduled itself, the next
+    // generation would now redeliver to reconnected B. Wait one known retry
+    // interval and prove no live duplicate authority appears.
     await pageB.waitForTimeout(5_500)
-    const bLiveAfterRetry = await pageB.evaluate(() => window.__t5.events.messages)
-    const retryProjection = [...(replayB.messages || []), ...bLiveAfterRetry]
-    assert.deepEqual(messageIdsInSequence(retryProjection), [h1])
-    assertCanonicalMessage(retryProjection, h1, 1, "T5-HOSTILE-M1")
-    assert.ok(bLiveAfterRetry.some((entry) => entry.client_message_id === h1), "expected server retry to redeliver after delayed ACK")
+    const bLiveAfterInertRetry = await pageB.evaluate(() => window.__t5.events.messages)
+    assert.equal(
+      bLiveAfterInertRetry.some((entry) => entry.client_message_id === h1),
+      false,
+      "disconnected retry generation rescheduled and redelivered after reconnect"
+    )
 
     const delayedProgress = await pushConversation(pageB, "delivery:progress", {
       epoch_id: epochId,
       highest_contiguous_sequence: 1
     })
     assert.equal(delayedProgress.status, "applied")
+    assert.equal(delayedProgress.highest_contiguous_sequence, 1)
+
     const duplicateProgress = await pushConversation(pageB, "delivery:progress", {
       epoch_id: epochId,
       highest_contiguous_sequence: 1
     })
     assert.equal(duplicateProgress.status, "no_op")
+    assert.equal(duplicateProgress.highest_contiguous_sequence, 1)
+
+    pageA2 = await contextA.newPage()
+    failuresA2 = observeCritical(pageA2, "hostile-A2")
+    const sibling = await bootstrapParticipant(pageA2, a.identity)
+    assert.equal(sibling.identity.participant_id, a.identity.participant_id)
+    const siblingSync = await joinConversation(pageA2, conversationId, epochId, 1)
+    assert.equal(siblingSync.epoch_id, epochId)
+    assert.equal(siblingSync.latest_sequence, 1)
 
     const h2 = crypto.randomUUID()
     const accepted2 = await pushConversation(pageB, "message:send", {
@@ -421,6 +448,8 @@ test("hostile delayed ACK retry plus sibling tab still converges before terminal
       content: "T5-HOSTILE-RESPONSE"
     })
     assert.equal(accepted2.sequence, 2)
+    assert.equal(accepted2.status, "sent")
+
     const [receivedA1, receivedA2] = await Promise.all([
       waitForMessage(pageA, h2),
       waitForMessage(pageA2, h2)
@@ -428,6 +457,13 @@ test("hostile delayed ACK retry plus sibling tab still converges before terminal
     assert.equal(receivedA1.sequence, 2)
     assert.equal(receivedA2.sequence, 2)
 
+    const preEndCounts = await Promise.all([pageA, pageA2].map((page) => page.evaluate((id) =>
+      window.__t5.events.messages.filter((entry) => entry.client_message_id === id).length
+    , h2)))
+    assert.deepEqual(preEndCounts, [1, 1])
+
+    // H2 now has a legitimate pending retry generation for participant A.
+    // End before its 5-second timer can produce another delivery.
     const endResult = await pushConversation(pageA2, "conversation:end", {})
     assert.equal(endResult.status, "ended")
     const terminalEvents = await Promise.all([
@@ -439,6 +475,12 @@ test("hostile delayed ACK retry plus sibling tab still converges before terminal
       assert.equal(terminalEvent.status, "ended")
       assert.equal(terminalEvent.reason, "participant_completed")
     }
+
+    await pageA.waitForTimeout(5_500)
+    const postTerminalH2Counts = await Promise.all([pageA, pageA2].map((page) => page.evaluate((id) =>
+      window.__t5.events.messages.filter((entry) => entry.client_message_id === id).length
+    , h2)))
+    assert.deepEqual(postTerminalH2Counts, [1, 1], "pending retry survived terminal Conversation authority")
 
     const staleMessageId = crypto.randomUUID()
     const staleSend = await pushConversationResult(pageA, "message:send", {
