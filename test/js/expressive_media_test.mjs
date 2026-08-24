@@ -50,9 +50,12 @@ test("Feature 1D bundled catalog remains same-origin and is presented as sticker
   assert.match(runtimeSource, /emojiButton\.textContent = "Emoji"/)
 })
 
-test("Team 10 entrypoint exposes composer emoji and a truthful provider-controlled GIF seam", () => {
-  assert.match(pageController, /expression_runtime\.mjs/)
-  assert.match(pageController, /expression_surface\.css/)
+test("Team 10 canonical entry exposes composer emoji and provider-controlled GIF seam", () => {
+  assert.equal((html.match(/expression_runtime\.mjs/g) || []).length, 1)
+  assert.equal((html.match(/<script[^>]+\/assets\/app\.js/g) || []).length, 0)
+  assert.match(html, /expression_surface\.css/)
+  assert.match(pageController, /send_file/)
+  assert.doesNotMatch(pageController, /String\.replace|expression_runtime|expression_surface/)
   assert.match(runtimeSource, /emoji_picker\/index\.js/)
   assert.match(runtimeSource, /insertEmojiIntoDraft/)
   assert.match(runtimeSource, /\/api\/gifs\/status/)
