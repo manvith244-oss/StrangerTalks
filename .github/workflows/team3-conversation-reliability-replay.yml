@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - newteam/reliability
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
   workflow_dispatch:
 
 permissions:
@@ -38,13 +41,13 @@ jobs:
       - name: Checkout exact Team 3 HEAD
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Record entry state
         shell: bash
         run: |
           set -euo pipefail
-          expected="${{ github.sha }}"
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
           actual="$(git rev-parse HEAD)"
           echo "EXPECTED_TEAM3_COMMIT=$expected"
           echo "HEAD=$actual"
@@ -244,4 +247,5 @@ jobs:
           set -euo pipefail
           tested="$(git rev-parse HEAD)"
           echo "TEAM3_TESTED_COMMIT=$tested"
-          test "$tested" = "${{ github.sha }}"
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          test "$tested" = "$expected"
