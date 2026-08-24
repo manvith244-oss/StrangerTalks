@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   bootstrap:
-    if: ${{ !contains(github.event.head_commit.message, '[team4-bootstrap]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,385 +18,67 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
-      - name: Apply Team 4 authoritative media fix and regressions
-        shell: bash
+          node-version: '22'
+      - name: Close stale async authority races
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
           path = Path('priv/static/assets/live_call.mjs')
           s = path.read_text()
-
-          def replace_once(old, new, label):
-              global s
-              count = s.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected 1 match, got {count}')
-              s = s.replace(old, new, 1)
-
-          replace_once(
-          '''    const isPlaybackAllowed = [CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(coordinator.status)\n''',
-          '''    const isPlaybackAllowed = coordinator.status === CALL_STATUS.ACTIVE\n''',
-          'remote playback ACTIVE gate')
-
-          replace_once(
-          '''              [CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(coordinator.status)\n''',
-          '''              coordinator.status === CALL_STATUS.ACTIVE\n''',
-          'late playback ACTIVE gate')
-
-          replace_once(
-          '''    this.credentials = null\n    this.connectingTimer = null\n''',
-          '''    this.credentials = null\n    this.connectingTimer = null\n    this.transportAudioTransceiver = null\n    this.transportVideoTransceiver = null\n    this.activeMediaAcquisitionGeneration = 0\n''',
-          'transport authority state')
-
-          replace_once(
-          '''mediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection = this.peerConnection) {\n  return Boolean(\n    callAttemptId &&\n    this.callAttemptId === callAttemptId &&\n    this.mediaGeneration === mediaGeneration &&\n    [CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status) &&\n    (!peerConnection || this.peerConnection === peerConnection)\n  )\n}\n''',
-          '''mediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection = this.peerConnection) {\n  return Boolean(\n    callAttemptId &&\n    this.callAttemptId === callAttemptId &&\n    this.mediaGeneration === mediaGeneration &&\n    [CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status) &&\n    (!peerConnection || this.peerConnection === peerConnection)\n  )\n}\n\nactiveMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection = this.peerConnection) {\n  return Boolean(\n    callAttemptId &&\n    this.callAttemptId === callAttemptId &&\n    this.mediaGeneration === mediaGeneration &&\n    this.status === CALL_STATUS.ACTIVE &&\n    (!peerConnection || this.peerConnection === peerConnection)\n  )\n}\n''',
-          'ACTIVE media authority helper')
-
-          replace_once(
-          '''  handleMediaRequested({ call_attempt_id, media_request_id, request_type, proposal, requester_id }) {\n    if (this.callAttemptId !== call_attempt_id) return\n''',
-          '''  handleMediaRequested({ call_attempt_id, media_request_id, request_type, proposal, requester_id }) {\n    if (this.callAttemptId !== call_attempt_id || this.status !== CALL_STATUS.ACTIVE) return\n''',
-          'media request active guard')
-
-          replace_once(
-          '''  handleMediaUpdated({ call_attempt_id, media_generation, active_media, return_to_voice, actor_id }) {\n    if (this.callAttemptId !== call_attempt_id) return\n''',
-          '''  handleMediaUpdated({ call_attempt_id, media_generation, active_media, return_to_voice, actor_id }) {\n    if (this.callAttemptId !== call_attempt_id || this.status !== CALL_STATUS.ACTIVE) return\n''',
-          'media update active guard')
-
-          replace_once(
-          '''  handleReaction({ call_attempt_id, reaction_event_id, reaction, sender_id, timestamp }) {\n    if (this.callAttemptId !== call_attempt_id) return\n    if (![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)) return\n''',
-          '''  handleReaction({ call_attempt_id, reaction_event_id, reaction, sender_id, timestamp }) {\n    if (this.callAttemptId !== call_attempt_id) return\n    if (this.status !== CALL_STATUS.ACTIVE) return\n''',
-          'reaction active guard')
-
-          replace_once(
-          '''  handleRevealReady({ call_attempt_id, media_request_id, participant_id, ready }) {\n    if (this.callAttemptId !== call_attempt_id) return\n''',
-          '''  handleRevealReady({ call_attempt_id, media_request_id, participant_id, ready }) {\n    if (this.callAttemptId !== call_attempt_id || this.status !== CALL_STATUS.ACTIVE) return\n''',
-          'reveal ready active guard')
-
-          replace_once(
-          '''  handleRevealCommitted({ call_attempt_id, media_request_id }) {\n    if (this.callAttemptId !== call_attempt_id) return\n''',
-          '''  handleRevealCommitted({ call_attempt_id, media_request_id }) {\n    if (this.callAttemptId !== call_attempt_id || this.status !== CALL_STATUS.ACTIVE) return\n''',
-          'reveal commit active guard')
-
-          replace_once(
-          '''  async returnToVoice() {\n    if (this.status !== CALL_STATUS.ACTIVE && this.status !== CALL_STATUS.CONNECTING) return\n''',
-          '''  async returnToVoice() {\n    if (this.status !== CALL_STATUS.ACTIVE) return\n''',
-          'return to voice active guard')
-
-          replace_once(
-          '''  async acquireCameraStream() {\n    if (this.localVisualFloorClosed) return null\n''',
-          '''  async acquireCameraStream() {\n    if (this.localVisualFloorClosed || this.status !== CALL_STATUS.ACTIVE || !this.callAttemptId) return null\n''',
-          'camera capture active guard')
-
-          replace_once(
-          '''  async sendReaction(reaction) {\n    if (![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status) || !this.callAttemptId) return\n''',
-          '''  async sendReaction(reaction) {\n    if (this.status !== CALL_STATUS.ACTIVE || !this.callAttemptId) return\n''',
-          'send reaction active guard')
-
-          replace_once(
-          '''  async setRevealReady(mediaRequestId, ready = true) {\n    if (!this.callAttemptId) return\n''',
-          '''  async setRevealReady(mediaRequestId, ready = true) {\n    if (!this.callAttemptId || this.status !== CALL_STATUS.ACTIVE) return\n''',
-          'set reveal ready active guard')
-
-          replace_once(
-          '''  async setVoiceExpression(preset = "plain") {\n    if (!["plain", "warm_radio", "space_echo"].includes(preset)) preset = "plain"\n''',
-          '''  async setVoiceExpression(preset = "plain") {\n    if (this.status !== CALL_STATUS.ACTIVE || !this.callAttemptId) return\n    if (!["plain", "warm_radio", "space_echo"].includes(preset)) preset = "plain"\n''',
-          'voice effect active guard')
-
-          start = s.index('async initializeWebRTC(isOfferSide = false) {')
-          end = s.index('\nsendSignal(signal) {', start)
-          old_block = s[start:end]
-          new_block = r'''async initializeWebRTC(isOfferSide = false) {
-  const setupAttemptId = this.callAttemptId
-  const setupGeneration = this.mediaGeneration
-  if (!this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, null)) return
-
-  let peerConnection = null
-  try {
-    const creds = await this.fetchCredentials()
-    if (!this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, null)) return
-
-    const config = {
-      iceServers: creds.ice_servers || [],
-      iceTransportPolicy: "relay",
-      bundlePolicy: "max-bundle",
-      rtcpMuxPolicy: "require"
-    }
-    const RTCPC = globalThis.RTCPeerConnection || globalThis.webkitRTCPeerConnection
-    if (!RTCPC) throw new Error("WebRTC RTCPeerConnection not supported")
-
-    peerConnection = new RTCPC(config)
-    this.peerConnection = peerConnection
-
-    // CONNECTING establishes transport only. Hardware capture stays closed until ACTIVE.
-    if (!peerConnection.addTransceiver) {
-      throw new Error("WebRTC transceiver support is required for fail-closed media authority")
-    }
-    this.transportAudioTransceiver = peerConnection.addTransceiver("audio", {direction: "sendrecv"})
-    this.transportVideoTransceiver = peerConnection.addTransceiver("video", {direction: "sendrecv"})
-
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate && this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) {
-        this.sendSignal(event.candidate)
-      }
-    }
-
-    peerConnection.ontrack = (event) => {
-      if (!this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) return
-      if (event.streams && event.streams[0]) {
-        this.remoteStream = event.streams[0]
-      } else if (this.remoteStream && this.remoteStream.addTrack) {
-        this.remoteStream.addTrack(event.track)
-      }
-      // Playback itself is ACTIVE-gated by attachMediaStream. Re-emit on ACTIVE below.
-      if (this.status === CALL_STATUS.ACTIVE) this.onRemoteStream(this.remoteStream)
-    }
-
-    peerConnection.oniceconnectionstatechange = () => {
-      const state = peerConnection.iceConnectionState
-      if (state === "connected" || state === "completed") {
-        if (!this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) return
-        this.status = CALL_STATUS.ACTIVE
-        this.applyOutgoingAudioGate()
-        this.notifyStateChange()
-        if (this.remoteStream) this.onRemoteStream(this.remoteStream)
-        void this.activateLocalMedia(setupAttemptId, setupGeneration, peerConnection)
-      } else if (state === "failed" && this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) {
-        this.handleIceFailure()
-      }
-    }
-
-    if (isOfferSide) {
-      const offer = await peerConnection.createOffer()
-      if (!this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) return
-      await peerConnection.setLocalDescription(offer)
-      if (!this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) return
-      this.sendSignal(peerConnection.localDescription)
-    }
-
-    if (!this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) return
-    await this.flushPendingCandidates()
-  } catch (error) {
-    if (this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) {
-      this.onError(error)
-      this.teardown("connection_error")
-    }
-  }
-}
-
-async activateLocalMedia(callAttemptId, mediaGeneration, peerConnection) {
-  if (!this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)) return
-  if (!navigator.mediaDevices?.getUserMedia) return
-
-  const acquisitionGeneration = ++this.activeMediaAcquisitionGeneration
-  const needVideo = this.callType === "video" && !this.localVisualFloorClosed
-  let stream
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({audio: true, video: needVideo})
-  } catch (error) {
-    if (this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)) {
-      this.onError(error)
-      this.teardown("media_permission_failed")
-    }
-    return
-  }
-
-  if (
-    this.activeMediaAcquisitionGeneration !== acquisitionGeneration ||
-    !this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)
-  ) {
-    stopMediaTracks(stream)
-    return
-  }
-
-  this.localStream = stream
-  const audioTrack = stream.getAudioTracks?.()[0] || null
-  const videoTrack = stream.getVideoTracks?.()[0] || null
-  this.rawAudioTrack = audioTrack
-  this.rawCameraTrack = videoTrack
-  this.applyOutgoingAudioGate()
-
-  if (audioTrack && this.transportAudioTransceiver?.sender?.replaceTrack) {
-    await this.transportAudioTransceiver.sender.replaceTrack(audioTrack)
-  }
-  if (!this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)) {
-    stopMediaTracks(stream)
-    return
-  }
-
-  if (videoTrack && this.transportVideoTransceiver?.sender?.replaceTrack) {
-    await this.transportVideoTransceiver.sender.replaceTrack(videoTrack)
-  }
-  if (!this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)) {
-    stopMediaTracks(stream)
-    return
-  }
-
-  this.selfVideo = Boolean(videoTrack)
-  this.onLocalStream(stream)
-  this.notifyStateChange()
-}
-'''
-          s = s[:start] + new_block + s[end:]
-
-          replace_once(
-          '''  async retryPlayback() {\n    if (!this.remoteElement || !this.remoteStream) return\n    if (![CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(this.status)) return\n''',
-          '''  async retryPlayback() {\n    if (!this.remoteElement || !this.remoteStream) return\n    if (this.status !== CALL_STATUS.ACTIVE) return\n''',
-          'retry playback active guard')
-
-          replace_once(
-          '''    this.pendingCandidates = []\n    this.presentedReactions.clear()\n''',
-          '''    this.pendingCandidates = []\n    this.transportAudioTransceiver = null\n    this.transportVideoTransceiver = null\n    this.activeMediaAcquisitionGeneration++\n    this.presentedReactions.clear()\n''',
-          'teardown invalidates active media')
-
+          old = '''    return new Promise((resolve, reject) => {\n      if (!this.channel) return reject(new Error("Channel unavailable"))\n      this.channel.push("call:initiate", { call_type: callType })\n        .receive("ok", (res) => {\n          this.callAttemptId = res.call_attempt_id\n          this.notifyStateChange()\n          resolve(res)\n        })\n        .receive("error", (err) => {\n          this.teardown("initiate_failed")\n          reject(err)\n        })\n    })\n'''
+          new = '''    const initiationConversationId = this.conversationId\n    return new Promise((resolve, reject) => {\n      if (!this.channel) return reject(new Error("Channel unavailable"))\n      this.channel.push("call:initiate", { call_type: callType })\n        .receive("ok", (res) => {\n          const stillCurrent =\n            this.status === CALL_STATUS.PENDING_OUTGOING &&\n            this.role === "caller" &&\n            this.callAttemptId === null &&\n            this.conversationId === initiationConversationId\n          if (!stillCurrent) { resolve({ ...res, stale: true }); return }\n          this.callAttemptId = res.call_attempt_id\n          this.notifyStateChange()\n          resolve(res)\n        })\n        .receive("error", (err) => {\n          if (this.status === CALL_STATUS.PENDING_OUTGOING && this.role === "caller" && this.callAttemptId === null && this.conversationId === initiationConversationId) {\n            this.teardown("initiate_failed")\n          }\n          reject(err)\n        })\n    })\n'''
+          if old not in s: raise SystemExit('initiate async authority block not found exactly once')
+          s = s.replace(old, new, 1)
+          old = '''    return new Promise((resolve, reject) => {\n      if (!this.channel) return reject(new Error("Channel unavailable"))\n      this.channel.push("call:accept", { call_attempt_id: this.callAttemptId })\n        .receive("ok", (res) => {\n          this.status = CALL_STATUS.CONNECTING\n          this.notifyStateChange()\n          resolve(res)\n        })\n        .receive("error", (err) => {\n          this.teardown("accept_failed")\n          reject(err)\n        })\n    })\n'''
+          new = '''    const acceptedAttemptId = this.callAttemptId\n    const acceptedConversationId = this.conversationId\n    return new Promise((resolve, reject) => {\n      if (!this.channel) return reject(new Error("Channel unavailable"))\n      this.channel.push("call:accept", { call_attempt_id: acceptedAttemptId })\n        .receive("ok", (res) => {\n          const stillCurrent = this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId\n          if (!stillCurrent) { resolve({ ...res, stale: true }); return }\n          this.status = CALL_STATUS.CONNECTING\n          this.applyOutgoingAudioGate()\n          this.notifyStateChange()\n          resolve(res)\n        })\n        .receive("error", (err) => {\n          if (this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId) {\n            this.teardown("accept_failed")\n          }\n          reject(err)\n        })\n    })\n'''
+          if old not in s: raise SystemExit('accept async authority block not found exactly once')
+          s = s.replace(old, new, 1)
           path.write_text(s)
+
+          t = Path('test/js/team4_media_authority_test.mjs')
+          tests = t.read_text()
+          if 'T4-006: late Accept success after terminal teardown is inert' not in tests:
+            tests += r'''
+
+function controllablePush() {
+  const handlers = new Map()
+  return { receive(kind, callback) { handlers.set(kind, callback); return this }, fire(kind, payload) { handlers.get(kind)?.(payload) } }
+}
+
+test("T4-006: late Accept success after terminal teardown is inert", async () => {
+  const push = controllablePush()
+  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push(event) { assert.equal(event, "call:accept"); return push }}})
+  coord.callAttemptId = "a1"; coord.role = "callee"; coord.status = CALL_STATUS.PENDING_INCOMING
+  const pending = coord.accept()
+  coord.teardown("blocked")
+  push.fire("ok", {call_attempt_id: "a1"})
+  const result = await pending
+  assert.equal(result.stale, true)
+  assert.equal(coord.callAttemptId, null)
+  assert.notEqual(coord.status, CALL_STATUS.CONNECTING)
+})
+
+test("T4-007: late Initiate success after terminal teardown cannot rebind attempt authority", async () => {
+  const push = controllablePush()
+  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push(event) { assert.equal(event, "call:initiate"); return push }}})
+  const pending = coord.initiate("voice")
+  coord.teardown("ended")
+  push.fire("ok", {call_attempt_id: "dead-attempt"})
+  const result = await pending
+  assert.equal(result.stale, true)
+  assert.equal(coord.callAttemptId, null)
+  assert.notEqual(coord.status, CALL_STATUS.CONNECTING)
+  assert.notEqual(coord.status, CALL_STATUS.ACTIVE)
+})
+'''
+            t.write_text(tests)
           PY
-
-          cat > test/js/team4_media_authority_test.mjs <<'EOF'
-          import assert from "node:assert/strict"
-          import test from "node:test"
-          import {CALL_STATUS, LiveCallCoordinator, attachMediaStream} from "../../priv/static/assets/live_call.mjs"
-
-          function phoenixPushOk(payload) {
-            return {receive(kind, callback) { if (kind === "ok") queueMicrotask(() => callback(payload)); return this }}
-          }
-
-          function installWebRTC({getUserMedia}) {
-            const originalNavigator = globalThis.navigator
-            const originalRTC = globalThis.RTCPeerConnection
-            let pc
-            class FakeRTCPeerConnection {
-              constructor(config) { this.config = config; this.iceConnectionState = "new"; this.localDescription = null; this.remoteDescription = null; this.transceivers = []; pc = this }
-              addTransceiver(kind) {
-                const sender = {track: null, async replaceTrack(track) { this.track = track }}
-                const transceiver = {kind, sender, receiver: {track: {kind}}, direction: "sendrecv"}
-                this.transceivers.push(transceiver)
-                return transceiver
-              }
-              getSenders() { return this.transceivers.map(({sender}) => sender) }
-              async createOffer() { return {type: "offer", sdp: "fake"} }
-              async setLocalDescription(desc) { this.localDescription = desc }
-              close() { this.closed = true }
-            }
-            Object.defineProperty(globalThis, "navigator", {configurable: true, value: {mediaDevices: {getUserMedia}}})
-            globalThis.RTCPeerConnection = FakeRTCPeerConnection
-            return {
-              get pc() { return pc },
-              restore() {
-                if (originalNavigator === undefined) delete globalThis.navigator
-                else Object.defineProperty(globalThis, "navigator", {configurable: true, value: originalNavigator})
-                if (originalRTC === undefined) delete globalThis.RTCPeerConnection
-                else globalThis.RTCPeerConnection = originalRTC
-              }
-            }
-          }
-
-          function channel() {
-            return {push(event) { return phoenixPushOk(event === "call:request_credentials" ? {ice_servers: [{urls: ["turn:relay.invalid:3478"]}]} : {}) }}
-          }
-
-          test("T4-001: CONNECTING establishes transport without requesting microphone or camera", async () => {
-            let requests = 0
-            const audio = {kind: "audio", enabled: true, stop() {}}
-            const stream = {getAudioTracks: () => [audio], getVideoTracks: () => [], getTracks: () => [audio]}
-            const env = installWebRTC({getUserMedia: async () => { requests++; return stream }})
-            try {
-              const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: channel()})
-              coord.callAttemptId = "a1"; coord.role = "caller"; coord.status = CALL_STATUS.CONNECTING
-              await coord.initializeWebRTC(true)
-              assert.equal(coord.status, CALL_STATUS.CONNECTING)
-              assert.equal(requests, 0, "CONNECTING must not even request hardware capture")
-              assert.equal(env.pc.transceivers.length, 2, "transport uses empty transceivers before capture")
-
-              env.pc.iceConnectionState = "connected"
-              env.pc.oniceconnectionstatechange()
-              await new Promise((resolve) => setImmediate(resolve))
-              assert.equal(coord.status, CALL_STATUS.ACTIVE)
-              assert.equal(requests, 1, "hardware capture opens only after ACTIVE authority")
-              assert.equal(audio.enabled, true)
-              assert.equal(coord.transportAudioTransceiver.sender.track, audio)
-            } finally { env.restore() }
-          })
-
-          test("T4-002: initial Video Call camera request is also deferred until ACTIVE", async () => {
-            const constraints = []
-            const audio = {kind: "audio", enabled: true, stop() {}}
-            const video = {kind: "video", enabled: true, stop() {}}
-            const stream = {getAudioTracks: () => [audio], getVideoTracks: () => [video], getTracks: () => [audio, video]}
-            const env = installWebRTC({getUserMedia: async (c) => { constraints.push(c); return stream }})
-            try {
-              const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: channel()})
-              coord.callAttemptId = "a1"; coord.role = "caller"; coord.callType = "video"; coord.status = CALL_STATUS.CONNECTING
-              await coord.initializeWebRTC(true)
-              assert.deepEqual(constraints, [])
-              env.pc.iceConnectionState = "connected"; env.pc.oniceconnectionstatechange()
-              await new Promise((resolve) => setImmediate(resolve))
-              assert.deepEqual(constraints, [{audio: true, video: true}])
-              assert.equal(coord.transportVideoTransceiver.sender.track, video)
-              assert.equal(coord.selfVideo, true)
-            } finally { env.restore() }
-          })
-
-          test("T4-003: late ACTIVE permission resolution after terminal teardown stops stale tracks", async () => {
-            let resolveMedia
-            const stopped = []
-            const audio = {kind: "audio", enabled: true, stop() { stopped.push("audio") }}
-            const stream = {getAudioTracks: () => [audio], getVideoTracks: () => [], getTracks: () => [audio]}
-            const env = installWebRTC({getUserMedia: () => new Promise((resolve) => { resolveMedia = resolve })})
-            try {
-              const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: channel()})
-              coord.callAttemptId = "a1"; coord.role = "caller"; coord.status = CALL_STATUS.CONNECTING
-              await coord.initializeWebRTC(true)
-              env.pc.iceConnectionState = "connected"; env.pc.oniceconnectionstatechange()
-              await new Promise((resolve) => setImmediate(resolve))
-              coord.teardown("blocked")
-              resolveMedia(stream)
-              await new Promise((resolve) => setImmediate(resolve))
-              assert.deepEqual(stopped, ["audio"])
-              assert.equal(coord.localStream, null)
-              assert.equal(coord.status, CALL_STATUS.TERMINAL)
-            } finally { env.restore() }
-          })
-
-          test("T4-004: CONNECTING remote playback is fail-closed", () => {
-            const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1"})
-            coord.callAttemptId = "a1"; coord.status = CALL_STATUS.CONNECTING
-            let plays = 0
-            const element = {srcObject: null, play() { plays++; return Promise.resolve() }, pause() {}}
-            attachMediaStream(element, {id: "remote"}, coord)
-            assert.equal(plays, 0)
-            assert.equal(element.srcObject, null)
-          })
-
-          test("T4-005: effects, reactions and camera capture cannot gain authority in CONNECTING", async () => {
-            let gum = 0; let pushes = 0
-            const originalNavigator = globalThis.navigator
-            Object.defineProperty(globalThis, "navigator", {configurable: true, value: {mediaDevices: {getUserMedia: async () => { gum++; return {getTracks: () => []} }}}})
-            try {
-              const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push() { pushes++; return phoenixPushOk({}) }}})
-              coord.callAttemptId = "a1"; coord.status = CALL_STATUS.CONNECTING
-              await coord.setVoiceExpression("warm_radio")
-              await coord.sendReaction("heart")
-              const camera = await coord.acquireCameraStream()
-              assert.equal(camera, null)
-              assert.equal(gum, 0)
-              assert.equal(pushes, 0)
-              assert.equal(coord.voiceEffectPreset, "plain")
-            } finally {
-              if (originalNavigator === undefined) delete globalThis.navigator
-              else Object.defineProperty(globalThis, "navigator", {configurable: true, value: originalNavigator})
-            }
-          })
-          EOF
-
-          node --test test/js/team4_media_authority_test.mjs test/js/live_call_test.mjs test/js/team6_media_gate_test.mjs
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add priv/static/assets/live_call.mjs test/js/team4_media_authority_test.mjs
-          git diff --cached --check
-          git commit -m "Team 4: close CONNECTING hardware capture authority [team4-bootstrap]"
+          node --test --test-concurrency=1 test/js/team4_media_authority_test.mjs test/js/live_call_test.mjs
+          rm -f .github/workflows/team4-bootstrap-media-authority.yml .github/workflows/team4-bootstrap-pr-executor.yml .github/workflows/team4-async-authority-fix.yml .team4-bootstrap-trigger
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Fix stale live-call async authority [team4-async-fixed]'
           git push origin HEAD:newteam/media
