@@ -141,8 +141,8 @@ defmodule StrangertalksNew.TerminalPersistenceFailureTest do
     :sys.replace_state(pid, fn state -> %{state | conversation: durable_active} end)
     send(pid, {:retry_terminal_persistence, retry_token})
 
-    assert_receive {:conversation_completed,
-                    %{status: "ended", reason: "participant_completed"}}, 1_000
+    assert_receive {:conversation_completed, %{status: "ended", reason: "participant_completed"}},
+                   1_000
 
     assert_eventually(fn ->
       ConversationServer.lookup(conversation_id) == {:error, :not_started}

@@ -8,6 +8,7 @@ defmodule StrangertalksNew.GifProviderTest do
     def search("empty"), do: {:ok, []}
     def search("error"), do: {:error, :provider_error}
     def search("rate"), do: {:error, :rate_limited}
+
     def search("timeout") do
       Process.sleep(100)
       {:ok, []}

@@ -40,7 +40,10 @@ defmodule StrangertalksNew.IntelligenceV1HostileTest do
     routes = StrangertalksNewWeb.Router.__routes__()
 
     refute Enum.any?(routes, fn route ->
-             Enum.any?(["/analytics", "/intelligence", "/learning"], &String.contains?(route.path, &1))
+             Enum.any?(
+               ["/analytics", "/intelligence", "/learning"],
+               &String.contains?(route.path, &1)
+             )
            end)
 
     operator_task = File.read!("lib/mix/tasks/strangertalks.intelligence.ex")

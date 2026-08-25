@@ -96,7 +96,9 @@ defmodule StrangertalksNew.GifProvider do
     if Enum.any?(normalized, &match?({:error, _}, &1)) do
       {:error, :malformed_provider_response}
     else
-      items = Enum.map(normalized, fn {:ok, item} -> Map.put(item, :reference, sign_result(item)) end)
+      items =
+        Enum.map(normalized, fn {:ok, item} -> Map.put(item, :reference, sign_result(item)) end)
+
       {:ok, items}
     end
   end
@@ -156,7 +158,11 @@ defmodule StrangertalksNew.GifProvider do
   end
 
   defp provider_timeout_ms do
-    case Application.get_env(:strangertalks_new, :gif_provider_timeout_ms, @default_provider_timeout_ms) do
+    case Application.get_env(
+           :strangertalks_new,
+           :gif_provider_timeout_ms,
+           @default_provider_timeout_ms
+         ) do
       value when is_integer(value) and value >= 25 and value <= 10_000 -> value
       _ -> @default_provider_timeout_ms
     end

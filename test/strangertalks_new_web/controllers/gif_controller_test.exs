@@ -40,8 +40,11 @@ defmodule StrangertalksNewWeb.GifControllerTest do
 
     on_exit(fn ->
       case ConversationServer.lookup(fixture.conversation.conversation_id) do
-        {:ok, pid} -> DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, pid)
-        {:error, :not_started} -> :ok
+        {:ok, pid} ->
+          DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, pid)
+
+        {:error, :not_started} ->
+          :ok
       end
 
       restore_env(:gif_provider_adapter, old_adapter)
@@ -53,12 +56,18 @@ defmodule StrangertalksNewWeb.GifControllerTest do
   end
 
   test "status remains lightweight when no provider is configured", %{conn: conn} do
-    Application.put_env(:strangertalks_new, :gif_provider_adapter, StrangertalksNew.GifProvider.Disabled)
+    Application.put_env(
+      :strangertalks_new,
+      :gif_provider_adapter,
+      StrangertalksNew.GifProvider.Disabled
+    )
+
     Application.put_env(:strangertalks_new, :gif_media_hosts, [])
     assert %{"available" => false} = conn |> get("/api/gifs/status") |> json_response(200)
   end
 
-  test "authenticated current member can search and only q reaches the provider", %{conn: conn} = context do
+  test "authenticated current member can search and only q reaches the provider",
+       %{conn: conn} = context do
     configure_fake_provider()
     token = ParticipantToken.sign(context.participant_a)
 
@@ -77,7 +86,8 @@ defmodule StrangertalksNewWeb.GifControllerTest do
     refute Map.has_key?(hd(response["results"]), "participant_id")
   end
 
-  test "missing token, outsider and malformed request never reach provider", %{conn: conn} = context do
+  test "missing token, outsider and malformed request never reach provider",
+       %{conn: conn} = context do
     configure_fake_provider()
     conversation_id = context.conversation.conversation_id
 
@@ -135,7 +145,9 @@ defmodule StrangertalksNewWeb.GifControllerTest do
       |> put_req_header("authorization", "Bearer #{token}")
       |> get("/api/gifs/search", %{q: "burst-13", conversation_id: conversation_id})
 
-    assert %{"error" => "rate_limited", "retry_after_ms" => retry_after_ms} = json_response(limited, 429)
+    assert %{"error" => "rate_limited", "retry_after_ms" => retry_after_ms} =
+             json_response(limited, 429)
+
     assert is_integer(retry_after_ms) and retry_after_ms > 0
     refute_received {:gif_query, "burst-13"}
   end

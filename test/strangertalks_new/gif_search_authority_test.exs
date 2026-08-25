@@ -11,8 +11,11 @@ defmodule StrangertalksNew.GifSearchAuthorityTest do
 
     on_exit(fn ->
       case ConversationServer.lookup(fixture.conversation.conversation_id) do
-        {:ok, pid} -> DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, pid)
-        {:error, :not_started} -> :ok
+        {:ok, pid} ->
+          DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, pid)
+
+        {:error, :not_started} ->
+          :ok
       end
     end)
 
@@ -21,7 +24,10 @@ defmodule StrangertalksNew.GifSearchAuthorityTest do
 
   test "current member captures live authority and terminal transition invalidates it", context do
     assert {:ok, authority} =
-             GifSearchAuthority.capture(context.conversation.conversation_id, context.participant_a)
+             GifSearchAuthority.capture(
+               context.conversation.conversation_id,
+               context.participant_a
+             )
 
     assert is_binary(authority.epoch_id)
 
@@ -31,7 +37,10 @@ defmodule StrangertalksNew.GifSearchAuthorityTest do
              |> Repo.update()
 
     assert {:error, :conversation_unavailable} =
-             GifSearchAuthority.capture(context.conversation.conversation_id, context.participant_a)
+             GifSearchAuthority.capture(
+               context.conversation.conversation_id,
+               context.participant_a
+             )
 
     assert {:error, :conversation_stale} = GifSearchAuthority.revalidate(authority)
   end
