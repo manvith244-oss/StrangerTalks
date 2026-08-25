@@ -74,13 +74,21 @@ defmodule StrangertalksNewWeb.GifController do
   end
 
   defp error_response(conn, :invalid_token), do: gif_error(conn, :unauthorized, "invalid_token")
-  defp error_response(conn, :invalid_payload), do: gif_error(conn, :bad_request, "invalid_request")
-  defp error_response(conn, :invalid_query), do: gif_error(conn, :bad_request, "invalid_query")
-  defp error_response(conn, :conversation_not_found), do: gif_error(conn, :not_found, "conversation_not_found")
-  defp error_response(conn, :not_conversation_member), do: gif_error(conn, :forbidden, "not_conversation_member")
 
-  defp error_response(conn, reason) when reason in [:conversation_unavailable, :conversation_stale],
-    do: gif_error(conn, :conflict, "conversation_unavailable")
+  defp error_response(conn, :invalid_payload),
+    do: gif_error(conn, :bad_request, "invalid_request")
+
+  defp error_response(conn, :invalid_query), do: gif_error(conn, :bad_request, "invalid_query")
+
+  defp error_response(conn, :conversation_not_found),
+    do: gif_error(conn, :not_found, "conversation_not_found")
+
+  defp error_response(conn, :not_conversation_member),
+    do: gif_error(conn, :forbidden, "not_conversation_member")
+
+  defp error_response(conn, reason)
+       when reason in [:conversation_unavailable, :conversation_stale],
+       do: gif_error(conn, :conflict, "conversation_unavailable")
 
   defp error_response(conn, :provider_unavailable),
     do: gif_error(conn, :service_unavailable, "provider_unavailable")

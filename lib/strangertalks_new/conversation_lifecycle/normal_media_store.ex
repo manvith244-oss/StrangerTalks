@@ -384,7 +384,9 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
 
       {entry, media} ->
         conversation_id = entry.conversation_id
-        remaining = max(0, Map.get(state.conversation_bytes, conversation_id, 0) - entry.byte_size)
+
+        remaining =
+          max(0, Map.get(state.conversation_bytes, conversation_id, 0) - entry.byte_size)
 
         conversation_bytes =
           if remaining == 0 do

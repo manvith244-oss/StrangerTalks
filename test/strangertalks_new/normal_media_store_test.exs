@@ -124,10 +124,11 @@ defmodule StrangertalksNew.NormalMediaStoreTest do
              )
   end
 
-  test "multiple media accepted at one generic Conversation boundary get deterministic ordinals", %{
-    conversation_id: conversation_id,
-    sender_id: sender_id
-  } do
+  test "multiple media accepted at one generic Conversation boundary get deterministic ordinals",
+       %{
+         conversation_id: conversation_id,
+         sender_id: sender_id
+       } do
     first_id = Ecto.UUID.generate()
     second_id = Ecto.UUID.generate()
 

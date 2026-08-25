@@ -165,6 +165,7 @@ defmodule StrangertalksNewWeb.NormalMediaControllerTest do
       |> json_response(201)
 
     assert media["anchor_sequence"] == 0
+
     assert {:ok, %{sequence: 1}} =
              ConversationServer.append_message(
                conversation.conversation_id,
@@ -307,6 +308,7 @@ defmodule StrangertalksNewWeb.NormalMediaControllerTest do
       )
 
     assert json_response(response, 413)["error"] == "normal_media_too_large"
+
     assert {:error, :media_unavailable} =
              NormalMediaStore.fetch_media(conversation.conversation_id, message_id)
   end

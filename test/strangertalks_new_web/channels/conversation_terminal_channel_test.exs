@@ -78,7 +78,8 @@ defmodule StrangertalksNewWeb.ConversationTerminalChannelTest do
     }
   end
 
-  test "Block broadcasts authoritative terminal state to blocker, peer, and sibling tab", context do
+  test "Block broadcasts authoritative terminal state to blocker, peer, and sibling tab",
+       context do
     socket_a = connect_and_join(context.participant_a, context.conversation)
     socket_b = connect_and_join(context.participant_b, context.conversation)
     _socket_a_sibling = connect_and_join(context.participant_a, context.conversation)
@@ -138,6 +139,7 @@ defmodule StrangertalksNewWeb.ConversationTerminalChannelTest do
     assert terminal.conversation_status == :ENDED
     assert terminal.ending_type == :BLOCK
     assert terminal.ending_initiator == context.participant_a.participant_id
+
     assert {:error, :terminal_conversation} =
              ConversationServer.ensure_started(context.conversation.conversation_id)
   end
