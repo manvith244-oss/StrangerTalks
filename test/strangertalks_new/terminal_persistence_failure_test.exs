@@ -128,7 +128,7 @@ defmodule StrangertalksNew.TerminalPersistenceFailureTest do
     assert %{retry_token: retry_token} = terminating_state.terminal_intent
     assert is_reference(retry_token)
 
-    assert {:error, :conversation_inactive} =
+    assert {:error, :conversation_terminating} =
              ConversationServer.append_message(
                conversation_id,
                a.participant_id,
@@ -170,22 +170,5 @@ defmodule StrangertalksNew.TerminalPersistenceFailureTest do
       a: a,
       b: b
     }
-  end
-
-  defp participant_fixture do
-    {:ok, participant} = StrangertalksNew.Participants.create_participant(%{})
-    participant
-  end
-
-  defp assert_eventually(fun, attempts \\ 50)
-  defp assert_eventually(fun, 0), do: assert(fun.())
-
-  defp assert_eventually(fun, attempts) do
-    if fun.() do
-      :ok
-    else
-      Process.sleep(10)
-      assert_eventually(fun, attempts - 1)
-    end
   end
 end
