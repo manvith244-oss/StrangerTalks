@@ -1,0 +1,58 @@
+name: Release Format Export
+
+on:
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+
+permissions:
+  contents: read
+
+jobs:
+  format-export:
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout PR head exactly
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install Elixir dependencies
+        run: mix deps.get
+
+      - name: Apply repository formatter
+        run: mix format
+
+      - name: Package formatter output
+        run: |
+          git diff --name-only > changed.txt
+          if [ -s changed.txt ]; then
+            tar -czf formatted.tar.gz -T changed.txt
+          else
+            tar -czf formatted.tar.gz --files-from=/dev/null
+          fi
+
+      - name: Upload formatter output
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-format-output
+          path: |
+            changed.txt
+            formatted.tar.gz
+          if-no-files-found: error
