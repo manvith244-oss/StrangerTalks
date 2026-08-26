@@ -30,7 +30,7 @@ defmodule StrangertalksNewWeb.SafetyMediaAccessPrivacyTest do
       })
       |> Repo.insert!()
 
-    safety_id = media.report_safety_media_id
+    safety_id = media.safety_media_id
     conversation_id = fixture.conversation.conversation_id
 
     routes =
