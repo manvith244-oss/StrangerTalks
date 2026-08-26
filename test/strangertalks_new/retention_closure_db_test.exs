@@ -441,7 +441,7 @@ defmodule StrangertalksNew.RetentionClosureDbTest do
         participant_a_id: participant_a.participant_id,
         participant_b_id: participant_b.participant_id,
         conversation_status: status,
-        ending_type: if(ended_at, do: :NORMAL, else: nil),
+        ending_type: if(ended_at, do: :NATURAL_END, else: nil),
         door_type: :JUST_TALK,
         message_count: 0,
         voice_note_count: 0,
