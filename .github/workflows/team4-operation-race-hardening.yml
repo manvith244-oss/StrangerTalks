@@ -3,33 +3,35 @@ name: Team 4 Operation Race Hardening
 on:
   push:
     branches:
-      - newteam/media
+      - team4/media-authority-2026-08-26
 
 permissions:
   contents: write
 
 concurrency:
-  group: team4-operation-race-hardening
+  group: team4-operation-race-hardening-current
   cancel-in-progress: false
 
 jobs:
   harden:
-    if: ${{ !contains(github.event.head_commit.message, '[team4-op-fixed]') }}
+    if: ${{ !contains(github.event.head_commit.message, '[team4-op-fixed-current]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: newteam/media
+          ref: team4/media-authority-2026-08-26
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Land operation-scoped async authority and regressions
+      - name: Land operation-scoped async authority on current Team 4 branch
         shell: bash
         run: |
           set -euo pipefail
+          git pull --rebase origin team4/media-authority-2026-08-26
           python3 - <<'PY'
           from pathlib import Path
+
           live = Path('priv/static/assets/live_call.mjs')
           s = live.read_text()
 
@@ -109,12 +111,12 @@ jobs:
           resolve(res)
         })
         .receive("error", (err) => {
-          if (!stillCurrent()) { resolve({stale: true, error: err}); return }
+          if (!stillCurrent()) { resolve({ stale: true, error: err }); return }
           this.teardown("initiate_failed")
           reject(err)
         })
         .receive("timeout", () => {
-          if (!stillCurrent()) { resolve({stale: true, timeout: true}); return }
+          if (!stillCurrent()) { resolve({ stale: true, timeout: true }); return }
           this.teardown("initiate_timeout")
           reject(new Error("Call initiation timed out"))
         })
@@ -164,12 +166,12 @@ jobs:
           resolve(res)
         })
         .receive("error", (err) => {
-          if (!stillCurrent()) { resolve({stale: true, error: err}); return }
+          if (!stillCurrent()) { resolve({ stale: true, error: err }); return }
           this.teardown("accept_failed")
           reject(err)
         })
         .receive("timeout", () => {
-          if (!stillCurrent()) { resolve({stale: true, timeout: true}); return }
+          if (!stillCurrent()) { resolve({ stale: true, timeout: true }); return }
           this.teardown("accept_timeout")
           reject(new Error("Call acceptance timed out"))
         })
@@ -186,113 +188,22 @@ jobs:
     if (this.connectingTimer) {
 ''',
           'teardown operation invalidation')
+
           live.write_text(s)
-
-          tests = Path('test/js/team4_media_authority_test.mjs')
-          t = tests.read_text()
-          if 'T4-011: Conversation A async completion cannot mutate Conversation B' not in t:
-              t += r'''
-
-test("T4-008: late Initiate error cannot teardown a newer authoritative call", async () => {
-  const pushes = []
-  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push() { const push = controllablePush(); pushes.push(push); return push }}})
-  const oldPending = coord.initiate("voice")
-  coord.teardown("blocked")
-  coord.status = CALL_STATUS.IDLE
-  const newPending = coord.initiate("voice")
-  pushes[0].fire("error", {reason: "late_old_error"})
-  const oldResult = await oldPending
-  assert.equal(oldResult.stale, true)
-  assert.equal(coord.status, CALL_STATUS.PENDING_OUTGOING)
-  assert.equal(coord.callAttemptId, null)
-  pushes[1].fire("ok", {call_attempt_id: "new-authoritative"})
-  await newPending
-  assert.equal(coord.callAttemptId, "new-authoritative")
-})
-
-test("T4-009: late Accept error cannot teardown a newer incoming call", async () => {
-  const pushes = []
-  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push() { const push = controllablePush(); pushes.push(push); return push }}})
-  coord.callAttemptId = "old"; coord.role = "callee"; coord.status = CALL_STATUS.PENDING_INCOMING
-  const oldPending = coord.accept()
-  coord.teardown("ended")
-  coord.status = CALL_STATUS.IDLE
-  coord.handleIncomingCall({call_attempt_id: "new", caller_id: "p2", call_type: "voice"})
-  pushes[0].fire("error", {reason: "late_old_error"})
-  const oldResult = await oldPending
-  assert.equal(oldResult.stale, true)
-  assert.equal(coord.callAttemptId, "new")
-  assert.equal(coord.status, CALL_STATUS.PENDING_INCOMING)
-})
-
-test("T4-010: Accept reapplies outgoing-audio privacy gate before CONNECTING", async () => {
-  const push = controllablePush()
-  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push() { return push }}})
-  const audio = {kind: "audio", enabled: true, stop() {}}
-  coord.rawAudioTrack = audio
-  coord.callAttemptId = "a1"; coord.role = "callee"; coord.status = CALL_STATUS.PENDING_INCOMING
-  const pending = coord.accept()
-  push.fire("ok", {call_attempt_id: "a1"})
-  await pending
-  assert.equal(coord.status, CALL_STATUS.CONNECTING)
-  assert.equal(audio.enabled, false)
-})
-
-test("T4-011: Conversation A async completion cannot mutate Conversation B", async () => {
-  const pushes = []
-  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "conversation-a", channel: {push() { const push = controllablePush(); pushes.push(push); return push }}})
-  const pendingA = coord.initiate("voice")
-  coord.teardown("ended")
-  coord.status = CALL_STATUS.IDLE
-  coord.setConversationId("conversation-b")
-  const pendingB = coord.initiate("voice")
-  pushes[0].fire("ok", {call_attempt_id: "attempt-a"})
-  const resultA = await pendingA
-  assert.equal(resultA.stale, true)
-  assert.equal(coord.conversationId, "conversation-b")
-  assert.equal(coord.callAttemptId, null)
-  assert.equal(coord.status, CALL_STATUS.PENDING_OUTGOING)
-  pushes[1].fire("ok", {call_attempt_id: "attempt-b"})
-  await pendingB
-  assert.equal(coord.callAttemptId, "attempt-b")
-})
-
-test("T4-006E: late Accept success after ordinary End is inert", async () => {
-  const push = controllablePush()
-  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push() { return push }}})
-  coord.callAttemptId = "a1"; coord.role = "callee"; coord.status = CALL_STATUS.PENDING_INCOMING
-  const pending = coord.accept()
-  coord.teardown("ended")
-  push.fire("ok", {call_attempt_id: "a1"})
-  const result = await pending
-  assert.equal(result.stale, true)
-  assert.equal(coord.callAttemptId, null)
-  assert.notEqual(coord.status, CALL_STATUS.CONNECTING)
-})
-
-test("T4-007B: late Initiate success after Block is inert", async () => {
-  const push = controllablePush()
-  const coord = new LiveCallCoordinator({participantId: "p1", conversationId: "c1", channel: {push() { return push }}})
-  const pending = coord.initiate("voice")
-  coord.teardown("blocked")
-  push.fire("ok", {call_attempt_id: "dead-attempt"})
-  const result = await pending
-  assert.equal(result.stale, true)
-  assert.equal(coord.callAttemptId, null)
-  assert.notEqual(coord.status, CALL_STATUS.CONNECTING)
-  assert.notEqual(coord.status, CALL_STATUS.ACTIVE)
-})
-'''
-              tests.write_text(t)
           PY
 
-          node --test --test-concurrency=1 test/js/team4_media_authority_test.mjs test/js/team11_media_expression_break_test.mjs test/js/live_call_test.mjs
+          node --test --test-concurrency=1 \
+            test/js/team4_media_authority_test.mjs \
+            test/js/team4_call_operation_race_test.mjs \
+            test/js/team11_media_expression_break_test.mjs \
+            test/js/live_call_test.mjs
           git diff --check
 
-          rm -f .github/workflows/team4-operation-race-hardening.yml
+          git checkout 585637924ff45933c7b35b0bc27719934907c70e -- .github/workflows/team4-operation-race-hardening.yml
+          rm -f .github/workflows/team4-current-race-fix-executor.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add priv/static/assets/live_call.mjs test/js/team4_media_authority_test.mjs .github/workflows/team4-operation-race-hardening.yml
-          git commit -m 'Team 4: scope async call authority by operation [team4-op-fixed]'
-          git pull --rebase origin newteam/media
-          git push origin HEAD:newteam/media
+          git add priv/static/assets/live_call.mjs test/js/team4_call_operation_race_test.mjs .github/workflows/team4-operation-race-hardening.yml .github/workflows/team4-current-race-fix-executor.yml
+          git commit -m 'fix(team4): scope async call authority by operation generation [team4-op-fixed-current]'
+          git pull --rebase origin team4/media-authority-2026-08-26
+          git push origin HEAD:team4/media-authority-2026-08-26
