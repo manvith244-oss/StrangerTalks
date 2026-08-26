@@ -12,6 +12,7 @@ import {
 
 const indexHtml = await readFile(new URL("../../priv/static/index.html", import.meta.url), "utf8")
 const runtimeSource = await readFile(new URL("../../priv/static/assets/expression_runtime.mjs", import.meta.url), "utf8")
+const appSource = await readFile(new URL("../../priv/static/assets/app.js", import.meta.url), "utf8")
 const pageController = await readFile(new URL("../../lib/strangertalks_new_web/controllers/page_controller.ex", import.meta.url), "utf8")
 
 test("Team 10 has one formatting-independent canonical loader and no PageController surgery", () => {
@@ -21,6 +22,15 @@ test("Team 10 has one formatting-independent canonical loader and no PageControl
   assert.match(runtimeSource, /const APP_ENTRY = "\/assets\/app\.js\?v=20260807_v2"/)
   assert.doesNotMatch(pageController, /String\.replace|@app_script|@expression_script/)
   assert.match(pageController, /send_file/)
+})
+
+test("floating live reactions render network-derived emoji and labels as text, never HTML", () => {
+  const match = appSource.match(/function displayReaction\(payload\) \{([\s\S]*?)\n\}/)
+  assert.ok(match, "displayReaction renderer must exist")
+  const renderer = match[1]
+  assert.doesNotMatch(renderer, /innerHTML\s*=/)
+  assert.match(renderer, /textContent\s*=/)
+  assert.match(renderer, /replaceChildren|append/)
 })
 
 test("emoji insertion behaves like text editing at start, middle, end and selection", () => {
