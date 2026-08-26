@@ -105,9 +105,9 @@ jobs:
             test/strangertalks_new/conversation_lifecycle_test.exs \
             test/strangertalks_new/conversation_live_call_test.exs \
             test/strangertalks_new/view_once_conversation_test.exs \
-            test/strangertalks_new_web/channels/conversation_terminal_channel_test.exs \
-            test/strangertalks_new_web/channels/conversation_channel_test.exs \
-            test/strangertalks_new_web/channels/conversation_call_channel_test.exs
+            test/strangertalks_new_web/channels/conversation_*_channel_test.exs \
+            test/strangertalks_new_web/controllers/normal_media_controller_test.exs \
+            test/strangertalks_new_web/controllers/companion_controller_test.exs
 
       - name: Focused Team 2 JS terminal attacks
         shell: bash
@@ -189,7 +189,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --test test/js/terminal_truth_browser_test.mjs
+          node --test \
+            test/js/terminal_truth_browser_test.mjs \
+            test/js/team2_connected_end_browser_test.mjs
 
       - name: Stop Phoenix terminal server
         if: always()
