@@ -1,0 +1,208 @@
+name: Team 4 Current Race Fix Executor
+
+on:
+  push:
+    branches:
+      - team4/media-authority-2026-08-26
+
+permissions:
+  contents: write
+
+concurrency:
+  group: team4-current-race-fix-executor
+  cancel-in-progress: false
+
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, '[team4-race-fixed]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: team4/media-authority-2026-08-26
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply operation-scoped call authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --rebase origin team4/media-authority-2026-08-26
+          python3 - <<'PY'
+          from pathlib import Path
+
+          live = Path('priv/static/assets/live_call.mjs')
+          s = live.read_text()
+
+          def once(old, new, label):
+              global s
+              if new in s:
+                  return
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one old block, found {count}')
+              s = s.replace(old, new, 1)
+
+          once(
+          '''    this.transportAudioTransceiver = null
+    this.transportVideoTransceiver = null
+    this.activeMediaAcquisitionGeneration = 0
+''',
+          '''    this.transportAudioTransceiver = null
+    this.transportVideoTransceiver = null
+    this.activeMediaAcquisitionGeneration = 0
+    this.callOperationGeneration = 0
+''',
+          'operation generation state')
+
+          once(
+          '''  setConversationId(id) {
+    this.conversationId = id
+  }
+''',
+          '''  setConversationId(id) {
+    if (this.conversationId !== id) this.callOperationGeneration++
+    this.conversationId = id
+  }
+''',
+          'conversation transition invalidation')
+
+          once(
+          '''    const initiationConversationId = this.conversationId
+    return new Promise((resolve, reject) => {
+      if (!this.channel) return reject(new Error("Channel unavailable"))
+      this.channel.push("call:initiate", { call_type: callType })
+        .receive("ok", (res) => {
+          const stillCurrent =
+            this.status === CALL_STATUS.PENDING_OUTGOING &&
+            this.role === "caller" &&
+            this.callAttemptId === null &&
+            this.conversationId === initiationConversationId
+          if (!stillCurrent) { resolve({ ...res, stale: true }); return }
+          this.callAttemptId = res.call_attempt_id
+          this.notifyStateChange()
+          resolve(res)
+        })
+        .receive("error", (err) => {
+          if (this.status === CALL_STATUS.PENDING_OUTGOING && this.role === "caller" && this.callAttemptId === null && this.conversationId === initiationConversationId) {
+            this.teardown("initiate_failed")
+          }
+          reject(err)
+        })
+    })
+''',
+          '''    const operationGeneration = ++this.callOperationGeneration
+    const initiationConversationId = this.conversationId
+    const stillCurrent = () =>
+      this.callOperationGeneration === operationGeneration &&
+      this.status === CALL_STATUS.PENDING_OUTGOING &&
+      this.role === "caller" &&
+      this.callAttemptId === null &&
+      this.conversationId === initiationConversationId
+
+    return new Promise((resolve, reject) => {
+      if (!this.channel) return reject(new Error("Channel unavailable"))
+      this.channel.push("call:initiate", { call_type: callType })
+        .receive("ok", (res) => {
+          if (!stillCurrent()) { resolve({ ...res, stale: true }); return }
+          this.callAttemptId = res.call_attempt_id
+          this.notifyStateChange()
+          resolve(res)
+        })
+        .receive("error", (err) => {
+          if (!stillCurrent()) { resolve({ stale: true, error: err }); return }
+          this.teardown("initiate_failed")
+          reject(err)
+        })
+        .receive("timeout", () => {
+          if (!stillCurrent()) { resolve({ stale: true, timeout: true }); return }
+          this.teardown("initiate_timeout")
+          reject(new Error("Call initiation timed out"))
+        })
+    })
+''',
+          'initiate operation authority')
+
+          once(
+          '''    const acceptedAttemptId = this.callAttemptId
+    const acceptedConversationId = this.conversationId
+    return new Promise((resolve, reject) => {
+      if (!this.channel) return reject(new Error("Channel unavailable"))
+      this.channel.push("call:accept", { call_attempt_id: acceptedAttemptId })
+        .receive("ok", (res) => {
+          const stillCurrent = this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId
+          if (!stillCurrent) { resolve({ ...res, stale: true }); return }
+          this.status = CALL_STATUS.CONNECTING
+          this.applyOutgoingAudioGate()
+          this.notifyStateChange()
+          resolve(res)
+        })
+        .receive("error", (err) => {
+          if (this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId) {
+            this.teardown("accept_failed")
+          }
+          reject(err)
+        })
+    })
+''',
+          '''    const operationGeneration = ++this.callOperationGeneration
+    const acceptedAttemptId = this.callAttemptId
+    const acceptedConversationId = this.conversationId
+    const stillCurrent = () =>
+      this.callOperationGeneration === operationGeneration &&
+      this.status === CALL_STATUS.PENDING_INCOMING &&
+      this.callAttemptId === acceptedAttemptId &&
+      this.conversationId === acceptedConversationId
+
+    return new Promise((resolve, reject) => {
+      if (!this.channel) return reject(new Error("Channel unavailable"))
+      this.channel.push("call:accept", { call_attempt_id: acceptedAttemptId })
+        .receive("ok", (res) => {
+          if (!stillCurrent()) { resolve({ ...res, stale: true }); return }
+          this.status = CALL_STATUS.CONNECTING
+          this.applyOutgoingAudioGate()
+          this.notifyStateChange()
+          resolve(res)
+        })
+        .receive("error", (err) => {
+          if (!stillCurrent()) { resolve({ stale: true, error: err }); return }
+          this.teardown("accept_failed")
+          reject(err)
+        })
+        .receive("timeout", () => {
+          if (!stillCurrent()) { resolve({ stale: true, timeout: true }); return }
+          this.teardown("accept_timeout")
+          reject(new Error("Call acceptance timed out"))
+        })
+    })
+''',
+          'accept operation authority')
+
+          once(
+          '''  teardown(reason = "normal") {
+    if (this.connectingTimer) {
+''',
+          '''  teardown(reason = "normal") {
+    this.callOperationGeneration++
+    if (this.connectingTimer) {
+''',
+          'teardown operation invalidation')
+
+          live.write_text(s)
+          PY
+
+          node --test --test-concurrency=1 \
+            test/js/team4_media_authority_test.mjs \
+            test/js/team4_call_operation_race_test.mjs \
+            test/js/team11_media_expression_break_test.mjs \
+            test/js/live_call_test.mjs
+          git diff --check
+
+          rm .github/workflows/team4-current-race-fix-executor.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add priv/static/assets/live_call.mjs test/js/team4_call_operation_race_test.mjs .github/workflows/team4-current-race-fix-executor.yml
+          git commit -m 'fix(team4): scope async call authority by operation generation [team4-race-fixed]'
+          git pull --rebase origin team4/media-authority-2026-08-26
+          git push origin HEAD:team4/media-authority-2026-08-26
