@@ -49,13 +49,13 @@ defmodule StrangertalksNew.MatchingRules do
     query =
       from b in BoundaryBlock,
         where:
-          (b.blocker_user_id == ^participant_a_id and b.blocked_user_id == ^participant_b_id and
+          (b.blocker_user_id == ^participant_a_id and b.blocked_user_id == ^blocked_user_id and
              b.active_status == true) or
-            (b.blocker_user_id == ^participant_b_id and b.blocked_user_id == ^participant_a_id and
+            (b.blocker_user_id == ^blocked_user_id and b.blocked_user_id == ^participant_a_id and
                b.active_status == true),
         select: count(b.blocker_user_id)
 
-    Repo.one(query) > 0 or closed_relationship?(participant_a_id, participant_b_id)
+    Repo.one(query) > 0 or closed_relationship?(participant_a_id, blocked_user_id)
   end
 
   defp closed_relationship?(participant_a_id, participant_b_id) do
@@ -102,8 +102,17 @@ defmodule StrangertalksNew.MatchingRules do
 
             case result do
               {:ok, {block, terminal_conversation}} ->
+                if terminal_conversation.ending_type == :BLOCK do
+                  StrangertalksNew.Telemetry.execute(
+                    [:terminal, :durable_commit],
+                    %{count: 1},
+                    %{terminal_status: :ENDED, lifecycle_event: :safety_terminated}
+                  )
+                end
+
                 terminate_suspended_runtime(suspended_runtime)
                 stop_conversation_runtime(conversation_id)
+                emit_block_runtime_cleanup(suspended_runtime, terminal_conversation)
                 maybe_broadcast_block_terminal_authority(terminal_conversation)
                 {:ok, block}
 
@@ -147,9 +156,44 @@ defmodule StrangertalksNew.MatchingRules do
 
   defp maybe_broadcast_block_terminal_authority(%Conversation{ending_type: :BLOCK} = conversation) do
     broadcast_block_terminal_authority(conversation.conversation_id)
+
+    StrangertalksNew.Telemetry.execute(
+      [:terminal, :client_notification],
+      %{count: 1},
+      %{terminal_reason: :blocked, notification_path: :block_broadcast}
+    )
   end
 
-  defp maybe_broadcast_block_terminal_authority(%Conversation{}), do: :ok
+  defp maybe_broadcast_block_terminal_authority(%Conversation{} = conversation) do
+    StrangertalksNew.Telemetry.execute(
+      [:terminal, :stale_action_rejected],
+      %{count: 1},
+      %{
+        terminal_action: :block,
+        canonical_ending: bounded_ending_type(conversation.ending_type)
+      }
+    )
+
+    :ok
+  end
+
+  defp emit_block_runtime_cleanup({:suspended, _pid}, %Conversation{ending_type: :BLOCK}) do
+    StrangertalksNew.Telemetry.execute(
+      [:terminal, :runtime_cleanup],
+      %{count: 1},
+      %{terminal_reason: :blocked, cleanup_path: :block_suspended_runtime}
+    )
+  end
+
+  defp emit_block_runtime_cleanup(_runtime, _conversation), do: :ok
+
+  defp bounded_ending_type(:NATURAL_END), do: :natural_end
+  defp bounded_ending_type(:BLOCK), do: :block
+  defp bounded_ending_type(:SAFETY_ACTION), do: :safety_action
+  defp bounded_ending_type(:PARTICIPANT_LEFT), do: :participant_left
+  defp bounded_ending_type(:TIMEOUT), do: :timeout
+  defp bounded_ending_type(:DISCONNECT), do: :disconnect
+  defp bounded_ending_type(_ending_type), do: :other_terminal
 
   defp broadcast_block_terminal_authority(conversation_id) do
     StrangertalksNewWeb.Endpoint.broadcast(
