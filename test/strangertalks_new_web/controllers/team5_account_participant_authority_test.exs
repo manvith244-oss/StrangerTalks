@@ -2,7 +2,7 @@ defmodule StrangertalksNewWeb.Team5AccountParticipantAuthorityTest do
   use StrangertalksNewWeb.ConnCase, async: false
 
   alias StrangertalksNew.Accounts
-  alias StrangertalksNew.{Participants, Repo}
+  alias StrangertalksNew.Participants
   alias StrangertalksNewWeb.ParticipantToken
 
   setup do
@@ -10,6 +10,9 @@ defmodule StrangertalksNewWeb.Team5AccountParticipantAuthorityTest do
 
     Application.put_env(:strangertalks_new, :google_continuity,
       enabled: true,
+      client_id: "client",
+      client_secret: "secret",
+      redirect_uri: "http://localhost/auth/google/callback",
       subject_hmac_key: Base.encode64(:binary.copy(<<9>>, 32)),
       refresh_token_encryption_key: Base.encode64(:binary.copy(<<7>>, 32))
     )
