@@ -359,14 +359,14 @@ defmodule StrangertalksNew.RetentionCleanup do
       SET relationship_name = NULL,
           participant_custom_name = NULL,
           most_common_atmosphere = NULL,
-          learning_version = NULL,
-          learning_processed = NULL,
-          reconnection_priority = NULL,
-          relationship_strength_score = NULL,
-          continuation_probability = NULL,
-          relationship_temperature = NULL,
-          atmosphere_history = NULL,
-          relationship_summary = NULL,
+          learning_version = 'retention-minimized',
+          learning_processed = FALSE,
+          reconnection_priority = 0.0000,
+          relationship_strength_score = 0.0000,
+          continuation_probability = 0.0000,
+          relationship_temperature = 0.0000,
+          atmosphere_history = '{}'::jsonb,
+          relationship_summary = '{}'::jsonb,
           latest_note_at = NULL,
           latest_memory_id = NULL,
           featured_memory_id = NULL,
@@ -378,14 +378,14 @@ defmodule StrangertalksNew.RetentionCleanup do
           relationship_name IS NOT NULL
           OR participant_custom_name IS NOT NULL
           OR most_common_atmosphere IS NOT NULL
-          OR learning_version IS NOT NULL
-          OR learning_processed IS NOT NULL
-          OR reconnection_priority IS NOT NULL
-          OR relationship_strength_score IS NOT NULL
-          OR continuation_probability IS NOT NULL
-          OR relationship_temperature IS NOT NULL
-          OR atmosphere_history IS NOT NULL
-          OR relationship_summary IS NOT NULL
+          OR learning_version <> 'retention-minimized'
+          OR learning_processed <> FALSE
+          OR reconnection_priority <> 0.0000
+          OR relationship_strength_score <> 0.0000
+          OR continuation_probability <> 0.0000
+          OR relationship_temperature <> 0.0000
+          OR atmosphere_history <> '{}'::jsonb
+          OR relationship_summary <> '{}'::jsonb
           OR latest_note_at IS NOT NULL
           OR latest_memory_id IS NOT NULL
           OR featured_memory_id IS NOT NULL
@@ -417,8 +417,7 @@ defmodule StrangertalksNew.RetentionCleanup do
   end
 
   defp cleanup_terminal_matches(now) do
-    cutoff =
-      RetentionPolicy.cutoff_days(now, RetentionPolicy.terminal_match_days())
+    cutoff = RetentionPolicy.cutoff_days(now, RetentionPolicy.terminal_match_days())
 
     delete_count(
       """
