@@ -211,8 +211,7 @@ defmodule StrangertalksNewWeb.NormalMediaHostileControllerTest do
   } do
     assert_media_error(conversation, token, "GIF89a-not-allowed", "photo", 422, "malformed_media")
 
-    response =
-      media_request(conversation, token, <<1, 2, 3, 4, 5>>, "photo")
+    response = media_request(conversation, token, <<1, 2, 3, 4, 5>>, "photo")
 
     assert response.status in [415, 422]
     assert NormalMediaStore.inspect_state().total_bytes == 0
@@ -256,9 +255,7 @@ defmodule StrangertalksNewWeb.NormalMediaHostileControllerTest do
     |> Ecto.Changeset.change(conversation_status: :ENDED, conversation_completed: true)
     |> Repo.update!()
 
-    upload =
-      media_request(conversation, sender_token, valid_jpeg(), "photo")
-
+    upload = media_request(conversation, sender_token, valid_jpeg(), "photo")
     assert json_response(upload, 410)["error"] == "conversation_inactive"
 
     list =
@@ -292,6 +289,71 @@ defmodule StrangertalksNewWeb.NormalMediaHostileControllerTest do
              NormalMediaStore.list_media(conversation.conversation_id, conversation.participant_a_id)
 
     assert length(items) == 10
+  end
+
+  test "rapid malformed upload spam is rate-bounded, accounting-neutral, and text remains healthy", %{
+    conversation: conversation,
+    a: a,
+    sender_token: token
+  } do
+    store_pid = Process.whereis(NormalMediaStore)
+
+    statuses =
+      for _ <- 1..12 do
+        media_request(
+          conversation,
+          token,
+          "<html><script>malformed-spam</script></html>",
+          "photo"
+        ).status
+      end
+
+    assert Enum.take(statuses, 10) == List.duplicate(422, 10)
+    assert Enum.drop(statuses, 10) == [429, 429]
+    assert Process.whereis(NormalMediaStore) == store_pid
+    assert Process.alive?(store_pid)
+
+    state = NormalMediaStore.inspect_state()
+    assert state.total_bytes == 0
+    assert state.conversation_bytes == %{}
+
+    assert {:ok, %{sequence: 1}} =
+             ConversationServer.append_message(
+               conversation.conversation_id,
+               a.participant_id,
+               Ecto.UUID.generate(),
+               "text survives malformed media spam"
+             )
+  end
+
+  test "rapid list and fetch polling are independently rate-bounded", %{
+    conversation: conversation,
+    sender_token: sender_token,
+    recipient_token: recipient_token
+  } do
+    message_id = upload_photo(conversation.conversation_id, sender_token)
+
+    list_statuses =
+      for _ <- 1..121 do
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{recipient_token}")
+        |> get("/api/conversations/#{conversation.conversation_id}/normal-media")
+        |> Map.fetch!(:status)
+      end
+
+    assert Enum.take(list_statuses, 120) == List.duplicate(200, 120)
+    assert List.last(list_statuses) == 429
+
+    fetch_statuses =
+      for _ <- 1..121 do
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{recipient_token}")
+        |> get("/api/conversations/#{conversation.conversation_id}/normal-media/#{message_id}")
+        |> Map.fetch!(:status)
+      end
+
+    assert Enum.take(fetch_statuses, 120) == List.duplicate(200, 120)
+    assert List.last(fetch_statuses) == 429
   end
 
   defp upload_photo(conversation_id, token) do
