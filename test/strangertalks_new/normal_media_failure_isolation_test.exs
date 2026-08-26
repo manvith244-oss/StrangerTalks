@@ -91,6 +91,47 @@ defmodule StrangertalksNew.NormalMediaFailureIsolationTest do
              )
   end
 
+  test "malformed Conversation runtime state cannot crash the media store or remain suspended" do
+    runtime = live_conversation()
+    existing_id = put_media(runtime, "unrelated-media")
+    before = NormalMediaStore.inspect_state()
+    store_pid = Process.whereis(NormalMediaStore)
+
+    malformed_conversation_id = Ecto.UUID.generate()
+
+    owner_pid =
+      start_supervised!({StrangertalksNew.TestMalformedNormalMediaOwner, malformed_conversation_id})
+
+    assert :pong = GenServer.call(owner_pid, :ping, 1_000)
+
+    binary = "malformed-runtime"
+
+    assert {:error, :conversation_unavailable} =
+             NormalMediaStore.put_media(
+               malformed_conversation_id,
+               runtime.a.participant_id,
+               Ecto.UUID.generate(),
+               binary,
+               %{
+                 media_type: "image/jpeg",
+                 width: 1,
+                 height: 1,
+                 content_hash: :crypto.hash(:sha256, binary)
+               }
+             )
+
+    assert Process.whereis(NormalMediaStore) == store_pid
+    assert Process.alive?(store_pid)
+    assert :pong = GenServer.call(owner_pid, :ping, 1_000)
+
+    after_failure = NormalMediaStore.inspect_state()
+    assert after_failure.total_bytes == before.total_bytes
+    assert after_failure.conversation_bytes == before.conversation_bytes
+
+    assert {:ok, "unrelated-media", "image/jpeg"} =
+             NormalMediaStore.fetch_media(runtime.conversation.conversation_id, existing_id)
+  end
+
   defp live_conversation do
     {:ok, a} = StrangertalksNew.Participants.create_participant(%{})
     {:ok, b} = StrangertalksNew.Participants.create_participant(%{})
