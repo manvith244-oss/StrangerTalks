@@ -355,6 +355,7 @@ async function mediaUrl(runtime, item) {
   const blob = await authenticatedBlob(runtime, item.client_message_id)
   const current = await currentRuntime()
   if (!current || current.conversationId !== runtime.conversationId) throw new Error("stale_conversation")
+  if (!state.renderedIds.has(item.client_message_id)) throw new Error("stale_media")
 
   const url = URL.createObjectURL(blob)
   state.mediaUrls.set(item.client_message_id, url)
@@ -450,17 +451,18 @@ function reconcileMissingMedia(items) {
   const container = byId("messages")
   if (!container) return
 
+  for (const [clientMessageId, url] of state.mediaUrls.entries()) {
+    if (authoritativeIds.has(clientMessageId)) continue
+
+    const viewerMedia = byId("normal-media-viewer")?.querySelector("img, video")
+    if (viewerMedia?.src === url) closeViewer({restoreFocus: false})
+    revokeUrl(url)
+    state.mediaUrls.delete(clientMessageId)
+  }
+
   for (const node of container.querySelectorAll("[data-normal-media-id]")) {
     const clientMessageId = node.dataset.normalMediaId
     if (!clientMessageId || authoritativeIds.has(clientMessageId)) continue
-
-    const url = state.mediaUrls.get(clientMessageId)
-    if (url) {
-      const viewerMedia = byId("normal-media-viewer")?.querySelector("img, video")
-      if (viewerMedia?.src === url) closeViewer({restoreFocus: false})
-      revokeUrl(url)
-      state.mediaUrls.delete(clientMessageId)
-    }
 
     const video = node.querySelector("video")
     if (video) {
