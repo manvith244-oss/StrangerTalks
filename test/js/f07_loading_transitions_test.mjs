@@ -55,6 +55,13 @@ test("F-07 loading taxonomy distinguishes unresolved authority from confirmed st
     leaveEnabled: false
   })
 
+  assert.deepEqual(loadingPresentation(FLOW_PHASE.MATCHMAKING_CANCELLED), {
+    title: "You left matchmaking.",
+    detail: "Matchmaking is no longer active.",
+    interaction: "blocked",
+    leaveEnabled: false
+  })
+
   assert.deepEqual(loadingPresentation(FLOW_PHASE.ENTERING_CONVERSATION), {
     title: "Found someone.",
     detail: "Opening your temporary conversation…",
@@ -75,4 +82,18 @@ test("F-07 runtime owns the browser transition bridge before the existing app en
   assert.equal(existsSync(runtimePath), true, "flow_loading_runtime.mjs must exist")
   assert.match(index, /src="\/assets\/flow_loading_runtime\.mjs\?v=20260826_f07_v1"/)
   assert.doesNotMatch(index, /src="\/assets\/expression_runtime\.mjs\?v=20260824_v2"/)
+})
+
+test("cold boot has a bounded early-failure handoff even before participant channel creation", () => {
+  const runtime = readFileSync(runtimePath, "utf8")
+  assert.match(runtime, /BOOT_WATCHDOG_MS/)
+  assert.match(runtime, /MutationObserver/)
+  assert.match(runtime, /StrangerTalks could not start/)
+  assert.match(runtime, /renderBootFailure/)
+})
+
+test("canonical queue leave reply exits cancelling instead of waiting forever for a broadcast", () => {
+  const runtime = readFileSync(runtimePath, "utf8")
+  assert.match(runtime, /MATCHMAKING_CANCELLED/)
+  assert.match(runtime, /result\?\.status === "left"/)
 })
