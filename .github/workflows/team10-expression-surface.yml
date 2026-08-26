@@ -123,7 +123,8 @@ jobs:
             test/js/team10_expression_browser_test.mjs \
             test/js/team10_expression_actions_browser_test.mjs \
             test/js/team10_expression_reliability_browser_test.mjs \
-            test/js/team10_expression_authority_browser_test.mjs
+            test/js/team10_expression_authority_browser_test.mjs \
+            test/js/team10_floating_reaction_dom_browser_test.mjs
 
       - name: Conversation and replay regressions
         run: |
