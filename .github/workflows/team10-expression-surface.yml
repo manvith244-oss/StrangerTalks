@@ -11,6 +11,7 @@ permissions:
 env:
   BASE_SHA: d8dce24bc414bbdd1a560bc8e4aa7b33cfdadf35
 
+# Existing push-triggered repair harness; final candidate is built from BASE_SHA, not this tree.
 jobs:
   build-candidate:
     runs-on: ubuntu-latest
@@ -18,16 +19,17 @@ jobs:
       - name: Checkout repair harness head
         uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 3
 
-      - name: Prove repair parent
+      - name: Prove audited repair base is available
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "${BASE_SHA}"
+          git cat-file -e "${BASE_SHA}^{commit}"
 
       - name: Apply exact Team 10 closure corrections
         run: |
           set -euo pipefail
+          git checkout "${BASE_SHA}" -- priv/static/assets/app.js test/js/team10_floating_reaction_authority_test.mjs
           python3 - <<'PY'
           from pathlib import Path
 
@@ -50,8 +52,7 @@ jobs:
                   raise SystemExit(f"T10-001 renderer invariant missing: {needle}")
           start = app_source.index("function displayReaction(payload) {")
           end = app_source.index("\n}\n\nfunction initLiveCallCoordinator()", start)
-          renderer = app_source[start:end]
-          if "innerHTML" in renderer:
+          if "innerHTML" in app_source[start:end]:
               raise SystemExit("T10-001 inert renderer regressed to innerHTML")
           app_path.write_text(app_source)
 
