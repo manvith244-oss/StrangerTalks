@@ -210,6 +210,47 @@ test("F-10 queue resize preserves one queue attempt and desktop layout continuit
   }
 })
 
+test("F-10 standard keyboard controls operate Matchmaking and Settings", {timeout: 90_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let user
+  try {
+    user = await bootFresh(browser, VIEWPORTS.standard)
+
+    const language = user.page.locator("#conversation-language")
+    await language.focus()
+    await user.page.keyboard.press("ArrowDown")
+    assert.equal(await language.inputValue(), "en", "native select changes language from keyboard")
+
+    const advice = user.page.getByRole("button", {name: /Advice/})
+    await advice.focus()
+    await user.page.keyboard.press("Enter")
+    await user.page.locator('[data-screen="queue"].active').waitFor({state: "visible", timeout: WAIT_MS})
+
+    const participantTopic = user.journal.events.find(item => item.type === "frame_sent" && item.topic?.startsWith("participant:") && item.event === "queue:join")?.topic
+    assert.ok(participantTopic, "keyboard start sends a queue request")
+    assert.equal(sentCount(user, participantTopic, "queue:join"), 1, "keyboard start submits exactly one queue attempt")
+
+    await user.page.locator("#leave-queue").focus()
+    await user.page.keyboard.press("Space")
+    await user.page.locator('[data-screen="doors"].active').waitFor({state: "visible", timeout: WAIT_MS})
+
+    const settingsNav = user.page.locator('#bottom-nav [data-go="settings"]')
+    await settingsNav.focus()
+    await user.page.keyboard.press("Enter")
+    await user.page.locator('[data-screen="settings"].active').waitFor({state: "visible", timeout: WAIT_MS})
+
+    const reducedMotion = user.page.locator("#reduced-motion")
+    await reducedMotion.focus()
+    const before = await reducedMotion.isChecked()
+    await user.page.keyboard.press("Space")
+    assert.equal(await reducedMotion.isChecked(), !before, "Settings checkbox operates with Space")
+    assertClean(user)
+  } finally {
+    await user?.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
+
 test("F-10 Conversation resize preserves runtime, unsent draft and readable width", {timeout: 135_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let pair
@@ -245,6 +286,39 @@ test("F-10 Conversation resize preserves runtime, unsent draft and readable widt
     assert.ok(layout.screen.width <= 48 * 16 + 2, `Conversation stays constrained instead of stretching across ${layout.viewport}px`)
     assert.ok(layout.bubble.width <= 36 * 16 + 2, "message bubble stays within readable max width")
     assert.ok(layout.composer.left >= layout.screen.left - 1 && layout.composer.right <= layout.screen.right + 1, "composer remains anchored to Conversation region")
+    assertClean(a)
+    assertClean(b)
+  } finally {
+    await pair?.a.context.close().catch(() => {})
+    await pair?.b.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
+
+test("F-10 refresh of active desktop Conversation recovers the same Conversation once", {timeout: 135_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let pair
+  try {
+    pair = await matchPair(browser)
+    const {a, b, topic} = pair
+    await a.page.setViewportSize(VIEWPORTS.standard)
+    const mark = a.journal.mark()
+
+    const response = await a.page.reload({waitUntil: "domcontentloaded"})
+    assert.ok(response?.ok(), "desktop refresh reloads the app shell")
+    await a.page.waitForFunction(() => document.documentElement.dataset.instagramChatBooted === "true")
+    await a.journal.waitFor(
+      event => event.type === "frame_received" && event.topic?.startsWith("participant:") && event.event === "phx_reply" && event.body?.status === "ok" && event.body?.response?.status === "connected",
+      "ParticipantChannel rejoin after refresh",
+      mark
+    )
+
+    const restoredTopic = await waitForConversation(a, mark)
+    assert.equal(restoredTopic, topic, "refresh restores the same Conversation identity")
+    const refreshJoins = a.journal.events.slice(mark).filter(item => item.type === "frame_sent" && item.topic === topic && item.event === "phx_join")
+    assert.equal(refreshJoins.length, 1, "refresh creates exactly one replacement Conversation subscription")
+    await assertNoOverflow(a.page, "refreshed active Conversation")
+    await a.page.screenshot({path: path.join(SCREENSHOTS, "conversation-refresh-standard.png"), fullPage: false})
     assertClean(a)
     assertClean(b)
   } finally {
