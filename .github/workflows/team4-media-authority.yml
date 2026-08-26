@@ -77,6 +77,7 @@ jobs:
           node --test --test-concurrency=1 \
             test/js/team4_media_authority_test.mjs \
             test/js/team4_call_operation_race_test.mjs \
+            test/js/team4_screen_share_absent_test.mjs \
             test/js/team11_media_expression_break_test.mjs \
             test/js/live_call_test.mjs \
             test/js/voice_notes_test.mjs \
@@ -101,6 +102,43 @@ jobs:
             test/strangertalks_new/view_once_media_store_test.exs \
             test/strangertalks_new/view_once_media_validator_test.exs \
             test/strangertalks_new/view_once_safety_report_test.exs
+
+      - name: Install and start test-only coturn relay
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y coturn
+          cat > /tmp/team4-turnserver.conf <<'EOF'
+          listening-port=3478
+          listening-ip=127.0.0.1
+          relay-ip=127.0.0.1
+          fingerprint
+          use-auth-secret
+          static-auth-secret=team6-test-only-coturn-secret
+          realm=strangertalks.test
+          allow-loopback-peers
+          no-multicast-peers
+          no-tls
+          no-dtls
+          min-port=49160
+          max-port=49200
+          cli-password=team4-test-only-cli-secret
+          EOF
+          turnserver -c /tmp/team4-turnserver.conf --log-file=/tmp/team4-turn.log > /tmp/team4-turn.stdout 2>&1 &
+          echo $! > /tmp/team4-turn.pid
+          for attempt in $(seq 1 30); do
+            if ! kill -0 "$(cat /tmp/team4-turn.pid)" 2>/dev/null; then
+              cat /tmp/team4-turn.stdout || true
+              cat /tmp/team4-turn.log || true
+              exit 1
+            fi
+            if ss -lun | grep -q ':3478 '; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/team4-turn.stdout || true
+          cat /tmp/team4-turn.log || true
+          exit 1
 
       - name: Start Phoenix for native Chromium media proof
         run: |
@@ -127,6 +165,9 @@ jobs:
       - name: Native browser media and required device/accessibility proof
         run: node --test --test-concurrency=1 test/js/team4_media_browser_test.mjs
 
+      - name: Genuine two-browser relay WebRTC proof
+        run: node --test --test-concurrency=1 test/js/team4_two_browser_webrtc_test.mjs
+
       - name: Upload Team 4 device screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -141,6 +182,19 @@ jobs:
         run: |
           if [ -f /tmp/team4-media-browser.pid ]; then
             pid="$(cat /tmp/team4-media-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Stop test-only coturn relay
+        if: always()
+        run: |
+          if [ -f /tmp/team4-turn.pid ]; then
+            pid="$(cat /tmp/team4-turn.pid)"
             kill "$pid" 2>/dev/null || true
             for attempt in $(seq 1 20); do
               if ! kill -0 "$pid" 2>/dev/null; then break; fi
@@ -174,4 +228,7 @@ jobs:
 
       - name: Browser server log on failure
         if: failure()
-        run: cat /tmp/team4-media-browser.log || true
+        run: |
+          cat /tmp/team4-media-browser.log || true
+          cat /tmp/team4-turn.stdout || true
+          cat /tmp/team4-turn.log || true

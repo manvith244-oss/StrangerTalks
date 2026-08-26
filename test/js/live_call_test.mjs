@@ -90,7 +90,7 @@ test("Teardown immediately stops local media tracks and remote element playback"
   assert.equal(coord.status, CALL_STATUS.TERMINAL)
 })
 
-test("Media update notifications update coordinator state", () => {
+test("Media update notifications update coordinator state without granting unsupported screen-share authority", () => {
   const coord = new LiveCallCoordinator({ participantId: "user-1", conversationId: "conv-1" })
   coord.callAttemptId = "attempt-123"
   coord.status = CALL_STATUS.ACTIVE
@@ -108,7 +108,8 @@ test("Media update notifications update coordinator state", () => {
   assert.equal(state.mediaGeneration, 2)
   assert.equal(state.selfVideo, true)
   assert.equal(state.peerVideo, false)
-  assert.equal(state.screenSharing, true)
+  assert.equal(state.screenSharing, false)
+  assert.equal(coord.localScreenStream, null)
 })
 
 test("stopMediaTracks safely handles null or trackless stream", () => {
@@ -1232,11 +1233,11 @@ test("REACTION-13: Admitting reaction does not alter Camera authority or state",
   assert.equal(coord.localVisualFloorClosed, false)
 })
 
-test("REACTION-14: Admitting reaction does not alter Screen Share authority or state", () => {
+test("REACTION-14: Admitting a reaction cannot create unsupported Screen Share authority", () => {
   const coord = new LiveCallCoordinator({ participantId: "user-1", conversationId: "conv-1" })
   coord.status = CALL_STATUS.ACTIVE
   coord.callAttemptId = "attempt-1"
-  coord.screenSharing = true
+  assert.equal(coord.screenSharing, false)
 
   coord.handleReaction({
     call_attempt_id: "attempt-1",
@@ -1245,7 +1246,8 @@ test("REACTION-14: Admitting reaction does not alter Screen Share authority or s
     sender_id: "user-2"
   })
 
-  assert.equal(coord.screenSharing, true)
+  assert.equal(coord.screenSharing, false)
+  assert.equal(coord.localScreenStream, null)
 })
 
 test("REACTION-15: Ephemeral reaction contains zero matchmaking state or scoring", () => {
