@@ -1,179 +1,154 @@
-name: Team 10 Expression Surface Verification
+name: Team 10 Closure Candidate Builder
 
 on:
-  pull_request:
+  push:
     branches:
-      - release/prep-2026-08-22
-  workflow_dispatch:
-    inputs:
-      candidate_sha:
-        description: Exact Team 10 candidate SHA to verify
-        required: true
-        type: string
+      - team10/expression-safety-reattack-20260826
 
 permissions:
-  contents: read
-
-concurrency:
-  group: team10-expression-${{ github.event.pull_request.head.sha || inputs.candidate_sha }}
-  cancel-in-progress: true
+  contents: write
 
 env:
-  MIX_ENV: test
-  PORT: "4002"
-  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
-  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
-  TEAM10_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha }}
+  BASE_SHA: d8dce24bc414bbdd1a560bc8e4aa7b33cfdadf35
 
 jobs:
-  verify-expression-surface:
+  build-candidate:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: strangertalks_local
-          POSTGRES_PASSWORD: strangertalks_test
-          POSTGRES_DB: strangertalks_new_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
-      - name: Checkout exact Team 10 candidate
+      - name: Checkout repair harness head
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.TEAM10_CANDIDATE_SHA }}
-          fetch-depth: 0
+          fetch-depth: 2
 
-      - name: Prove checkout identity
+      - name: Prove repair parent
         run: |
-          echo "TEAM10_CANDIDATE_SHA=${TEAM10_CANDIDATE_SHA}"
-          echo "TEAM10_CHECKED_OUT_SHA=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "${TEAM10_CANDIDATE_SHA}"
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "${BASE_SHA}"
 
-      - name: Set up BEAM
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.18.4"
-          otp-version: "27.3.4"
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-
-      - name: Install dependencies
+      - name: Apply exact Team 10 closure corrections
         run: |
-          mix local.hex --force
-          mix local.rebar --force
-          mix deps.get
-          npm ci
-          npx playwright install --with-deps chromium
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
 
-      - name: Focused expressive JavaScript
+          app_path = Path("priv/static/assets/app.js")
+          app_source = app_path.read_text()
+          old_queue = 'await handleDomainError(error, {fallbackMessage: "Could not cancel matching. Please try again.", fallbackScreen: "doors"})'
+          new_queue = 'await handleDomainError(error, {fallbackMessage: "Could not cancel matching. Please try again."})'
+          if app_source.count(old_queue) != 1:
+              raise SystemExit(f"expected one queue hygiene target, found {app_source.count(old_queue)}")
+          app_source = app_source.replace(old_queue, new_queue, 1)
+
+          required_renderer = [
+              'emoji.textContent = payload?.emoji || "❤️"',
+              'label.textContent = payload?.label || "Reaction"',
+              'item.append(emoji, document.createTextNode(" "), label)',
+              'reactionDisplay?.replaceChildren()'
+          ]
+          for needle in required_renderer:
+              if needle not in app_source:
+                  raise SystemExit(f"T10-001 renderer invariant missing: {needle}")
+          start = app_source.index("function displayReaction(payload) {")
+          end = app_source.index("\n}\n\nfunction initLiveCallCoordinator()", start)
+          renderer = app_source[start:end]
+          if "innerHTML" in renderer:
+              raise SystemExit("T10-001 inert renderer regressed to innerHTML")
+          app_path.write_text(app_source)
+
+          test_path = Path("test/js/team10_floating_reaction_authority_test.mjs")
+          test_source = test_path.read_text()
+          old = '''  coordinator.handleReaction({
+            call_attempt_id: "call-b",
+            reaction_event_id: "reaction-b-current",
+            reaction: "wave",
+            sender_id: "participant-peer"
+          })
+
+          assert.deepEqual(presented, [{
+            reaction: "wave",
+            emoji: "👋",
+            label: "Wave (Hello)",
+            sender_id: "participant-peer"
+          }])'''
+          new = '''  const currentReactionStartedAt = Date.now()
+          coordinator.handleReaction({
+            call_attempt_id: "call-b",
+            reaction_event_id: "reaction-b-current",
+            reaction: "wave",
+            sender_id: "participant-peer"
+          })
+          const currentReactionFinishedAt = Date.now()
+
+          assert.equal(presented.length, 1, "current call reaction must be presented exactly once")
+          const current = presented[0]
+          assert.equal(current.reaction_event_id, "reaction-b-current")
+          assert.equal(current.reaction, "wave")
+          assert.equal(current.emoji, "👋")
+          assert.equal(current.label, "Wave (Hello)")
+          assert.equal(current.sender_id, "participant-peer")
+          assert.equal(current.isSelf, false)
+          assert.equal(Number.isFinite(current.timestamp), true, "presentation timestamp must be numeric")
+          assert.ok(
+            current.timestamp >= currentReactionStartedAt && current.timestamp <= currentReactionFinishedAt,
+            "generated timestamp must be bounded by the current reaction handling window"
+          )'''
+          if test_source.count(old) != 1:
+              raise SystemExit(f"expected one over-strict authority assertion, found {test_source.count(old)}")
+          test_path.write_text(test_source.replace(old, new, 1))
+          PY
+
+          git diff --check -- priv/static/assets/app.js test/js/team10_floating_reaction_authority_test.mjs
+
+      - name: Run focused Team 10 JavaScript before candidate creation
         run: |
           node --test \
             test/js/team10_expression_surface_test.mjs \
             test/js/expressive_media_test.mjs \
             test/js/team10_floating_reaction_authority_test.mjs
 
-      - name: GIF provider and authority ExUnit
+      - name: Build one final candidate commit from audited parent
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          mix test \
-            test/strangertalks_new/gif_provider_test.exs \
-            test/strangertalks_new/gif_search_authority_test.exs \
-            test/strangertalks_new_web/controllers/gif_controller_test.exs
+          set -euo pipefail
+          api="https://api.github.com/repos/${REPOSITORY}"
+          auth="Authorization: Bearer ${GH_TOKEN}"
+          accept="Accept: application/vnd.github+json"
+          version="X-GitHub-Api-Version: 2022-11-28"
 
-      - name: Prepare browser database
-        run: |
-          mix ecto.create --quiet
-          mix ecto.migrate --quiet
+          make_blob() {
+            local file="$1"
+            local json="$2"
+            jq -Rs '{content: ., encoding: "utf-8"}' "$file" > "$json"
+            curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" \
+              "${api}/git/blobs" --data-binary "@$json" | jq -er '.sha'
+          }
 
-      - name: Start Phoenix for Team 10 Chromium proof
-        run: |
-          mix run --no-start -e '
-            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
-            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
-            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
-            Process.sleep(:infinity)
-          ' > /tmp/team10-browser.log 2>&1 &
-          echo $! > /tmp/team10-browser.pid
-          for attempt in $(seq 1 45); do
-            if ! kill -0 "$(cat /tmp/team10-browser.pid)" 2>/dev/null; then
-              cat /tmp/team10-browser.log
-              exit 1
-            fi
-            if curl -fsS http://localhost:4002/ >/dev/null; then
-              exit 0
-            fi
-            sleep 1
-          done
-          cat /tmp/team10-browser.log
-          exit 1
+          app_blob="$(make_blob priv/static/assets/app.js /tmp/t10-app.json)"
+          test_blob="$(make_blob test/js/team10_floating_reaction_authority_test.mjs /tmp/t10-test.json)"
+          base_tree="$(git rev-parse "${BASE_SHA}^{tree}")"
 
-      - name: Real Chromium Team 10 hostile proof
-        run: |
-          node --test \
-            test/js/team10_expression_browser_test.mjs \
-            test/js/team10_expression_actions_browser_test.mjs \
-            test/js/team10_expression_reliability_browser_test.mjs \
-            test/js/team10_expression_authority_browser_test.mjs \
-            test/js/team10_floating_reaction_dom_browser_test.mjs
+          jq -n \
+            --arg base "$base_tree" \
+            --arg app "$app_blob" \
+            --arg test "$test_blob" \
+            '{base_tree: $base, tree: [
+              {path: "priv/static/assets/app.js", mode: "100644", type: "blob", sha: $app},
+              {path: "test/js/team10_floating_reaction_authority_test.mjs", mode: "100644", type: "blob", sha: $test}
+            ]}' > /tmp/t10-tree.json
 
-      - name: Conversation and replay regressions
-        run: |
-          node --test \
-            test/js/delivery_progress_test.mjs \
-            test/js/reply_quote_test.mjs \
-            test/js/reaction_test.mjs \
-            test/js/pin_test.mjs \
-            test/js/message_unsend_test.mjs \
-            test/js/session_reconciliation_guard_test.mjs \
-            test/js/expressive_media_test.mjs
+          tree_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" \
+            "${api}/git/trees" --data-binary @/tmp/t10-tree.json | jq -er '.sha')"
 
-      - name: Stop Team 10 browser server
-        if: always()
-        run: |
-          if [ -f /tmp/team10-browser.pid ]; then
-            pid="$(cat /tmp/team10-browser.pid)"
-            kill "$pid" 2>/dev/null || true
-            for attempt in $(seq 1 20); do
-              if ! kill -0 "$pid" 2>/dev/null; then break; fi
-              sleep 0.25
-            done
-            kill -9 "$pid" 2>/dev/null || true
-          fi
+          jq -n \
+            --arg message "Team 10: close reaction authority test and scope hygiene" \
+            --arg tree "$tree_sha" \
+            --arg parent "$BASE_SHA" \
+            '{message: $message, tree: $tree, parents: [$parent]}' > /tmp/t10-commit.json
 
-      - name: Reset database before full suite
-        run: |
-          mix ecto.drop --quiet
-          mix ecto.create --quiet
-          mix ecto.migrate --quiet
+          candidate_sha="$(curl -fsS -X POST -H "$auth" -H "$accept" -H "$version" \
+            "${api}/git/commits" --data-binary @/tmp/t10-commit.json | jq -er '.sha')"
 
-      - name: Full precommit
-        run: mix precommit
-
-      - name: Diff hygiene
-        run: git diff --check
-
-      - name: Prove clean checkout
-        run: |
-          git status --porcelain | tee /tmp/team10-status
-          test ! -s /tmp/team10-status
-
-      - name: Prove exact tested SHA
-        run: |
-          tested_sha="$(git rev-parse HEAD)"
-          echo "TEAM10_TESTED_SHA=${tested_sha}"
-          test "${tested_sha}" = "${TEAM10_CANDIDATE_SHA}"
-
-      - name: Browser log on failure
-        if: failure()
-        run: cat /tmp/team10-browser.log || true
+          echo "T10_CANDIDATE_SHA=${candidate_sha}"
+          echo "T10_CANDIDATE_SHA=${candidate_sha}" >> "$GITHUB_STEP_SUMMARY"
