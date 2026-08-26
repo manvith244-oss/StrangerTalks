@@ -200,10 +200,8 @@ defmodule StrangertalksNew.RetentionCleanup do
           media.created_at <= $2
           OR NOT EXISTS (
             SELECT 1
-            FROM reports report
-            JOIN safety_reviews review ON review.report_id = report.report_id
-            WHERE report.report_id = media.report_id
-              AND report.report_status = 'UNDER_REVIEW'
+            FROM safety_reviews review
+            WHERE review.report_id = media.report_id
               AND review.status = 'IN_REVIEW'
           )
         )
@@ -419,7 +417,8 @@ defmodule StrangertalksNew.RetentionCleanup do
   end
 
   defp cleanup_terminal_matches(now) do
-    cutoff = RetentionPolicy.cutoff_days(now, RetentionPolicy.terminal_match_days())
+    cutoff =
+      RetentionPolicy.cutoff_days(now, RetentionPolicy.terminal_match_days())
 
     delete_count(
       """
