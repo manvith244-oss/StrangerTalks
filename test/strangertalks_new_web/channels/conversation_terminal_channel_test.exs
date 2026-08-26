@@ -179,6 +179,68 @@ defmodule StrangertalksNewWeb.ConversationTerminalChannelTest do
              )
   end
 
+  test "ordinary End rejects stale live-only operations across Conversation feature families", context do
+    socket_a = connect_and_join(context.participant_a, context.conversation)
+    _socket_b = connect_and_join(context.participant_b, context.conversation)
+    message_id = Ecto.UUID.generate()
+
+    send_ref =
+      push(socket_a, "message:send", %{
+        "client_message_id" => message_id,
+        "content" => "seed before terminal"
+      })
+
+    assert_reply send_ref, :ok, %{status: "sent"}
+
+    end_ref = push(socket_a, "conversation:end", %{})
+    assert_reply end_ref, :ok, %{status: "ended"}
+
+    for _ <- 1..2 do
+      assert_push "conversation:ended", %{status: "ended", reason: "participant_completed"}
+    end
+
+    assert_eventually(fn ->
+      ConversationServer.lookup(context.conversation.conversation_id) == {:error, :not_started}
+    end)
+
+    stale_operations = [
+      {"message:send",
+       %{"client_message_id" => Ecto.UUID.generate(), "content" => "stale after End"}},
+      {"message:edit",
+       %{
+         "target_client_message_id" => message_id,
+         "expected_content_revision" => 0,
+         "content" => "stale edit"
+       }},
+      {"message:unsend",
+       %{"target_client_message_id" => message_id, "expected_content_revision" => 0}},
+      {"message:react",
+       %{
+         "target_client_message_id" => message_id,
+         "desired_reaction" => "❤️",
+         "expected_reaction_revision" => 0
+       }},
+      {"message:pin",
+       %{
+         "target_client_message_id" => message_id,
+         "pinned" => true,
+         "expected_pin_revision" => 0
+       }},
+      {"typing:start", %{}},
+      {"view_once:open", %{"target_client_message_id" => message_id}},
+      {"voice_note:ack", %{"voice_note_id" => Ecto.UUID.generate()}},
+      {"call:initiate", %{"call_type" => "voice"}},
+      {"call:accept", %{"call_attempt_id" => Ecto.UUID.generate()}},
+      {"call:request_credentials", %{"call_attempt_id" => Ecto.UUID.generate()}},
+      {"sync:reconcile", %{"last_applied_sequence" => 0}}
+    ]
+
+    for {event, payload} <- stale_operations do
+      stale_ref = push(socket_a, event, payload)
+      assert_reply stale_ref, :error, %{code: "CONVERSATION_UNAVAILABLE"}
+    end
+  end
+
   defp participant_fixture do
     {:ok, participant} = Participants.create_participant(%{})
     participant
