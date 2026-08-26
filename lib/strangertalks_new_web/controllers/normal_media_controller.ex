@@ -56,7 +56,8 @@ defmodule StrangertalksNewWeb.NormalMediaController do
          :ok <- valid_uuid(conversation_id, :invalid_request),
          {:ok, _conversation} <- active_conversation(conversation_id, participant_id),
          :ok <- rate_limit(:normal_media_list, participant_id, 120, 60_000),
-         {:ok, items} <- NormalMediaStore.list_media(conversation_id, participant_id) do
+         {:ok, items} <- NormalMediaStore.list_media(conversation_id, participant_id),
+         {:ok, _conversation} <- active_conversation(conversation_id, participant_id) do
       json(conn, %{items: items})
     else
       error -> error_response(conn, error)
@@ -70,7 +71,8 @@ defmodule StrangertalksNewWeb.NormalMediaController do
          {:ok, _conversation} <- active_conversation(conversation_id, participant_id),
          :ok <- rate_limit(:normal_media_open, participant_id, 120, 60_000),
          {:ok, binary, media_type} <-
-           NormalMediaStore.fetch_media(conversation_id, client_message_id) do
+           NormalMediaStore.fetch_media(conversation_id, client_message_id),
+         {:ok, _conversation} <- active_conversation(conversation_id, participant_id) do
       conn
       |> put_resp_header("cache-control", "no-store, private")
       |> put_resp_header("x-content-type-options", "nosniff")
