@@ -47,6 +47,7 @@ jobs:
 
       - name: Prove checkout identity
         run: |
+          set -euo pipefail
           expected="${{ github.event.pull_request.head.sha || github.sha }}"
           actual="$(git rev-parse HEAD)"
           echo "EXPECTED_TEAM7_COMMIT=$expected"
@@ -59,11 +60,77 @@ jobs:
           elixir-version: "1.18.4"
           otp-version: "27.3.4"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
       - name: Install dependencies
         run: |
+          set -euo pipefail
           mix local.hex --force
           mix local.rebar --force
           mix deps.get
+          npm ci
 
-      - name: Team 7 retention policy contract
-        run: mix test test/strangertalks_new/retention_policy_test.exs
+      - name: Team 7 retention policy and cleanup attacks
+        run: |
+          set -euo pipefail
+          mix test \
+            test/strangertalks_new/retention_policy_test.exs \
+            test/strangertalks_new/retention_cleanup_test.exs \
+            test/strangertalks_new/retention_cleanup_db_test.exs \
+            test/strangertalks_new/privacy_persistence_guard_test.exs \
+            test/strangertalks_new/telemetry_privacy_test.exs
+
+      - name: Team 7 Agent privacy boundaries
+        run: |
+          set -euo pipefail
+          mix test \
+            test/strangertalks_new/companion_open_ai_provider_test.exs \
+            test/strangertalks_new/agent_systems_functional_test.exs \
+            test/strangertalks_new/agent_systems_break_test.exs \
+            test/strangertalks_new/team7_intelligence_boundary_test.exs
+
+      - name: Team 7 logging and diagnostic privacy
+        run: |
+          set -euo pipefail
+          mix test \
+            test/strangertalks_new_web/channel_crash_diagnostic_privacy_test.exs \
+            test/strangertalks_new_web/expressive_diagnostic_privacy_test.exs
+
+      - name: Team 7 account continuity and deletion-adjacent regressions
+        run: |
+          set -euo pipefail
+          mix test \
+            test/strangertalks_new/account_sync_test.exs \
+            test/strangertalks_new/reflections_test.exs \
+            test/strangertalks_new_web/controllers/google_continuity_test.exs
+
+      - name: Team 7 client privacy and retention regressions
+        run: |
+          set -euo pipefail
+          node --test \
+            test/js/local_data_test.mjs \
+            test/js/team7_retention_race_test.mjs \
+            test/js/encrypted_sync_test.mjs \
+            test/js/reflections_test.mjs \
+            test/js/ephemeral_conversation_ux_test.mjs \
+            test/js/security_adversarial_test.mjs
+
+      - name: Full precommit
+        run: mix precommit
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Prove final checkout clean
+        run: |
+          set -euo pipefail
+          git status --short --branch
+          git status --porcelain | tee /tmp/team7-privacy-status
+          test ! -s /tmp/team7-privacy-status
+
+      - name: Record exact tested commit
+        run: echo "TEAM7_PRIVACY_RETENTION_TESTED_COMMIT=$(git rev-parse HEAD)"
