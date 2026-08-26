@@ -816,6 +816,7 @@ async function joinConversation(id) {
 
   app.conversation.on("conversation:ended", async () => {
     if (app.conversationId !== id) return
+    clearConversationTypingRuntime()
     app.liveCall?.teardown()
     closeViewOnceModal()
     clearViewOncePreview()
@@ -830,7 +831,7 @@ async function joinConversation(id) {
     const composerInput = $("#message-input")
     if (composerInput) {
       composerInput.value = ""
-      composerInput.dispatchEvent(new Event("input", {bubbles: true}))
+      renderPromptDraftAvailability()
     }
     resetPinnedMessages()
     app.peerPresence = null
@@ -951,6 +952,23 @@ function reportCurrentVisibility() {
   if (!app.conversation) return
   const visibility = document.visibilityState === "hidden" ? "hidden" : "visible"
   push(app.conversation, "session:visibility", {visibility}).catch(() => {})
+}
+
+function clearConversationTypingRuntime() {
+  clearTimeout(app.typingTimer)
+  app.typingTimer = null
+  const typing = $("#typing")
+  if (typing) typing.textContent = ""
+}
+
+function releaseConversationRuntime() {
+  clearConversationTypingRuntime()
+  const channel = app.conversation
+  app.conversation = null
+  app.currentEpochId = null
+  if (channel) {
+    try { channel.leave() } catch (_) {}
+  }
 }
 
 function isQuietModeActive() {
@@ -3377,6 +3395,7 @@ async function applyRetention(choice, summaryText) {
   await replaceRecords(next)
   if (["kept", "summary_only"].includes(choice)) { await offerContinuity(); await maybeAutoSync() }
   releaseAllVoiceUrls()
+  releaseConversationRuntime()
   app.conversationId = null
   if (choice === "kept") show("chats"); else show("doors")
 }
@@ -4093,7 +4112,21 @@ $("#prompt-helper")?.addEventListener("keydown", (event) => {
     closePromptCards()
   }
 })
-$("#message-input").addEventListener("input", () => { renderPromptDraftAvailability(); push(app.conversation, "typing:start").catch(() => {}); clearTimeout(app.typingTimer); app.typingTimer = setTimeout(() => push(app.conversation, "typing:stop").catch(() => {}), 1500) })
+$("#message-input").addEventListener("input", () => {
+  renderPromptDraftAvailability()
+  const conversation = app.conversation
+  if (!conversation || !app.conversationId) {
+    clearConversationTypingRuntime()
+    return
+  }
+  push(conversation, "typing:start").catch(() => {})
+  clearTimeout(app.typingTimer)
+  app.typingTimer = setTimeout(() => {
+    if (app.conversation !== conversation || !app.conversationId) return
+    app.typingTimer = null
+    push(conversation, "typing:stop").catch(() => {})
+  }, 1500)
+})
 $("#voice-start").addEventListener("click", requestVoiceRecording)
 $("#voice-warning-help").addEventListener("click", () => { $("#voice-warning").hidden = false })
 $("#voice-warning-cancel").addEventListener("click", () => { $("#voice-warning").hidden = true })
