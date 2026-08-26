@@ -92,6 +92,11 @@ test("cold boot has a bounded early-failure handoff even before participant chan
   assert.match(runtime, /renderBootFailure/)
 })
 
+test("participant reconciliation errors never reveal unresolved product truth", () => {
+  const runtime = readFileSync(runtimePath, "utf8")
+  assert.doesNotMatch(runtime, /finishBoot\(null\)/)
+})
+
 test("canonical queue leave reply exits cancelling instead of waiting forever for a broadcast", () => {
   const runtime = readFileSync(runtimePath, "utf8")
   assert.match(runtime, /MATCHMAKING_CANCELLED/)
