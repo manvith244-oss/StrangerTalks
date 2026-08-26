@@ -92,6 +92,71 @@ defmodule StrangertalksNew.NormalMediaHostileStoreTest do
     )
   end
 
+  test "many Conversations under concurrent global pressure remain bounded and reuse released capacity" do
+    configure_limits(100, 20)
+    runtimes = for _ <- 1..10, do: live_conversation()
+
+    tasks =
+      Enum.map(runtimes, fn runtime ->
+        Task.async(fn ->
+          result =
+            NormalMediaStore.put_media(
+              runtime.conversation.conversation_id,
+              runtime.a.participant_id,
+              Ecto.UUID.generate(),
+              "load",
+              metadata("load")
+            )
+
+          {runtime, result}
+        end)
+      end)
+
+    results = Enum.map(tasks, &Task.await(&1, 5_000))
+
+    accepted = Enum.filter(results, fn {_runtime, result} -> match?({:ok, _, :created}, result) end)
+
+    rejected =
+      Enum.filter(results, fn {_runtime, result} ->
+        match?({:error, :normal_media_global_capacity}, result)
+      end)
+
+    assert length(accepted) == 5
+    assert length(rejected) == 5
+
+    expected =
+      Map.new(accepted, fn {runtime, _result} ->
+        {runtime.conversation.conversation_id, 4}
+      end)
+
+    assert_accounting(expected, 20)
+
+    {rejected_runtime, _} = hd(rejected)
+
+    assert {:ok, %{sequence: 1}} =
+             ConversationServer.append_message(
+               rejected_runtime.conversation.conversation_id,
+               rejected_runtime.a.participant_id,
+               Ecto.UUID.generate(),
+               "text survives global media pressure"
+             )
+
+    {released_runtime, _} = hd(accepted)
+    assert :ok = NormalMediaStore.delete_conversation(released_runtime.conversation.conversation_id)
+
+    expected_after_release = Map.delete(expected, released_runtime.conversation.conversation_id)
+    assert_accounting(expected_after_release, 16)
+
+    assert_created(rejected_runtime.conversation, rejected_runtime.a, "load")
+
+    assert_accounting(
+      Map.put(expected_after_release, rejected_runtime.conversation.conversation_id, 4),
+      20
+    )
+
+    assert Process.alive?(Process.whereis(NormalMediaStore))
+  end
+
   test "concurrent uploads cannot materially exceed the per-Conversation limit" do
     %{conversation: conversation, a: a} = live_conversation()
     configure_limits(10, 100)
