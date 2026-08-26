@@ -216,7 +216,7 @@ test("F-10 Conversation resize preserves runtime, unsent draft and readable widt
   }
 })
 
-test("F-10 desktop report surface is a keyboard-contained modal and Escape restores focus", {timeout: 120_000}, async () => {
+test("F-10 desktop report sheet exposes dialog semantics and Escape restores focus", {timeout: 120_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let pair
   try {
@@ -229,22 +229,53 @@ test("F-10 desktop report surface is a keyboard-contained modal and Escape resto
     const report = a.page.locator("#report-form")
     await report.waitFor({state: "visible", timeout: WAIT_MS})
 
-    assert.equal(await report.getAttribute("role"), "dialog", "report surface exposes dialog semantics")
-    assert.equal(await report.getAttribute("aria-modal"), "true", "report surface is modal to assistive technology")
-    assert.equal(await report.getAttribute("aria-labelledby"), "report-title", "report dialog has a stable accessible name")
-    assert.equal(await a.page.locator("#report-title").evaluate(node => node === document.activeElement), true, "focus enters report dialog")
-
-    const focusable = report.locator('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')
-    const focusableCount = await focusable.count()
-    assert.ok(focusableCount >= 2, "report dialog has multiple keyboard controls")
-    await focusable.nth(focusableCount - 1).focus()
-    await a.page.keyboard.press("Tab")
-    const focusStayedInside = await a.page.evaluate(() => document.querySelector("#report-form")?.contains(document.activeElement))
-    assert.equal(focusStayedInside, true, "Tab cannot escape the open report dialog")
+    assert.equal(await report.getAttribute("role"), "dialog", "report sheet exposes dialog semantics")
+    assert.equal(await report.getAttribute("aria-modal"), "false", "report sheet does not claim modal behavior it does not visually enforce")
+    assert.equal(await report.getAttribute("aria-labelledby"), "report-title", "report sheet has a stable accessible name")
+    assert.equal(await a.page.locator("#report-title").evaluate(node => node === document.activeElement), true, "focus enters report sheet")
 
     await a.page.keyboard.press("Escape")
     await report.waitFor({state: "hidden", timeout: WAIT_MS})
     assert.equal(await a.page.locator("#report-open").evaluate(node => node === document.activeElement), true, "Escape closes report and restores trigger focus")
+    assertClean(a)
+  } finally {
+    await pair?.a.context.close().catch(() => {})
+    await pair?.b.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
+
+test("F-10 true confirmation modal traps keyboard focus and Escape restores trigger", {timeout: 120_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let pair
+  try {
+    pair = await matchPair(browser)
+    const {a} = pair
+    await a.page.setViewportSize(VIEWPORTS.standard)
+
+    await a.page.locator(".conversation-head-actions .overflow summary").click()
+    await a.page.locator("#end-conversation").click()
+    const backdrop = a.page.locator("#end-confirmation-backdrop")
+    const dialog = a.page.locator("#end-confirmation-dialog")
+    await backdrop.waitFor({state: "visible", timeout: WAIT_MS})
+
+    assert.equal(await dialog.getAttribute("role"), "dialog", "End confirmation exposes dialog semantics")
+    assert.equal(await dialog.getAttribute("aria-modal"), "true", "End confirmation is explicitly modal")
+    assert.equal(await a.page.locator("#end-cancel").evaluate(node => node === document.activeElement), true, "focus enters the confirmation modal")
+
+    const controls = dialog.locator("button:not([disabled])")
+    const count = await controls.count()
+    assert.ok(count >= 2, "confirmation modal exposes keyboard controls")
+    await controls.nth(count - 1).focus()
+    await a.page.keyboard.press("Tab")
+    assert.equal(await controls.nth(0).evaluate(node => node === document.activeElement), true, "Tab wraps from the last control to the first")
+    await controls.nth(0).focus()
+    await a.page.keyboard.press("Shift+Tab")
+    assert.equal(await controls.nth(count - 1).evaluate(node => node === document.activeElement), true, "Shift+Tab wraps from the first control to the last")
+
+    await a.page.keyboard.press("Escape")
+    await backdrop.waitFor({state: "hidden", timeout: WAIT_MS})
+    assert.equal(await a.page.locator("#end-conversation").evaluate(node => node === document.activeElement), true, "Escape closes modal and restores trigger focus")
     assertClean(a)
   } finally {
     await pair?.a.context.close().catch(() => {})
