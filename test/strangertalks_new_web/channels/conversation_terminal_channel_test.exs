@@ -179,7 +179,8 @@ defmodule StrangertalksNewWeb.ConversationTerminalChannelTest do
              )
   end
 
-  test "ordinary End rejects stale live-only operations across Conversation feature families", context do
+  test "ordinary End rejects stale live-only operations across Conversation feature families",
+       context do
     socket_a = connect_and_join(context.participant_a, context.conversation)
     _socket_b = connect_and_join(context.participant_b, context.conversation)
     message_id = Ecto.UUID.generate()
