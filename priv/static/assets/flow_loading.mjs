@@ -3,6 +3,7 @@ export const FLOW_PHASE = Object.freeze({
   MATCHMAKING_ADMISSION: "matchmaking_admission",
   MATCHMAKING_WAITING: "matchmaking_waiting",
   MATCHMAKING_CANCELLING: "matchmaking_cancelling",
+  MATCHMAKING_CANCELLED: "matchmaking_cancelled",
   ENTERING_CONVERSATION: "entering_conversation"
 })
 
@@ -37,6 +38,14 @@ export function loadingPresentation(phase, context = {}) {
       return {
         title: "Leaving queue…",
         detail: "Confirming you left matchmaking.",
+        interaction: "blocked",
+        leaveEnabled: false
+      }
+
+    case FLOW_PHASE.MATCHMAKING_CANCELLED:
+      return {
+        title: "You left matchmaking.",
+        detail: "Matchmaking is no longer active.",
         interaction: "blocked",
         leaveEnabled: false
       }
