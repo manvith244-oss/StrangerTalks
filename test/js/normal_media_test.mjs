@@ -183,3 +183,9 @@ test("authoritative pruning ignores malformed lists and stale polls", () => {
   assert.match(runtimeSource, /response\.json\(\)\.catch\(\(\) => null\)/)
   assert.match(runtimeSource, /Array\.isArray\(body\.items\)/)
 })
+
+test("in-flight media fetch cannot recreate an object URL after authoritative removal", () => {
+  assert.match(runtimeSource, /state\.renderedIds\.has\(item\.client_message_id\)/)
+  assert.match(runtimeSource, /for \(const \[clientMessageId, url\] of state\.mediaUrls\.entries\(\)\)/)
+  assert.match(runtimeSource, /authoritativeIds\.has\(clientMessageId\)/)
+})
