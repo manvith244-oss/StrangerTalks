@@ -83,42 +83,23 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
       ) do
     key = {conversation_id, client_message_id}
     size = byte_size(binary)
-    content_hash = Map.fetch!(metadata, :content_hash)
 
-    case Map.get(state.media, key) do
-      %{sender_id: ^sender_id, content_hash: ^content_hash} = existing ->
-        case authorize_existing(conversation_id, sender_id) do
-          :ok ->
-            {:reply, {:ok, public_entry(existing, sender_id), :duplicate}, state}
+    case validate_metadata(metadata) do
+      {:ok, content_hash} ->
+        handle_validated_put(
+          state,
+          key,
+          conversation_id,
+          sender_id,
+          client_message_id,
+          binary,
+          metadata,
+          content_hash,
+          size
+        )
 
-          {:error, reason} ->
-            {:reply, {:error, reason}, state}
-        end
-
-      nil ->
-        case capacity_check(state, conversation_id, size) do
-          :ok ->
-            case accept_at_conversation_boundary(
-                   state,
-                   conversation_id,
-                   sender_id,
-                   client_message_id,
-                   binary,
-                   metadata
-                 ) do
-              {:ok, media, next_state} ->
-                {:reply, {:ok, public_entry(media, sender_id), :created}, next_state}
-
-              {:error, reason} ->
-                {:reply, {:error, reason}, state}
-            end
-
-          {:error, reason} ->
-            {:reply, {:error, reason}, state}
-        end
-
-      _conflicting_existing ->
-        {:reply, {:error, :normal_media_identity_conflict}, state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -173,16 +154,88 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
     inactive_ids =
       state.conversation_bytes
       |> Map.keys()
-      |> Enum.filter(fn conversation_id ->
-        case Conversations.get_conversation(conversation_id) do
-          %{conversation_status: status} when status in [:PENDING, :ACTIVE, :PAUSED] -> false
-          _ -> true
-        end
-      end)
+      |> Enum.filter(&inactive_for_sweep?/1)
 
     state = Enum.reduce(inactive_ids, state, &drop_conversation(&2, &1))
     Process.send_after(self(), :sweep_inactive, @sweep_interval_ms)
     {:noreply, state}
+  end
+
+  defp handle_validated_put(
+         state,
+         key,
+         conversation_id,
+         sender_id,
+         client_message_id,
+         binary,
+         metadata,
+         content_hash,
+         size
+       ) do
+    case Map.get(state.media, key) do
+      %{sender_id: ^sender_id, content_hash: ^content_hash} = existing ->
+        case authorize_existing(conversation_id, sender_id) do
+          :ok ->
+            {:reply, {:ok, public_entry(existing, sender_id), :duplicate}, state}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+
+      nil ->
+        case capacity_check(state, conversation_id, size) do
+          :ok ->
+            case accept_at_conversation_boundary(
+                   state,
+                   conversation_id,
+                   sender_id,
+                   client_message_id,
+                   binary,
+                   metadata
+                 ) do
+              {:ok, media, next_state} ->
+                {:reply, {:ok, public_entry(media, sender_id), :created}, next_state}
+
+              {:error, reason} ->
+                {:reply, {:error, reason}, state}
+            end
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+
+      _conflicting_existing ->
+        {:reply, {:error, :normal_media_identity_conflict}, state}
+    end
+  end
+
+  defp validate_metadata(metadata) do
+    with {:ok, content_hash} when is_binary(content_hash) <- Map.fetch(metadata, :content_hash),
+         {:ok, media_type} when is_binary(media_type) <- Map.fetch(metadata, :media_type) do
+      {:ok, content_hash}
+    else
+      _ -> {:error, :invalid_normal_media_metadata}
+    end
+  end
+
+  defp inactive_for_sweep?(conversation_id) do
+    conversations_module =
+      Application.get_env(
+        :strangertalks_new,
+        :normal_media_conversations_module,
+        Conversations
+      )
+
+    try do
+      case conversations_module.get_conversation(conversation_id) do
+        %{conversation_status: status} when status in [:PENDING, :ACTIVE, :PAUSED] -> false
+        _ -> true
+      end
+    rescue
+      _error -> false
+    catch
+      :exit, _reason -> false
+    end
   end
 
   defp capacity_check(state, conversation_id, size) do
@@ -261,12 +314,12 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
             client_message_id: client_message_id,
             sender_id: sender_id,
             binary: binary,
-            media_type: Map.fetch!(metadata, :media_type),
+            media_type: Map.get(metadata, :media_type),
             byte_size: byte_size(binary),
             width: Map.get(metadata, :width),
             height: Map.get(metadata, :height),
             duration_seconds: Map.get(metadata, :duration_seconds),
-            content_hash: Map.fetch!(metadata, :content_hash),
+            content_hash: Map.get(metadata, :content_hash),
             anchor_sequence: anchor_sequence,
             anchor_ordinal: anchor_ordinal,
             inserted_at: inserted_at
