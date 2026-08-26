@@ -166,3 +166,12 @@ test("normal media does not create automatic report evidence or persistent local
 test("normal binary media exposes no Edit action", () => {
   assert.doesNotMatch(runtimeSource, /Edit Photo|Edit Video|message:edit/)
 })
+
+test("volatile server media loss removes stale cards and revokes cached object URLs", () => {
+  assert.match(runtimeSource, /function reconcileMissingMedia/)
+  assert.match(runtimeSource, /state\.mediaUrls\.delete\(clientMessageId\)/)
+  assert.match(runtimeSource, /state\.renderedIds\.delete\(clientMessageId\)/)
+  assert.match(runtimeSource, /revokeUrl\(url\)/)
+  assert.match(runtimeSource, /node\.remove\(\)/)
+  assert.match(runtimeSource, /reconcileMissingMedia\(items\)/)
+})
