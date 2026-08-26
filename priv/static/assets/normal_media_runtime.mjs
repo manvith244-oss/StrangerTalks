@@ -590,8 +590,16 @@ function init() {
   window.addEventListener("beforeunload", cleanup, {once: true})
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", init, {once: true})
-} else {
-  init()
+function bootInBrowser() {
+  if (typeof document === "undefined" || typeof window === "undefined") return false
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init, {once: true})
+  } else {
+    init()
+  }
+
+  return true
 }
+
+bootInBrowser()
