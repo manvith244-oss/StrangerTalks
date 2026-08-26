@@ -111,3 +111,30 @@ test("T4-011: Conversation A async success cannot mutate Conversation B", async 
   await newPromise
   assert.equal(coordinator.callAttemptId, "attempt-from-b")
 })
+
+test("T4-012: superseded Initiate error resolves stale and cannot reject or terminate the newer attempt", async () => {
+  const pushes = []
+  const coordinator = new LiveCallCoordinator({
+    participantId: "p1",
+    conversationId: "conversation-a",
+    channel: {push() { const push = controllablePush(); pushes.push(push); return push }}
+  })
+
+  const oldPromise = coordinator.initiate("voice")
+  coordinator.teardown("superseded")
+  coordinator.status = CALL_STATUS.IDLE
+  const newPromise = coordinator.initiate("voice")
+
+  pushes[0].fire("error", {reason: "late-old-error"})
+  const oldResult = await oldPromise
+
+  assert.equal(oldResult.stale, true)
+  assert.equal(coordinator.status, CALL_STATUS.PENDING_OUTGOING)
+  assert.equal(coordinator.callAttemptId, null)
+  assert.equal(coordinator.role, "caller")
+
+  pushes[1].fire("ok", {call_attempt_id: "new-authoritative-attempt"})
+  await newPromise
+  assert.equal(coordinator.callAttemptId, "new-authoritative-attempt")
+  assert.equal(coordinator.status, CALL_STATUS.PENDING_OUTGOING)
+})
