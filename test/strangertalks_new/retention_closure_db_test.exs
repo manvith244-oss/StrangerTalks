@@ -46,7 +46,7 @@ defmodule StrangertalksNew.RetentionClosureDbTest do
         status: :ACTIVE,
         created_at: @now,
         updated_at: @now,
-        expires_at: DateTime.add(@now, 2, :hour)
+        expires_at: DateTime.add(@now, 2 * 3_600, :second)
       })
 
     first = RetentionCleanup.run(@now)
@@ -269,7 +269,7 @@ defmodule StrangertalksNew.RetentionClosureDbTest do
       status: :ACTIVE,
       created_at: @now,
       updated_at: @now,
-      expires_at: DateTime.add(@now, 2, :hour)
+      expires_at: DateTime.add(@now, 2 * 3_600, :second)
     }
 
     %RelationshipReconnectionIntent{}
