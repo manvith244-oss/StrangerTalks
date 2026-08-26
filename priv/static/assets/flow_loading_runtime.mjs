@@ -270,6 +270,7 @@ document.addEventListener("click", (event) => {
   if (!language) return
   selectedDoor = door.querySelector("strong")?.textContent?.trim() || null
   renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor})
+  queueMicrotask(() => renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor}))
 }, true)
 
 installBootWatchers()
