@@ -33,16 +33,17 @@ defmodule StrangertalksNewWeb.SafetyMediaAccessPrivacyTest do
     safety_id = media.report_safety_media_id
     conversation_id = fixture.conversation.conversation_id
 
+    routes =
+      StrangertalksNewWeb.Router
+      |> Phoenix.Router.routes()
+      |> Enum.map(& &1.path)
+
+    refute Enum.any?(routes, &String.contains?(&1, "report_safety_media"))
+    refute Enum.any?(routes, &String.contains?(&1, "safety-media"))
+
     submitter_token = ParticipantToken.sign(fixture.participant_a.participant_id)
     reported_token = ParticipantToken.sign(fixture.participant_b.participant_id)
     outsider_token = ParticipantToken.sign(fixture.outsider.participant_id)
-
-    for token <- [submitter_token, reported_token, outsider_token] do
-      guessed = authorized_get(conn, token, "/api/safety-media/#{safety_id}")
-      assert guessed.status == 404
-      refute guessed.resp_body == @secret_bytes
-      refute :binary.match(guessed.resp_body, @secret_bytes) != :nomatch
-    end
 
     for token <- [submitter_token, reported_token] do
       normal =
@@ -53,8 +54,7 @@ defmodule StrangertalksNewWeb.SafetyMediaAccessPrivacyTest do
         )
 
       assert normal.status == 404
-      refute normal.resp_body == @secret_bytes
-      refute :binary.match(normal.resp_body, @secret_bytes) != :nomatch
+      assert :binary.match(normal.resp_body, @secret_bytes) == :nomatch
 
       view_once =
         authorized_get(
@@ -64,8 +64,7 @@ defmodule StrangertalksNewWeb.SafetyMediaAccessPrivacyTest do
         )
 
       refute view_once.status == 200
-      refute view_once.resp_body == @secret_bytes
-      refute :binary.match(view_once.resp_body, @secret_bytes) != :nomatch
+      assert :binary.match(view_once.resp_body, @secret_bytes) == :nomatch
     end
 
     outsider_normal =
@@ -76,7 +75,7 @@ defmodule StrangertalksNewWeb.SafetyMediaAccessPrivacyTest do
       )
 
     assert outsider_normal.status == 403
-    refute outsider_normal.resp_body == @secret_bytes
+    assert :binary.match(outsider_normal.resp_body, @secret_bytes) == :nomatch
 
     outsider_view_once =
       authorized_get(
@@ -86,7 +85,7 @@ defmodule StrangertalksNewWeb.SafetyMediaAccessPrivacyTest do
       )
 
     assert outsider_view_once.status == 403
-    refute outsider_view_once.resp_body == @secret_bytes
+    assert :binary.match(outsider_view_once.resp_body, @secret_bytes) == :nomatch
   end
 
   defp authorized_get(conn, token, path) do
