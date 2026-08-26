@@ -1,0 +1,51 @@
+name: F-06 Secondary Flow Gate
+
+on:
+  push:
+    branches:
+      - f06/settings-secondary-flow-2026-08-26
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+
+concurrency:
+  group: f06-secondary-flow-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  secondary-flow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact F-06 HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          echo "EXPECTED_F06_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "ACTUAL_F06_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: F-06 focused secondary-flow tests
+        run: node --test test/js/f06_secondary_flow_test.mjs
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Prove final checkout clean
+        run: |
+          git status --porcelain | tee /tmp/f06-status
+          test ! -s /tmp/f06-status
+
+      - name: Record exact tested commit
+        run: echo "F06_TESTED_COMMIT=$(git rev-parse HEAD)"
