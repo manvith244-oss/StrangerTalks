@@ -46,26 +46,41 @@ defmodule StrangertalksNew.NormalMediaFailureIsolationTest do
     runtime = live_conversation()
     store_pid = Process.whereis(NormalMediaStore)
 
-    assert {:error, :invalid_normal_media_metadata} =
-             NormalMediaStore.put_media(
-               runtime.conversation.conversation_id,
-               runtime.a.participant_id,
-               Ecto.UUID.generate(),
-               "bad-metadata",
-               %{content_hash: <<1, 2, 3>>}
-             )
+    invalid_metadata = [
+      %{content_hash: <<1, 2, 3>>},
+      %{media_type: "image/jpeg"},
+      %{content_hash: nil, media_type: "image/jpeg"},
+      %{content_hash: :not_binary, media_type: "image/jpeg"},
+      %{content_hash: <<0::256>>, media_type: nil},
+      %{content_hash: <<0::256>>, media_type: :jpeg},
+      %{content_hash: <<1, 2, 3>>, media_type: "image/jpeg"},
+      %{content_hash: <<0::256>>, media_type: "text/html"}
+    ]
+
+    for {metadata, index} <- Enum.with_index(invalid_metadata) do
+      assert {:error, :invalid_normal_media_metadata} =
+               NormalMediaStore.put_media(
+                 runtime.conversation.conversation_id,
+                 runtime.a.participant_id,
+                 Ecto.UUID.generate(),
+                 "bad-metadata-#{index}",
+                 metadata
+               )
+    end
 
     assert {:error, :invalid_normal_media_metadata} =
              NormalMediaStore.put_media(
                runtime.conversation.conversation_id,
                runtime.a.participant_id,
                Ecto.UUID.generate(),
-               "bad-metadata-2",
-               %{media_type: "image/jpeg"}
+               "not-a-map",
+               :not_a_map
              )
 
     assert Process.whereis(NormalMediaStore) == store_pid
+    assert Process.alive?(store_pid)
     assert NormalMediaStore.inspect_state().total_bytes == 0
+    assert NormalMediaStore.inspect_state().conversation_bytes == %{}
 
     assert {:ok, %{sequence: 1}} =
              ConversationServer.append_message(
