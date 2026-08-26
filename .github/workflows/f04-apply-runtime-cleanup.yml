@@ -1,0 +1,145 @@
+name: F-04 Apply Runtime Cleanup
+
+on:
+  push:
+    branches:
+      - f04/conversation-continuity-2026-08-26
+    paths:
+      - ".github/workflows/f04-apply-runtime-cleanup.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout F-04 branch
+        uses: actions/checkout@v4
+        with:
+          ref: f04/conversation-continuity-2026-08-26
+
+      - name: Apply narrowly scoped Conversation runtime cleanup
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("priv/static/assets/app.js")
+          text = path.read_text()
+
+          if "function clearConversationTypingRuntime()" in text:
+              print("F-04 runtime cleanup already applied")
+              raise SystemExit(0)
+
+          replacements = []
+
+          old = '''function reportCurrentVisibility() {
+            if (!app.conversation) return
+            const visibility = document.visibilityState === "hidden" ? "hidden" : "visible"
+            push(app.conversation, "session:visibility", {visibility}).catch(() => {})
+          }
+          '''
+          new = '''function reportCurrentVisibility() {
+            if (!app.conversation) return
+            const visibility = document.visibilityState === "hidden" ? "hidden" : "visible"
+            push(app.conversation, "session:visibility", {visibility}).catch(() => {})
+          }
+
+          function clearConversationTypingRuntime() {
+            clearTimeout(app.typingTimer)
+            app.typingTimer = null
+            const typing = $("#typing")
+            if (typing) typing.textContent = ""
+          }
+
+          function releaseConversationRuntime() {
+            clearConversationTypingRuntime()
+            const channel = app.conversation
+            app.conversation = null
+            app.currentEpochId = null
+            if (channel) {
+              try { channel.leave() } catch (_) {}
+            }
+          }
+          '''
+          replacements.append((old, new, "runtime cleanup helpers"))
+
+          old = '''  app.conversation.on("conversation:ended", async () => {
+            if (app.conversationId !== id) return
+            app.liveCall?.teardown()
+          '''
+          new = '''  app.conversation.on("conversation:ended", async () => {
+            if (app.conversationId !== id) return
+            clearConversationTypingRuntime()
+            app.liveCall?.teardown()
+          '''
+          replacements.append((old, new, "terminal typing cleanup"))
+
+          old = '''    const composerInput = $("#message-input")
+            if (composerInput) {
+              composerInput.value = ""
+              composerInput.dispatchEvent(new Event("input", {bubbles: true}))
+            }
+          '''
+          new = '''    const composerInput = $("#message-input")
+            if (composerInput) {
+              composerInput.value = ""
+              renderPromptDraftAvailability()
+            }
+          '''
+          replacements.append((old, new, "terminal composer reset without transport event"))
+
+          old = '''  releaseAllVoiceUrls()
+            app.conversationId = null
+            if (choice === "kept") show("chats"); else show("doors")
+          }
+          '''
+          new = '''  releaseAllVoiceUrls()
+            releaseConversationRuntime()
+            app.conversationId = null
+            if (choice === "kept") show("chats"); else show("doors")
+          }
+          '''
+          replacements.append((old, new, "retention runtime release"))
+
+          old = '''$("#message-input").addEventListener("input", () => { renderPromptDraftAvailability(); push(app.conversation, "typing:start").catch(() => {}); clearTimeout(app.typingTimer); app.typingTimer = setTimeout(() => push(app.conversation, "typing:stop").catch(() => {}), 1500) })
+          '''
+          new = '''$("#message-input").addEventListener("input", () => {
+            renderPromptDraftAvailability()
+            const conversation = app.conversation
+            if (!conversation || !app.conversationId) {
+              clearConversationTypingRuntime()
+              return
+            }
+            push(conversation, "typing:start").catch(() => {})
+            clearTimeout(app.typingTimer)
+            app.typingTimer = setTimeout(() => {
+              if (app.conversation !== conversation || !app.conversationId) return
+              app.typingTimer = null
+              push(conversation, "typing:stop").catch(() => {})
+            }, 1500)
+          })
+          '''
+          replacements.append((old, new, "typing timer bound to Conversation runtime"))
+
+          for old, new, label in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one {label} target, found {count}")
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+          if git diff --quiet -- priv/static/assets/app.js; then
+            echo "No production patch required"
+            exit 0
+          fi
+
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add priv/static/assets/app.js
+          git commit -m "fix(f04): release terminal Conversation runtime"
+          git push origin HEAD:f04/conversation-continuity-2026-08-26
