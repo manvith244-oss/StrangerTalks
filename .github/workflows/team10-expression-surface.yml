@@ -81,7 +81,8 @@ jobs:
         run: |
           node --test \
             test/js/team10_expression_surface_test.mjs \
-            test/js/expressive_media_test.mjs
+            test/js/expressive_media_test.mjs \
+            test/js/team10_floating_reaction_authority_test.mjs
 
       - name: GIF provider and authority ExUnit
         run: |
