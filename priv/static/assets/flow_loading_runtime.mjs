@@ -2,10 +2,13 @@ import {Socket} from "/vendor/phoenix.mjs"
 import {FLOW_PHASE, createOperationGuard, loadingPresentation} from "./flow_loading.mjs"
 
 const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"
+const BOOT_WATCHDOG_MS = 15_000
 const queueGuard = createOperationGuard()
 let activeQueueAttemptId = null
 let currentQueuePhase = FLOW_PHASE.MATCHMAKING_ADMISSION
 let selectedDoor = null
+let bootWatchdog = null
+let startupFailureObserver = null
 
 function node(selector) {
   return document.querySelector(selector)
@@ -52,7 +55,15 @@ function applyQueueSnapshot(snapshot) {
   return true
 }
 
+function stopBootWatchers() {
+  clearTimeout(bootWatchdog)
+  bootWatchdog = null
+  startupFailureObserver?.disconnect()
+  startupFailureObserver = null
+}
+
 function finishBoot(snapshot) {
+  stopBootWatchers()
   const activeScreen = node("section.screen.active")?.dataset?.screen
   if (activeScreen === "queue") applyQueueSnapshot(snapshot)
   const bridge = node("#boot-bridge")
@@ -64,12 +75,13 @@ function finishBoot(snapshot) {
 }
 
 function renderBootFailure() {
+  stopBootWatchers()
   const bridge = node("#boot-bridge")
   if (!bridge) return
   bridge.dataset.state = "error"
   bridge.setAttribute("aria-busy", "false")
   const title = bridge.querySelector("h1")
-  const detail = bridge.querySelector("p")
+  const detail = bridge.querySelector(".lede")
   if (title) title.textContent = "StrangerTalks can’t confirm your session."
   if (detail) detail.textContent = "Your current state is still unknown. Reload to try restoring it again."
   if (!bridge.querySelector("button")) {
@@ -79,6 +91,20 @@ function renderBootFailure() {
     retry.addEventListener("click", () => location.reload())
     bridge.append(retry)
   }
+}
+
+function installBootWatchers() {
+  bootWatchdog = setTimeout(() => {
+    if (document.body.classList.contains("flow-booting")) renderBootFailure()
+  }, BOOT_WATCHDOG_MS)
+
+  const status = node("#status")
+  if (!status) return
+  startupFailureObserver = new MutationObserver(() => {
+    if (!document.body.classList.contains("flow-booting")) return
+    if (status.textContent.includes("StrangerTalks could not start")) renderBootFailure()
+  })
+  startupFailureObserver.observe(status, {childList: true, characterData: true, subtree: true})
 }
 
 function withQueueCompletion(push, event, payload) {
@@ -104,6 +130,13 @@ function withQueueCompletion(push, event, payload) {
   if (event === "queue:leave") {
     const token = queueGuard.begin("queue-cancel")
     renderQueue(FLOW_PHASE.MATCHMAKING_CANCELLING, {door: selectedDoor})
+    push.receive("ok", (result) => {
+      if (!queueGuard.current(token)) return
+      if (result?.status === "left") {
+        activeQueueAttemptId = null
+        renderQueue(FLOW_PHASE.MATCHMAKING_CANCELLED, {door: selectedDoor})
+      }
+    })
     push.receive("error", () => {
       if (!queueGuard.current(token)) return
       renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
@@ -198,7 +231,7 @@ function patchParticipantChannel(channel) {
           try {
             return await callback(payload)
           } finally {
-            finishBoot(null)
+            renderBootFailure()
           }
         })
       }
@@ -239,4 +272,5 @@ document.addEventListener("click", (event) => {
   renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor})
 }, true)
 
+installBootWatchers()
 await import(APP_ENTRY)
