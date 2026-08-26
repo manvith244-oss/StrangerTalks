@@ -49,13 +49,13 @@ defmodule StrangertalksNew.MatchingRules do
     query =
       from b in BoundaryBlock,
         where:
-          (b.blocker_user_id == ^participant_a_id and b.blocked_user_id == ^blocked_user_id and
+          (b.blocker_user_id == ^participant_a_id and b.blocked_user_id == ^participant_b_id and
              b.active_status == true) or
-            (b.blocker_user_id == ^blocked_user_id and b.blocked_user_id == ^participant_a_id and
+            (b.blocker_user_id == ^participant_b_id and b.blocked_user_id == ^participant_a_id and
                b.active_status == true),
         select: count(b.blocker_user_id)
 
-    Repo.one(query) > 0 or closed_relationship?(participant_a_id, blocked_user_id)
+    Repo.one(query) > 0 or closed_relationship?(participant_a_id, participant_b_id)
   end
 
   defp closed_relationship?(participant_a_id, participant_b_id) do
