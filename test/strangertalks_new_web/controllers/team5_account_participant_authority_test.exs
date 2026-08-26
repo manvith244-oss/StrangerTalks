@@ -72,7 +72,9 @@ defmodule StrangertalksNewWeb.Team5AccountParticipantAuthorityTest do
     assert {:error, _reason} = ParticipantToken.verify(connected_token)
   end
 
-  test "single-device logout revokes only that session-bound participant credential", %{conn: conn} do
+  test "single-device logout revokes only that session-bound participant credential", %{
+    conn: conn
+  } do
     participant = participant()
     first = link_participant(participant, "team5-two-sessions")
     second = sign_in_existing("team5-two-sessions")

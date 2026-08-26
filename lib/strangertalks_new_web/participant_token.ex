@@ -49,8 +49,8 @@ defmodule StrangertalksNewWeb.ParticipantToken do
        when is_binary(participant_id) and is_integer(version) and is_binary(account_session_id) do
     if current_version?(participant_id, version) and
          active_account_session?(account_session_id, participant_id),
-      do: {:ok, participant_id},
-      else: {:error, :stale_account_session}
+       do: {:ok, participant_id},
+       else: {:error, :stale_account_session}
   end
 
   # Legacy anonymous tokens signed before credential versioning remain valid only
