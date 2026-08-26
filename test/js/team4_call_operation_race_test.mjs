@@ -138,3 +138,56 @@ test("T4-012: superseded Initiate error resolves stale and cannot reject or term
   assert.equal(coordinator.callAttemptId, "new-authoritative-attempt")
   assert.equal(coordinator.status, CALL_STATUS.PENDING_OUTGOING)
 })
+
+test("T4-013: superseded Initiate timeout is stale and cannot terminate the replacement attempt", async () => {
+  const pushes = []
+  const coordinator = new LiveCallCoordinator({
+    participantId: "p1",
+    conversationId: "conversation-a",
+    channel: {push() { const push = controllablePush(); pushes.push(push); return push }}
+  })
+
+  const oldPromise = coordinator.initiate("voice")
+  coordinator.teardown("superseded")
+  coordinator.status = CALL_STATUS.IDLE
+  const newPromise = coordinator.initiate("voice")
+
+  pushes[0].fire("timeout")
+  const oldResult = await oldPromise
+
+  assert.equal(oldResult.stale, true)
+  assert.equal(oldResult.timeout, true)
+  assert.equal(coordinator.status, CALL_STATUS.PENDING_OUTGOING)
+  assert.equal(coordinator.role, "caller")
+
+  pushes[1].fire("ok", {call_attempt_id: "new-authoritative-attempt"})
+  await newPromise
+  assert.equal(coordinator.callAttemptId, "new-authoritative-attempt")
+})
+
+test("T4-014: superseded Accept timeout is stale and cannot terminate a newer incoming call", async () => {
+  const pushes = []
+  const coordinator = new LiveCallCoordinator({
+    participantId: "p1",
+    conversationId: "conversation-a",
+    channel: {push() { const push = controllablePush(); pushes.push(push); return push }}
+  })
+
+  coordinator.callAttemptId = "old-attempt"
+  coordinator.role = "callee"
+  coordinator.status = CALL_STATUS.PENDING_INCOMING
+  const oldPromise = coordinator.accept()
+
+  coordinator.teardown("superseded")
+  coordinator.status = CALL_STATUS.IDLE
+  coordinator.handleIncomingCall({call_attempt_id: "new-attempt", caller_id: "p2", call_type: "voice"})
+
+  pushes[0].fire("timeout")
+  const oldResult = await oldPromise
+
+  assert.equal(oldResult.stale, true)
+  assert.equal(oldResult.timeout, true)
+  assert.equal(coordinator.callAttemptId, "new-attempt")
+  assert.equal(coordinator.status, CALL_STATUS.PENDING_INCOMING)
+  assert.equal(coordinator.role, "callee")
+})
