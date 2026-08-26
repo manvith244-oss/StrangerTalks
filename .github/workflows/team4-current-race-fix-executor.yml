@@ -14,7 +14,6 @@ concurrency:
 
 jobs:
   fix:
-    if: ${{ !contains(github.event.head_commit.message, '[team4-race-fixed]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,185 +23,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Apply operation-scoped call authority
+      - name: Apply and verify operation-scoped call authority
         shell: bash
         run: |
           set -euo pipefail
           git pull --rebase origin team4/media-authority-2026-08-26
-          python3 - <<'PY'
-          from pathlib import Path
-
-          live = Path('priv/static/assets/live_call.mjs')
-          s = live.read_text()
-
-          def once(old, new, label):
-              global s
-              if new in s:
-                  return
-              count = s.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected one old block, found {count}')
-              s = s.replace(old, new, 1)
-
-          once(
-          '''    this.transportAudioTransceiver = null
-    this.transportVideoTransceiver = null
-    this.activeMediaAcquisitionGeneration = 0
-''',
-          '''    this.transportAudioTransceiver = null
-    this.transportVideoTransceiver = null
-    this.activeMediaAcquisitionGeneration = 0
-    this.callOperationGeneration = 0
-''',
-          'operation generation state')
-
-          once(
-          '''  setConversationId(id) {
-    this.conversationId = id
-  }
-''',
-          '''  setConversationId(id) {
-    if (this.conversationId !== id) this.callOperationGeneration++
-    this.conversationId = id
-  }
-''',
-          'conversation transition invalidation')
-
-          once(
-          '''    const initiationConversationId = this.conversationId
-    return new Promise((resolve, reject) => {
-      if (!this.channel) return reject(new Error("Channel unavailable"))
-      this.channel.push("call:initiate", { call_type: callType })
-        .receive("ok", (res) => {
-          const stillCurrent =
-            this.status === CALL_STATUS.PENDING_OUTGOING &&
-            this.role === "caller" &&
-            this.callAttemptId === null &&
-            this.conversationId === initiationConversationId
-          if (!stillCurrent) { resolve({ ...res, stale: true }); return }
-          this.callAttemptId = res.call_attempt_id
-          this.notifyStateChange()
-          resolve(res)
-        })
-        .receive("error", (err) => {
-          if (this.status === CALL_STATUS.PENDING_OUTGOING && this.role === "caller" && this.callAttemptId === null && this.conversationId === initiationConversationId) {
-            this.teardown("initiate_failed")
-          }
-          reject(err)
-        })
-    })
-''',
-          '''    const operationGeneration = ++this.callOperationGeneration
-    const initiationConversationId = this.conversationId
-    const stillCurrent = () =>
-      this.callOperationGeneration === operationGeneration &&
-      this.status === CALL_STATUS.PENDING_OUTGOING &&
-      this.role === "caller" &&
-      this.callAttemptId === null &&
-      this.conversationId === initiationConversationId
-
-    return new Promise((resolve, reject) => {
-      if (!this.channel) return reject(new Error("Channel unavailable"))
-      this.channel.push("call:initiate", { call_type: callType })
-        .receive("ok", (res) => {
-          if (!stillCurrent()) { resolve({ ...res, stale: true }); return }
-          this.callAttemptId = res.call_attempt_id
-          this.notifyStateChange()
-          resolve(res)
-        })
-        .receive("error", (err) => {
-          if (!stillCurrent()) { resolve({ stale: true, error: err }); return }
-          this.teardown("initiate_failed")
-          reject(err)
-        })
-        .receive("timeout", () => {
-          if (!stillCurrent()) { resolve({ stale: true, timeout: true }); return }
-          this.teardown("initiate_timeout")
-          reject(new Error("Call initiation timed out"))
-        })
-    })
-''',
-          'initiate operation authority')
-
-          once(
-          '''    const acceptedAttemptId = this.callAttemptId
-    const acceptedConversationId = this.conversationId
-    return new Promise((resolve, reject) => {
-      if (!this.channel) return reject(new Error("Channel unavailable"))
-      this.channel.push("call:accept", { call_attempt_id: acceptedAttemptId })
-        .receive("ok", (res) => {
-          const stillCurrent = this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId
-          if (!stillCurrent) { resolve({ ...res, stale: true }); return }
-          this.status = CALL_STATUS.CONNECTING
-          this.applyOutgoingAudioGate()
-          this.notifyStateChange()
-          resolve(res)
-        })
-        .receive("error", (err) => {
-          if (this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId) {
-            this.teardown("accept_failed")
-          }
-          reject(err)
-        })
-    })
-''',
-          '''    const operationGeneration = ++this.callOperationGeneration
-    const acceptedAttemptId = this.callAttemptId
-    const acceptedConversationId = this.conversationId
-    const stillCurrent = () =>
-      this.callOperationGeneration === operationGeneration &&
-      this.status === CALL_STATUS.PENDING_INCOMING &&
-      this.callAttemptId === acceptedAttemptId &&
-      this.conversationId === acceptedConversationId
-
-    return new Promise((resolve, reject) => {
-      if (!this.channel) return reject(new Error("Channel unavailable"))
-      this.channel.push("call:accept", { call_attempt_id: acceptedAttemptId })
-        .receive("ok", (res) => {
-          if (!stillCurrent()) { resolve({ ...res, stale: true }); return }
-          this.status = CALL_STATUS.CONNECTING
-          this.applyOutgoingAudioGate()
-          this.notifyStateChange()
-          resolve(res)
-        })
-        .receive("error", (err) => {
-          if (!stillCurrent()) { resolve({ stale: true, error: err }); return }
-          this.teardown("accept_failed")
-          reject(err)
-        })
-        .receive("timeout", () => {
-          if (!stillCurrent()) { resolve({ stale: true, timeout: true }); return }
-          this.teardown("accept_timeout")
-          reject(new Error("Call acceptance timed out"))
-        })
-    })
-''',
-          'accept operation authority')
-
-          once(
-          '''  teardown(reason = "normal") {
-    if (this.connectingTimer) {
-''',
-          '''  teardown(reason = "normal") {
-    this.callOperationGeneration++
-    if (this.connectingTimer) {
-''',
-          'teardown operation invalidation')
-
-          live.write_text(s)
-          PY
-
-          node --test --test-concurrency=1 \
-            test/js/team4_media_authority_test.mjs \
-            test/js/team4_call_operation_race_test.mjs \
-            test/js/team11_media_expression_break_test.mjs \
-            test/js/live_call_test.mjs
+          printf '%s' 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCgpsaXZlID0gUGF0aCgicHJpdi9zdGF0aWMvYXNzZXRzL2xpdmVfY2FsbC5tanMiKQpzID0gbGl2ZS5yZWFkX3RleHQoKQoKZGVmIHJlcGxhY2Vfb25jZShvbGQsIG5ldywgbGFiZWwpOgogICAgZ2xvYmFsIHMKICAgIGlmIG5ldyBpbiBzOgogICAgICAgIHJldHVybgogICAgY291bnQgPSBzLmNvdW50KG9sZCkKICAgIGlmIGNvdW50ICE9IDE6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdChmIntsYWJlbH06IGV4cGVjdGVkIG9uZSBvbGQgYmxvY2ssIGZvdW5kIHtjb3VudH0iKQogICAgcyA9IHMucmVwbGFjZShvbGQsIG5ldywgMSkKCnJlcGxhY2Vfb25jZSgKIiIiICAgIHRoaXMudHJhbnNwb3J0QXVkaW9UcmFuc2NlaXZlciA9IG51bGwKICAgIHRoaXMudHJhbnNwb3J0VmlkZW9UcmFuc2NlaXZlciA9IG51bGwKICAgIHRoaXMuYWN0aXZlTWVkaWFBY3F1aXNpdGlvbkdlbmVyYXRpb24gPSAwCiIiIiwKIiIiICAgIHRoaXMudHJhbnNwb3J0QXVkaW9UcmFuc2NlaXZlciA9IG51bGwKICAgIHRoaXMudHJhbnNwb3J0VmlkZW9UcmFuc2NlaXZlciA9IG51bGwKICAgIHRoaXMuYWN0aXZlTWVkaWFBY3F1aXNpdGlvbkdlbmVyYXRpb24gPSAwCiAgICB0aGlzLmNhbGxPcGVyYXRpb25HZW5lcmF0aW9uID0gMAoiIiIsCiJvcGVyYXRpb24gZ2VuZXJhdGlvbiBzdGF0ZSIpCgpyZXBsYWNlX29uY2UoCiIiIiAgc2V0Q29udmVyc2F0aW9uSWQoaWQpIHsKICAgIHRoaXMuY29udmVyc2F0aW9uSWQgPSBpZAogIH0KIiIiLAoiIiIgIHNldENvbnZlcnNhdGlvbklkKGlkKSB7CiAgICBpZiAodGhpcy5jb252ZXJzYXRpb25JZCAhPT0gaWQpIHRoaXMuY2FsbE9wZXJhdGlvbkdlbmVyYXRpb24rKwogICAgdGhpcy5jb252ZXJzYXRpb25JZCA9IGlkCiAgfQoiIiIsCiJjb252ZXJzYXRpb24gdHJhbnNpdGlvbiBpbnZhbGlkYXRpb24iKQoKcmVwbGFjZV9vbmNlKAoiIiIgICAgY29uc3QgaW5pdGlhdGlvbkNvbnZlcnNhdGlvbklkID0gdGhpcy5jb252ZXJzYXRpb25JZAogICAgcmV0dXJuIG5ldyBQcm9taXNlKChyZXNvbHZlLCByZWplY3QpID0+IHsKICAgICAgaWYgKCF0aGlzLmNoYW5uZWwpIHJldHVybiByZWplY3QobmV3IEVycm9yKCJDaGFubmVsIHVuYXZhaWxhYmxlIikpCiAgICAgIHRoaXMuY2hhbm5lbC5wdXNoKCJjYWxsOmluaXRpYXRlIiwgeyBjYWxsX3R5cGU6IGNhbGxUeXBlIH0pCiAgICAgICAgLnJlY2VpdmUoIm9rIiwgKHJlcykgPT4gewogICAgICAgICAgY29uc3Qgc3RpbGxDdXJyZW50ID0KICAgICAgICAgICAgdGhpcy5zdGF0dXMgPT09IENBTExfU1RBVFVTLlBFTkRJTkdfT1VUR09JTkcgJiYKICAgICAgICAgICAgdGhpcy5yb2xlID09PSAiY2FsbGVyIiAmJgogICAgICAgICAgICB0aGlzLmNhbGxBdHRlbXB0SWQgPT09IG51bGwgJiYKICAgICAgICAgICAgdGhpcy5jb252ZXJzYXRpb25JZCA9PT0gaW5pdGlhdGlvbkNvbnZlcnNhdGlvbklkCiAgICAgICAgICBpZiAoIXN0aWxsQ3VycmVudCkgeyByZXNvbHZlKHsgLi4ucmVzLCBzdGFsZTogdHJ1ZSB9KTsgcmV0dXJuIH0KICAgICAgICAgIHRoaXMuY2FsbEF0dGVtcHRJZCA9IHJlcy5jYWxsX2F0dGVtcHRfaWQKICAgICAgICAgIHRoaXMubm90aWZ5U3RhdGVDaGFuZ2UoKQogICAgICAgICAgcmVzb2x2ZShyZXMpCiAgICAgICAgfSkKICAgICAgICAucmVjZWl2ZSgiZXJyb3IiLCAoZXJyKSA9PiB7CiAgICAgICAgICBpZiAodGhpcy5zdGF0dXMgPT09IENBTExfU1RBVFVTLlBFTkRJTkdfT1VUR09JTkcgJiYgdGhpcy5yb2xlID09PSAiY2FsbGVyIiAmJiB0aGlzLmNhbGxBdHRlbXB0SWQgPT09IG51bGwgJiYgdGhpcy5jb252ZXJzYXRpb25JZCA9PT0gaW5pdGlhdGlvbkNvbnZlcnNhdGlvbklkKSB7CiAgICAgICAgICAgIHRoaXMudGVhcmRvd24oImluaXRpYXRlX2ZhaWxlZCIpCiAgICAgICAgICB9CiAgICAgICAgICByZWplY3QoZXJyKQogICAgICAgIH0pCiAgICB9KQoiIiIsCiIiIiAgICBjb25zdCBvcGVyYXRpb25HZW5lcmF0aW9uID0gKyt0aGlzLmNhbGxPcGVyYXRpb25HZW5lcmF0aW9uCiAgICBjb25zdCBpbml0aWF0aW9uQ29udmVyc2F0aW9uSWQgPSB0aGlzLmNvbnZlcnNhdGlvbklkCiAgICBjb25zdCBzdGlsbEN1cnJlbnQgPSAoKSA9PgogICAgICB0aGlzLmNhbGxPcGVyYXRpb25HZW5lcmF0aW9uID09PSBvcGVyYXRpb25HZW5lcmF0aW9uICYmCiAgICAgIHRoaXMuc3RhdHVzID09PSBDQUxMX1NUQVRVUy5QRU5ESU5HX09VVEdPSU5HICYmCiAgICAgIHRoaXMucm9sZSA9PT0gImNhbGxlciIgJiYKICAgICAgdGhpcy5jYWxsQXR0ZW1wdElkID09PSBudWxsICYmCiAgICAgIHRoaXMuY29udmVyc2F0aW9uSWQgPT09IGluaXRpYXRpb25Db252ZXJzYXRpb25JZAoKICAgIHJldHVybiBuZXcgUHJvbWlzZSgocmVzb2x2ZSwgcmVqZWN0KSA9PiB7CiAgICAgIGlmICghdGhpcy5jaGFubmVsKSByZXR1cm4gcmVqZWN0KG5ldyBFcnJvcigiQ2hhbm5lbCB1bmF2YWlsYWJsZSIpKQogICAgICB0aGlzLmNoYW5uZWwucHVzaCgiY2FsbDppbml0aWF0ZSIsIHsgY2FsbF90eXBlOiBjYWxsVHlwZSB9KQogICAgICAgIC5yZWNlaXZlKCJvayIsIChyZXMpID0+IHsKICAgICAgICAgIGlmICghc3RpbGxDdXJyZW50KCkpIHsgcmVzb2x2ZSh7IC4uLnJlcywgc3RhbGU6IHRydWUgfSk7IHJldHVybiB9CiAgICAgICAgICB0aGlzLmNhbGxBdHRlbXB0SWQgPSByZXMuY2FsbF9hdHRlbXB0X2lkCiAgICAgICAgICB0aGlzLm5vdGlmeVN0YXRlQ2hhbmdlKCkKICAgICAgICAgIHJlc29sdmUocmVzKQogICAgICAgIH0pCiAgICAgICAgLnJlY2VpdmUoImVycm9yIiwgKGVycikgPT4gewogICAgICAgICAgaWYgKCFzdGlsbEN1cnJlbnQoKSkgeyByZXNvbHZlKHsgc3RhbGU6IHRydWUsIGVycm9yOiBlcnIgfSk7IHJldHVybiB9CiAgICAgICAgICB0aGlzLnRlYXJkb3duKCJpbml0aWF0ZV9mYWlsZWQiKQogICAgICAgICAgcmVqZWN0KGVycikKICAgICAgICB9KQogICAgICAgIC5yZWNlaXZlKCJ0aW1lb3V0IiwgKCkgPT4gewogICAgICAgICAgaWYgKCFzdGlsbEN1cnJlbnQoKSkgeyByZXNvbHZlKHsgc3RhbGU6IHRydWUsIHRpbWVvdXQ6IHRydWUgfSk7IHJldHVybiB9CiAgICAgICAgICB0aGlzLnRlYXJkb3duKCJpbml0aWF0ZV90aW1lb3V0IikKICAgICAgICAgIHJlamVjdChuZXcgRXJyb3IoIkNhbGwgaW5pdGlhdGlvbiB0aW1lZCBvdXQiKSkKICAgICAgICB9KQogICAgfSkKIiIiLAoiaW5pdGlhdGUgb3BlcmF0aW9uIGF1dGhvcml0eSIpCgpyZXBsYWNlX29uY2UoCiIiIiAgICBjb25zdCBhY2NlcHRlZEF0dGVtcHRJZCA9IHRoaXMuY2FsbEF0dGVtcHRJZAogICAgY29uc3QgYWNjZXB0ZWRDb252ZXJzYXRpb25JZCA9IHRoaXMuY29udmVyc2F0aW9uSWQKICAgIHJldHVybiBuZXcgUHJvbWlzZSgocmVzb2x2ZSwgcmVqZWN0KSA9PiB7CiAgICAgIGlmICghdGhpcy5jaGFubmVsKSByZXR1cm4gcmVqZWN0KG5ldyBFcnJvcigiQ2hhbm5lbCB1bmF2YWlsYWJsZSIpKQogICAgICB0aGlzLmNoYW5uZWwucHVzaCgiY2FsbDphY2NlcHQiLCB7IGNhbGxfYXR0ZW1wdF9pZDogYWNjZXB0ZWRBdHRlbXB0SWQgfSkKICAgICAgICAucmVjZWl2ZSgib2siLCAocmVzKSA9PiB7CiAgICAgICAgICBjb25zdCBzdGlsbEN1cnJlbnQgPSB0aGlzLnN0YXR1cyA9PT0gQ0FMTF9TVEFUVVMuUEVORElOR19JTkNPTUlORyAmJiB0aGlzLmNhbGxBdHRlbXB0SWQgPT09IGFjY2VwdGVkQXR0ZW1wdElkICYmIHRoaXMuY29udmVyc2F0aW9uSWQgPT09IGFjY2VwdGVkQ29udmVyc2F0aW9uSWQKICAgICAgICAgIGlmICghc3RpbGxDdXJyZW50KSB7IHJlc29sdmUoeyAuLi5yZXMsIHN0YWxlOiB0cnVlIH0pOyByZXR1cm4gfQogICAgICAgICAgdGhpcy5zdGF0dXMgPSBDQUxMX1NUQVRVUy5DT05ORUNUSU5HCiAgICAgICAgICB0aGlzLmFwcGx5T3V0Z29pbmdBdWRpb0dhdGUoKQogICAgICAgICAgdGhpcy5ub3RpZnlTdGF0ZUNoYW5nZSgpCiAgICAgICAgICByZXNvbHZlKHJlcykKICAgICAgICB9KQogICAgICAgIC5yZWNlaXZlKCJlcnJvciIsIChlcnIpID0+IHsKICAgICAgICAgIGlmICh0aGlzLnN0YXR1cyA9PT0gQ0FMTF9TVEFUVVMuUEVORElOR19JTkNPTUlORyAmJiB0aGlzLmNhbGxBdHRlbXB0SWQgPT09IGFjY2VwdGVkQXR0ZW1wdElkICYmIHRoaXMuY29udmVyc2F0aW9uSWQgPT09IGFjY2VwdGVkQ29udmVyc2F0aW9uSWQpIHsKICAgICAgICAgICAgdGhpcy50ZWFyZG93bigiYWNjZXB0X2ZhaWxlZCIpCiAgICAgICAgICB9CiAgICAgICAgICByZWplY3QoZXJyKQogICAgICAgIH0pCiAgICB9KQoiIiIsCiIiIiAgICBjb25zdCBvcGVyYXRpb25HZW5lcmF0aW9uID0gKyt0aGlzLmNhbGxPcGVyYXRpb25HZW5lcmF0aW9uCiAgICBjb25zdCBhY2NlcHRlZEF0dGVtcHRJZCA9IHRoaXMuY2FsbEF0dGVtcHRJZAogICAgY29uc3QgYWNjZXB0ZWRDb252ZXJzYXRpb25JZCA9IHRoaXMuY29udmVyc2F0aW9uSWQKICAgIGNvbnN0IHN0aWxsQ3VycmVudCA9ICgpID0+CiAgICAgIHRoaXMuY2FsbE9wZXJhdGlvbkdlbmVyYXRpb24gPT09IG9wZXJhdGlvbkdlbmVyYXRpb24gJiYKICAgICAgdGhpcy5zdGF0dXMgPT09IENBTExfU1RBVFVTLlBFTkRJTkdfSU5DT01JTkcgJiYKICAgICAgdGhpcy5jYWxsQXR0ZW1wdElkID09PSBhY2NlcHRlZEF0dGVtcHRJZCAmJgogICAgICB0aGlzLmNvbnZlcnNhdGlvbklkID09PSBhY2NlcHRlZENvbnZlcnNhdGlvbklkCgogICAgcmV0dXJuIG5ldyBQcm9taXNlKChyZXNvbHZlLCByZWplY3QpID0+IHsKICAgICAgaWYgKCF0aGlzLmNoYW5uZWwpIHJldHVybiByZWplY3QobmV3IEVycm9yKCJDaGFubmVsIHVuYXZhaWxhYmxlIikpCiAgICAgIHRoaXMuY2hhbm5lbC5wdXNoKCJjYWxsOmFjY2VwdCIsIHsgY2FsbF9hdHRlbXB0X2lkOiBhY2NlcHRlZEF0dGVtcHRJZCB9KQogICAgICAgIC5yZWNlaXZlKCJvayIsIChyZXMpID0+IHsKICAgICAgICAgIGlmICghc3RpbGxDdXJyZW50KCkpIHsgcmVzb2x2ZSh7IC4uLnJlcywgc3RhbGU6IHRydWUgfSk7IHJldHVybiB9CiAgICAgICAgICB0aGlzLnN0YXR1cyA9IENBTExfU1RBVFVTLkNPTk5FQ1RJTkcKICAgICAgICAgIHRoaXMuYXBwbHlPdXRnb2luZ0F1ZGlvR2F0ZSgpCiAgICAgICAgICB0aGlzLm5vdGlmeVN0YXRlQ2hhbmdlKCkKICAgICAgICAgIHJlc29sdmUocmVzKQogICAgICAgIH0pCiAgICAgICAgLnJlY2VpdmUoImVycm9yIiwgKGVycikgPT4gewogICAgICAgICAgaWYgKCFzdGlsbEN1cnJlbnQoKSkgeyByZXNvbHZlKHsgc3RhbGU6IHRydWUsIGVycm9yOiBlcnIgfSk7IHJldHVybiB9CiAgICAgICAgICB0aGlzLnRlYXJkb3duKCJhY2NlcHRfZmFpbGVkIikKICAgICAgICAgIHJlamVjdChlcnIpCiAgICAgICAgfSkKICAgICAgICAucmVjZWl2ZSgidGltZW91dCIsICgpID0+IHsKICAgICAgICAgIGlmICghc3RpbGxDdXJyZW50KCkpIHsgcmVzb2x2ZSh7IHN0YWxlOiB0cnVlLCB0aW1lb3V0OiB0cnVlIH0pOyByZXR1cm4gfQogICAgICAgICAgdGhpcy50ZWFyZG93bigiYWNjZXB0X3RpbWVvdXQiKQogICAgICAgICAgcmVqZWN0KG5ldyBFcnJvcigiQ2FsbCBhY2NlcHRhbmNlIHRpbWVkIG91dCIpKQogICAgICAgIH0pCiAgICB9KQoiIiIsCiJhY2NlcHQgb3BlcmF0aW9uIGF1dGhvcml0eSIpCgpyZXBsYWNlX29uY2UoCiIiIiAgdGVhcmRvd24ocmVhc29uID0gIm5vcm1hbCIpIHsKICAgIGlmICh0aGlzLmNvbm5lY3RpbmdUaW1lcikgewoiIiIsCiIiIiAgdGVhcmRvd24ocmVhc29uID0gIm5vcm1hbCIpIHsKICAgIHRoaXMuY2FsbE9wZXJhdGlvbkdlbmVyYXRpb24rKwogICAgaWYgKHRoaXMuY29ubmVjdGluZ1RpbWVyKSB7CiIiIiwKInRlYXJkb3duIG9wZXJhdGlvbiBpbnZhbGlkYXRpb24iKQoKbGl2ZS53cml0ZV90ZXh0KHMpCg==' | base64 -d > /tmp/team4_fix.py
+          python3 /tmp/team4_fix.py
+          node --test --test-concurrency=1 test/js/team4_media_authority_test.mjs test/js/team4_call_operation_race_test.mjs test/js/team11_media_expression_break_test.mjs test/js/live_call_test.mjs
           git diff --check
-
-          rm .github/workflows/team4-current-race-fix-executor.yml
+          git checkout 585637924ff45933c7b35b0bc27719934907c70e -- .github/workflows/team4-operation-race-hardening.yml
+          rm -f .github/workflows/team4-current-race-fix-executor.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add priv/static/assets/live_call.mjs test/js/team4_call_operation_race_test.mjs .github/workflows/team4-current-race-fix-executor.yml
+          git add priv/static/assets/live_call.mjs test/js/team4_call_operation_race_test.mjs .github/workflows/team4-operation-race-hardening.yml .github/workflows/team4-current-race-fix-executor.yml
           git commit -m 'fix(team4): scope async call authority by operation generation [team4-race-fixed]'
-          git pull --rebase origin team4/media-authority-2026-08-26
           git push origin HEAD:team4/media-authority-2026-08-26
