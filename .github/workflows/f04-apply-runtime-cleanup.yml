@@ -1,9 +1,9 @@
 name: F-04 Apply Runtime Cleanup
 
 on:
-  push:
+  pull_request:
     branches:
-      - f04/conversation-continuity-2026-08-26
+      - release/prep-2026-08-22
     paths:
       - ".github/workflows/f04-apply-runtime-cleanup.yml"
 
@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   patch:
+    if: github.head_ref == 'f04/conversation-continuity-2026-08-26'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout F-04 branch
