@@ -17,8 +17,12 @@ defmodule Mix.Tasks.Strangertalks.Retention do
   def run(_args) do
     Mix.Task.run("app.start")
 
-    result = StrangertalksNew.RetentionCleanup.run()
+    StrangertalksNew.RetentionCleanup.run()
+    |> handle_result!()
+  end
 
+  @doc false
+  def handle_result!(result) when is_map(result) do
     Enum.each(result, fn {category, outcome} ->
       Mix.shell().info("retention #{category}=#{format_outcome(outcome)}")
     end)
@@ -28,6 +32,8 @@ defmodule Mix.Tasks.Strangertalks.Retention do
     if failures != [] do
       Mix.raise("retention cleanup completed with #{length(failures)} failed categories")
     end
+
+    :ok
   end
 
   defp format_outcome({:ok, count}), do: "ok count=#{inspect(count)}"
