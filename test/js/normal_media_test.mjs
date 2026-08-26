@@ -175,3 +175,11 @@ test("volatile server media loss removes stale cards and revokes cached object U
   assert.match(runtimeSource, /node\.remove\(\)/)
   assert.match(runtimeSource, /reconcileMissingMedia\(items\)/)
 })
+
+test("authoritative pruning ignores malformed lists and stale polls", () => {
+  assert.match(runtimeSource, /mediaMutationGeneration/)
+  assert.match(runtimeSource, /const generation = state\.mediaMutationGeneration/)
+  assert.match(runtimeSource, /state\.mediaMutationGeneration === generation/)
+  assert.match(runtimeSource, /response\.json\(\)\.catch\(\(\) => null\)/)
+  assert.match(runtimeSource, /Array\.isArray\(body\.items\)/)
+})
