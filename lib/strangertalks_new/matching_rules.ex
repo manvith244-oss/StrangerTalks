@@ -92,19 +92,19 @@ defmodule StrangertalksNew.MatchingRules do
                 current_conversation = Repo.get!(Conversation, conversation_id)
 
                 with {:ok, block} <- insert_block(blocker_id, blocked_id, "CONVERSATION"),
-                     {:ok, _conversation} <-
+                     {:ok, terminal_conversation} <-
                        terminate_conversation_for_block(current_conversation, blocker_id) do
-                  block
+                  {block, terminal_conversation}
                 else
                   {:error, reason} -> Repo.rollback(reason)
                 end
               end)
 
             case result do
-              {:ok, block} ->
+              {:ok, {block, terminal_conversation}} ->
                 terminate_suspended_runtime(suspended_runtime)
                 stop_conversation_runtime(conversation_id)
-                broadcast_block_terminal_authority(conversation_id)
+                maybe_broadcast_block_terminal_authority(terminal_conversation)
                 {:ok, block}
 
               {:error, reason} ->
@@ -144,6 +144,12 @@ defmodule StrangertalksNew.MatchingRules do
       safety_flagged: true
     })
   end
+
+  defp maybe_broadcast_block_terminal_authority(%Conversation{ending_type: :BLOCK} = conversation) do
+    broadcast_block_terminal_authority(conversation.conversation_id)
+  end
+
+  defp maybe_broadcast_block_terminal_authority(%Conversation{}), do: :ok
 
   defp broadcast_block_terminal_authority(conversation_id) do
     StrangertalksNewWeb.Endpoint.broadcast(
