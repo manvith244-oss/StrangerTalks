@@ -109,3 +109,98 @@ custom classes must fully style the input
 <!-- phoenix:ecto-end -->
 
 <!-- usage-rules-end -->
+
+# StrangerTalks frozen-live Codex contract
+
+The previous multi-team hardening cycle is paused. Codex must now work from one clean frozen development baseline instead of continuing the Team 1–10 branches in parallel.
+
+## Frozen production truth
+
+- Production branch: `release/prep-2026-08-22`
+- Production/frozen product SHA: `585637924ff45933c7b35b0bc27719934907c70e`
+- Live Phoenix Render service: `strangertalks-phoenix`
+- Live URL: `https://strangertalks-phoenix.onrender.com`
+- Render auto-deploy is OFF.
+
+Do not commit to, move, merge into, or deploy `release/prep-2026-08-22` unless the user explicitly authorizes a release action.
+
+## Codex working base
+
+Use:
+
+`codex/frozen-live-2026-08-26`
+
+This branch was created directly from the frozen production SHA. Aside from this `AGENTS.md` handoff, its product code begins identical to the live product.
+
+For every new task:
+
+1. Confirm branch and exact starting SHA.
+2. Start from `codex/frozen-live-2026-08-26` unless the user explicitly names another accepted base.
+3. Create one narrow task branch.
+4. Reproduce the defect/invariant before changing production code when practical.
+5. Make the smallest coherent fix.
+6. Add/repair regression coverage.
+7. Run focused tests first, then the relevant maintained broad tests and `mix precommit`.
+8. Record the exact tested ending SHA.
+9. Keep the task isolated until the user accepts integration.
+
+Do not create parallel pseudo-teams, empty CI-trigger commits, or duplicate authority branches.
+
+## Previous Team branches are frozen reference material
+
+The old Team hardening PRs were closed without merging. Their branch commits are preserved and may contain useful patches/tests, but they are NOT accepted release truth.
+
+Reference branches include:
+
+- Team 1: `newteam/core-authority`
+- Team 2: `team2/terminal-truth-2026-08-26`
+- Team 3: `team3/conversation-experience-proof`
+- Team 4: `team4/media-authority-2026-08-26`
+- Team 5: `team5/continuity-authority-2026-08-26`
+- Team 6: `team6/product-ux-reaudit-2026-08-26`
+- Team 7: `team7/privacy-retention-2026-08-26`
+- Team 8: `team8/release-authority-2026-08-26`
+- Team 9: `team9/normal-media-hostile-2026-08-26`
+- Team 10: `team10/expression-safety-reattack-20260826`
+
+Never merge one of those branches wholesale merely because it contains a fix. If a prior branch appears useful, inspect the exact diff, reproduce the issue against the frozen Codex base, port only the necessary change/regression, and retest it.
+
+## Known leads from the paused hardening cycle
+
+Treat these as investigation leads, not automatic defects on the frozen baseline:
+
+- Terminal truth: stale Block after an already terminal Conversation may need the later Team 2 correction.
+- Calls/WebRTC: later Team 4 work investigated stale async call-operation results and false screen-share authority.
+- Continuity: later Team 5 work investigated account-session-bound participant credentials and per-session live-socket logout isolation.
+- Privacy/retention: later Team 7 work built centralized retention cleanup but did not finish exact-SHA closure.
+- Normal media: later Team 9 work added import-safety and hostile volatile-media cleanup tests.
+- Expressions: later Team 10 work replaced a network-derived floating-reaction `innerHTML` sink with inert DOM construction and hostile XSS tests.
+
+Reproduce first; port second.
+
+## Infrastructure guardrails
+
+At freeze time:
+
+- Render Phoenix runtime observed Elixir `1.18.4` and Erlang/OTP `28.0.2`.
+- Previous intended release/test authority used OTP `27.3.4`, so runtime parity remains unproven.
+- Render health-check path was not configured.
+- Production PostgreSQL is a Render Free PostgreSQL instance in Singapore and reports expiry `2026-09-21`.
+- There is an older Node Render service. Do not retire, repurpose, or route traffic through it without proving its role and getting explicit approval.
+
+Do not delete, replace, migrate, purchase, or deploy infrastructure without explicit user approval.
+
+## Reporting contract
+
+For each Codex task, return:
+
+- starting branch and SHA;
+- reproduced failure/invariant;
+- files changed;
+- regression added/updated;
+- commands executed;
+- exact test results;
+- ending SHA;
+- remaining risks/unproven areas.
+
+Static inspection is not executable proof. Do not claim tests ran when they did not. Do not weaken safety/authority semantics to obtain green CI. Do not deploy automatically.
