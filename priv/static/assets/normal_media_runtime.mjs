@@ -18,6 +18,7 @@ const state = {
   draft: null,
   previewUrl: null,
   previewGeneration: 0,
+  mediaMutationGeneration: 0,
   mediaUrls: new Map(),
   renderedIds: new Set(),
   pollTimer: null,
@@ -99,10 +100,12 @@ function releaseConversationUrls() {
   for (const url of state.mediaUrls.values()) revokeUrl(url)
   state.mediaUrls.clear()
   state.renderedIds.clear()
+  document.querySelectorAll("[data-normal-media-id]").forEach((node) => node.remove())
 }
 
 function transitionConversation(conversationId) {
   if (state.activeConversationId === conversationId) return
+  state.mediaMutationGeneration += 1
   clearPreview()
   releaseConversationUrls()
   state.activeConversationId = conversationId
@@ -312,6 +315,7 @@ async function sendDraft() {
       return
     }
 
+    state.mediaMutationGeneration += 1
     if (state.draft?.generation === draft.generation) {
       if (status) status.textContent = "Sent"
       clearPreview()
@@ -441,6 +445,35 @@ async function renderMedia(item, runtime) {
   state.renderedIds.add(item.client_message_id)
 }
 
+function reconcileMissingMedia(items) {
+  const authoritativeIds = new Set(items.map((item) => item.client_message_id))
+  const container = byId("messages")
+  if (!container) return
+
+  for (const node of container.querySelectorAll("[data-normal-media-id]")) {
+    const clientMessageId = node.dataset.normalMediaId
+    if (!clientMessageId || authoritativeIds.has(clientMessageId)) continue
+
+    const url = state.mediaUrls.get(clientMessageId)
+    if (url) {
+      const viewerMedia = byId("normal-media-viewer")?.querySelector("img, video")
+      if (viewerMedia?.src === url) closeViewer({restoreFocus: false})
+      revokeUrl(url)
+      state.mediaUrls.delete(clientMessageId)
+    }
+
+    const video = node.querySelector("video")
+    if (video) {
+      video.pause()
+      video.removeAttribute("src")
+      video.load()
+    }
+
+    state.renderedIds.delete(clientMessageId)
+    node.remove()
+  }
+}
+
 function recordTimelineKey(record) {
   if (!record?.value) return null
   if (record.type === "local_message") return genericTimelineKey(record.value.sequence)
@@ -511,6 +544,7 @@ async function syncNormalMedia() {
     }
 
     transitionConversation(runtime.conversationId)
+    const generation = state.mediaMutationGeneration
     const response = await fetch(
       `/api/conversations/${encodeURIComponent(runtime.conversationId)}/normal-media`,
       {headers: {authorization: `Bearer ${runtime.token}`}, cache: "no-store"}
@@ -520,13 +554,16 @@ async function syncNormalMedia() {
       return
     }
 
-    const body = await response.json().catch(() => ({items: []}))
-    const items = dedupeNormalMedia(body.items || [])
+    const body = await response.json().catch(() => null)
+    if (!body || !Array.isArray(body.items)) return
+
+    const items = dedupeNormalMedia(body.items)
     const current = await currentRuntime()
     if (!current || current.conversationId !== runtime.conversationId) return
 
     for (const item of items) await renderMedia(item, runtime)
     await reconcileTimeline(runtime, items)
+    if (state.mediaMutationGeneration === generation) reconcileMissingMedia(items)
   } finally {
     state.polling = false
   }
