@@ -13,6 +13,7 @@ const DEVICES = [
   {name: "412x915", width: 412, height: 915, mobile: true},
   {name: "844x390", width: 844, height: 390, mobile: true},
   {name: "820x1180", width: 820, height: 1180, mobile: true},
+  {name: "1024x768", width: 1024, height: 768, mobile: false},
   {name: "1440x900", width: 1440, height: 900, mobile: false}
 ]
 
@@ -114,7 +115,7 @@ test("Arrival language, Queue and human-facing labels are truthful", {timeout: 6
   }
 })
 
-test("Conversation presentation stays usable across the seven release viewports", {timeout: 180_000}, async () => {
+test("Conversation presentation stays usable across the eight required release viewports", {timeout: 180_000}, async () => {
   const browser = await chromium.launch({headless: true})
   try {
     for (const device of DEVICES) {
@@ -139,7 +140,7 @@ test("Conversation presentation stays usable across the seven release viewports"
         await page.locator(".ig-compose-plus").click()
         await page.locator("#ig-message-tools").waitFor({state: "visible"})
         await assertNoOverflow(page, `${device.name} tools tray`)
-        if (["320x568", "844x390", "1440x900"].includes(device.name)) {
+        if (["320x568", "844x390", "1024x768", "1440x900"].includes(device.name)) {
           await page.screenshot({path: path.join(SCREENSHOTS, `${device.name}-tools.png`), fullPage: false})
         }
         assert.deepEqual(session.errors, [], `${device.name}: no browser errors`)
