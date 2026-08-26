@@ -107,6 +107,7 @@ jobs:
             test/strangertalks_new/view_once_conversation_test.exs \
             test/strangertalks_new_web/channels/conversation_*_channel_test.exs \
             test/strangertalks_new_web/controllers/normal_media_controller_test.exs \
+            test/strangertalks_new_web/controllers/team2_normal_media_terminal_test.exs \
             test/strangertalks_new_web/controllers/companion_controller_test.exs
 
       - name: Focused Team 2 JS terminal attacks
