@@ -81,6 +81,7 @@ jobs:
             test/strangertalks_new/retention_policy_test.exs \
             test/strangertalks_new/retention_cleanup_test.exs \
             test/strangertalks_new/retention_cleanup_db_test.exs \
+            test/strangertalks_new/retention_safety_media_closure_test.exs \
             test/strangertalks_new/privacy_persistence_guard_test.exs \
             test/strangertalks_new/telemetry_privacy_test.exs
 
