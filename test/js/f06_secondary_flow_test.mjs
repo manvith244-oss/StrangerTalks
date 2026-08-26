@@ -1,28 +1,55 @@
 import assert from "node:assert/strict"
-import {readFile} from "node:fs/promises"
 import test from "node:test"
+import {createPreferenceSaveQueue, saveBooleanPreference} from "../../priv/static/assets/preference_saves.mjs"
+import {ensureSecondaryEntries} from "../../priv/static/assets/secondary_flow.mjs"
 
-const indexPath = new URL("../../priv/static/index.html", import.meta.url)
-
-let preferenceModule = null
-try {
-  preferenceModule = await import("../../priv/static/assets/preference_saves.mjs")
-} catch (error) {
-  if (error?.code !== "ERR_MODULE_NOT_FOUND") throw error
+function secondarySurfaceFixture() {
+  let reflectionsEntry = null
+  const memoryEntry = {
+    insertAdjacentElement(position, element) {
+      assert.equal(position, "afterend")
+      reflectionsEntry = element
+    }
+  }
+  const settings = {
+    querySelector(selector) {
+      if (selector === '[data-go="reflections"]') return reflectionsEntry
+      if (selector === '[data-go="memories"]') return memoryEntry
+      return null
+    }
+  }
+  const documentRef = {
+    querySelector(selector) {
+      return selector === 'section[data-screen="settings"]' ? settings : null
+    },
+    createElement(tagName) {
+      return {
+        tagName: tagName.toUpperCase(),
+        dataset: {},
+        attributes: {},
+        textContent: "",
+        type: "",
+        setAttribute(name, value) { this.attributes[name] = value }
+      }
+    }
+  }
+  return {documentRef, currentEntry: () => reflectionsEntry}
 }
 
-test("F-06 You surface exposes the existing Private Reflections screen", async () => {
-  const html = await readFile(indexPath, "utf8")
-  const settings = html.match(/<section data-screen="settings"[\s\S]*?<\/section>/)?.[0]
+test("F-06 You surface deliberately exposes the existing Private Reflections screen", () => {
+  const fixture = secondarySurfaceFixture()
+  const entry = ensureSecondaryEntries(fixture.documentRef)
 
-  assert.ok(settings, "You/settings screen exists")
-  assert.match(settings, /data-go="memories"/, "Memory Space remains reachable from You")
-  assert.match(settings, /data-go="reflections"/, "Private Reflections must be deliberately reachable from You")
+  assert.equal(entry, fixture.currentEntry())
+  assert.equal(entry.tagName, "BUTTON")
+  assert.equal(entry.type, "button")
+  assert.equal(entry.dataset.go, "reflections")
+  assert.equal(entry.textContent, "Open Private Reflections")
+  assert.equal(ensureSecondaryEntries(fixture.documentRef), entry, "entry is idempotent")
 })
 
 test("F-06 preference writes serialize rapid intent so stale completion cannot win", async () => {
-  assert.equal(typeof preferenceModule?.createPreferenceSaveQueue, "function", "preference save queue exists")
-  const queue = preferenceModule.createPreferenceSaveQueue()
+  const queue = createPreferenceSaveQueue()
   const persisted = []
   let releaseFirst
   const firstGate = new Promise(resolve => { releaseFirst = resolve })
@@ -44,9 +71,8 @@ test("F-06 preference writes serialize rapid intent so stale completion cannot w
   assert.deepEqual(persisted, [false, true], "final persisted value follows newest user intent")
 })
 
-test("F-06 latest failed preference save is distinguishable from an obsolete failure", async () => {
-  assert.equal(typeof preferenceModule?.createPreferenceSaveQueue, "function", "preference save queue exists")
-  const queue = preferenceModule.createPreferenceSaveQueue()
+test("F-06 obsolete failed preference save cannot roll back newer intent", async () => {
+  const queue = createPreferenceSaveQueue()
   let releaseFirst
   const firstGate = new Promise(resolve => { releaseFirst = resolve })
 
@@ -57,14 +83,45 @@ test("F-06 latest failed preference save is distinguishable from an obsolete fai
   const second = queue.save("auto-sync", async () => {})
   releaseFirst()
 
-  const firstResult = await first
-  const secondResult = await second
-  assert.equal(firstResult.status, "superseded_failed", "obsolete failure must not roll back newer intent")
-  assert.equal(secondResult.status, "saved")
+  assert.equal((await first).status, "superseded_failed")
+  assert.equal((await second).status, "saved")
+})
 
-  const latestFailure = await queue.save("auto-sync", async () => {
-    throw new Error("latest write failed")
+test("F-06 latest failed preference save reconciles to persisted canonical truth", async () => {
+  const queue = createPreferenceSaveQueue()
+  const writes = []
+  const result = await saveBooleanPreference({
+    queue,
+    key: "reduced-motion",
+    recordId: "settings:privacy",
+    valueKey: "reduced_motion",
+    desired: true,
+    putRecord: async record => {
+      writes.push(record)
+      throw new Error("forced persistence failure")
+    },
+    getRecord: async id => ({id, type: "settings", value: {reduced_motion: false}}),
+    now: () => "2026-08-26T18:30:00.000Z"
   })
-  assert.equal(latestFailure.status, "failed", "latest failure must be exposed for canonical UI reconciliation")
-  assert.match(latestFailure.error.message, /latest write failed/)
+
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0].value.reduced_motion, true)
+  assert.equal(result.status, "failed")
+  assert.equal(result.canonical, false, "latest failure returns persisted canonical value for UI rollback")
+})
+
+test("F-06 failed save never fabricates canonical truth when reconciliation also fails", async () => {
+  const result = await saveBooleanPreference({
+    queue: createPreferenceSaveQueue(),
+    key: "auto-sync",
+    recordId: "settings:auto-sync",
+    valueKey: "enabled",
+    desired: true,
+    putRecord: async () => { throw new Error("write failed") },
+    getRecord: async () => { throw new Error("read failed") }
+  })
+
+  assert.equal(result.status, "failed")
+  assert.equal(result.canonical, null)
+  assert.match(result.reconcileError.message, /read failed/)
 })
