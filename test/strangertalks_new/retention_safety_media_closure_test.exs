@@ -67,12 +67,12 @@ defmodule StrangertalksNew.RetentionSafetyMediaClosureTest do
 
     assert {:ok, _} = RetentionCleanup.run(@now).safety_media
 
-    refute Repo.get(ReportSafetyMedia, no_review_media.report_safety_media_id)
-    refute Repo.get(ReportSafetyMedia, pending_media.report_safety_media_id)
-    refute Repo.get(ReportSafetyMedia, resolved_media.report_safety_media_id)
-    refute Repo.get(ReportSafetyMedia, dismissed_media.report_safety_media_id)
-    assert Repo.get(ReportSafetyMedia, active_media.report_safety_media_id)
-    refute Repo.get(ReportSafetyMedia, hard_max_media.report_safety_media_id)
+    refute Repo.get(ReportSafetyMedia, no_review_media.safety_media_id)
+    refute Repo.get(ReportSafetyMedia, pending_media.safety_media_id)
+    refute Repo.get(ReportSafetyMedia, resolved_media.safety_media_id)
+    refute Repo.get(ReportSafetyMedia, dismissed_media.safety_media_id)
+    assert Repo.get(ReportSafetyMedia, active_media.safety_media_id)
+    refute Repo.get(ReportSafetyMedia, hard_max_media.safety_media_id)
   end
 
   defp report_with_media(conversation, reporter, label, created_at) do
