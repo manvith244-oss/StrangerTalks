@@ -3,6 +3,10 @@ export function createPreferenceSaveQueue() {
   const tails = new Map()
 
   return {
+    isCurrent(key, version) {
+      return latestVersion.get(key) === version
+    },
+
     save(key, operation) {
       if (typeof key !== "string" || !key || typeof operation !== "function") {
         throw new TypeError("invalid_preference_save")
@@ -16,10 +20,12 @@ export function createPreferenceSaveQueue() {
       const result = run.then(
         value => ({
           status: latestVersion.get(key) === version ? "saved" : "superseded",
+          version,
           value
         }),
         error => ({
           status: latestVersion.get(key) === version ? "failed" : "superseded_failed",
+          version,
           error
         })
       )
@@ -48,14 +54,17 @@ export async function saveBooleanPreference({
   }))
 
   if (result.status !== "failed") return result
+  if (!queue.isCurrent(key, result.version)) return {...result, status: "superseded_failed"}
 
   try {
     const record = await getRecord(recordId)
+    if (!queue.isCurrent(key, result.version)) return {...result, status: "superseded_failed"}
     return {
       ...result,
       canonical: record?.value?.[valueKey] === true
     }
   } catch (reconcileError) {
+    if (!queue.isCurrent(key, result.version)) return {...result, status: "superseded_failed"}
     return {
       ...result,
       canonical: null,
