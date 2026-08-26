@@ -33,96 +33,113 @@ jobs:
               print("F-04 runtime cleanup already applied")
               raise SystemExit(0)
 
-          replacements = []
+          def lines(*items):
+              return "\n".join(items) + "\n"
 
-          old = '''function reportCurrentVisibility() {
-            if (!app.conversation) return
-            const visibility = document.visibilityState === "hidden" ? "hidden" : "visible"
-            push(app.conversation, "session:visibility", {visibility}).catch(() => {})
-          }
-          '''
-          new = '''function reportCurrentVisibility() {
-            if (!app.conversation) return
-            const visibility = document.visibilityState === "hidden" ? "hidden" : "visible"
-            push(app.conversation, "session:visibility", {visibility}).catch(() => {})
-          }
-
-          function clearConversationTypingRuntime() {
-            clearTimeout(app.typingTimer)
-            app.typingTimer = null
-            const typing = $("#typing")
-            if (typing) typing.textContent = ""
-          }
-
-          function releaseConversationRuntime() {
-            clearConversationTypingRuntime()
-            const channel = app.conversation
-            app.conversation = null
-            app.currentEpochId = null
-            if (channel) {
-              try { channel.leave() } catch (_) {}
-            }
-          }
-          '''
-          replacements.append((old, new, "runtime cleanup helpers"))
-
-          old = '''  app.conversation.on("conversation:ended", async () => {
-            if (app.conversationId !== id) return
-            app.liveCall?.teardown()
-          '''
-          new = '''  app.conversation.on("conversation:ended", async () => {
-            if (app.conversationId !== id) return
-            clearConversationTypingRuntime()
-            app.liveCall?.teardown()
-          '''
-          replacements.append((old, new, "terminal typing cleanup"))
-
-          old = '''    const composerInput = $("#message-input")
-            if (composerInput) {
-              composerInput.value = ""
-              composerInput.dispatchEvent(new Event("input", {bubbles: true}))
-            }
-          '''
-          new = '''    const composerInput = $("#message-input")
-            if (composerInput) {
-              composerInput.value = ""
-              renderPromptDraftAvailability()
-            }
-          '''
-          replacements.append((old, new, "terminal composer reset without transport event"))
-
-          old = '''  releaseAllVoiceUrls()
-            app.conversationId = null
-            if (choice === "kept") show("chats"); else show("doors")
-          }
-          '''
-          new = '''  releaseAllVoiceUrls()
-            releaseConversationRuntime()
-            app.conversationId = null
-            if (choice === "kept") show("chats"); else show("doors")
-          }
-          '''
-          replacements.append((old, new, "retention runtime release"))
-
-          old = '''$("#message-input").addEventListener("input", () => { renderPromptDraftAvailability(); push(app.conversation, "typing:start").catch(() => {}); clearTimeout(app.typingTimer); app.typingTimer = setTimeout(() => push(app.conversation, "typing:stop").catch(() => {}), 1500) })
-          '''
-          new = '''$("#message-input").addEventListener("input", () => {
-            renderPromptDraftAvailability()
-            const conversation = app.conversation
-            if (!conversation || !app.conversationId) {
-              clearConversationTypingRuntime()
-              return
-            }
-            push(conversation, "typing:start").catch(() => {})
-            clearTimeout(app.typingTimer)
-            app.typingTimer = setTimeout(() => {
-              if (app.conversation !== conversation || !app.conversationId) return
-              app.typingTimer = null
-              push(conversation, "typing:stop").catch(() => {})
-            }, 1500)
-          })
-          '''
-          replacements.append((old, new, "typing timer bound to Conversation runtime"))
+          replacements = [
+              (
+                  lines(
+                      'function reportCurrentVisibility() {',
+                      '  if (!app.conversation) return',
+                      '  const visibility = document.visibilityState === "hidden" ? "hidden" : "visible"',
+                      '  push(app.conversation, "session:visibility", {visibility}).catch(() => {})',
+                      '}'
+                  ),
+                  lines(
+                      'function reportCurrentVisibility() {',
+                      '  if (!app.conversation) return',
+                      '  const visibility = document.visibilityState === "hidden" ? "hidden" : "visible"',
+                      '  push(app.conversation, "session:visibility", {visibility}).catch(() => {})',
+                      '}',
+                      '',
+                      'function clearConversationTypingRuntime() {',
+                      '  clearTimeout(app.typingTimer)',
+                      '  app.typingTimer = null',
+                      '  const typing = $("#typing")',
+                      '  if (typing) typing.textContent = ""',
+                      '}',
+                      '',
+                      'function releaseConversationRuntime() {',
+                      '  clearConversationTypingRuntime()',
+                      '  const channel = app.conversation',
+                      '  app.conversation = null',
+                      '  app.currentEpochId = null',
+                      '  if (channel) {',
+                      '    try { channel.leave() } catch (_) {}',
+                      '  }',
+                      '}'
+                  ),
+                  'runtime cleanup helpers'
+              ),
+              (
+                  lines(
+                      '  app.conversation.on("conversation:ended", async () => {',
+                      '    if (app.conversationId !== id) return',
+                      '    app.liveCall?.teardown()'
+                  ),
+                  lines(
+                      '  app.conversation.on("conversation:ended", async () => {',
+                      '    if (app.conversationId !== id) return',
+                      '    clearConversationTypingRuntime()',
+                      '    app.liveCall?.teardown()'
+                  ),
+                  'terminal typing cleanup'
+              ),
+              (
+                  lines(
+                      '    const composerInput = $("#message-input")',
+                      '    if (composerInput) {',
+                      '      composerInput.value = ""',
+                      '      composerInput.dispatchEvent(new Event("input", {bubbles: true}))',
+                      '    }'
+                  ),
+                  lines(
+                      '    const composerInput = $("#message-input")',
+                      '    if (composerInput) {',
+                      '      composerInput.value = ""',
+                      '      renderPromptDraftAvailability()',
+                      '    }'
+                  ),
+                  'terminal composer reset without transport event'
+              ),
+              (
+                  lines(
+                      '  releaseAllVoiceUrls()',
+                      '  app.conversationId = null',
+                      '  if (choice === "kept") show("chats"); else show("doors")',
+                      '}'
+                  ),
+                  lines(
+                      '  releaseAllVoiceUrls()',
+                      '  releaseConversationRuntime()',
+                      '  app.conversationId = null',
+                      '  if (choice === "kept") show("chats"); else show("doors")',
+                      '}'
+                  ),
+                  'retention runtime release'
+              ),
+              (
+                  lines('$("#message-input").addEventListener("input", () => { renderPromptDraftAvailability(); push(app.conversation, "typing:start").catch(() => {}); clearTimeout(app.typingTimer); app.typingTimer = setTimeout(() => push(app.conversation, "typing:stop").catch(() => {}), 1500) })'),
+                  lines(
+                      '$("#message-input").addEventListener("input", () => {',
+                      '  renderPromptDraftAvailability()',
+                      '  const conversation = app.conversation',
+                      '  if (!conversation || !app.conversationId) {',
+                      '    clearConversationTypingRuntime()',
+                      '    return',
+                      '  }',
+                      '  push(conversation, "typing:start").catch(() => {})',
+                      '  clearTimeout(app.typingTimer)',
+                      '  app.typingTimer = setTimeout(() => {',
+                      '    if (app.conversation !== conversation || !app.conversationId) return',
+                      '    app.typingTimer = null',
+                      '    push(conversation, "typing:stop").catch(() => {})',
+                      '  }, 1500)',
+                      '})'
+                  ),
+                  'typing timer bound to Conversation runtime'
+              )
+          ]
 
           for old, new, label in replacements:
               count = text.count(old)
