@@ -120,10 +120,12 @@ defmodule StrangertalksNew.NormalMediaRuntimeSemanticsTest do
         end
       end)
 
-    assert_receive {:race_ready, media_pid} when media_pid == media_task.pid
-    assert_receive {:race_ready, terminal_pid} when terminal_pid == terminal_task.pid
-    send(media_task.pid, :go)
-    send(terminal_task.pid, :go)
+    media_pid = media_task.pid
+    terminal_pid = terminal_task.pid
+    assert_receive {:race_ready, ^media_pid}
+    assert_receive {:race_ready, ^terminal_pid}
+    send(media_pid, :go)
+    send(terminal_pid, :go)
 
     media_result = Task.await(media_task, 10_000)
     assert :ok = Task.await(terminal_task, 10_000)
