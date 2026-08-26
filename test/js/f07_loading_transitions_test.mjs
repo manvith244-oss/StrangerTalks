@@ -97,6 +97,11 @@ test("participant reconciliation errors never reveal unresolved product truth", 
   assert.doesNotMatch(runtime, /finishBoot\(null\)/)
 })
 
+test("door label rendering cannot overwrite unresolved admission copy before first paint", () => {
+  const runtime = readFileSync(runtimePath, "utf8")
+  assert.match(runtime, /queueMicrotask\(\(\) => renderQueue\(FLOW_PHASE\.MATCHMAKING_ADMISSION/)
+})
+
 test("canonical queue leave reply exits cancelling instead of waiting forever for a broadcast", () => {
   const runtime = readFileSync(runtimePath, "utf8")
   assert.match(runtime, /MATCHMAKING_CANCELLED/)
