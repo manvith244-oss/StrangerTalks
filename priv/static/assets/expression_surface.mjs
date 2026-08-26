@@ -1,3 +1,4 @@
+import "./desktop_flow.mjs"
 import {Socket} from "/vendor/phoenix.mjs"
 import {getRecord} from "./local_data.mjs"
 
