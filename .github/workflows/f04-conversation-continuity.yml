@@ -38,7 +38,7 @@ jobs:
       PORT: "4000"
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4000
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
 
     steps:
       - name: Checkout exact PR head
