@@ -1,0 +1,108 @@
+name: F-04 Conversation Continuity Gate
+
+on:
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+    paths:
+      - "priv/static/assets/app.js"
+      - "priv/static/assets/expression_runtime.mjs"
+      - "test/js/f04_conversation_runtime_cleanup_browser_test.mjs"
+      - ".github/workflows/f04-conversation-continuity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  continuity:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      MIX_TEST_PARTITION: _f04_browser
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4000
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare isolated database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            endpoint_config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint_config, :server, true))
+            repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo_config |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 16))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/f04-browser-server.log 2>&1 &
+          echo $! > /tmp/f04-browser-server.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/f04-browser-server.pid)" 2>/dev/null; then cat /tmp/f04-browser-server.log; exit 1; fi
+            sleep 1
+          done
+          cat /tmp/f04-browser-server.log
+          exit 1
+
+      - name: F-04 terminal runtime cleanup browser proof
+        run: node --test test/js/f04_conversation_runtime_cleanup_browser_test.mjs
+
+      - name: Browser server log on failure
+        if: failure()
+        run: cat /tmp/f04-browser-server.log || true
+
+      - name: Stop Phoenix
+        if: always()
+        run: |
+          if [ -f /tmp/f04-browser-server.pid ]; then
+            kill "$(cat /tmp/f04-browser-server.pid)" 2>/dev/null || true
+          fi
