@@ -92,6 +92,33 @@ defmodule StrangertalksNewWeb.NormalMediaTerminalRaceTest do
      store_pid: store_pid}
   end
 
+  test "upload accepted inside the store cannot survive durable terminal truth before controller commit",
+       %{conversation: conversation, sender_token: sender_token, store_pid: store_pid} do
+    message_id = Ecto.UUID.generate()
+    :ok = :sys.suspend(store_pid)
+
+    request =
+      Task.async(fn ->
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{sender_token}")
+        |> put_req_header("content-type", "application/octet-stream")
+        |> post(
+          "/api/conversations/#{conversation.conversation_id}/normal-media/#{message_id}/photo",
+          valid_jpeg()
+        )
+      end)
+
+    assert_store_call_queued(store_pid, :put_media, 20_000)
+    terminalize!(conversation)
+    :ok = :sys.resume(store_pid)
+
+    response = Task.await(request, 5_000)
+    assert json_response(response, 410)["error"] == "conversation_inactive"
+
+    assert {:error, :media_unavailable} =
+             NormalMediaStore.fetch_media(conversation.conversation_id, message_id)
+  end
+
   test "fetch cannot return bytes after durable terminal truth commits while the store call is queued",
        %{conversation: conversation, sender_token: sender_token, recipient_token: recipient_token, store_pid: store_pid} do
     message_id = upload_photo(conversation.conversation_id, sender_token)
