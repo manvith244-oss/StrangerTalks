@@ -1,0 +1,23 @@
+name: F-07 Loading & Transition Gate
+
+on:
+  push:
+    branches:
+      - f07/loading-transitions-2026-08-26
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+
+permissions:
+  contents: read
+
+jobs:
+  loading-transitions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: F-07 transition regressions
+        run: node --test test/js/f07_loading_transitions_test.mjs
