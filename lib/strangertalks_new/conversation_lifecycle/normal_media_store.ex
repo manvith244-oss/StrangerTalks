@@ -291,6 +291,8 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
           {:ok, _anchor_sequence} -> :ok
           {:error, reason} -> {:error, reason}
         end
+      rescue
+        _error -> {:error, :conversation_unavailable}
       catch
         :exit, _reason -> {:error, :conversation_unavailable}
       after
@@ -343,6 +345,8 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
 
           {:ok, entry, next_state}
         end
+      rescue
+        _error -> {:error, :conversation_unavailable}
       catch
         :exit, _reason -> {:error, :conversation_unavailable}
       after
