@@ -23,6 +23,7 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
   @max_item_bytes 5_242_880
   @sweep_interval_ms 15_000
   @system_timeout_ms 5_000
+  @approved_media_types ["image/jpeg", "image/png", "image/webp", "video/mp4"]
 
   def max_item_bytes, do: @max_item_bytes
 
@@ -37,6 +38,12 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
       __MODULE__,
       {:put_media, conversation_id, sender_id, client_message_id, binary, metadata}
     )
+  end
+
+  def put_media(conversation_id, sender_id, client_message_id, binary, _metadata)
+      when is_binary(conversation_id) and is_binary(sender_id) and is_binary(client_message_id) and
+             is_binary(binary) do
+    {:error, :invalid_normal_media_metadata}
   end
 
   def list_media(conversation_id, participant_id)
@@ -210,8 +217,12 @@ defmodule StrangertalksNew.ConversationLifecycle.NormalMediaStore do
   end
 
   defp validate_metadata(metadata) do
-    with {:ok, content_hash} when is_binary(content_hash) <- Map.fetch(metadata, :content_hash),
-         {:ok, media_type} when is_binary(media_type) <- Map.fetch(metadata, :media_type) do
+    with {:ok, content_hash}
+         when is_binary(content_hash) and byte_size(content_hash) == 32 <-
+           Map.fetch(metadata, :content_hash),
+         {:ok, media_type}
+         when is_binary(media_type) and media_type in @approved_media_types <-
+           Map.fetch(metadata, :media_type) do
       {:ok, content_hash}
     else
       _ -> {:error, :invalid_normal_media_metadata}
