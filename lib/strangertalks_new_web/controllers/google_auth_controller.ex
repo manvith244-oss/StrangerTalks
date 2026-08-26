@@ -108,7 +108,11 @@ defmodule StrangertalksNewWeb.GoogleAuthController do
   end
 
   defp disconnect_participant_sockets(participant_id) do
-    StrangertalksNewWeb.Endpoint.broadcast("participant_socket:#{participant_id}", "disconnect", %{})
+    StrangertalksNewWeb.Endpoint.broadcast(
+      "participant_socket:#{participant_id}",
+      "disconnect",
+      %{}
+    )
   end
 
   defp rate_allowed?(bucket, conn, limit) do

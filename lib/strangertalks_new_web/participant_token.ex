@@ -72,7 +72,6 @@ defmodule StrangertalksNewWeb.ParticipantToken do
         if current_version?(participant_id, 0),
           do: {:ok, %{participant_id: participant_id, source_fingerprint: source_fingerprint}},
           else: {:error, :stale_participant_credential}
-
       {:ok, {:participant, participant_id, version}}
       when is_binary(participant_id) and is_integer(version) ->
         if current_version?(participant_id, version),
