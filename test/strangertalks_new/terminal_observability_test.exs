@@ -298,6 +298,16 @@ defmodule StrangertalksNew.TerminalObservabilityTest do
         duration_seconds: 0
       })
 
+    on_exit(fn ->
+      case ConversationServer.lookup(conversation.conversation_id) do
+        {:ok, pid} ->
+          DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, pid)
+
+        {:error, :not_started} ->
+          :ok
+      end
+    end)
+
     %{conversation: conversation, a: a, b: b}
   end
 end
