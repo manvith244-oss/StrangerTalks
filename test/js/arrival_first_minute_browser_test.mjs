@@ -13,6 +13,7 @@ const VIEWPORTS = [
   {width: 412, height: 915},
   {width: 844, height: 390},
   {width: 820, height: 1180},
+  {width: 1024, height: 768},
   {width: 1440, height: 900}
 ]
 
