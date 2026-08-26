@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: f10-desktop-flow-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: f10-desktop-flow-${{ github.event_name }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 permissions:
