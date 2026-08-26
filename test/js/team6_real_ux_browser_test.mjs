@@ -7,6 +7,13 @@ import {chromium} from "playwright"
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
 const SCREENSHOTS = path.resolve("tmp/team6-real-ux-screenshots")
 const WAIT_MS = 15_000
+const REAL_DEVICE_CLASSES = [
+  {width: 320, height: 568},
+  {width: 390, height: 844},
+  {width: 844, height: 390},
+  {width: 820, height: 1180},
+  {width: 1440, height: 900}
+]
 
 fs.mkdirSync(SCREENSHOTS, {recursive: true})
 
@@ -119,9 +126,9 @@ async function waitForConversation(observed, from = 0) {
   return joined.topic
 }
 
-async function matchPair(browser, door = "Advice") {
-  const a = await bootFresh(browser)
-  const b = await bootFresh(browser)
+async function matchPair(browser, door = "Advice", viewport = {width: 390, height: 844}) {
+  const a = await bootFresh(browser, viewport)
+  const b = await bootFresh(browser, viewport)
   await selectLanguageAndQueue(a, door)
   await b.page.locator("#conversation-language").selectOption("en")
   const markA = a.journal.mark()
@@ -170,6 +177,39 @@ test("real Team 6 Arrival -> language -> Door -> Queue -> Leave Queue", {timeout
     assertClean(user)
   } finally {
     await user?.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
+
+test("real matched Conversation stays usable across representative device classes", {timeout: 300_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  try {
+    for (const viewport of REAL_DEVICE_CLASSES) {
+      const label = `${viewport.width}x${viewport.height}`
+      let pair
+      try {
+        pair = await matchPair(browser, "Distract", viewport)
+        const {a, b, topic} = pair
+        await assertNoOverflow(a.page, `${label} real Conversation`)
+        const composer = await a.page.locator("#message-form").boundingBox()
+        assert.ok(composer, `${label}: composer is rendered`)
+        assert.ok(composer.x >= -1 && composer.x + composer.width <= viewport.width + 1, `${label}: composer fits horizontally`)
+        assert.ok(composer.y >= -1 && composer.y < viewport.height, `${label}: composer begins in viewport`)
+        assert.equal(await a.page.locator("#message-input").isEnabled(), true, `${label}: composer is enabled`)
+
+        await sendAndReceive(a, b, topic, `Team 6 responsive ${label}`)
+        await a.page.locator(".ig-compose-plus").click()
+        await a.page.locator("#ig-message-tools").waitFor({state: "visible", timeout: WAIT_MS})
+        await assertNoOverflow(a.page, `${label} real tools tray`)
+        await a.page.screenshot({path: path.join(SCREENSHOTS, `real-${label}-conversation.png`), fullPage: false})
+        assertClean(a)
+        assertClean(b)
+      } finally {
+        await pair?.a.context.close().catch(() => {})
+        await pair?.b.context.close().catch(() => {})
+      }
+    }
+  } finally {
     await browser.close().catch(() => {})
   }
 })
