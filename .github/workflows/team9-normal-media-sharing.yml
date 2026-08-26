@@ -90,12 +90,22 @@ jobs:
         run: |
           mix test \
             test/strangertalks_new/normal_media_store_test.exs \
-            test/strangertalks_new_web/controllers/normal_media_controller_test.exs
+            test/strangertalks_new/normal_media_hostile_store_test.exs \
+            test/strangertalks_new/normal_media_cleanup_test.exs \
+            test/strangertalks_new/normal_media_runtime_semantics_test.exs \
+            test/strangertalks_new/normal_media_failure_isolation_test.exs \
+            test/strangertalks_new/view_once_media_validator_test.exs \
+            test/strangertalks_new_web/controllers/normal_media_controller_test.exs \
+            test/strangertalks_new_web/controllers/normal_media_hostile_controller_test.exs \
+            test/strangertalks_new_web/controllers/normal_media_terminal_race_test.exs
 
-      - name: Normal media client attacks
+      - name: Normal media client and import-safety attacks
         id: focused_js
         continue-on-error: true
-        run: node --test test/js/normal_media_test.mjs
+        run: |
+          node --test \
+            test/js/normal_media_import_safety_test.mjs \
+            test/js/normal_media_test.mjs
 
       - name: Team 4 View Once and View Twice regressions
         id: team4_media
