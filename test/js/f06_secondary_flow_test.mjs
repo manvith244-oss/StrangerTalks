@@ -110,6 +110,37 @@ test("F-06 latest failed preference save reconciles to persisted canonical truth
   assert.equal(result.canonical, false, "latest failure returns persisted canonical value for UI rollback")
 })
 
+test("F-06 reconciliation that becomes stale cannot overwrite newer intent", async () => {
+  const queue = createPreferenceSaveQueue()
+  let markReadStarted
+  let releaseRead
+  const readStarted = new Promise(resolve => { markReadStarted = resolve })
+  const readGate = new Promise(resolve => { releaseRead = resolve })
+
+  const failedOlderIntent = saveBooleanPreference({
+    queue,
+    key: "reduced-motion",
+    recordId: "settings:privacy",
+    valueKey: "reduced_motion",
+    desired: true,
+    putRecord: async () => { throw new Error("older write failed") },
+    getRecord: async () => {
+      markReadStarted()
+      await readGate
+      return {id: "settings:privacy", type: "settings", value: {reduced_motion: false}}
+    }
+  })
+
+  await readStarted
+  const newerIntent = queue.save("reduced-motion", async () => {})
+  releaseRead()
+
+  const olderResult = await failedOlderIntent
+  assert.equal(olderResult.status, "superseded_failed", "old reconciliation is invalidated by newer intent")
+  assert.equal("canonical" in olderResult, false, "stale canonical read is not offered to UI for rollback")
+  assert.equal((await newerIntent).status, "saved")
+})
+
 test("F-06 failed save never fabricates canonical truth when reconciliation also fails", async () => {
   const result = await saveBooleanPreference({
     queue: createPreferenceSaveQueue(),
