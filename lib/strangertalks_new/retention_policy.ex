@@ -58,7 +58,7 @@ defmodule StrangertalksNew.RetentionPolicy do
   def sentry_days, do: @sentry_days
   def operator_backup_days, do: @operator_backup_days
 
-  @doc """Returns the complete named V1 retention contract for audit/tests."""
+  @doc "Returns the complete named V1 retention contract for audit/tests."
   def v1 do
     %{
       ordinary_live_conversation: {:server_durable_seconds, @ordinary_live_conversation_seconds},
