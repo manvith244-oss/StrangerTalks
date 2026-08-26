@@ -15,6 +15,18 @@ const VIEWPORTS = Object.freeze({
   ultrawide: {width: 2560, height: 1080}
 })
 
+const KNOWN_BREAKPOINT_WIDTHS = Object.freeze([
+  1024,
+  993, 992, 991,
+  641, 640, 639,
+  601, 600, 599,
+  513, 512, 511,
+  599, 600, 601,
+  639, 640, 641,
+  991, 992, 993,
+  1024
+])
+
 fs.mkdirSync(SCREENSHOTS, {recursive: true})
 
 function phoenixMessage(payload) {
@@ -152,7 +164,28 @@ async function resizeThrough(page, entries, labelPrefix) {
   }
 }
 
-test("F-10 queue resize preserves one queue attempt and desktop layout continuity", {timeout: 75_000}, async () => {
+async function continuousDesktopResize(page, labelPrefix) {
+  const widths = []
+  for (let width = 1024; width <= 2560; width += 128) widths.push(width)
+  if (widths.at(-1) !== 2560) widths.push(2560)
+  widths.push(...widths.slice(0, -1).reverse())
+
+  for (const width of widths) {
+    await page.setViewportSize({width, height: 900})
+    await page.waitForTimeout(20)
+    await assertNoOverflow(page, `${labelPrefix} continuous ${width}px`)
+  }
+}
+
+async function crossKnownBreakpoints(page, labelPrefix) {
+  for (const width of KNOWN_BREAKPOINT_WIDTHS) {
+    await page.setViewportSize({width, height: 844})
+    await page.waitForTimeout(20)
+    await assertNoOverflow(page, `${labelPrefix} breakpoint ${width}px`)
+  }
+}
+
+test("F-10 queue resize preserves one queue attempt and desktop layout continuity", {timeout: 90_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let user
   try {
@@ -164,9 +197,11 @@ test("F-10 queue resize preserves one queue attempt and desktop layout continuit
     assert.equal(sentCount(user, participantTopic, "queue:join"), 1, "exactly one queue attempt before resize")
 
     await resizeThrough(user.page, Object.entries(VIEWPORTS), "queue")
+    await continuousDesktopResize(user.page, "queue")
+    await crossKnownBreakpoints(user.page, "queue")
 
     assert.equal(await user.page.locator('[data-screen="queue"]').getAttribute("class").then(value => value.includes("active")), true, "queue screen remains active")
-    assert.equal(sentCount(user, participantTopic, "queue:join"), 1, "resize does not submit another queue attempt")
+    assert.equal(sentCount(user, participantTopic, "queue:join"), 1, "resize and breakpoint crossing do not submit another queue attempt")
     assert.equal(await user.page.locator("#conversation-language").inputValue(), "en", "selected language survives resize")
     assertClean(user)
   } finally {
@@ -175,7 +210,7 @@ test("F-10 queue resize preserves one queue attempt and desktop layout continuit
   }
 })
 
-test("F-10 Conversation resize preserves runtime, unsent draft and readable width", {timeout: 120_000}, async () => {
+test("F-10 Conversation resize preserves runtime, unsent draft and readable width", {timeout: 135_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let pair
   try {
@@ -192,8 +227,11 @@ test("F-10 Conversation resize preserves runtime, unsent draft and readable widt
     await a.page.locator("#messages li", {hasText: "Desktop width proof"}).waitFor({state: "visible", timeout: WAIT_MS})
 
     await resizeThrough(a.page, Object.entries(VIEWPORTS), "conversation")
+    await continuousDesktopResize(a.page, "conversation")
+    await crossKnownBreakpoints(a.page, "conversation")
+    await a.page.setViewportSize(VIEWPORTS.ultrawide)
 
-    assert.equal(sentCount(a, topic, "phx_join"), joinsBefore, "resize does not create another Conversation subscription")
+    assert.equal(sentCount(a, topic, "phx_join"), joinsBefore, "resize and breakpoint crossing do not create another Conversation subscription")
     assert.equal(await a.page.locator("#message-input").inputValue(), draft, "unsent composer draft survives resize")
     assert.equal(await a.page.locator('[data-screen="conversation"]').evaluate(node => node.classList.contains("active")), true, "same Conversation surface remains active")
 
