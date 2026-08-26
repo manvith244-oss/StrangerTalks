@@ -88,6 +88,68 @@ defmodule StrangertalksNew.NormalMediaRuntimeSemanticsTest do
              )
   end
 
+  test "media racing safety terminalization converges to terminal truth with no surviving media" do
+    runtime = live_conversation()
+    message_id = Ecto.UUID.generate()
+    binary = "terminal-race-media"
+    parent = self()
+    owner_ref = Process.monitor(runtime.owner_pid)
+
+    media_task =
+      Task.async(fn ->
+        send(parent, {:race_ready, self()})
+
+        receive do
+          :go ->
+            NormalMediaStore.put_media(
+              runtime.conversation.conversation_id,
+              runtime.a.participant_id,
+              message_id,
+              binary,
+              metadata(binary)
+            )
+        end
+      end)
+
+    terminal_task =
+      Task.async(fn ->
+        send(parent, {:race_ready, self()})
+
+        receive do
+          :go -> ConversationServer.trigger_safety_terminate(runtime.conversation.conversation_id)
+        end
+      end)
+
+    assert_receive {:race_ready, media_pid} when media_pid == media_task.pid
+    assert_receive {:race_ready, terminal_pid} when terminal_pid == terminal_task.pid
+    send(media_task.pid, :go)
+    send(terminal_task.pid, :go)
+
+    media_result = Task.await(media_task, 10_000)
+    assert :ok = Task.await(terminal_task, 10_000)
+
+    assert match?({:ok, _entry, :created}, media_result) or
+             media_result in [
+               {:error, :conversation_terminating},
+               {:error, :conversation_unavailable},
+               {:error, :conversation_inactive}
+             ]
+
+    assert_receive {:DOWN, ^owner_ref, :process, _, :normal}, 10_000
+
+    assert_eventually(fn ->
+      NormalMediaStore.fetch_media(runtime.conversation.conversation_id, message_id) ==
+        {:error, :media_unavailable}
+    end)
+
+    state = NormalMediaStore.inspect_state()
+    refute Map.has_key?(state.conversation_bytes, runtime.conversation.conversation_id)
+
+    refute Enum.any?(state.media, fn {{conversation_id, _message_id}, _entry} ->
+             conversation_id == runtime.conversation.conversation_id
+           end)
+  end
+
   test "NormalMediaStore restart causes expected volatile loss while Conversation text survives and media can start fresh" do
     runtime = live_conversation()
     old_id = put_media(runtime, "volatile")
@@ -205,6 +267,18 @@ defmodule StrangertalksNew.NormalMediaRuntimeSemanticsTest do
       height: 1,
       content_hash: :crypto.hash(:sha256, binary)
     }
+  end
+
+  defp assert_eventually(fun, attempts \\ 20_000)
+  defp assert_eventually(fun, 0), do: assert(fun.())
+
+  defp assert_eventually(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      :erlang.yield()
+      assert_eventually(fun, attempts - 1)
+    end
   end
 
   defp await_new_store(_old_store, 0) do
