@@ -124,6 +124,7 @@ Socket.prototype.channel = function(topic, params) {
 }
 
 await import(APP_ENTRY)
+await import("/assets/mobile_flow.mjs?v=20260827_f09")
 initializeExpressionSurface()
 
 function initializeExpressionSurface() {
