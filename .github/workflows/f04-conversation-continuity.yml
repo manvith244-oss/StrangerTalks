@@ -59,22 +59,10 @@ jobs:
           from pathlib import Path
           path = Path("priv/static/assets/app.js")
           text = path.read_text()
-          def once(old, new, label):
-              global text
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected 1, found {count}")
-              text = text.replace(old, new, 1)
-          once('''function releaseConversationRuntime() {
-            clearConversationTypingRuntime()
-            const channel = app.conversation
-            app.conversation = null
-            app.currentEpochId = null
-            if (channel) {
-              try { channel.leave() } catch (_) {}
-            }
-          }
-          ''','''const releasedConversationChannels = new WeakSet()
+
+          start = text.index("function releaseConversationRuntime() {")
+          end = text.index("\nfunction isQuietModeActive()", start)
+          replacement = '''const releasedConversationChannels = new WeakSet()
 
           function releaseConversationChannel(channel) {
             if (!channel || releasedConversationChannels.has(channel)) return
@@ -95,21 +83,21 @@ jobs:
             releaseConversationChannel(channel)
             return targetsCurrent
           }
-          ''', 'release helper')
-          once('''  } else if (snapshot.canonical_state === "QUEUED" && snapshot.queue) {
-            bindQueueAttempt(snapshot.queue.queue_attempt_id)
-          ''','''  } else if (snapshot.canonical_state === "QUEUED" && snapshot.queue) {
-            if (app.conversation || app.conversationId) releaseConversationRuntime()
-            bindQueueAttempt(snapshot.queue.queue_attempt_id)
-          ''', 'queued eviction')
-          once('''  } else {
-            bindQueueAttempt(null)
-            const appliedRevision = app.sessionReconciliationGuard.capture()
-          ''','''  } else {
-            if (app.conversation || app.conversationId) releaseConversationRuntime()
-            bindQueueAttempt(null)
-            const appliedRevision = app.sessionReconciliationGuard.capture()
-          ''', 'available eviction')
+          '''
+          text = text[:start] + replacement + text[end:]
+
+          start = text.index("async function reconcileWithServer(")
+          end = text.index("async function invalidateStaleActiveConversations", start)
+          reconcile = text[start:end]
+          queued = '  } else if (snapshot.canonical_state === "QUEUED" && snapshot.queue) {\n'
+          if reconcile.count(queued) != 1:
+              raise SystemExit("queued branch anchor mismatch")
+          reconcile = reconcile.replace(queued, queued + '    if (app.conversation || app.conversationId) releaseConversationRuntime()\n', 1)
+          available = '  } else {\n    bindQueueAttempt(null)\n'
+          if reconcile.count(available) != 1:
+              raise SystemExit("available branch anchor mismatch")
+          reconcile = reconcile.replace(available, '  } else {\n    if (app.conversation || app.conversationId) releaseConversationRuntime()\n    bindQueueAttempt(null)\n', 1)
+          text = text[:start] + reconcile + text[end:]
           path.write_text(text)
           PY
           echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -126,16 +114,10 @@ jobs:
           start = text.index("async function joinConversation(id) {")
           end = text.index("async function handleMatchedConversation", start)
           join = text[start:end]
-          def once(source, old, new, label):
-              count = source.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected 1, found {count}")
-              return source.replace(old, new, 1)
-          join = once(join, '''  app.conversation = app.socket.channel(`conversation:${id}`, {
-            epoch_id: clientEpochId,
-            last_applied_sequence: lastAppliedSequence
-          })
-          ''','''  const channel = app.socket.channel(`conversation:${id}`, {
+
+          header_start = join.index('  app.conversation = app.socket.channel(`conversation:${id}`, {')
+          header_end = join.index('\n\n  app.conversation.on("conversation:presence"', header_start)
+          header = '''  const channel = app.socket.channel(`conversation:${id}`, {
             epoch_id: clientEpochId,
             last_applied_sequence: lastAppliedSequence
           })
@@ -154,68 +136,44 @@ jobs:
               for (const [event, ref] of runtimeBindings.splice(0)) {
                 try { channel.off(event, ref) } catch (_) {}
               }
-            }
-          ''', 'channel capture')
-          binding_count = join.count('app.conversation.on(')
-          if binding_count < 10:
-              raise SystemExit(f"listener guard: expected >=10, found {binding_count}")
+            }'''
+          join = join[:header_start] + header + join[header_end:]
+
+          if join.count('app.conversation.on(') < 10:
+              raise SystemExit("Conversation listener anchor mismatch")
           join = join.replace('app.conversation.on(', 'onCurrent(')
-          join = once(join, '  coord.setChannel(app.conversation)\n', '  coord.setChannel(channel)\n', 'call coordinator channel')
-          join = once(join, '  app.conversation.join()\n', '  channel.join()\n', 'channel join')
-          join = once(join, '''  onCurrent("voice_note:new", async (note) => {
-            await receiveVoiceNote(note)
-            await markCanonicalSequenceApplied(note.sequence)
-          })
-          ''','''  onCurrent("voice_note:new", async (note) => {
-            await receiveVoiceNote(note, {conversationId: id, channel, isCurrent: runtimeIsCurrent})
-            if (!runtimeIsCurrent()) return
-            await markCanonicalSequenceApplied(note.sequence)
-          })
-          ''', 'voice event guard')
-          join = once(join, '''    .receive("ok", async (syncPayload) => {
-              await ensureTemporaryConversation(id)
-              await renderCachedConversation(id)
-              if (syncPayload) {
-                await applySyncPayload(id, syncPayload)
-              }
-              updateLocalConnection("connected")
-          ''','''    .receive("ok", async (syncPayload) => {
-              if (!runtimeIsCurrent()) {
-                releaseConversationChannel(channel)
-                return
-              }
-              await ensureTemporaryConversation(id)
-              if (!runtimeIsCurrent()) return
-              await renderCachedConversation(id)
-              if (!runtimeIsCurrent()) return
-              if (syncPayload) {
-                await applySyncPayload(id, syncPayload)
-                if (!runtimeIsCurrent()) return
-              }
-              updateLocalConnection("connected")
-          ''', 'join success guard')
-          join = once(join, '''    .receive("error", async (error) => {
-              cancelMessageEdit({restoreFocus: false})
-          ''','''    .receive("error", async (error) => {
-              if (!runtimeIsCurrent()) {
-                releaseConversationChannel(channel)
-                return
-              }
-              releaseConversationRuntime({conversationId: id, channel})
-              cancelMessageEdit({restoreFocus: false})
-          ''', 'join error guard')
+          if join.count('  coord.setChannel(app.conversation)\n') != 1 or join.count('  app.conversation.join()\n') != 1:
+              raise SystemExit("captured channel anchors mismatch")
+          join = join.replace('  coord.setChannel(app.conversation)\n', '  coord.setChannel(channel)\n', 1)
+          join = join.replace('  app.conversation.join()\n', '  channel.join()\n', 1)
+
+          voice_line = '    await receiveVoiceNote(note)\n'
+          if join.count(voice_line) != 1:
+              raise SystemExit("voice callback anchor mismatch")
+          join = join.replace(voice_line, '    await receiveVoiceNote(note, {conversationId: id, channel, isCurrent: runtimeIsCurrent})\n    if (!runtimeIsCurrent()) return\n', 1)
+
+          ok_line = '    .receive("ok", async (syncPayload) => {\n'
+          if join.count(ok_line) != 1:
+              raise SystemExit("join ok anchor mismatch")
+          join = join.replace(ok_line, ok_line + '      if (!runtimeIsCurrent()) { releaseConversationChannel(channel); return }\n', 1)
+          for anchor in ['      await ensureTemporaryConversation(id)\n', '      await renderCachedConversation(id)\n', '        await applySyncPayload(id, syncPayload)\n']:
+              if join.count(anchor) != 1:
+                  raise SystemExit(f"join async anchor mismatch: {anchor.strip()}")
+              join = join.replace(anchor, anchor + ('      if (!runtimeIsCurrent()) return\n' if anchor.startswith('      ') else '        if (!runtimeIsCurrent()) return\n'), 1)
+
+          error_line = '    .receive("error", async (error) => {\n'
+          if join.count(error_line) != 1:
+              raise SystemExit("join error anchor mismatch")
+          join = join.replace(error_line, error_line + '      if (!runtimeIsCurrent()) { releaseConversationChannel(channel); return }\n      releaseConversationRuntime({conversationId: id, channel})\n', 1)
           text = text[:start] + join + text[end:]
+
           start = text.index("async function handleMatchedConversation(payload, relationshipId = null) {")
           end = text.index("async function ensureTemporaryConversation", start)
           matched = text[start:end]
-          matched = once(matched, '''  const conversationId = app.matchedTransition.claim(payload)
-            if (!conversationId) return
-            markConversationAuthorityTransition()
-          ''','''  const conversationId = app.matchedTransition.claim(payload)
-            if (!conversationId) return
-            if (app.conversation || app.conversationId) releaseConversationRuntime()
-            markConversationAuthorityTransition()
-          ''', 'A-to-B eviction')
+          anchor = '  if (!conversationId) return\n'
+          if matched.count(anchor) != 1:
+              raise SystemExit("matched transition anchor mismatch")
+          matched = matched.replace(anchor, anchor + '  if (app.conversation || app.conversationId) releaseConversationRuntime()\n', 1)
           text = text[:start] + matched + text[end:]
           path.write_text(text)
           PY
@@ -232,41 +190,42 @@ jobs:
           start = text.index("async function receiveVoiceNote(note) {")
           end = text.index("\nfunction updateVoiceNoteStatus", start)
           voice = text[start:end]
-          def once(old, new, label):
-              global voice
-              count = voice.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected 1, found {count}")
-              voice = voice.replace(old, new, 1)
-          once('async function receiveVoiceNote(note) {\n', '''async function receiveVoiceNote(note, runtime = null) {
+
+          voice = voice.replace('async function receiveVoiceNote(note) {\n', '''async function receiveVoiceNote(note, runtime = null) {
             const conversationId = runtime?.conversationId || app.conversationId
             const channel = runtime?.channel || app.conversation
             const runtimeIsCurrent = runtime?.isCurrent || (() => app.conversationId === conversationId && app.conversation === channel)
             if (!runtimeIsCurrent()) return
-          ''', 'voice capture')
-          once('  const id = `voice:${app.conversationId}:${note.voice_note_id}`\n', '  const id = `voice:${conversationId}:${note.voice_note_id}`\n', 'voice id')
-          once('  const existing = await getRecord(id)\n', '  const existing = await getRecord(id)\n  if (!runtimeIsCurrent()) return\n', 'post-record guard')
+          ''', 1)
+          anchors = {
+              '  const id = `voice:${app.conversationId}:${note.voice_note_id}`\n': '  const id = `voice:${conversationId}:${note.voice_note_id}`\n',
+              '  const existing = await getRecord(id)\n': '  const existing = await getRecord(id)\n  if (!runtimeIsCurrent()) return\n',
+              '    if (!response.ok) throw new Error("download_failed")\n': '    if (!runtimeIsCurrent()) return\n    if (!response.ok) throw new Error("download_failed")\n',
+              '    const blob = await response.blob()\n': '    const blob = await response.blob()\n    if (!runtimeIsCurrent()) return\n',
+          }
+          for old, new in anchors.items():
+              if voice.count(old) != 1:
+                  raise SystemExit(f"voice anchor mismatch: {old.strip()}")
+              voice = voice.replace(old, new, 1)
           voice = voice.replace('push(app.conversation, "voice_note:ack"', 'push(channel, "voice_note:ack"')
           voice = voice.replace('/api/conversations/${app.conversationId}/voice-notes/', '/api/conversations/${conversationId}/voice-notes/')
-          once('    if (!response.ok) throw new Error("download_failed")\n', '    if (!runtimeIsCurrent()) return\n    if (!response.ok) throw new Error("download_failed")\n', 'post-fetch guard')
-          once('    const blob = await response.blob()\n', '    const blob = await response.blob()\n    if (!runtimeIsCurrent()) return\n', 'post-blob guard')
           voice = voice.replace('conversation_id: app.conversationId', 'conversation_id: conversationId')
-          once('''    try { await putRecord(record) } catch { announce("Voice note received, but it may not survive refresh because local storage is unavailable.") }
-          ''','''    try { await putRecord(record) } catch { if (runtimeIsCurrent()) announce("Voice note received, but it may not survive refresh because local storage is unavailable.") }
-            if (!runtimeIsCurrent()) return
-          ''', 'post-store guard')
-          once('''    renderVoiceNoteNode(record.value, $("#messages"), false)
-            requestAnimationFrame(() => { if (shouldFollow) scrollTimelineToNewest({smooth: true}); else $("#new-messages").hidden = false })
-            await push(channel, "voice_note:ack", {voice_note_id: note.voice_note_id})
-          ''','''    renderVoiceNoteNode(record.value, $("#messages"), false)
-            requestAnimationFrame(() => {
-              if (!runtimeIsCurrent()) return
-              if (shouldFollow) scrollTimelineToNewest({smooth: true}); else $("#new-messages").hidden = false
-            })
-            if (!runtimeIsCurrent()) return
-            await push(channel, "voice_note:ack", {voice_note_id: note.voice_note_id})
-          ''', 'render/ack guard')
-          once('  } catch { announce("A voice note could not be downloaded before it expired.") }\n', '  } catch { if (runtimeIsCurrent()) announce("A voice note could not be downloaded before it expired.") }\n', 'stale catch guard')
+          store = '    try { await putRecord(record) } catch { announce("Voice note received, but it may not survive refresh because local storage is unavailable.") }\n'
+          if voice.count(store) != 1:
+              raise SystemExit("voice store anchor mismatch")
+          voice = voice.replace(store, '    try { await putRecord(record) } catch { if (runtimeIsCurrent()) announce("Voice note received, but it may not survive refresh because local storage is unavailable.") }\n    if (!runtimeIsCurrent()) return\n', 1)
+          raf = '    requestAnimationFrame(() => { if (shouldFollow) scrollTimelineToNewest({smooth: true}); else $("#new-messages").hidden = false })\n'
+          if voice.count(raf) != 1:
+              raise SystemExit("voice RAF anchor mismatch")
+          voice = voice.replace(raf, '    requestAnimationFrame(() => { if (!runtimeIsCurrent()) return; if (shouldFollow) scrollTimelineToNewest({smooth: true}); else $("#new-messages").hidden = false })\n', 1)
+          final_ack = '    await push(channel, "voice_note:ack", {voice_note_id: note.voice_note_id})\n'
+          if voice.count(final_ack) != 1:
+              raise SystemExit("voice final ack anchor mismatch")
+          voice = voice.replace(final_ack, '    if (!runtimeIsCurrent()) return\n' + final_ack, 1)
+          stale_catch = '  } catch { announce("A voice note could not be downloaded before it expired.") }\n'
+          if voice.count(stale_catch) != 1:
+              raise SystemExit("voice catch anchor mismatch")
+          voice = voice.replace(stale_catch, '  } catch { if (runtimeIsCurrent()) announce("A voice note could not be downloaded before it expired.") }\n', 1)
           text = text[:start] + voice + text[end:]
           path.write_text(text)
           PY
