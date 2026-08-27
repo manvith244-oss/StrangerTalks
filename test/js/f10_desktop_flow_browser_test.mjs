@@ -264,7 +264,7 @@ test("F-10 Conversation resize preserves runtime, unsent draft and readable widt
     await a.page.locator("#message-input").fill(draft)
 
     await b.page.locator("#message-input").fill("Desktop width proof")
-    await b.page.locator("#message-form button.primary").click()
+    await b.page.locator("#message-form .compose button.primary").click()
     await a.page.locator("#messages li", {hasText: "Desktop width proof"}).waitFor({state: "visible", timeout: WAIT_MS})
 
     await resizeThrough(a.page, Object.entries(VIEWPORTS), "conversation")
@@ -370,6 +370,7 @@ test("F-10 true confirmation modal traps keyboard focus and Escape restores trig
     const backdrop = a.page.locator("#end-confirmation-backdrop")
     const dialog = a.page.locator("#end-confirmation-dialog")
     await backdrop.waitFor({state: "visible", timeout: WAIT_MS})
+    await a.page.waitForFunction(() => document.activeElement?.id === "end-cancel")
 
     assert.equal(await dialog.getAttribute("role"), "dialog", "End confirmation exposes dialog semantics")
     assert.equal(await dialog.getAttribute("aria-modal"), "true", "End confirmation is explicitly modal")
