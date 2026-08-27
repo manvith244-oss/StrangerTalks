@@ -7,6 +7,11 @@ import {
 } from "./route_contract.mjs"
 
 const ROUTE_STATE_KEY = "__strangerTalksF02Route"
+const ACTIVITY_EVENT_TRANSITIONS = new Set([
+  "match_found_handoff",
+  "conversation_ended",
+  "conversation_unavailable"
+])
 
 function currentBrowserRoute() {
   return parseRoute(globalThis.location?.pathname || "/")
@@ -166,7 +171,8 @@ export function installBrowserRouteRuntime(SocketClass) {
     const resolved = resolveActivityEventRoute(requested, event)
 
     if (resolved.replace && resolved.path) {
-      setRequestedPath(resolved.path, false)
+      const eventOwnsRoute = ACTIVITY_EVENT_TRANSITIONS.has(resolved.reason)
+      setRequestedPath(resolved.path, eventOwnsRoute ? false : null)
     }
 
     return resolved
@@ -273,6 +279,11 @@ export function installBrowserRouteRuntime(SocketClass) {
 
     if (active === "doors" && requested?.kind === "matchmaking") {
       setRequestedPath("/", true)
+      return
+    }
+
+    if (active === "doors" && requested?.kind === "conversation_unavailable") {
+      activateExistingScreen("unrecoverable")
     }
   })
 
