@@ -1,0 +1,150 @@
+name: F-06 Secondary Flow Gate
+
+on:
+  push:
+    branches:
+      - f06/settings-secondary-flow-2026-08-26
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+
+concurrency:
+  group: f06-secondary-flow-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  secondary-flow:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact F-06 HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          echo "EXPECTED_F06_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "ACTUAL_F06_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: F-06 focused unit and secondary-flow tests
+        run: |
+          node --test \
+            test/js/f06_secondary_flow_test.mjs \
+            test/js/reflections_test.mjs
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix for F-06 browser proof
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/f06-browser.log 2>&1 &
+          echo $! > /tmp/f06-browser.pid
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$(cat /tmp/f06-browser.pid)" 2>/dev/null; then
+              cat /tmp/f06-browser.log
+              exit 1
+            fi
+            if curl -fsS http://localhost:4000/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/f06-browser.log
+          exit 1
+
+      - name: F-06 real-browser secondary-flow attacks
+        run: node --test test/js/f06_secondary_flow_browser_test.mjs
+
+      - name: Stop Phoenix browser server
+        if: always()
+        run: |
+          if [ -f /tmp/f06-browser.pid ]; then
+            pid="$(cat /tmp/f06-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Reset data before repository precommit
+        run: |
+          mix ecto.drop --quiet
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Format check
+        run: mix format --check-formatted
+
+      - name: Full precommit
+        run: mix precommit
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Prove final checkout clean
+        run: |
+          git status --short --branch
+          git status --porcelain | tee /tmp/f06-status
+          test ! -s /tmp/f06-status
+
+      - name: Record exact tested commit
+        run: echo "F06_TESTED_COMMIT=$(git rev-parse HEAD)"
+
+      - name: Browser server log on failure
+        if: failure()
+        run: cat /tmp/f06-browser.log || true

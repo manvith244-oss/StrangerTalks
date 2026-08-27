@@ -1,4 +1,5 @@
 import "./arrival_first_minute.mjs"
+import "./secondary_flow.mjs"
 
 // V1 presentation aliases for the existing canonical backend Door values.
 export const DOORS = Object.freeze([
