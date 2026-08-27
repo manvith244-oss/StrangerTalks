@@ -249,9 +249,6 @@ function makeCanonicalTransaction(state, mode) {
       const result = await commitState(state, [...draft.values()])
       transaction.__f11Durability = result.durable ? "durable" : "ephemeral"
 
-      // local_data.mjs resolves write promises from operation.onsuccess.
-      // Fire transaction completion first so those promises cannot report
-      // durability before the native transaction has completed.
       transaction.oncomplete?.({target: transaction})
       for (const request of deferredMutationSuccesses) request.onsuccess?.({target: request})
     })
@@ -275,6 +272,7 @@ export function createCanonicalIndexedDB(nativeFactory) {
 
   const factory = {
     __f11Canonical: true,
+    __f11Resilient: true,
     open(name, version = 1) {
       if (name !== LOCAL_DB_NAME) {
         if (!nativeFactory?.open) return failedOpenRequest(new Error("indexeddb_unavailable"))
@@ -324,4 +322,18 @@ export function createCanonicalIndexedDB(nativeFactory) {
   }
 
   return factory
+}
+
+export function installCanonicalIndexedDB(target = globalThis) {
+  let existing = null
+  try { existing = target?.indexedDB || null } catch (_error) {}
+  if (existing?.__f11Canonical) return existing
+
+  const canonical = createCanonicalIndexedDB(existing)
+  try {
+    Object.defineProperty(target, "indexedDB", {value: canonical, configurable: true})
+  } catch (_error) {
+    try { target.indexedDB = canonical } catch (_ignored) {}
+  }
+  return canonical
 }
