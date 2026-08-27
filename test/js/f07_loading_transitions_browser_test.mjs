@@ -4,6 +4,56 @@ import {chromium} from "playwright"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
 
+function collectBrowserErrors(page) {
+  const errors = []
+  page.on("pageerror", error => errors.push(`pageerror: ${error.message}`))
+  page.on("console", message => {
+    if (message.type() === "error") errors.push(`console: ${message.text()}`)
+  })
+  page.on("requestfailed", request => {
+    errors.push(`requestfailed: ${request.method()} ${request.url()} ${request.failure()?.errorText || "unknown"}`)
+  })
+  page.on("response", response => {
+    if (response.status() >= 400) errors.push(`response: ${response.status()} ${response.url()}`)
+  })
+  return errors
+}
+
+async function bootDiagnostics(page, errors = []) {
+  const dom = await page.evaluate(() => {
+    const bridge = document.querySelector("#boot-bridge")
+    const status = document.querySelector("#status")
+    const activeScreens = Array.from(document.querySelectorAll("section.screen.active"), node => node.dataset.screen)
+    const scripts = Array.from(document.scripts, script => script.src).filter(Boolean)
+    return {
+      readyState: document.readyState,
+      bodyClass: document.body?.className || null,
+      status: status?.textContent || null,
+      activeScreens,
+      boot: bridge ? {
+        hidden: bridge.hidden,
+        ariaBusy: bridge.getAttribute("aria-busy"),
+        state: bridge.dataset.state || null,
+        title: bridge.querySelector("h1")?.textContent || null,
+        detail: bridge.querySelector(".lede")?.textContent || null,
+        display: getComputedStyle(bridge).display
+      } : null,
+      scripts
+    }
+  }).catch(error => ({diagnosticError: error.message}))
+
+  return {url: page.url(), errors: [...errors], dom}
+}
+
+async function waitForBootExit(page, errors = [], timeout = 15_000) {
+  try {
+    await page.locator('body:not(.flow-booting)').waitFor({state: "attached", timeout})
+  } catch (error) {
+    const diagnostics = await bootDiagnostics(page, errors)
+    throw new Error(`${error.message}\nF-07 boot diagnostics:\n${JSON.stringify(diagnostics, null, 2)}`)
+  }
+}
+
 async function freshPage(browser, {recordQueueFrames = false} = {}) {
   const context = await browser.newContext({viewport: {width: 390, height: 844}})
 
@@ -30,17 +80,12 @@ async function freshPage(browser, {recordQueueFrames = false} = {}) {
   }
 
   const page = await context.newPage()
-  const errors = []
-  page.on("pageerror", error => errors.push(error.message))
-  page.on("console", message => {
-    if (message.type() === "error") errors.push(message.text())
-  })
-
+  const errors = collectBrowserErrors(page)
   return {context, page, errors}
 }
 
-async function waitForReadyDoors(page) {
-  await page.locator('body:not(.flow-booting)').waitFor({state: "attached", timeout: 15_000})
+async function waitForReadyDoors(page, errors = []) {
+  await waitForBootExit(page, errors)
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: 15_000})
   await page.locator("#conversation-language").selectOption("en")
 }
@@ -70,6 +115,7 @@ test("cold boot bridge stays authoritative while participant bootstrap is unreso
     await route.continue()
   })
   const page = await context.newPage()
+  const errors = collectBrowserErrors(page)
 
   try {
     const navigation = page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
@@ -80,7 +126,7 @@ test("cold boot bridge stays authoritative while participant bootstrap is unreso
 
     const response = await navigation
     assert.ok(response?.ok(), "root shell loads")
-    await page.locator('body:not(.flow-booting)').waitFor({state: "attached", timeout: 15_000})
+    await waitForBootExit(page, errors)
     await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: 15_000})
   } finally {
     await context.close().catch(() => {})
@@ -96,7 +142,7 @@ test("matchmaking entry and cancellation expose truthful intermediate states", {
     const {page} = fresh
     const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
     assert.ok(response?.ok(), "root shell loads")
-    await waitForReadyDoors(page)
+    await waitForReadyDoors(page, fresh.errors)
     await startQueueTransitionRecording(page)
 
     await page.getByRole("button", {name: /Deep Talk/}).click()
@@ -138,7 +184,7 @@ test("late queued event from a retired attempt cannot resurrect matchmaking", {t
     const {page} = fresh
     const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
     assert.ok(response?.ok(), "root shell loads")
-    await waitForReadyDoors(page)
+    await waitForReadyDoors(page, fresh.errors)
 
     await page.getByRole("button", {name: /Deep Talk/}).click()
     await page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: 12_000})
