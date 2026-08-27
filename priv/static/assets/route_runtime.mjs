@@ -81,6 +81,17 @@ export function installBrowserRouteRuntime(SocketClass) {
   const state = createRouteRuntimeState(location.pathname)
   window[ROUTE_STATE_KEY] = state
 
+  const accountReturn = new URLSearchParams(location.search).has("account") && location.pathname === "/you"
+  if (accountReturn) {
+    const nativeReplace = history.replaceState.bind(history)
+    history.replaceState = function(historyState, title, url) {
+      if (url === "/" && location.pathname === "/you" && new URLSearchParams(location.search).has("account")) {
+        return nativeReplace(historyState, title, "/you")
+      }
+      return nativeReplace(historyState, title, url)
+    }
+  }
+
   const setRequestedPath = (path, preserveActivityAway = null) => {
     const route = parseRoute(path)
     if (!route.valid) return null
