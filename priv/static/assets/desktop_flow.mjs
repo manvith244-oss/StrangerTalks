@@ -17,18 +17,35 @@ function handleReportKeydown(event) {
   report.querySelector("#report-cancel")?.click()
 }
 
+function configureEndConfirmationFocus() {
+  const backdrop = document.querySelector("#end-confirmation-backdrop")
+  const trigger = document.querySelector("#end-conversation")
+  if (!backdrop || !trigger || backdrop.dataset.f10FocusReturnReady === "true") return
+
+  backdrop.dataset.f10FocusReturnReady = "true"
+  backdrop.addEventListener("keydown", (event) => {
+    if (backdrop.hidden || event.key !== "Escape") return
+
+    requestAnimationFrame(() => {
+      if (backdrop.hidden && trigger.isConnected) trigger.focus()
+    })
+  })
+}
+
 export function initializeDesktopFlow() {
   const report = document.querySelector("#report-form")
-  if (!report || report.dataset.f10KeyboardReady === "true") return
+  if (report && report.dataset.f10KeyboardReady !== "true") {
+    report.dataset.f10KeyboardReady = "true"
+    configureReportSemantics(report)
+    report.addEventListener("keydown", handleReportKeydown)
 
-  report.dataset.f10KeyboardReady = "true"
-  configureReportSemantics(report)
-  report.addEventListener("keydown", handleReportKeydown)
+    new MutationObserver(() => configureReportSemantics(report)).observe(report, {
+      childList: true,
+      subtree: true
+    })
+  }
 
-  new MutationObserver(() => configureReportSemantics(report)).observe(report, {
-    childList: true,
-    subtree: true
-  })
+  configureEndConfirmationFocus()
 }
 
 initializeDesktopFlow()
