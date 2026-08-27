@@ -8,6 +8,7 @@ on:
       - "priv/static/assets/app.js"
       - "priv/static/assets/expression_runtime.mjs"
       - "test/js/f04_conversation_runtime_cleanup_browser_test.mjs"
+      - "test/js/f04_conversation_runtime_hostile_browser_test.mjs"
       - ".github/workflows/f04-conversation-continuity.yml"
 
 permissions:
@@ -123,8 +124,11 @@ jobs:
           cat /tmp/f04-browser-server.log
           exit 1
 
-      - name: F-04 P0 Chromium A-B-C runtime proof
-        run: node --test test/js/f04_conversation_runtime_cleanup_browser_test.mjs
+      - name: F-04 Chromium runtime proof
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/f04_conversation_runtime_cleanup_browser_test.mjs \
+            test/js/f04_conversation_runtime_hostile_browser_test.mjs
 
       - name: Browser server log on failure
         if: failure()
