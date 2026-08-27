@@ -84,7 +84,11 @@ async function stageReplyToPeerMessage(sender, receiver, text = "reply-target") 
 }
 
 async function navigateAway(page, destination = "chats") {
-  await page.locator(`#bottom-nav [data-go="${destination}"]`).click()
+  await page.evaluate((screen) => {
+    const control = document.querySelector(`#bottom-nav [data-go="${screen}"]`)
+    if (!control) throw new Error(`missing presentation control for ${screen}`)
+    control.click()
+  }, destination)
   await page.locator(`section[data-screen="${destination}"].active`).waitFor({state: "visible", timeout: 10_000})
 }
 
@@ -99,8 +103,8 @@ async function returnToSameConversationPresentation(page) {
       control.textContent = "Return to Conversation"
       document.body.append(control)
     }
+    control.click()
   })
-  await page.locator("#fx05-return-conversation").click()
   await page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 10_000})
 }
 
