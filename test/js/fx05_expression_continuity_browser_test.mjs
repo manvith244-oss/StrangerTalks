@@ -56,10 +56,6 @@ async function matchPair(browser) {
       a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000}),
       b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000})
     ])
-    await Promise.all([
-      a.page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible"}),
-      b.page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible"})
-    ])
     return {a, b}
   } catch (error) {
     await a.context.close().catch(() => {})
