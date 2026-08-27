@@ -130,6 +130,12 @@ jobs:
             kill "$pid" 2>/dev/null || true
           fi
 
+      - name: Reset browser-created database state
+        run: |
+          mix ecto.drop --quiet
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
       - name: Full repository precommit
         run: mix precommit
 
