@@ -1,0 +1,58 @@
+name: F-X04 Media Navigation Boundary Gate
+
+on:
+  push:
+    branches:
+      - fx04/media-navigation-boundary-2026-08-27
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fx04-media-navigation-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  media-navigation-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact F-X04 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Prove checkout identity
+        run: |
+          echo "EXPECTED_FX04_SHA=${{ github.sha }}"
+          echo "CHECKED_OUT_FX04_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: F-X04 hostile boundary tests
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/fx04_media_navigation_boundary_test.mjs \
+            test/js/team4_media_authority_test.mjs \
+            test/js/team4_call_operation_race_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/team6_voice_note_permission_test.mjs \
+            test/js/team4_screen_share_absent_test.mjs
+
+      - name: Diff integrity
+        run: git diff --check
+
+      - name: Clean tree proof
+        run: |
+          git status --porcelain | tee /tmp/fx04-status
+          test ! -s /tmp/fx04-status
+
+      - name: Exact tested SHA proof
+        run: |
+          echo "TESTED_FX04_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
