@@ -147,8 +147,9 @@ jobs:
             test/js/team10_expression_surface_test.mjs \
             test/js/expressive_media_test.mjs \
             test/js/voice_notes_test.mjs \
-            test/js/view_once_test.mjs \
             test/js/normal_media_test.mjs
+          node --import='data:text/javascript,globalThis.document={readyState:%22loading%22,addEventListener(){}}' \
+            --test test/js/view_once_test.mjs
 
       - name: Reset pristine test database
         run: |
