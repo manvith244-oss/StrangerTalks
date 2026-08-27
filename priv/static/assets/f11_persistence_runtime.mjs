@@ -186,10 +186,25 @@ function conversationIdForRecoveryRecord(record) {
 }
 
 export function cleanupConversationRecoveryRecords(records, conversationId) {
+  const conversation = records.find((record) =>
+    record?.type === "local_conversation" && record.value?.conversation_id === conversationId
+  )
+  const retainedStatus = conversation?.value?.status
+
   return records.filter((record) => {
-    if (record?.type === "local_conversation" && record.value?.conversation_id === conversationId) return false
-    if (["local_message", "local_voice_note", "sync_cursor", "terminal_retention_state"].includes(record?.type) && record.value?.conversation_id === conversationId) return false
-    return true
+    const sameConversation = conversationIdForRecoveryRecord(record) === conversationId
+    if (!sameConversation) return true
+
+    if (["sync_cursor", "terminal_retention_state"].includes(record.type)) return false
+
+    if (TERMINAL_RETENTION_STATUSES.has(retainedStatus)) {
+      if (record.type === "local_conversation") return true
+      if (retainedStatus === "kept" && ["local_message", "local_voice_note"].includes(record.type)) return true
+      if (["local_message", "local_voice_note"].includes(record.type)) return false
+      return true
+    }
+
+    return !["local_conversation", "local_message", "local_voice_note"].includes(record.type)
   })
 }
 
