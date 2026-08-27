@@ -23,13 +23,19 @@ function configureEndConfirmationFocus() {
   if (!backdrop || !trigger || backdrop.dataset.f10FocusReturnReady === "true") return
 
   backdrop.dataset.f10FocusReturnReady = "true"
-  backdrop.addEventListener("keydown", (event) => {
-    if (backdrop.hidden || event.key !== "Escape") return
+  let wasOpen = !backdrop.hidden
+
+  new MutationObserver(() => {
+    const isOpen = !backdrop.hidden
+    const justClosed = wasOpen && !isOpen
+    wasOpen = isOpen
+    if (!justClosed) return
 
     requestAnimationFrame(() => {
-      if (backdrop.hidden && trigger.isConnected) trigger.focus()
+      if (!backdrop.hidden || !trigger.isConnected) return
+      trigger.focus()
     })
-  })
+  }).observe(backdrop, {attributes: true, attributeFilter: ["hidden"]})
 }
 
 export function initializeDesktopFlow() {
