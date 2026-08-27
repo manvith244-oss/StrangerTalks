@@ -1,0 +1,48 @@
+name: F-03 Navigation / History Proof
+
+on:
+  push:
+    branches:
+      - f03/navigation-history-wave-a-2026-08-27
+  pull_request:
+    branches:
+      - f02/route-architecture-wave-a
+  workflow_dispatch:
+
+concurrency:
+  group: f03-navigation-history-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  navigation-contract-red-green:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact F-03 commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "EXPECTED_F03_COMMIT=$expected"
+          echo "ACTUAL_F03_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$expected"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Frozen F-02 route contract
+        run: node --test test/js/route_contract_test.mjs
+
+      - name: F-03 navigation history contract
+        run: node --test test/js/navigation_history_test.mjs
