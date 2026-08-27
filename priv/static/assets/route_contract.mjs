@@ -72,6 +72,15 @@ export function isActivityOwnedRoute(route) {
   return route?.kind === "matchmaking" || route?.kind?.startsWith("conversation")
 }
 
+function unchangedRoute(route) {
+  return {
+    path: route.path,
+    screen: route.screen,
+    replace: route.needsCanonicalReplace,
+    reason: route.needsCanonicalReplace ? "canonical_trailing_slash" : null
+  }
+}
+
 export function resolveRequestedRoute(route, snapshot) {
   if (!route?.valid) return {path: null, screen: null, replace: false, reason: "invalid_route"}
 
@@ -79,7 +88,7 @@ export function resolveRequestedRoute(route, snapshot) {
 
   if (route.kind === "matchmaking") {
     if (canonicalState === "QUEUED" && snapshot?.queue) {
-      return {path: route.path, screen: route.screen, replace: route.needsCanonicalReplace, reason: null}
+      return unchangedRoute(route)
     }
     if (canonicalState === "CONVERSATION" && snapshot?.conversation) {
       return {path: "/conversation", screen: "conversation", replace: true, reason: "matchmaking_advanced_to_conversation"}
@@ -89,7 +98,7 @@ export function resolveRequestedRoute(route, snapshot) {
 
   if (route.kind === "conversation") {
     if (canonicalState === "CONVERSATION" && snapshot?.conversation) {
-      return {path: route.path, screen: route.screen, replace: route.needsCanonicalReplace, reason: null}
+      return unchangedRoute(route)
     }
     return {path: "/conversation/unavailable", screen: "unrecoverable", replace: true, reason: "conversation_not_available"}
   }
@@ -98,12 +107,25 @@ export function resolveRequestedRoute(route, snapshot) {
     return {path: "/conversation", screen: "conversation", replace: true, reason: "active_conversation_supersedes_stale_location"}
   }
 
-  return {
-    path: route.path,
-    screen: route.screen,
-    replace: route.needsCanonicalReplace,
-    reason: route.needsCanonicalReplace ? "canonical_trailing_slash" : null
+  return unchangedRoute(route)
+}
+
+export function resolveActivityEventRoute(route, event) {
+  if (!route?.valid) return {path: null, screen: null, replace: false, reason: "invalid_route"}
+
+  if (event === "match_found" && route.kind === "matchmaking") {
+    return {path: "/conversation", screen: "conversation", replace: true, reason: "match_found_handoff"}
   }
+
+  if (event === "conversation_ended" && route.kind === "conversation") {
+    return {path: "/conversation/ended", screen: "ended", replace: true, reason: "conversation_ended"}
+  }
+
+  if (event === "conversation_unavailable" && route.kind === "conversation") {
+    return {path: "/conversation/unavailable", screen: "unrecoverable", replace: true, reason: "conversation_unavailable"}
+  }
+
+  return unchangedRoute(route)
 }
 
 export function routeNavigationPathForScreen(screen, conversationId = null) {
