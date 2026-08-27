@@ -14,6 +14,18 @@ defmodule StrangertalksNewWeb.RouteArchitectureTest do
     "/you/reflections"
   ]
 
+  @rejected_aliases [
+    "/matching",
+    "/settings",
+    "/settings/memories",
+    "/talk",
+    "/home",
+    "/language",
+    "/door",
+    "/match-found",
+    "/conversation/123"
+  ]
+
   test "every frozen canonical static route serves the StrangerTalks client shell with F-02 routing before app bootstrap" do
     Enum.each(@canonical_static_routes, fn path ->
       conn = get(build_conn(), path)
@@ -30,6 +42,14 @@ defmodule StrangertalksNewWeb.RouteArchitectureTest do
     end)
   end
 
+  test "one trailing slash still serves the shell so the client can canonicalize it" do
+    conn = get(build_conn(), "/you/")
+    body = html_response(conn, 200)
+
+    assert body =~ "StrangerTalks"
+    assert body =~ ~s(src="/assets/route_runtime.mjs?v=20260827_f02")
+  end
+
   test "saved Conversation detail is directly servable when its route parameter is structurally valid" do
     conversation_id = Ecto.UUID.generate()
     conn = get(build_conn(), "/chats/#{conversation_id}")
@@ -44,9 +64,16 @@ defmodule StrangertalksNewWeb.RouteArchitectureTest do
     assert response(conn, 404) == "Not Found"
   end
 
-  test "unknown URLs are not silently rewritten to Talk" do
-    conn = get(build_conn(), "/not-a-strangertalks-route")
-    assert response(conn, 404) =~ "Not Found"
+  test "saved Conversation validation is path-scoped and does not hijack unrelated query parameters" do
+    conn = get(build_conn(), "/you?conversation_id=not-a-uuid")
+    assert html_response(conn, 200) =~ "StrangerTalks"
+  end
+
+  test "unknown URLs and rejected aliases are not silently rewritten to Talk" do
+    Enum.each(["/not-a-strangertalks-route" | @rejected_aliases], fn path ->
+      conn = get(build_conn(), path)
+      assert response(conn, 404) =~ "Not Found"
+    end)
   end
 
   test "OAuth callback failures return to canonical You rather than root" do
