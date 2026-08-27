@@ -5,13 +5,23 @@ defmodule StrangertalksNewWeb.PageControllerTest do
     conn = get(conn, "/")
     body = html_response(conn, 200)
 
+    flow_runtime =
+      File.read!(
+        Application.app_dir(:strangertalks_new, "priv/static/assets/flow_loading_runtime.mjs")
+      )
+
     assert body =~ "What do you need right now?"
 
     assert body =~
              "Normal messages are not permanently stored on StrangerTalks servers. Messages shown during this Conversation were temporarily cached on this device. You decide whether to keep them."
 
     assert body =~ "Saved only on this device unless you export an encrypted backup."
-    assert body =~ "/assets/expression_runtime.mjs"
+    assert body =~ "/assets/flow_loading_runtime.mjs"
+    refute body =~ ~r/<script[^>]+src="\/assets\/expression_runtime\.mjs/
+
+    assert flow_runtime =~
+             ~S|const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"|
+
     assert body =~ "/assets/expression_surface.css"
     refute body =~ ~r/<script[^>]+src="\/assets\/app\.js/
     refute body =~ "participant_id"
@@ -63,8 +73,15 @@ defmodule StrangertalksNewWeb.PageControllerTest do
        } do
     body = conn |> get("/") |> html_response(200)
 
+    static_dir = Application.app_dir(:strangertalks_new, "priv/static")
+    loading = File.read!(Path.join(static_dir, "assets/flow_loading.mjs"))
+
     [_, matching] = Regex.run(~r/(<section data-screen="queue".*?<\/section>)/s, body)
-    assert matching =~ "Finding someone…"
+    assert matching =~ "Starting matchmaking…"
+    assert matching =~ "Confirming your place in the queue."
+    refute matching =~ "Finding someone…"
+    assert loading =~ "Finding someone…"
+    assert loading =~ "Looking for someone compatible with your choice."
     assert matching =~ "Leave Queue"
 
     refute matching =~ "queue count"
