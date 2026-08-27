@@ -35,8 +35,8 @@ defmodule StrangertalksNewWeb.RouteArchitectureTest do
   end
 
   test "unknown URLs are not silently rewritten to Talk" do
-    assert_error_sent 404, fn ->
-      get(build_conn(), "/not-a-strangertalks-route")
-    end
+    conn = get(build_conn(), "/not-a-strangertalks-route")
+
+    assert response(conn, 404) =~ "Not Found"
   end
 end
