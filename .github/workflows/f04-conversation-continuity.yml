@@ -124,11 +124,46 @@ jobs:
           cat /tmp/f04-browser-server.log
           exit 1
 
-      - name: F-04 Chromium runtime proof
+      - name: F-04 P0 A-B-C runtime cleanup proof
+        id: f04_p0_cleanup
+        continue-on-error: true
+        run: node --test test/js/f04_conversation_runtime_cleanup_browser_test.mjs
+
+      - name: F-04 canonical AVAILABLE eviction proof
+        id: f04_available_eviction
+        continue-on-error: true
+        run: node --test --test-name-pattern="canonical AVAILABLE" test/js/f04_conversation_runtime_hostile_browser_test.mjs
+
+      - name: F-04 stale callback isolation proof
+        id: f04_stale_callback
+        continue-on-error: true
+        run: node --test --test-name-pattern="callbacks are inert" test/js/f04_conversation_runtime_hostile_browser_test.mjs
+
+      - name: F-04 socket reconnect reuse proof
+        id: f04_reconnect
+        continue-on-error: true
+        run: node --test --test-name-pattern="socket reconnect" test/js/f04_conversation_runtime_hostile_browser_test.mjs
+
+      - name: F-04 reload recovery proof
+        id: f04_reload
+        continue-on-error: true
+        run: node --test --test-name-pattern="reload restores" test/js/f04_conversation_runtime_hostile_browser_test.mjs
+
+      - name: Require all F-04 browser contracts
+        if: always()
+        shell: bash
         run: |
-          node --test --test-concurrency=1 \
-            test/js/f04_conversation_runtime_cleanup_browser_test.mjs \
-            test/js/f04_conversation_runtime_hostile_browser_test.mjs
+          set -euo pipefail
+          printf 'p0_cleanup=%s\n' '${{ steps.f04_p0_cleanup.outcome }}'
+          printf 'available_eviction=%s\n' '${{ steps.f04_available_eviction.outcome }}'
+          printf 'stale_callback=%s\n' '${{ steps.f04_stale_callback.outcome }}'
+          printf 'reconnect=%s\n' '${{ steps.f04_reconnect.outcome }}'
+          printf 'reload=%s\n' '${{ steps.f04_reload.outcome }}'
+          test '${{ steps.f04_p0_cleanup.outcome }}' = success
+          test '${{ steps.f04_available_eviction.outcome }}' = success
+          test '${{ steps.f04_stale_callback.outcome }}' = success
+          test '${{ steps.f04_reconnect.outcome }}' = success
+          test '${{ steps.f04_reload.outcome }}' = success
 
       - name: Browser server log on failure
         if: failure()
