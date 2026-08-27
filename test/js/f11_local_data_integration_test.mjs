@@ -274,3 +274,24 @@ test("LOCAL-09 one Conversation cleanup removes recovery-only state and preserve
     assert.equal(ids.has(`relationship:${relationshipA}`), true)
   })
 })
+
+test("LOCAL-11 overlapping readwrite transactions preserve both writes durably", async () => {
+  await withCanonicalIndexedDB(async (native) => {
+    await listRecords()
+    await Promise.all([
+      putRecord(record("settings:privacy", "settings", {reduced_motion: true})),
+      putRecord(record("settings:auto-sync", "settings", {enabled: true}))
+    ])
+
+    const currentIds = new Set((await listRecords()).map(({id}) => id))
+    assert.equal(currentIds.has("settings:privacy"), true)
+    assert.equal(currentIds.has("settings:auto-sync"), true)
+
+    const reopened = createCanonicalIndexedDB(native)
+    await withIndexedDB(reopened, async () => {
+      const durableIds = new Set((await listRecords()).map(({id}) => id))
+      assert.equal(durableIds.has("settings:privacy"), true)
+      assert.equal(durableIds.has("settings:auto-sync"), true)
+    })
+  })
+})
