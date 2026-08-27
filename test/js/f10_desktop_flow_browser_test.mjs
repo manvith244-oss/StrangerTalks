@@ -277,27 +277,36 @@ test("F-10 Conversation resize preserves runtime, unsent draft and readable widt
     assert.equal(await a.page.locator('[data-screen="conversation"]').evaluate(node => node.classList.contains("active")), true, "same Conversation surface remains active")
 
     const layout = await a.page.evaluate(() => {
-      const bubble = document.querySelector("#messages .message")
-      const composer = document.querySelector("#message-form")
+      const main = document.querySelector("main")
       const screen = document.querySelector('[data-screen="conversation"].active')
+      const head = screen?.querySelector(".conversation-head")
+      const timeline = screen?.querySelector("#message-viewport")
+      const bubble = screen?.querySelector("#messages .message")
+      const composer = screen?.querySelector("#message-form")
       const rect = element => {
         if (!element) return null
         const bounds = element.getBoundingClientRect()
         return {left: bounds.left, right: bounds.right, width: bounds.width, top: bounds.top, bottom: bounds.bottom, height: bounds.height}
       }
       return {
+        main: rect(main),
+        screen: rect(screen),
+        head: rect(head),
+        timeline: rect(timeline),
         bubble: rect(bubble),
         composer: rect(composer),
-        screen: rect(screen),
         rootFontSize: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
         viewport: innerWidth
       }
     })
     assert.ok(Number.isFinite(layout.rootFontSize) && layout.rootFontSize > 0, "desktop root font size resolves to a finite value")
-    assert.ok(layout.screen.width <= 48 * layout.rootFontSize + 2, `Conversation respects its 48rem focused-screen cap instead of stretching across ${layout.viewport}px`)
+    assert.ok(layout.main.width <= 68 * layout.rootFontSize + 2, `global desktop shell stays bounded instead of stretching across ${layout.viewport}px`)
+    assert.ok(layout.screen.width <= layout.main.width + 2, "Conversation surface stays inside the bounded desktop shell")
+    assert.ok(layout.head.width <= 802, "Conversation header remains within the explicit 800px readable stage")
+    assert.ok(layout.timeline.width <= 802, "Conversation timeline remains within the explicit 800px readable stage")
     assert.ok(layout.bubble.width <= 36 * layout.rootFontSize + 2, "message bubble stays within readable max width")
     assert.ok(layout.composer.width <= 802, "composer remains within the explicit 800px desktop stage")
-    assert.ok(layout.composer.left >= layout.screen.left - 1 && layout.composer.right <= layout.screen.right + 1, "composer remains anchored to Conversation region")
+    assert.ok(layout.composer.left >= layout.timeline.left - 1 && layout.composer.right <= layout.timeline.right + 1, "composer remains anchored to the readable Conversation stage")
     assertClean(a)
     assertClean(b)
   } finally {
