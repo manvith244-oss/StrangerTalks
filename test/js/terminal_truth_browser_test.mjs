@@ -145,6 +145,20 @@ async function uiWaitForEnded(page) {
   await page.waitForSelector('section[data-screen="ended"].active', {timeout: 15_000})
 }
 
+async function uiOpenMessageTools(page) {
+  await page.click(".ig-compose-plus")
+  await page.waitForFunction(() => {
+    const form = document.querySelector("#message-form")
+    const tray = document.querySelector("#ig-message-tools")
+    return form?.classList.contains("ig-tray-open") && tray && getComputedStyle(tray).display !== "none"
+  })
+}
+
+async function uiOpenConversationInfo(page) {
+  await page.click(".conversation-head-actions .overflow summary")
+  await page.waitForFunction(() => document.querySelector(".conversation-head-actions .overflow")?.open === true)
+}
+
 async function uiMatch(pageA, pageB) {
   await Promise.all([prepareUiPage(pageA), prepareUiPage(pageB)])
   await Promise.all([uiJoinQueue(pageA), uiJoinQueue(pageB)])
@@ -305,11 +319,13 @@ test("real UI Block collapses local transient authority and stale Conversation A
     await a2.click("#messages .message:not(.mine) .react-action-btn")
     await a2.waitForSelector(".reaction-picker")
 
+    await uiOpenMessageTools(a3)
     await a3.click("#expressive-open")
     await a3.waitForSelector("#expressive-picker:not([hidden])")
     await a3.click("#prompt-control")
     await a3.waitForSelector("#prompt-helper:not([hidden])")
 
+    await uiOpenConversationInfo(a4)
     await a4.click("#report-open")
     await a4.waitForSelector("#report-form:not([hidden])")
     await a4.selectOption("#report-category", {label: "SPAM"})
@@ -319,6 +335,7 @@ test("real UI Block collapses local transient authority and stale Conversation A
     await a4.click("#report-open")
     await a4.waitForSelector("#report-form:not([hidden])")
 
+    await uiOpenConversationInfo(a1)
     a1.once("dialog", (dialog) => dialog.accept())
     await a1.click("#block")
     await Promise.all([a1, a2, a3, a4, b].map(uiWaitForEnded))
