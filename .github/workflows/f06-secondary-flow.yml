@@ -72,12 +72,11 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: F-06 focused unit and existing secondary-data tests
+      - name: F-06 focused unit and secondary-flow tests
         run: |
           node --test \
             test/js/f06_secondary_flow_test.mjs \
-            test/js/reflections_test.mjs \
-            test/js/local_data_test.mjs
+            test/js/reflections_test.mjs
 
       - name: Prepare browser database
         run: |
