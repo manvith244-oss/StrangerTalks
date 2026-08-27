@@ -96,18 +96,30 @@ test("BROWSER-04 AVAILABLE readiness is pending before canonical reconciliation"
   } finally { await close(s); await browser.close().catch(() => {}) }
 })
 
-test("BROWSER-05/LANG queued recovery never becomes false AVAILABLE and future language stays separate", {timeout: 60_000}, async () => {
+test("BROWSER-05/LANG final transport loss reconciles AVAILABLE without requeue and preserves future language", {timeout: 60_000}, async () => {
   const browser = await chromium.launch({headless: true}); let s
   try {
     s = await session(browser); await ready(s.page, "AVAILABLE"); await language(s.page, "te"); await queue(s.page)
+    const queued = await ready(s.page, "QUEUED")
+    const staleQueueAttemptId = queued.snapshot.queue.queue_attempt_id
+    assert.ok(staleQueueAttemptId)
+    assert.equal(queued.snapshot.queue.conversation_language, "te")
     await s.page.evaluate(() => { const select = document.querySelector("#conversation-language"); select.value = "hi"; select.dispatchEvent(new Event("change", {bubbles: true})) })
     await s.page.reload({waitUntil: "domcontentloaded"})
-    const state = await ready(s.page, "QUEUED")
-    assert.equal(state.snapshot.queue.conversation_language, "te")
+    const state = await ready(s.page, "AVAILABLE")
+    assert.equal(state.snapshot.queue, null)
+    assert.notEqual(state.snapshot.queue?.queue_attempt_id, staleQueueAttemptId)
     assert.equal(await s.page.evaluate(() => window.StrangerTalksF11.getFutureConversationLanguage()), "hi")
+    const afterFirstReconciliation = await s.page.evaluate(() => window.__f11Events.length)
+    await s.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")))
+    await s.page.waitForFunction((n) => {
+      const events = window.__f11Events || []
+      return events.length >= n + 2 && events.slice(n).some(e => e.status === "CANONICAL_STATE_PENDING") && events.at(-1)?.status === "READY" && events.at(-1)?.canonical_state === "AVAILABLE"
+    }, afterFirstReconciliation, {timeout: WAIT})
     const events = await s.page.evaluate(() => window.__f11Events)
     assert.equal(events[0]?.status, "CANONICAL_STATE_PENDING")
-    assert.equal(events.some(e => e.status === "READY" && e.canonical_state === "AVAILABLE"), false)
+    assert.equal(events.some(e => e.status === "READY" && e.canonical_state === "AVAILABLE"), true)
+    assert.equal(events.some(e => e.status === "READY" && e.canonical_state === "QUEUED"), false)
   } finally { await close(s); await browser.close().catch(() => {}) }
 })
 
