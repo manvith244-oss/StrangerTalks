@@ -332,6 +332,34 @@ test("real UI Block collapses local transient authority and stale Conversation A
     await a4.fill("#report-evidence", "report then block")
     await a4.click('#report-form button[type="submit"], #report-form .primary')
     await a4.waitForFunction(() => document.querySelector("#status")?.textContent.includes("Report submitted"), null, {timeout: 10_000})
+
+    const secondReportState = await a4.evaluate(() => {
+      const overflow = document.querySelector(".conversation-head-actions .overflow")
+      const reportOpen = document.querySelector("#report-open")
+      const reportForm = document.querySelector("#report-form")
+      const activeScreen = document.querySelector("[data-screen].active")
+      const reportStyle = reportOpen ? getComputedStyle(reportOpen) : null
+      return {
+        overflowOpen: overflow?.open ?? null,
+        reportOpenVisible: Boolean(
+          reportOpen &&
+          reportOpen.getClientRects().length > 0 &&
+          reportStyle?.display !== "none" &&
+          reportStyle?.visibility !== "hidden"
+        ),
+        activeScreen: activeScreen?.dataset.screen ?? null,
+        reportFormHidden: reportForm?.hidden ?? null
+      }
+    })
+    console.log("TEAM2_SECOND_REPORT_STATE", JSON.stringify(secondReportState))
+    assert.deepEqual(secondReportState, {
+      overflowOpen: false,
+      reportOpenVisible: false,
+      activeScreen: "conversation",
+      reportFormHidden: true
+    })
+
+    await uiOpenConversationInfo(a4)
     await a4.click("#report-open")
     await a4.waitForSelector("#report-form:not([hidden])")
 
