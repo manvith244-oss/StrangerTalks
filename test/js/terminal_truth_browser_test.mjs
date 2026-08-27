@@ -333,30 +333,18 @@ test("real UI Block collapses local transient authority and stale Conversation A
     await a4.click('#report-form button[type="submit"], #report-form .primary')
     await a4.waitForFunction(() => document.querySelector("#status")?.textContent.includes("Report submitted"), null, {timeout: 10_000})
 
-    const secondReportState = await a4.evaluate(() => {
-      const overflow = document.querySelector(".conversation-head-actions .overflow")
-      const reportOpen = document.querySelector("#report-open")
-      const reportForm = document.querySelector("#report-form")
-      const activeScreen = document.querySelector("[data-screen].active")
-      const reportStyle = reportOpen ? getComputedStyle(reportOpen) : null
-      return {
-        overflowOpen: overflow?.open ?? null,
-        reportOpenVisible: Boolean(
-          reportOpen &&
-          reportOpen.getClientRects().length > 0 &&
-          reportStyle?.display !== "none" &&
-          reportStyle?.visibility !== "hidden"
-        ),
-        activeScreen: activeScreen?.dataset.screen ?? null,
-        reportFormHidden: reportForm?.hidden ?? null
-      }
-    })
+    const secondReportState = await a4.evaluate(() => ({
+      overflowOpen: document.querySelector(".conversation-head-actions .overflow")?.open ?? null,
+      activeScreen: document.querySelector("[data-screen].active")?.dataset.screen ?? null,
+      reportFormHidden: document.querySelector("#report-form")?.hidden ?? null
+    }))
+    secondReportState.reportOpenVisible = await a4.locator("#report-open").isVisible()
     console.log("TEAM2_SECOND_REPORT_STATE", JSON.stringify(secondReportState))
     assert.deepEqual(secondReportState, {
       overflowOpen: false,
-      reportOpenVisible: false,
       activeScreen: "conversation",
-      reportFormHidden: true
+      reportFormHidden: true,
+      reportOpenVisible: false
     })
 
     await uiOpenConversationInfo(a4)
