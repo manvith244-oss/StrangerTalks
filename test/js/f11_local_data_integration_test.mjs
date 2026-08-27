@@ -6,9 +6,11 @@ import {
   deleteRecord,
   getRecord,
   listRecords,
-  putRecord
+  putRecord,
+  replaceRecords
 } from "../../priv/static/assets/local_data.mjs"
-import {createMemoryIndexedDB, createResilientIndexedDB} from "../../priv/static/assets/f11_persistence_runtime.mjs"
+import {createMemoryIndexedDB} from "../../priv/static/assets/f11_persistence_runtime.mjs"
+import {createCanonicalIndexedDB} from "../../priv/static/assets/f11_local_store.mjs"
 
 const now = "2026-08-27T06:45:00.000Z"
 const participantA = "11111111-1111-4111-8111-111111111111"
@@ -31,18 +33,18 @@ function conversation(status = "temporary", connection_state = "ended") {
   })
 }
 
-async function withMemoryIndexedDB(run) {
+async function withCanonicalIndexedDB(run) {
   const previous = globalThis.indexedDB
-  const memory = createMemoryIndexedDB()
-  globalThis.indexedDB = createResilientIndexedDB(memory, createMemoryIndexedDB())
-  try { return await run(memory) } finally {
+  const native = createMemoryIndexedDB()
+  globalThis.indexedDB = createCanonicalIndexedDB(native)
+  try { return await run(native) } finally {
     if (previous === undefined) delete globalThis.indexedDB
     else globalThis.indexedDB = previous
   }
 }
 
-async function rawPut(memory, item) {
-  const opening = memory.open("strangertalks-local-v1", 1)
+async function rawPut(native, item) {
+  const opening = native.open("strangertalks-local-v1", 1)
   const db = await new Promise((resolve, reject) => {
     opening.onupgradeneeded = () => opening.result.createObjectStore("records", {keyPath: "id"})
     opening.onerror = () => reject(opening.error)
@@ -53,47 +55,60 @@ async function rawPut(memory, item) {
   await new Promise((resolve, reject) => { request.onsuccess = resolve; request.onerror = reject })
 }
 
-test("CLEANUP-02 retention completion removes cursor and pending-terminal recovery records", () => {
-  const records = [
-    conversation(),
-    record(`message:${conversationA}:m1`, "local_message", {conversation_id: conversationA, client_message_id: "m1", message_id: "m1", type: "text", content: "keep", mine: true, delivery_status: "delivered", sent_at: now}),
-    record(`sync_cursor:${conversationA}`, "sync_cursor", {conversation_id: conversationA, epoch_id: "epoch-a", last_applied_sequence: 2}),
-    record(`terminal_retention:${conversationA}`, "terminal_retention_state", {conversation_id: conversationA, status: "pending", ended_at: now})
-  ]
-  const kept = chooseConversationRetention(records, conversationA, "kept", {now})
-  assert.equal(kept.some(({id}) => id === `sync_cursor:${conversationA}`), false)
-  assert.equal(kept.some(({id}) => id === `terminal_retention:${conversationA}`), false)
-  assert.equal(kept.some(({id}) => id === `message:${conversationA}:m1`), true)
+test("CLEANUP-02 retention completion removes cursor and pending-terminal recovery records", async () => {
+  await withCanonicalIndexedDB(async () => {
+    const records = [
+      conversation(),
+      record(`message:${conversationA}:m1`, "local_message", {conversation_id: conversationA, client_message_id: "m1", message_id: "m1", type: "text", content: "keep", mine: true, delivery_status: "delivered", sent_at: now}),
+      record(`sync_cursor:${conversationA}`, "sync_cursor", {conversation_id: conversationA, epoch_id: "epoch-a", last_applied_sequence: 2}),
+      record(`terminal_retention:${conversationA}`, "terminal_retention_state", {conversation_id: conversationA, status: "pending", ended_at: now})
+    ]
+    await replaceRecords(records)
+    await replaceRecords(chooseConversationRetention(await listRecords(), conversationA, "kept", {now}))
+    const kept = await listRecords()
+    assert.equal(kept.some(({id}) => id === `sync_cursor:${conversationA}`), false)
+    assert.equal(kept.some(({id}) => id === `terminal_retention:${conversationA}`), false)
+    assert.equal(kept.some(({id}) => id === `message:${conversationA}:m1`), true)
+  })
 })
 
 test("CORRUPT live get discards a malformed saved identity instead of trusting it", async () => {
-  await withMemoryIndexedDB(async (memory) => {
-    await rawPut(memory, record("strangertalks.identity.v1", "identity", {participant_id: participantA}))
+  await withCanonicalIndexedDB(async (native) => {
+    await rawPut(native, record("strangertalks.identity.v1", "identity", {participant_id: participantA}))
     assert.equal(await getRecord("strangertalks.identity.v1"), null)
   })
 })
 
-test("STORAGE-05 putRecord resolves only after the readwrite transaction completes", async () => {
+test("STORAGE-05 putRecord resolves only after the native readwrite transaction completes", async () => {
   const events = []
-  const fake = {
+  const native = {
     open() {
       const opening = {result: null, error: null, onsuccess: null, onerror: null, onupgradeneeded: null}
       queueMicrotask(() => {
+        const records = new Map()
         const db = {
           close() {},
           createObjectStore() {},
-          transaction() {
+          transaction(_name, mode) {
             const tx = {oncomplete: null, onerror: null, onabort: null, error: null}
             const store = {
+              getAll() {
+                const request = {result: [...records.values()], error: null, onsuccess: null, onerror: null}
+                queueMicrotask(() => { request.onsuccess?.({target: request}); tx.oncomplete?.({target: tx}) })
+                return request
+              },
+              clear() {
+                const request = {result: undefined, error: null, onsuccess: null, onerror: null}
+                queueMicrotask(() => { records.clear(); request.onsuccess?.({target: request}) })
+                return request
+              },
               put(value) {
                 const request = {result: value.id, error: null, onsuccess: null, onerror: null}
                 queueMicrotask(() => {
-                  events.push("operation-success")
+                  records.set(value.id, value)
+                  events.push("native-operation-success")
                   request.onsuccess?.({target: request})
-                  setTimeout(() => {
-                    events.push("transaction-complete")
-                    tx.oncomplete?.({target: tx})
-                  }, 5)
+                  if (mode === "readwrite") setTimeout(() => { events.push("native-transaction-complete"); tx.oncomplete?.({target: tx}) }, 5)
                 })
                 return request
               }
@@ -109,22 +124,26 @@ test("STORAGE-05 putRecord resolves only after the readwrite transaction complet
     }
   }
   const previous = globalThis.indexedDB
-  globalThis.indexedDB = createResilientIndexedDB(fake, createMemoryIndexedDB())
+  globalThis.indexedDB = createCanonicalIndexedDB(native)
   try {
+    // Prime hydration before measuring the write boundary.
+    await listRecords()
+    events.length = 0
     let resolved = false
     const write = putRecord(record("settings:privacy", "settings", {reduced_motion: true})).then(() => { resolved = true; events.push("promise-resolved") })
     await new Promise((resolve) => setTimeout(resolve, 1))
     assert.equal(resolved, false)
     await write
-    assert.deepEqual(events, ["operation-success", "transaction-complete", "promise-resolved"])
+    assert.equal(events.at(-1), "promise-resolved")
+    assert.ok(events.indexOf("native-transaction-complete") < events.indexOf("promise-resolved"))
   } finally {
     if (previous === undefined) delete globalThis.indexedDB
     else globalThis.indexedDB = previous
   }
 })
 
-test("PARTICIPANT-01 deleting a replaced identity also invalidates old participant recovery-only records", async () => {
-  await withMemoryIndexedDB(async () => {
+test("PARTICIPANT-01 deleting a replaced identity invalidates old recovery-only records", async () => {
+  await withCanonicalIndexedDB(async () => {
     await putRecord(record("strangertalks.identity.v1", "identity", {participant_id: participantA, token: "token"}))
     await putRecord(conversation("temporary", "connected"))
     await putRecord(record(`message:${conversationA}:m1`, "local_message", {conversation_id: conversationA, client_message_id: "m1", message_id: "m1", type: "text", content: "temporary", mine: true, delivery_status: "delivered", sent_at: now}))
