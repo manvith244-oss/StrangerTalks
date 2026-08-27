@@ -118,8 +118,8 @@ jobs:
           text = text.replace(anchor, anchor + helper, 1)
           old = 'observed = await bootObserved(browser, "/conversation")'
           new = 'observed = await bootActivityObserved(browser, "/conversation", "/conversation/unavailable")'
-          if old not in text:
-            raise SystemExit("J10 call anchor not found")
+          if text.count(old) != 1:
+            raise SystemExit(f"J10 call target count={text.count(old)}")
           path.write_text(text.replace(old, new, 1))
           PY
 
@@ -220,16 +220,17 @@ jobs:
       - name: Apply terminal navigation event
         run: |
           python3 - <<'PY'
+          import re
           from pathlib import Path
           path = Path("priv/static/assets/app.js")
           text = path.read_text()
-          old = '''    await markConversationEnded()
-            show("ended")'''
-          new = '''    await markConversationEnded()
-            await navigation.activityEvent("conversation_ended")'''
-          if text.count(old) != 1:
-            raise SystemExit(f"conversation ended target count={text.count(old)}")
-          path.write_text(text.replace(old, new, 1))
+          pattern = r'(?m)^(\s*)await markConversationEnded\(\)\n\1show\("ended"\)$'
+          matches = list(re.finditer(pattern, text))
+          if len(matches) != 1:
+            raise SystemExit(f"conversation ended target count={len(matches)}")
+          indent = matches[0].group(1)
+          replacement = f'{indent}await markConversationEnded()\n{indent}await navigation.activityEvent("conversation_ended")'
+          path.write_text(re.sub(pattern, replacement, text, count=1))
           PY
 
       - name: J09 terminal history GREEN
