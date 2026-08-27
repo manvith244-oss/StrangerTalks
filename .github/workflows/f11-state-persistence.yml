@@ -94,6 +94,9 @@ jobs:
       - name: Start Phoenix browser server
         run: |
           mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
             config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
             Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
