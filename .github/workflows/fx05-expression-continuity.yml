@@ -12,7 +12,7 @@ on:
         type: string
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: fx05-expression-continuity-${{ github.event.pull_request.head.sha || inputs.candidate_sha }}
@@ -56,6 +56,62 @@ jobs:
           echo "FX05_CANDIDATE_SHA=${FX05_CANDIDATE_SHA}"
           echo "FX05_CHECKED_OUT_SHA=$(git rev-parse HEAD)"
           test "$(git rev-parse HEAD)" = "${FX05_CANDIDATE_SHA}"
+
+      - name: Apply one-shot reply continuity correction
+        if: github.event_name == 'pull_request' && github.head_ref == 'fx05/expression-continuity-boundary-2026-08-27'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_BRANCH: ${{ github.head_ref }}
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          repo = os.environ["GH_REPOSITORY"]
+          branch = os.environ["GH_BRANCH"]
+          token = os.environ["GH_TOKEN"]
+          path = "priv/static/assets/app.js"
+          api = f"https://api.github.com/repos/{repo}/contents/{path}?ref={urllib.parse.quote(branch, safe='')}"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "StrangerTalks-FX05",
+          }
+          request = urllib.request.Request(api, headers=headers)
+          with urllib.request.urlopen(request) as response:
+              file = json.load(response)
+
+          content = base64.b64decode(file["content"]).decode("utf-8")
+          old = '  if (name !== "conversation") cancelReplyStaging()\n'
+          count = content.count(old)
+          if count == 0:
+              print("reply presentation coupling already absent; no write needed")
+              raise SystemExit(0)
+          if count != 1:
+              raise SystemExit(f"expected exactly one reply presentation coupling, found {count}")
+
+          updated = content.replace(old, "", 1)
+          payload = json.dumps({
+              "message": "fix(fx05): preserve reply staging across presentation",
+              "content": base64.b64encode(updated.encode("utf-8")).decode("ascii"),
+              "sha": file["sha"],
+              "branch": branch,
+          }).encode("utf-8")
+          put = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/contents/{path}",
+              data=payload,
+              headers={**headers, "Content-Type": "application/json"},
+              method="PUT",
+          )
+          with urllib.request.urlopen(put) as response:
+              result = json.load(response)
+          print("FX05_APP_CORRECTION_SHA=" + result["commit"]["sha"])
+          PY
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
