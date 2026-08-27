@@ -4,14 +4,14 @@ defmodule StrangertalksNewWeb.PageController do
   @route_runtime_tag ~s(<script type="module" src="/assets/route_runtime.mjs?v=20260827_f02"></script>)
   @expression_runtime_tag ~s(<script type="module" src="/assets/expression_runtime.mjs?v=20260824_v2"></script>)
 
-  def home(conn, %{"conversation_id" => conversation_id}) do
+  def home(conn, _params), do: serve_client(conn)
+
+  def saved_conversation(conn, %{"conversation_id" => conversation_id}) do
     case Ecto.UUID.cast(conversation_id) do
       {:ok, _uuid} -> serve_client(conn)
       :error -> not_found(conn)
     end
   end
-
-  def home(conn, _params), do: serve_client(conn)
 
   defp serve_client(conn) do
     body =
