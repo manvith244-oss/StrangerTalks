@@ -159,13 +159,40 @@ function makeCanonicalDatabase(state) {
   }
 }
 
+function reserveTransactionTurn(state) {
+  const previous = state.transactionTail || Promise.resolve()
+  let release
+  const current = new Promise((resolve) => { release = resolve })
+  state.transactionTail = previous.then(() => current)
+  return {ready: previous, release}
+}
+
+async function withTransactionTurn(state, operation) {
+  const turn = reserveTransactionTurn(state)
+  await turn.ready
+  try {
+    return await operation()
+  } finally {
+    turn.release()
+  }
+}
+
 function makeCanonicalTransaction(state, mode) {
-  let draft = mode === "readwrite" ? recordsMap([...state.records.values()]) : state.records
+  const turn = reserveTransactionTurn(state)
+  let draft = null
+  let turnReady = false
+  let turnReleased = false
   let pending = 0
   let commitScheduled = false
   let commitStarted = false
   let aborted = false
   const deferredMutationSuccesses = []
+
+  const releaseTurn = () => {
+    if (turnReleased) return
+    turnReleased = true
+    turn.release()
+  }
 
   const transaction = {
     mode,
@@ -179,6 +206,7 @@ function makeCanonicalTransaction(state, mode) {
       aborted = true
       transaction.error = transaction.error || new Error("AbortError")
       transaction.onabort?.({target: transaction})
+      releaseTurn()
     },
     objectStore() {
       return {
@@ -191,10 +219,18 @@ function makeCanonicalTransaction(state, mode) {
     }
   }
 
+  turn.ready.then(() => {
+    if (aborted) { releaseTurn(); return }
+    draft = recordsMap([...state.records.values()])
+    turnReady = true
+    scheduleCommit()
+  })
+
   function operation(kind, key, value) {
     const request = {result: undefined, error: null, onsuccess: null, onerror: null}
     pending += 1
-    queueMicrotask(() => {
+    queueMicrotask(async () => {
+      await turn.ready
       if (aborted) { pending -= 1; scheduleCommit(); return }
       try {
         if (kind === "get") request.result = draft.has(key) ? cloneValue(draft.get(key)) : null
@@ -227,22 +263,24 @@ function makeCanonicalTransaction(state, mode) {
         transaction.onerror?.({target: transaction})
         aborted = true
         transaction.onabort?.({target: transaction})
+        releaseTurn()
       }
     })
     return request
   }
 
   function scheduleCommit() {
-    if (commitScheduled || commitStarted || aborted) return
+    if (!turnReady || commitScheduled || commitStarted || aborted) return
     commitScheduled = true
     queueMicrotask(async () => {
       commitScheduled = false
-      if (pending !== 0 || commitStarted || aborted) return
+      if (!turnReady || pending !== 0 || commitStarted || aborted) return
       commitStarted = true
 
       if (mode === "readonly") {
         transaction.__f11Durability = state.mode
         transaction.oncomplete?.({target: transaction})
+        releaseTurn()
         return
       }
 
@@ -251,6 +289,7 @@ function makeCanonicalTransaction(state, mode) {
 
       transaction.oncomplete?.({target: transaction})
       for (const request of deferredMutationSuccesses) request.onsuccess?.({target: request})
+      releaseTurn()
     })
   }
 
@@ -263,7 +302,7 @@ export function createCanonicalIndexedDB(nativeFactory) {
   function localState(name, version) {
     let state = states.get(name)
     if (!state) {
-      state = {name, version, hydrated: false, hydration: null, records: new Map(), nativeDb: null, mode: "pending", reason: null}
+      state = {name, version, hydrated: false, hydration: null, records: new Map(), nativeDb: null, mode: "pending", reason: null, transactionTail: Promise.resolve()}
       state.hydration = hydrateState(state, nativeFactory, name, version)
       states.set(name, state)
     }
@@ -298,26 +337,33 @@ export function createCanonicalIndexedDB(nativeFactory) {
     async cleanupConversationRecovery(conversationId) {
       const state = localState(LOCAL_DB_NAME, 1)
       await state.hydration
-      const next = cleanupConversationRecoveryRecords([...state.records.values()], conversationId)
-      return commitState(state, next)
+      return withTransactionTurn(state, () => {
+        const next = cleanupConversationRecoveryRecords([...state.records.values()], conversationId)
+        return commitState(state, next)
+      })
     },
     async cleanupParticipantRecovery() {
       const state = localState(LOCAL_DB_NAME, 1)
       await state.hydration
-      return commitState(state, cleanupParticipantBoundRecords([...state.records.values()]))
+      return withTransactionTurn(state, () =>
+        commitState(state, cleanupParticipantBoundRecords([...state.records.values()]))
+      )
     },
     async refresh() {
       const state = localState(LOCAL_DB_NAME, 1)
-      if (state.mode === "ephemeral" || !state.nativeDb) return [...state.records.values()].map(cloneValue)
-      try {
-        const raw = await readNativeRecords(state.nativeDb)
-        const accepted = validRecords(raw)
-        state.records = recordsMap(accepted)
-        return accepted
-      } catch (error) {
-        degrade(state, error)
-        return [...state.records.values()].map(cloneValue)
-      }
+      await state.hydration
+      return withTransactionTurn(state, async () => {
+        if (state.mode === "ephemeral" || !state.nativeDb) return [...state.records.values()].map(cloneValue)
+        try {
+          const raw = await readNativeRecords(state.nativeDb)
+          const accepted = validRecords(raw)
+          state.records = recordsMap(accepted)
+          return accepted
+        } catch (error) {
+          degrade(state, error)
+          return [...state.records.values()].map(cloneValue)
+        }
+      })
     }
   }
 
