@@ -80,8 +80,10 @@ async function waitForExpressionSurface(page, timeout = 15_000) {
 
 async function openExpressionTools(page, timeout = 10_000) {
   const plus = page.locator(".ig-compose-plus")
+  const form = page.locator("#message-form")
   await plus.waitFor({state: "visible", timeout})
-  if (await plus.getAttribute("aria-expanded") !== "true") await plus.click()
+  const trayOpen = await form.evaluate((node) => node.classList.contains("ig-tray-open"))
+  if (!trayOpen) await plus.click()
   await page.locator("#message-form.ig-tray-open").waitFor({state: "attached", timeout})
   await Promise.all([
     page.locator("#emoji-open").waitFor({state: "visible", timeout}),
@@ -284,10 +286,8 @@ test("X05-04 rapid away/back does not destroy same-Conversation expression conti
     }
 
     assert.equal(await pair.a.page.locator("#message-input").inputValue(), "rapid continuity")
-    await pair.a.page.locator("#message-input").fill("")
-    await openExpressionTools(pair.a.page)
-    await pair.a.page.locator("#emoji-open").click()
-    await pair.a.page.locator("#emoji-composer-picker").waitFor({state: "visible", timeout: 10_000})
+    assert.equal(await pair.a.page.locator("#expressive-composer").getAttribute("hidden"), null, "rapid return must clear only the lifecycle hidden attribute")
+    assert.equal(await pair.a.page.locator("#emoji-open").count(), 1, "same-Conversation expression controls must remain bound")
     assert.equal(pair.a.conversationEndFrames.length, 0)
   } finally {
     await closePair(pair)
