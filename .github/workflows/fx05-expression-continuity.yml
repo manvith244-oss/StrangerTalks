@@ -255,8 +255,7 @@ jobs:
 
           git config user.name "StrangerTalks F-X05"
           git config user.email "actions@users.noreply.github.com"
-          git show HEAD^^:.github/workflows/fx05-expression-continuity.yml > .github/workflows/fx05-expression-continuity.yml
-          git add test/js/fx05_expression_continuity_browser_test.mjs priv/static/assets/expression_surface.mjs .github/workflows/fx05-expression-continuity.yml
+          git add test/js/fx05_expression_continuity_browser_test.mjs priv/static/assets/expression_surface.mjs
           if git diff --cached --quiet; then
             echo "No F-X05 correction commit required"
           else
