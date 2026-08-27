@@ -8,6 +8,7 @@ const runtime = await import("../../priv/static/assets/route_runtime.mjs")
 const {
   CANONICAL_ROUTE_PATTERNS,
   parseRoute,
+  resolveActivityEventRoute,
   resolveRequestedRoute,
   screenForRoute
 } = contract
@@ -56,6 +57,9 @@ test("route parser rejects non-canonical aliases and malformed saved Conversatio
     "/settings/memories",
     "/talk",
     "/home",
+    "/language",
+    "/door",
+    "/match-found",
     "/conversation/123",
     "/chats/not-a-uuid",
     "/unknown"
@@ -117,6 +121,19 @@ test("terminal and unavailable Conversation routes remain canonical locations", 
   }
 })
 
+test("activity events only move activity-owned routes", () => {
+  assert.equal(resolveActivityEventRoute(parseRoute("/matchmaking"), "match_found").path, "/conversation")
+  assert.equal(resolveActivityEventRoute(parseRoute("/you"), "match_found").path, "/you")
+  assert.equal(resolveActivityEventRoute(parseRoute("/chats"), "match_found").path, "/chats")
+
+  assert.equal(resolveActivityEventRoute(parseRoute("/conversation"), "conversation_ended").path, "/conversation/ended")
+  assert.equal(resolveActivityEventRoute(parseRoute("/you"), "conversation_ended").path, "/you")
+  assert.equal(resolveActivityEventRoute(parseRoute("/chats"), "conversation_ended").path, "/chats")
+
+  assert.equal(resolveActivityEventRoute(parseRoute("/conversation"), "conversation_unavailable").path, "/conversation/unavailable")
+  assert.equal(resolveActivityEventRoute(parseRoute("/you"), "conversation_unavailable").path, "/you")
+})
+
 test("refresh resolution covers every frozen canonical route", () => {
   const cases = [
     ["/", queued, "/"],
@@ -144,9 +161,11 @@ test("runtime starts non-activity routes in preserve-away mode until canonical r
   assert.equal(createRouteRuntimeState("/conversation").preserveActivityAway, false)
 })
 
-test("F-02 route runtime does not emit queue Cancel, Conversation End, or Block", async () => {
+test("F-02 route runtime emits no destructive lifecycle actions and owns no Back-stack policy", async () => {
   const source = await readFile(new URL("../../priv/static/assets/route_runtime.mjs", import.meta.url), "utf8")
   assert.equal(source.includes('"queue:leave"'), false)
   assert.equal(source.includes('"conversation:end"'), false)
   assert.equal(source.includes('"conversation:block"'), false)
+  assert.equal(/report/i.test(source), false)
+  assert.equal(source.includes("pushState"), false)
 })
