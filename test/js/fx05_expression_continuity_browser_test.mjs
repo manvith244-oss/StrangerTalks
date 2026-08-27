@@ -45,8 +45,22 @@ async function queue(page) {
   await page.locator('button.door:has-text("Advice")').click()
 }
 
-async function waitForExpressionControls(page, timeout = 15_000) {
+async function waitForExpressionSurface(page, timeout = 15_000) {
   await page.locator("#expressive-composer:not([hidden])").waitFor({state: "attached", timeout})
+  await Promise.all([
+    page.locator("#message-input").waitFor({state: "visible", timeout}),
+    page.locator(".ig-compose-plus").waitFor({state: "visible", timeout}),
+    page.locator("#emoji-open").waitFor({state: "attached", timeout}),
+    page.locator("#expressive-open").waitFor({state: "attached", timeout}),
+    page.locator("#gif-open").waitFor({state: "attached", timeout})
+  ])
+}
+
+async function openExpressionTools(page, timeout = 10_000) {
+  const plus = page.locator(".ig-compose-plus")
+  await plus.waitFor({state: "visible", timeout})
+  if (await plus.getAttribute("aria-expanded") !== "true") await plus.click()
+  await page.locator("#message-form.ig-tray-open").waitFor({state: "attached", timeout})
   await Promise.all([
     page.locator("#emoji-open").waitFor({state: "visible", timeout}),
     page.locator("#expressive-open").waitFor({state: "visible", timeout}),
@@ -66,8 +80,8 @@ async function matchPair(browser) {
       b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000})
     ])
     await Promise.all([
-      waitForExpressionControls(a.page),
-      waitForExpressionControls(b.page)
+      waitForExpressionSurface(a.page),
+      waitForExpressionSurface(b.page)
     ])
     return {a, b}
   } catch (error) {
@@ -121,7 +135,7 @@ async function returnToSameConversationPresentation(page) {
     control.click()
   })
   await page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 10_000})
-  await waitForExpressionControls(page, 10_000)
+  await waitForExpressionSurface(page, 10_000)
 }
 
 async function endConversation(page) {
@@ -199,6 +213,7 @@ test("X05-03 picker UI resets safely while Expression authority survives same-Co
   let pair
   try {
     pair = await matchPair(browser)
+    await openExpressionTools(pair.a.page)
     await pair.a.page.locator("#emoji-open").click()
     await pair.a.page.locator("#emoji-composer-picker").waitFor({state: "visible", timeout: 10_000})
 
@@ -206,6 +221,7 @@ test("X05-03 picker UI resets safely while Expression authority survives same-Co
     assert.equal(await pair.a.page.locator("#emoji-composer-picker").isHidden(), true, "picker presentation may reset while hidden")
 
     await returnToSameConversationPresentation(pair.a.page)
+    await openExpressionTools(pair.a.page)
     await pair.a.page.locator("#emoji-open").click()
     await pair.a.page.locator("#emoji-composer-picker").waitFor({state: "visible", timeout: 10_000})
     assert.equal(pair.a.conversationEndFrames.length, 0)
@@ -228,6 +244,8 @@ test("X05-04 rapid away/back does not destroy same-Conversation expression conti
     }
 
     assert.equal(await pair.a.page.locator("#message-input").inputValue(), "rapid continuity")
+    await pair.a.page.locator("#message-input").fill("")
+    await openExpressionTools(pair.a.page)
     await pair.a.page.locator("#emoji-open").click()
     await pair.a.page.locator("#emoji-composer-picker").waitFor({state: "visible", timeout: 10_000})
     assert.equal(pair.a.conversationEndFrames.length, 0)
