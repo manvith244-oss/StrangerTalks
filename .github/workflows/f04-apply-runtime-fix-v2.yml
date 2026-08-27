@@ -1,0 +1,303 @@
+name: F-04 Apply Verified Runtime Fix V2
+
+on:
+  push:
+    branches:
+      - f04/conversation-continuity-2026-08-26
+    paths:
+      - ".github/workflows/f04-apply-runtime-fix-v2.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      MIX_TEST_PARTITION: _f04_apply_v2
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+    steps:
+      - name: Checkout exact trigger head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Construct minimal F-04 runtime correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("priv/static/assets/app.js")
+          text = path.read_text()
+
+          if "const releasedConversationChannels = new WeakSet()" in text:
+              raise SystemExit("runtime correction already present; helper must be one-shot")
+
+          start = text.index("function releaseConversationRuntime() {")
+          end = text.index("\nfunction isQuietModeActive()", start)
+          replacement = '''const releasedConversationChannels = new WeakSet()
+
+          function releaseConversationChannel(channel) {
+            if (!channel || releasedConversationChannels.has(channel)) return
+            releasedConversationChannels.add(channel)
+            try { channel.__f04ReleaseRuntimeBindings?.() } catch (_) {}
+            try { channel.leave() } catch (_) {}
+          }
+
+          function releaseConversationRuntime({conversationId = app.conversationId, channel = app.conversation} = {}) {
+            const targetsCurrent = Boolean(conversationId || channel) && app.conversation === channel && app.conversationId === conversationId
+            if (targetsCurrent) {
+              clearConversationTypingRuntime()
+              app.conversation = null
+              app.conversationId = null
+              app.currentEpochId = null
+              app.matchedTransition.release(conversationId)
+            }
+            releaseConversationChannel(channel)
+            return targetsCurrent
+          }
+          '''
+          text = text[:start] + replacement + text[end:]
+
+          start = text.index("async function reconcileWithServer(")
+          end = text.index("async function invalidateStaleActiveConversations", start)
+          reconcile = text[start:end]
+          queued = '  } else if (snapshot.canonical_state === "QUEUED" && snapshot.queue) {\n'
+          if reconcile.count(queued) != 1:
+              raise SystemExit("queued branch anchor mismatch")
+          reconcile = reconcile.replace(queued, queued + '    if (app.conversation || app.conversationId) releaseConversationRuntime()\n', 1)
+          available = '  } else {\n    bindQueueAttempt(null)\n'
+          if reconcile.count(available) != 1:
+              raise SystemExit("available branch anchor mismatch")
+          reconcile = reconcile.replace(available, '  } else {\n    if (app.conversation || app.conversationId) releaseConversationRuntime()\n    bindQueueAttempt(null)\n', 1)
+          text = text[:start] + reconcile + text[end:]
+
+          start = text.index("async function joinConversation(id) {")
+          end = text.index("async function handleMatchedConversation", start)
+          join = text[start:end]
+
+          header_start = join.index('  app.conversation = app.socket.channel(`conversation:${id}`, {')
+          header_end = join.index('\n\n  app.conversation.on("conversation:presence"', header_start)
+          header = '''  const channel = app.socket.channel(`conversation:${id}`, {
+            epoch_id: clientEpochId,
+            last_applied_sequence: lastAppliedSequence
+          })
+            app.conversation = channel
+            const runtimeBindings = []
+            const runtimeIsCurrent = () => app.conversation === channel && app.conversationId === id
+            const onCurrent = (event, handler) => {
+              const ref = channel.on(event, (...args) => {
+                if (!runtimeIsCurrent()) return
+                return handler(...args)
+              })
+              runtimeBindings.push([event, ref])
+              return ref
+            }
+            channel.__f04ReleaseRuntimeBindings = () => {
+              for (const [event, ref] of runtimeBindings.splice(0)) {
+                try { channel.off(event, ref) } catch (_) {}
+              }
+            }'''
+          join = join[:header_start] + header + join[header_end:]
+
+          binding_count = join.count('app.conversation.on(')
+          if binding_count < 10:
+              raise SystemExit(f"Conversation listener anchor mismatch: {binding_count}")
+          join = join.replace('app.conversation.on(', 'onCurrent(')
+          if join.count('  coord.setChannel(app.conversation)\n') != 1 or join.count('  app.conversation.join()\n') != 1:
+              raise SystemExit("captured channel anchors mismatch")
+          join = join.replace('  coord.setChannel(app.conversation)\n', '  coord.setChannel(channel)\n', 1)
+          join = join.replace('  app.conversation.join()\n', '  channel.join()\n', 1)
+
+          voice_line = '    await receiveVoiceNote(note)\n'
+          if join.count(voice_line) != 1:
+              raise SystemExit("voice callback anchor mismatch")
+          join = join.replace(voice_line, '    await receiveVoiceNote(note, {conversationId: id, channel, isCurrent: runtimeIsCurrent})\n    if (!runtimeIsCurrent()) return\n', 1)
+
+          ok_line = '    .receive("ok", async (syncPayload) => {\n'
+          if join.count(ok_line) != 1:
+              raise SystemExit("join ok anchor mismatch")
+          join = join.replace(ok_line, ok_line + '      if (!runtimeIsCurrent()) { releaseConversationChannel(channel); return }\n', 1)
+          for anchor in ['      await ensureTemporaryConversation(id)\n', '      await renderCachedConversation(id)\n', '        await applySyncPayload(id, syncPayload)\n']:
+              if join.count(anchor) != 1:
+                  raise SystemExit(f"join async anchor mismatch: {anchor.strip()}")
+              guard = '      if (!runtimeIsCurrent()) return\n' if anchor.startswith('      ') else '        if (!runtimeIsCurrent()) return\n'
+              join = join.replace(anchor, anchor + guard, 1)
+
+          error_line = '    .receive("error", async (error) => {\n'
+          if join.count(error_line) != 1:
+              raise SystemExit("join error anchor mismatch")
+          join = join.replace(error_line, error_line + '      if (!runtimeIsCurrent()) { releaseConversationChannel(channel); return }\n      releaseConversationRuntime({conversationId: id, channel})\n', 1)
+          text = text[:start] + join + text[end:]
+
+          start = text.index("async function handleMatchedConversation(payload, relationshipId = null) {")
+          end = text.index("async function ensureTemporaryConversation", start)
+          matched = text[start:end]
+          anchor = '  if (!conversationId) return\n'
+          if matched.count(anchor) != 1:
+              raise SystemExit("matched transition anchor mismatch")
+          matched = matched.replace(anchor, anchor + '  if (app.conversation || app.conversationId) releaseConversationRuntime()\n', 1)
+          text = text[:start] + matched + text[end:]
+
+          start = text.index("async function receiveVoiceNote(note) {")
+          end = text.index("\nfunction updateVoiceNoteStatus", start)
+          voice = text[start:end]
+          original_ack = 'push(app.conversation, "voice_note:ack"'
+          if voice.count(original_ack) != 2:
+              raise SystemExit(f"expected exactly two voice-note acknowledgement paths, found {voice.count(original_ack)}")
+
+          voice = voice.replace('async function receiveVoiceNote(note) {\n', '''async function receiveVoiceNote(note, runtime = null) {
+            const conversationId = runtime?.conversationId || app.conversationId
+            const channel = runtime?.channel || app.conversation
+            const runtimeIsCurrent = runtime?.isCurrent || (() => app.conversationId === conversationId && app.conversation === channel)
+            if (!runtimeIsCurrent()) return
+          ''', 1)
+          anchors = {
+              '  const id = `voice:${app.conversationId}:${note.voice_note_id}`\n': '  const id = `voice:${conversationId}:${note.voice_note_id}`\n',
+              '  const existing = await getRecord(id)\n': '  const existing = await getRecord(id)\n  if (!runtimeIsCurrent()) return\n',
+              '    if (!response.ok) throw new Error("download_failed")\n': '    if (!runtimeIsCurrent()) return\n    if (!response.ok) throw new Error("download_failed")\n',
+              '    const blob = await response.blob()\n': '    const blob = await response.blob()\n    if (!runtimeIsCurrent()) return\n',
+          }
+          for old, new in anchors.items():
+              if voice.count(old) != 1:
+                  raise SystemExit(f"voice anchor mismatch: {old.strip()}")
+              voice = voice.replace(old, new, 1)
+
+          voice = voice.replace(original_ack, 'push(channel, "voice_note:ack"')
+          if voice.count('push(channel, "voice_note:ack"') != 2:
+              raise SystemExit("captured voice-note acknowledgement paths mismatch")
+          voice = voice.replace('/api/conversations/${app.conversationId}/voice-notes/', '/api/conversations/${conversationId}/voice-notes/')
+          voice = voice.replace('conversation_id: app.conversationId', 'conversation_id: conversationId')
+
+          store = '    try { await putRecord(record) } catch { announce("Voice note received, but it may not survive refresh because local storage is unavailable.") }\n'
+          if voice.count(store) != 1:
+              raise SystemExit("voice store anchor mismatch")
+          voice = voice.replace(store, '    try { await putRecord(record) } catch { if (runtimeIsCurrent()) announce("Voice note received, but it may not survive refresh because local storage is unavailable.") }\n    if (!runtimeIsCurrent()) return\n', 1)
+
+          raf = '    requestAnimationFrame(() => { if (shouldFollow) scrollTimelineToNewest({smooth: true}); else $("#new-messages").hidden = false })\n'
+          if voice.count(raf) != 1:
+              raise SystemExit("voice RAF anchor mismatch")
+          voice = voice.replace(raf, '    requestAnimationFrame(() => { if (!runtimeIsCurrent()) return; if (shouldFollow) scrollTimelineToNewest({smooth: true}); else $("#new-messages").hidden = false })\n', 1)
+
+          stale_catch = '  } catch { announce("A voice note could not be downloaded before it expired.") }\n'
+          if voice.count(stale_catch) != 1:
+              raise SystemExit("voice catch anchor mismatch")
+          voice = voice.replace(stale_catch, '  } catch { if (runtimeIsCurrent()) announce("A voice note could not be downloaded before it expired.") }\n', 1)
+          text = text[:start] + voice + text[end:]
+
+          path.write_text(text)
+          PY
+
+          node --check priv/static/assets/app.js
+          git diff --check
+          test "$(git diff --name-only)" = "priv/static/assets/app.js"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare isolated database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Relevant Conversation regressions
+        run: |
+          mix test \
+            test/strangertalks_new/conversation_lifecycle_test.exs \
+            test/strangertalks_new/conversation_isolation_test.exs \
+            test/strangertalks_new_web/channels/conversation_terminal_channel_test.exs \
+            test/strangertalks_new_web/channels/conversation_presence_channel_test.exs
+
+      - name: Full mix precommit
+        run: mix precommit
+
+      - name: Start Phoenix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            endpoint_config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint_config, :server, true))
+            repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo_config |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 16))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/f04-v2-browser-server.log 2>&1 &
+          echo $! > /tmp/f04-v2-browser-server.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/f04-v2-browser-server.pid)" 2>/dev/null; then cat /tmp/f04-v2-browser-server.log; exit 1; fi
+            sleep 1
+          done
+          cat /tmp/f04-v2-browser-server.log
+          exit 1
+
+      - name: F-04 P0 runtime cleanup
+        run: node --test test/js/f04_conversation_runtime_cleanup_browser_test.mjs
+
+      - name: F-04 hostile runtime matrix
+        run: node --test test/js/f04_conversation_runtime_hostile_browser_test.mjs
+
+      - name: Final patch hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check priv/static/assets/app.js
+          git diff --check
+          test "$(git diff --name-only)" = "priv/static/assets/app.js"
+
+      - name: Commit verified correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add priv/static/assets/app.js
+          git commit -m "fix(f04): isolate Conversation runtime generations"
+          git push origin HEAD:f04/conversation-continuity-2026-08-26
+
+      - name: Stop Phoenix
+        if: always()
+        run: |
+          if [ -f /tmp/f04-v2-browser-server.pid ]; then
+            kill "$(cat /tmp/f04-v2-browser-server.pid)" 2>/dev/null || true
+          fi
