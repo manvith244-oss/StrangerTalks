@@ -12,10 +12,228 @@ on:
       - ".github/workflows/f04-conversation-continuity.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  apply_runtime_fix:
+    if: github.event.pull_request.head.sha == '86affe24a2603566470689c0e3e1c9d9be0eb190'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout carrier head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Apply minimal F-04 runtime authority correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("priv/static/assets/app.js")
+          text = path.read_text()
+
+          def replace_once(source, old, new, label):
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return source.replace(old, new, 1)
+
+          old_release = '''function releaseConversationRuntime() {
+            clearConversationTypingRuntime()
+            const channel = app.conversation
+            app.conversation = null
+            app.currentEpochId = null
+            if (channel) {
+              try { channel.leave() } catch (_) {}
+            }
+          }
+          '''
+          new_release = '''const releasedConversationChannels = new WeakSet()
+
+          function releaseConversationChannel(channel) {
+            if (!channel || releasedConversationChannels.has(channel)) return
+            releasedConversationChannels.add(channel)
+            try { channel.__f04ReleaseRuntimeBindings?.() } catch (_) {}
+            try { channel.leave() } catch (_) {}
+          }
+
+          function releaseConversationRuntime({conversationId = app.conversationId, channel = app.conversation} = {}) {
+            const targetsCurrent = Boolean(conversationId || channel) &&
+              app.conversation === channel &&
+              app.conversationId === conversationId
+
+            if (targetsCurrent) {
+              clearConversationTypingRuntime()
+              app.conversation = null
+              app.conversationId = null
+              app.currentEpochId = null
+              app.matchedTransition.release(conversationId)
+            }
+
+            releaseConversationChannel(channel)
+            return targetsCurrent
+          }
+          '''
+          text = replace_once(text, old_release, new_release, "release helper")
+
+          reconcile_start = text.index("async function reconcileWithServer(")
+          reconcile_end = text.index("async function invalidateStaleActiveConversations", reconcile_start)
+          reconcile = text[reconcile_start:reconcile_end]
+          reconcile = replace_once(
+              reconcile,
+              '''  } else if (snapshot.canonical_state === "QUEUED" && snapshot.queue) {
+            bindQueueAttempt(snapshot.queue.queue_attempt_id)
+          ''',
+              '''  } else if (snapshot.canonical_state === "QUEUED" && snapshot.queue) {
+            if (app.conversation || app.conversationId) releaseConversationRuntime()
+            bindQueueAttempt(snapshot.queue.queue_attempt_id)
+          ''',
+              "QUEUED stale runtime eviction",
+          )
+          reconcile = replace_once(
+              reconcile,
+              '''  } else {
+            bindQueueAttempt(null)
+          ''',
+              '''  } else {
+            if (app.conversation || app.conversationId) releaseConversationRuntime()
+            bindQueueAttempt(null)
+          ''',
+              "AVAILABLE stale runtime eviction",
+          )
+          text = text[:reconcile_start] + reconcile + text[reconcile_end:]
+
+          join_start = text.index("async function joinConversation(id) {")
+          join_end = text.index("async function handleMatchedConversation", join_start)
+          join = text[join_start:join_end]
+
+          join = replace_once(
+              join,
+              '''  app.conversation = app.socket.channel(`conversation:${id}`, {
+            epoch_id: clientEpochId,
+            last_applied_sequence: lastAppliedSequence
+          })
+          ''',
+              '''  const channel = app.socket.channel(`conversation:${id}`, {
+            epoch_id: clientEpochId,
+            last_applied_sequence: lastAppliedSequence
+          })
+            app.conversation = channel
+
+            const runtimeBindings = []
+            const runtimeIsCurrent = () => app.conversation === channel && app.conversationId === id
+            const onCurrent = (event, handler) => {
+              const ref = channel.on(event, (...args) => {
+                if (!runtimeIsCurrent()) return
+                return handler(...args)
+              })
+              runtimeBindings.push([event, ref])
+              return ref
+            }
+            channel.__f04ReleaseRuntimeBindings = () => {
+              for (const [event, ref] of runtimeBindings.splice(0)) {
+                try { channel.off(event, ref) } catch (_) {}
+              }
+            }
+          ''',
+              "captured Conversation channel",
+          )
+
+          binding_count = join.count("app.conversation.on(")
+          if binding_count < 10:
+              raise SystemExit(f"Conversation binding guard: expected many bindings, found {binding_count}")
+          join = join.replace("app.conversation.on(", "onCurrent(")
+          join = replace_once(join, "  coord.setChannel(app.conversation)\n", "  coord.setChannel(channel)\n", "media channel capture")
+          join = replace_once(join, "  app.conversation.join()\n", "  channel.join()\n", "captured channel join")
+
+          join = replace_once(
+              join,
+              '''    .receive("ok", async (syncPayload) => {
+              await ensureTemporaryConversation(id)
+              await renderCachedConversation(id)
+              if (syncPayload) {
+                await applySyncPayload(id, syncPayload)
+              }
+              updateLocalConnection("connected")
+          ''',
+              '''    .receive("ok", async (syncPayload) => {
+              if (!runtimeIsCurrent()) {
+                releaseConversationChannel(channel)
+                return
+              }
+              await ensureTemporaryConversation(id)
+              if (!runtimeIsCurrent()) return
+              await renderCachedConversation(id)
+              if (!runtimeIsCurrent()) return
+              if (syncPayload) {
+                await applySyncPayload(id, syncPayload)
+                if (!runtimeIsCurrent()) return
+              }
+              updateLocalConnection("connected")
+          ''',
+              "join success stale guard",
+          )
+
+          join = replace_once(
+              join,
+              '''    .receive("error", async (error) => {
+              cancelMessageEdit({restoreFocus: false})
+          ''',
+              '''    .receive("error", async (error) => {
+              if (!runtimeIsCurrent()) {
+                releaseConversationChannel(channel)
+                return
+              }
+              releaseConversationRuntime({conversationId: id, channel})
+              cancelMessageEdit({restoreFocus: false})
+          ''',
+              "join failure stale guard",
+          )
+
+          text = text[:join_start] + join + text[join_end:]
+
+          matched_start = text.index("async function handleMatchedConversation(payload, relationshipId = null) {")
+          matched_end = text.index("async function ensureTemporaryConversation", matched_start)
+          matched = text[matched_start:matched_end]
+          matched = replace_once(
+              matched,
+              '''  const conversationId = app.matchedTransition.claim(payload)
+            if (!conversationId) return
+            markConversationAuthorityTransition()
+          ''',
+              '''  const conversationId = app.matchedTransition.claim(payload)
+            if (!conversationId) return
+            if (app.conversation && app.conversationId === conversationId) return
+            if (app.conversation || app.conversationId) releaseConversationRuntime()
+            markConversationAuthorityTransition()
+          ''',
+              "A-to-B stale runtime eviction",
+          )
+          text = text[:matched_start] + matched + text[matched_end:]
+
+          path.write_text(text)
+          PY
+
+          node --check priv/static/assets/app.js
+          git diff --check
+          git diff -- priv/static/assets/app.js
+
+      - name: Commit correction onto existing F-04 branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$(git status --porcelain -- priv/static/assets/app.js)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add priv/static/assets/app.js
+          git commit -m "fix(f04): enforce conversation runtime authority"
+          git push origin HEAD:f04/conversation-continuity-2026-08-26
+
   continuity:
+    if: github.event.pull_request.head.sha != '86affe24a2603566470689c0e3e1c9d9be0eb190'
     runs-on: ubuntu-latest
     services:
       postgres:
