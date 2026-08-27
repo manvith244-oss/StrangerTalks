@@ -50,7 +50,7 @@ test("frozen route table parses to the existing product screens", () => {
   assert.equal(screenForRoute(detail), "history")
 })
 
-test("route parser rejects non-canonical aliases and malformed saved Conversation ids", () => {
+test("route parser rejects non-canonical aliases, active-id URLs, and malformed saved Conversation ids", () => {
   for (const path of [
     "/matching",
     "/settings",
@@ -61,6 +61,7 @@ test("route parser rejects non-canonical aliases and malformed saved Conversatio
     "/door",
     "/match-found",
     "/conversation/123",
+    `/conversation/${UUID}`,
     "/chats/not-a-uuid",
     "/unknown"
   ]) {
@@ -125,6 +126,10 @@ test("activity events only move activity-owned routes", () => {
   assert.equal(resolveActivityEventRoute(parseRoute("/matchmaking"), "match_found").path, "/conversation")
   assert.equal(resolveActivityEventRoute(parseRoute("/you"), "match_found").path, "/you")
   assert.equal(resolveActivityEventRoute(parseRoute("/chats"), "match_found").path, "/chats")
+
+  const slashYou = resolveActivityEventRoute(parseRoute("/you/"), "match_found")
+  assert.equal(slashYou.path, "/you")
+  assert.equal(slashYou.reason, "canonical_trailing_slash")
 
   assert.equal(resolveActivityEventRoute(parseRoute("/conversation"), "conversation_ended").path, "/conversation/ended")
   assert.equal(resolveActivityEventRoute(parseRoute("/you"), "conversation_ended").path, "/you")
