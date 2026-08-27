@@ -358,9 +358,21 @@ function connectSocket() {
       bindQueueAttempt(null)
       show("doors")
     }
-    if (status === "queued" && queue_attempt_id) show("queue")
+    if (status === "queued" && queue_attempt_id) {
+      const currentRoute = parseRoute(location.pathname)
+      if (currentRoute.valid && currentRoute.kind === "talk") {
+        navigation.navigate("/matchmaking", {
+          snapshot: {canonical_state: "QUEUED", queue: {queue_attempt_id}}
+        }).catch(() => announce("Matchmaking navigation could not be applied."))
+      } else if (currentRoute.valid && currentRoute.kind === "matchmaking") {
+        presentScreen("queue")
+      }
+    }
   })
-  app.participant.on("match_found", (payload) => { handleMatchedConversation(payload).catch(() => announce("Reconnecting to the Conversation…")) })
+  app.participant.on("match_found", (payload) => {
+    navigation.activityEvent("match_found").catch(() => announce("Conversation navigation could not be applied."))
+    handleMatchedConversation(payload).catch(() => announce("Reconnecting to the Conversation…"))
+  })
   app.participant.on("transition:recovery_failed", () => {
     announce("That Conversation ended before it opened. Returning to Doors.")
     resumeLocalConversation().catch(() => show("doors"))
@@ -901,7 +913,7 @@ async function joinConversation(id) {
     resetAvatars()
     app.messageAvailability.clear()
     await markConversationEnded()
-    show("ended")
+    await navigation.activityEvent("conversation_ended")
     $("#consent")?.focus()
     announce("Conversation ended. Choose what this device should retain.")
   })

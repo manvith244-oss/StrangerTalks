@@ -113,6 +113,18 @@ async function bootObserved(browser, path = "/") {
   return {context, ...observed}
 }
 
+async function bootActivityObserved(browser, path, expectedPath) {
+  const context = await browser.newContext({viewport: {width: 1280, height: 800}})
+  const page = await context.newPage()
+  const observed = await observePage(context, page)
+  const response = await page.goto(`${BASE_URL}${path}`, {waitUntil: "domcontentloaded"})
+  assert.ok(response?.ok(), `${path} loads`)
+  await page.waitForFunction(() => document.querySelectorAll("#doors button.door").length > 0, null, {timeout: WAIT_MS})
+  await waitForParticipantJoin(observed)
+  await page.waitForFunction(expectedPathname => location.pathname === expectedPathname, expectedPath, {timeout: WAIT_MS})
+  return {context, ...observed}
+}
+
 function activeScreen(page, screen) {
   return page.locator(`section[data-screen="${screen}"].active`)
 }
@@ -356,11 +368,113 @@ test("F03 browser J10: direct unavailable Conversation canonicalizes with replac
   const browser = await chromium.launch({headless: true})
   let observed
   try {
-    observed = await bootObserved(browser, "/conversation")
+    observed = await bootActivityObserved(browser, "/conversation", "/conversation/unavailable")
     await activeScreen(observed.page, "unrecoverable").waitFor({state: "visible"})
     assert.equal(new URL(observed.page.url()).pathname, "/conversation/unavailable")
   } finally {
     await observed?.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
+
+test("F03 browser rapid primary navigation and Back/Forward stays coherent", {timeout: 45_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let observed
+  try {
+    observed = await bootObserved(browser)
+    const mark = observed.journal.mark()
+    await clickHiddenPrimary(observed.page, "settings")
+    await observed.page.waitForFunction(() => location.pathname === "/you", null, {timeout: WAIT_MS})
+    await clickHiddenPrimary(observed.page, "chats")
+    await observed.page.waitForFunction(() => location.pathname === "/chats", null, {timeout: WAIT_MS})
+    await clickHiddenPrimary(observed.page, "doors")
+    await observed.page.waitForFunction(() => location.pathname === "/", null, {timeout: WAIT_MS})
+    await observed.page.evaluate(() => history.back())
+    await observed.page.waitForFunction(() => location.pathname === "/chats", null, {timeout: WAIT_MS})
+    await observed.page.evaluate(() => history.forward())
+    await observed.page.waitForFunction(() => location.pathname === "/", null, {timeout: WAIT_MS})
+    await observed.page.evaluate(() => history.back())
+    await observed.page.waitForFunction(() => location.pathname === "/chats", null, {timeout: WAIT_MS})
+    await activeScreen(observed.page, "chats").waitFor({state: "visible"})
+    assert.deepEqual(destructiveFrames(observed, mark), [])
+  } finally {
+    await observed?.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
+
+test("F03 browser rapid QUEUED navigation rejects a pending canonical Back completion", {timeout: 60_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let observed
+  try {
+    observed = await bootObserved(browser)
+    await clickDoorAndQueue(observed, "Advice")
+    assert.equal(new URL(observed.page.url()).pathname, "/matchmaking")
+    await clickHiddenPrimary(observed.page, "settings")
+    await activeScreen(observed.page, "settings").waitFor({state: "visible"})
+    const mark = observed.journal.mark()
+    await observed.page.evaluate(() => history.back())
+    const reconcileRequest = await observed.journal.waitFor(
+      event => event.type === "frame_sent" && event.event === "session:reconcile",
+      "queued Back session:reconcile",
+      mark
+    )
+    const replyWasAlreadyApplied = observed.journal.events.slice(mark).some(event =>
+      event.type === "frame_received" && event.event === "phx_reply" && event.ref === reconcileRequest.ref
+    )
+    assert.equal(replyWasAlreadyApplied, false, "queued canonical read must still be pending for the stale-completion attack")
+    await clickHiddenPrimary(observed.page, "chats")
+    await activeScreen(observed.page, "chats").waitFor({state: "visible"})
+    await observed.journal.waitFor(
+      event => event.type === "frame_received" && event.event === "phx_reply" && event.ref === reconcileRequest.ref,
+      "queued Back session:reconcile reply",
+      mark
+    )
+    await observed.page.waitForTimeout(50)
+    assert.equal(new URL(observed.page.url()).pathname, "/chats")
+    assert.deepEqual(destructiveFrames(observed, mark), [])
+  } finally {
+    await observed?.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
+
+test("F03 browser rapid ACTIVE Conversation navigation rejects a pending canonical Back completion", {timeout: 75_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let pair
+  try {
+    pair = await matchPair(browser)
+    assert.equal(new URL(pair.a.page.url()).pathname, "/conversation")
+    await clickHiddenPrimary(pair.a.page, "chats")
+    await activeScreen(pair.a.page, "chats").waitFor({state: "visible"})
+    const mark = pair.a.journal.mark()
+    await pair.a.page.evaluate(() => history.back())
+    const reconcileRequest = await pair.a.journal.waitFor(
+      event => event.type === "frame_sent" && event.event === "session:reconcile",
+      "Conversation Back session:reconcile",
+      mark
+    )
+    const replyWasAlreadyApplied = pair.a.journal.events.slice(mark).some(event =>
+      event.type === "frame_received" && event.event === "phx_reply" && event.ref === reconcileRequest.ref
+    )
+    assert.equal(replyWasAlreadyApplied, false, "Conversation canonical read must still be pending for the stale-completion attack")
+    await clickHiddenPrimary(pair.a.page, "settings")
+    await activeScreen(pair.a.page, "settings").waitFor({state: "visible"})
+    await pair.a.journal.waitFor(
+      event => event.type === "frame_received" && event.event === "phx_reply" && event.ref === reconcileRequest.ref,
+      "Conversation Back session:reconcile reply",
+      mark
+    )
+    await pair.a.page.waitForTimeout(50)
+    assert.equal(new URL(pair.a.page.url()).pathname, "/you")
+    assert.deepEqual(destructiveFrames(pair.a, mark), [])
+    await pair.a.page.evaluate(() => history.back())
+    await activeScreen(pair.a.page, "conversation").waitFor({state: "visible"})
+    assert.equal(new URL(pair.a.page.url()).pathname, "/conversation")
+    assert.deepEqual(destructiveFrames(pair.a, mark), [])
+  } finally {
+    await pair?.a.context.close().catch(() => {})
+    await pair?.b.context.close().catch(() => {})
     await browser.close().catch(() => {})
   }
 })
