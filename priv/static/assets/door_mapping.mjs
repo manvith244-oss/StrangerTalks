@@ -1,4 +1,5 @@
 import "./arrival_first_minute.mjs"
+import {futureConversationLanguageForQueue} from "./f11_persistence_runtime.mjs"
 
 // V1 presentation aliases for the existing canonical backend Door values.
 export const DOORS = Object.freeze([
@@ -24,6 +25,7 @@ export function doorLabelForBackend(value) {
 
 export function queuePayloadFor(label, conversationLanguage) {
   const door_type = backendDoorFor(label)
-  const validLanguage = CONVERSATION_LANGUAGES.some(({value}) => value === conversationLanguage)
-  return door_type && validLanguage ? {door_type, conversation_language: conversationLanguage} : null
+  const futureLanguage = futureConversationLanguageForQueue(conversationLanguage)
+  const validLanguage = CONVERSATION_LANGUAGES.some(({value}) => value === futureLanguage)
+  return door_type && validLanguage ? {door_type, conversation_language: futureLanguage} : null
 }
