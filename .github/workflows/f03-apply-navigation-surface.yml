@@ -1,0 +1,34 @@
+name: F-03 One-Time Navigation Surface Patch
+
+on:
+  push:
+    branches:
+      - f03/navigation-history-wave-a-2026-08-27
+
+permissions:
+  contents: write
+
+jobs:
+  apply-once:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f03/navigation-history-wave-a-2026-08-27
+          fetch-depth: 0
+
+      - name: Apply tested F-03 surface integration
+        run: python3 scripts/f03_apply_navigation_surface.py
+
+      - name: Remove one-time patch machinery
+        run: rm scripts/f03_apply_navigation_surface.py .github/workflows/f03-apply-navigation-surface.yml
+
+      - name: Commit exact production integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add priv/static/assets/app.js scripts/f03_apply_navigation_surface.py .github/workflows/f03-apply-navigation-surface.yml
+          git diff --cached --check
+          git commit -m "feat(f03): integrate canonical browser navigation"
+          git push origin HEAD:f03/navigation-history-wave-a-2026-08-27
