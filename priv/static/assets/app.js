@@ -132,7 +132,6 @@ function announce(message) { $("#status").textContent = message }
 function show(name) {
   closeDisclosureDialog({restoreFocus: false})
   if (name !== "relationships") app.reconnectCountdown.stop()
-  if (name !== "conversation") cancelReplyStaging()
   document.querySelectorAll("[data-screen]").forEach((node) => node.classList.toggle("active", node.dataset.screen === name))
   $("#expressive-composer").hidden = name !== "conversation"
   if (name !== "conversation") closeExpressivePicker(false)
