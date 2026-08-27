@@ -47,86 +47,46 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          import re
           from pathlib import Path
 
           path = Path("test/js/f04_conversation_runtime_hostile_browser_test.mjs")
           text = path.read_text()
 
-          old_on = '''    const originalOn = channel.on.bind(channel)
-          channel.on = function(event, callback) {
-            const ref = originalOn(event, callback)
-            const key = String(event) + ":" + String(ref)
-            if (!metrics.listenerRefs[topic][key]) {
-              metrics.listenerRefs[topic][key] = true
-              metrics.listenerOn += 1
-              metrics.activeListeners += 1
-              metrics.maxActiveListeners = Math.max(metrics.maxActiveListeners, metrics.activeListeners)
-            }
-            return ref
-          }
-          '''
-          new_on = '''    const isApplicationListenerEvent = (event) => {
-            const name = String(event)
-            return !name.startsWith("phx_") && !name.startsWith("chan_reply_")
-          }
+          on_marker = '    const originalOn = channel.on.bind(channel)\n'
+          predicate = '    const isApplicationListenerEvent = (event) => {\n      const name = String(event)\n      return !name.startsWith("phx_") && !name.startsWith("chan_reply_")\n    }\n\n'
+          if text.count(on_marker) != 1:
+              raise SystemExit(f"listener-on structural marker mismatch: {text.count(on_marker)}")
+          text = text.replace(on_marker, predicate + on_marker, 1)
 
-          const originalOn = channel.on.bind(channel)
-          channel.on = function(event, callback) {
-            const ref = originalOn(event, callback)
-            if (!isApplicationListenerEvent(event)) return ref
-            const key = String(event) + ":" + String(ref)
-            if (!metrics.listenerRefs[topic][key]) {
-              metrics.listenerRefs[topic][key] = true
-              metrics.listenerOn += 1
-              metrics.activeListeners += 1
-              metrics.maxActiveListeners = Math.max(metrics.maxActiveListeners, metrics.activeListeners)
-            }
-            return ref
-          }
-          '''
-          if text.count(old_on) != 1:
-              raise SystemExit(f"listener-on probe anchor mismatch: {text.count(old_on)}")
-          text = text.replace(old_on, new_on, 1)
+          text, on_count = re.subn(
+              r'(    channel\.on = function\(event, callback\) \{\n      const ref = originalOn\(event, callback\)\n)',
+              r'\1      if (!isApplicationListenerEvent(event)) return ref\n',
+              text,
+              count=1
+          )
+          if on_count != 1:
+              raise SystemExit(f"listener-on callback structural mismatch: {on_count}")
 
-          old_off = '''    const originalOff = channel.off.bind(channel)
-          channel.off = function(event, ref) {
-            const key = String(event) + ":" + String(ref)
-            if (metrics.listenerRefs[topic][key]) {
-              delete metrics.listenerRefs[topic][key]
-              metrics.listenerOff += 1
-              metrics.activeListeners -= 1
-            }
-            return originalOff(event, ref)
-          }
-          '''
-          new_off = '''    const originalOff = channel.off.bind(channel)
-          channel.off = function(event, ref) {
-            if (isApplicationListenerEvent(event)) {
-              const key = String(event) + ":" + String(ref)
-              if (metrics.listenerRefs[topic][key]) {
-                delete metrics.listenerRefs[topic][key]
-                metrics.listenerOff += 1
-                metrics.activeListeners -= 1
-              }
-            }
-            return originalOff(event, ref)
-          }
-          '''
-          if text.count(old_off) != 1:
-              raise SystemExit(f"listener-off probe anchor mismatch: {text.count(old_off)}")
-          text = text.replace(old_off, new_off, 1)
+          text, off_count = re.subn(
+              r'(    channel\.off = function\(event, ref\) \{\n)',
+              r'\1      if (!isApplicationListenerEvent(event)) return originalOff(event, ref)\n',
+              text,
+              count=1
+          )
+          if off_count != 1:
+              raise SystemExit(f"listener-off structural mismatch: {off_count}")
 
-          old_voice = '''  voiceRecord(conversationId, voiceNoteId) {
-            return getRecord("voice:" + conversationId + ":" + voiceNoteId)
-          }
-          '''
-          new_voice = '''  async voiceRecord(conversationId, voiceNoteId) {
-            return (await getRecord("voice:" + conversationId + ":" + voiceNoteId)) ?? null
-          }
-          '''
-          if text.count(old_voice) != 1:
-              raise SystemExit(f"voice probe anchor mismatch: {text.count(old_voice)}")
-          text = text.replace(old_voice, new_voice, 1)
+          voice_pattern = re.compile(
+              r'  voiceRecord\(conversationId, voiceNoteId\) \{\n    return getRecord\("voice:" \+ conversationId \+ ":" \+ voiceNoteId\)\n  \}'
+          )
+          text, voice_count = voice_pattern.subn(
+              '  async voiceRecord(conversationId, voiceNoteId) {\n    return (await getRecord("voice:" + conversationId + ":" + voiceNoteId)) ?? null\n  }',
+              text,
+              count=1
+          )
+          if voice_count != 1:
+              raise SystemExit(f"voice probe structural mismatch: {voice_count}")
 
           path.write_text(text)
           PY
@@ -134,7 +94,6 @@ jobs:
           node --check test/js/f04_conversation_runtime_hostile_browser_test.mjs
           git diff --check
           test "$(git diff --name-only)" = "test/js/f04_conversation_runtime_hostile_browser_test.mjs"
-
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
         with:
