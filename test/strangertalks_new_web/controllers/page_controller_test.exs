@@ -150,8 +150,9 @@ defmodule StrangertalksNewWeb.PageControllerTest do
   test "Bond matched responses and pushes share the existing Conversation transition" do
     javascript = File.read!(Application.app_dir(:strangertalks_new, "priv/static/assets/app.js"))
 
-    assert javascript =~
-             ~S|app.participant.on("match_found", (payload) => { handleMatchedConversation(payload)|
+    assert javascript =~ ~S|app.participant.on("match_found", (payload) => {|
+    assert javascript =~ ~S|navigation.activityEvent("match_found")|
+    assert javascript =~ ~S|handleMatchedConversation(payload)|
 
     assert javascript =~
              ~S|if (state.status === "matched") await handleMatchedConversation(state, relationshipId)|

@@ -39,6 +39,9 @@ import {
 } from "./live_call.mjs"
 import {ReflectionManager} from "./reflections.mjs"
 import {applyReconciliationIfCurrent, createSessionReconciliationGuard} from "./session_reconciliation_guard.mjs"
+import {parseRoute, routeNavigationPathForScreen} from "./route_contract.mjs"
+import {createRouteRuntimeState} from "./route_runtime.mjs"
+import {createNavigationHistory} from "./navigation_history.mjs"
 
 const identityKey = "strangertalks.identity.v1"
 const conversationLanguageKey = "strangertalks.conversation-language.v1"
@@ -129,17 +132,71 @@ function accountFetch(path, options = {}) {
 }
 
 function announce(message) { $("#status").textContent = message }
+
+function presentScreen(name) {
+  document.querySelectorAll("[data-screen]").forEach((node) => node.classList.toggle("active", node.dataset.screen === name))
+  $("#expressive-composer").hidden = name !== "conversation"
+  if (name !== "conversation") closeExpressivePicker(false)
+  if (name === "chats") renderChats()
+  if (name === "relationships") renderLocalViews()
+  if (name === "reflections") loadAndRenderReflections()
+}
+
+function updatePrimaryNavigation(primaryDestination) {
+  const destinationByScreen = {doors: "talk", chats: "chats", relationships: "bonds", settings: "you"}
+  document.querySelectorAll("#bottom-nav [data-go]").forEach((button) => {
+    const selected = destinationByScreen[button.dataset.go] === primaryDestination
+    if (selected) button.setAttribute("aria-current", "page")
+    else button.removeAttribute("aria-current")
+  })
+}
+
+function presentRoute(decision) {
+  const route = parseRoute(decision.path)
+  updatePrimaryNavigation(decision.primaryDestination)
+
+  if (decision.screen === "history" && route.valid && route.params?.conversationId) {
+    renderHistory(route.params.conversationId).catch(() => announce("This saved Conversation is not available on this device."))
+    return
+  }
+
+  presentScreen(decision.screen)
+}
+
+async function readCanonicalNavigationSnapshot() {
+  if (!app.participantJoined || !app.participant) return null
+  const response = await push(app.participant, "session:reconcile")
+  return response?.snapshot || null
+}
+
+let navigationInitialized = false
+const navigation = createNavigationHistory({
+  history,
+  location,
+  getCanonicalSnapshot: readCanonicalNavigationSnapshot,
+  applyRoute: presentRoute
+})
+
+async function initializeOrReconcileNavigation(snapshot) {
+  if (!navigationInitialized) {
+    navigationInitialized = true
+    return navigation.initialize({snapshot})
+  }
+  return navigation.reconcile(snapshot)
+}
+
+async function navigateToScreen(name, conversationId = null) {
+  const path = routeNavigationPathForScreen(name, conversationId)
+  if (!path) return {applied: false, invalid: true}
+  return navigation.navigate(path)
+}
+
 function show(name) {
   closeDisclosureDialog({restoreFocus: false})
   if (name !== "relationships") app.reconnectCountdown.stop()
   if (name !== "conversation") cancelReplyStaging()
-  document.querySelectorAll("[data-screen]").forEach((node) => node.classList.toggle("active", node.dataset.screen === name))
-  $("#expressive-composer").hidden = name !== "conversation"
-  if (name !== "conversation") closeExpressivePicker(false)
+  presentScreen(name)
   $("#bottom-nav").hidden = !["doors", "chats", "relationships", "settings"].includes(name)
-  if (name === "chats") renderChats()
-  if (name === "relationships") renderLocalViews()
-  if (name === "reflections") loadAndRenderReflections()
 }
 
 function disclosureFocusables(dialog) {
@@ -301,9 +358,21 @@ function connectSocket() {
       bindQueueAttempt(null)
       show("doors")
     }
-    if (status === "queued" && queue_attempt_id) show("queue")
+    if (status === "queued" && queue_attempt_id) {
+      const currentRoute = parseRoute(location.pathname)
+      if (currentRoute.valid && currentRoute.kind === "talk") {
+        navigation.navigate("/matchmaking", {
+          snapshot: {canonical_state: "QUEUED", queue: {queue_attempt_id}}
+        }).catch(() => announce("Matchmaking navigation could not be applied."))
+      } else if (currentRoute.valid && currentRoute.kind === "matchmaking") {
+        presentScreen("queue")
+      }
+    }
   })
-  app.participant.on("match_found", (payload) => { handleMatchedConversation(payload).catch(() => announce("Reconnecting to the Conversation…")) })
+  app.participant.on("match_found", (payload) => {
+    navigation.activityEvent("match_found").catch(() => announce("Conversation navigation could not be applied."))
+    handleMatchedConversation(payload).catch(() => announce("Reconnecting to the Conversation…"))
+  })
   app.participant.on("transition:recovery_failed", () => {
     announce("That Conversation ended before it opened. Returning to Doors.")
     resumeLocalConversation().catch(() => show("doors"))
@@ -315,6 +384,7 @@ function connectSocket() {
   app.participant.join().receive("ok", async (response) => {
     app.participantJoined = true
     await reconcileWithServer(response?.snapshot)
+    await initializeOrReconcileNavigation(response?.snapshot)
     if (document.querySelector('[data-screen="relationships"]')?.classList.contains("active")) renderLocalViews()
   }).receive("error", (error) => {
     handleDomainError(error, {fallbackMessage: "Could not restore session. Please try again.", fallbackScreen: "doors"})
@@ -843,7 +913,7 @@ async function joinConversation(id) {
     resetAvatars()
     app.messageAvailability.clear()
     await markConversationEnded()
-    show("ended")
+    await navigation.activityEvent("conversation_ended")
     $("#consent")?.focus()
     announce("Conversation ended. Choose what this device should retain.")
   })
@@ -3496,15 +3566,19 @@ function scrollHistoryToNewest() {
   requestAnimationFrame(() => $("#history-messages").lastElementChild?.scrollIntoView({block: "end", behavior: "auto"}))
 }
 
-async function openHistory(conversationId) {
+async function renderHistory(conversationId) {
   app.historyConversationId = conversationId; app.rendered.clear(); releaseAllVoiceUrls(); $("#history-messages").replaceChildren()
   const records = await listRecords(); const conversation = records.find(({id}) => id === `conversation:${conversationId}`)
   $("#history-title").textContent = conversation.value.display_door
   const ribbon = signatureRibbon(conversation.value.abstract_signature_seed); $("#history-signature").replaceWith(ribbon); ribbon.id = "history-signature"
   chronologicalTimeline(records.filter((record) => ["local_message", "local_voice_note"].includes(record.type) && record.value.conversation_id === conversationId)).forEach((record) => record.type === "local_voice_note" ? renderVoiceNoteNode(record.value, $("#history-messages"), true) : renderMessageNode(record.value, record.value.mine, $("#history-messages")))
   $("#history-summary").value = records.find(({id}) => id === `summary:${conversationId}`)?.value.text || ""
-  show("history")
+  presentScreen("history")
   scrollHistoryToNewest()
+}
+
+async function openHistory(conversationId) {
+  return navigateToScreen("history", conversationId)
 }
 
 function releaseVoiceUrl(voiceNoteId) {
@@ -3896,8 +3970,14 @@ async function sendExpressive(expressiveId) {
 
 initializeLifetimePresentation()
 
+const initialNavigationRuntimeState = createRouteRuntimeState(location.pathname)
+if (!initialNavigationRuntimeState.requiresCanonicalReadiness) {
+  initializeOrReconcileNavigation(null).catch(() => announce("Navigation could not be initialized."))
+}
+
 DOORS.forEach((door) => { const button = document.createElement("button"); button.className = "door"; button.type = "button"; button.dataset.door = door.value; button.setAttribute("aria-pressed", "false"); const mark = document.createElement("i"); mark.className = "door-mark"; mark.setAttribute("aria-hidden", "true"); const title = document.createElement("strong"); title.textContent = door.label; const description = document.createElement("span"); description.textContent = door.description; button.append(mark, title, description); button.addEventListener("click", () => { document.querySelectorAll(".door").forEach((node) => node.setAttribute("aria-pressed", String(node === button))); startMatchingFor(door.label) }); $("#doors").append(button) })
-document.addEventListener("click", (event) => { const target = event.target.closest("[data-go]"); if (target) show(target.dataset.go) })
+document.addEventListener("click", (event) => { const target = event.target.closest("[data-go]"); if (target) navigateToScreen(target.dataset.go).catch(() => announce("Navigation could not be completed.")) })
+window.addEventListener("popstate", () => { navigation.popstate().catch(() => announce("Navigation could not be restored.")) })
 const joinQueueBtn = $("#join-queue"); if (joinQueueBtn) joinQueueBtn.addEventListener("click", () => startMatchingFor(app.selectedDoor))
 $("#leave-queue").addEventListener("click", async () => {
   try {
@@ -4696,4 +4776,4 @@ languageSelect.addEventListener("change", () => {
   else localStorage.removeItem(conversationLanguageKey)
 })
 
-ensureBootstrap().then(async () => { const settings = await getRecord("settings:privacy"); if (settings?.value.reduced_motion) { $("#reduced-motion").checked = true; document.body.classList.add("reduce-motion") } const accountResult = new URLSearchParams(location.search).get("account"); if (accountResult === "connected" && app.account.connected) await restoreFromGoogle(true).catch(() => announce("Connected privately. Unlock encrypted sync from You when you are ready.")); if (accountResult) history.replaceState({}, "", "/") }).catch(() => announce("StrangerTalks could not start. Please reload."))
+ensureBootstrap().then(async () => { const settings = await getRecord("settings:privacy"); if (settings?.value.reduced_motion) { $("#reduced-motion").checked = true; document.body.classList.add("reduce-motion") } const accountResult = new URLSearchParams(location.search).get("account"); if (accountResult === "connected" && app.account.connected) await restoreFromGoogle(true).catch(() => announce("Connected privately. Unlock encrypted sync from You when you are ready.")); if (accountResult) history.replaceState(history.state, "", location.pathname) }).catch(() => announce("StrangerTalks could not start. Please reload."))
