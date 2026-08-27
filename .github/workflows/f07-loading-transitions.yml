@@ -32,10 +32,8 @@ jobs:
     env:
       MIX_ENV: test
       PORT: "4000"
-      DB_HOST: localhost
-      DB_USER: postgres
-      DB_PASSWORD: postgres
-      DB_NAME: strangertalks_new_test
+      STRANGERTALKS_LOCAL_DB_USER: postgres
+      STRANGERTALKS_LOCAL_DB_PASSWORD: postgres
       STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4000
 
     steps:
