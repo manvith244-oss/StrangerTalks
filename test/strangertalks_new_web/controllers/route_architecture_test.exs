@@ -26,7 +26,7 @@ defmodule StrangertalksNewWeb.RouteArchitectureTest do
     "/conversation/123"
   ]
 
-  test "every frozen canonical static route serves the StrangerTalks client shell with F-02 routing before app bootstrap" do
+  test "every frozen canonical static route serves the StrangerTalks client shell with F-02 routing before the current app bootstrap" do
     Enum.each(@canonical_static_routes, fn path ->
       conn = get(build_conn(), path)
       body = html_response(conn, 200)
@@ -35,9 +35,10 @@ defmodule StrangertalksNewWeb.RouteArchitectureTest do
       assert body =~ ~s(data-screen="doors")
       assert body =~ ~s(data-screen="conversation")
       assert body =~ ~s(src="/assets/route_runtime.mjs?v=20260827_f02")
+      assert body =~ ~s(src="/assets/flow_loading_runtime.mjs?v=20260826_f07_v1")
 
       {route_position, _} = :binary.match(body, "/assets/route_runtime.mjs")
-      {app_boot_position, _} = :binary.match(body, "/assets/expression_runtime.mjs")
+      {app_boot_position, _} = :binary.match(body, "/assets/flow_loading_runtime.mjs")
       assert route_position < app_boot_position
     end)
   end
