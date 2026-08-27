@@ -240,9 +240,22 @@ test("F-10 standard keyboard controls operate Matchmaking and Settings", {timeou
     await user.page.locator('[data-screen="settings"].active').waitFor({state: "visible", timeout: WAIT_MS})
 
     const reducedMotion = user.page.locator("#reduced-motion")
+    await reducedMotion.evaluate(node => {
+      node.dataset.f10SpaceKeydown = "false"
+      node.addEventListener("keydown", event => {
+        if (event.key === " ") node.dataset.f10SpaceKeydown = "true"
+      }, {once: true})
+    })
     await reducedMotion.focus()
+    assert.equal(await reducedMotion.evaluate(node => node === document.activeElement), true, "Settings checkbox receives keyboard focus")
     const before = await reducedMotion.isChecked()
-    await user.page.keyboard.press("Space")
+    await reducedMotion.press("Space")
+    await user.page.waitForFunction(
+      expected => document.querySelector("#reduced-motion")?.checked === expected,
+      !before,
+      {timeout: WAIT_MS}
+    )
+    assert.equal(await reducedMotion.getAttribute("data-f10-space-keydown"), "true", "Space keydown reaches the focused Settings checkbox")
     assert.equal(await reducedMotion.isChecked(), !before, "Settings checkbox operates with Space")
     assertClean(user)
   } finally {
@@ -295,17 +308,20 @@ test("F-10 Conversation resize preserves runtime, unsent draft and readable widt
         timeline: rect(timeline),
         bubble: rect(bubble),
         composer: rect(composer),
+        chatMaxWidth: Number.parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--ig-chat-max")),
         rootFontSize: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
         viewport: innerWidth
       }
     })
     assert.ok(Number.isFinite(layout.rootFontSize) && layout.rootFontSize > 0, "desktop root font size resolves to a finite value")
-    assert.ok(layout.main.width <= 68 * layout.rootFontSize + 2, `global desktop shell stays bounded instead of stretching across ${layout.viewport}px`)
-    assert.ok(layout.screen.width <= layout.main.width + 2, "Conversation surface stays inside the bounded desktop shell")
-    assert.ok(layout.head.width <= 802, "Conversation header remains within the explicit 800px readable stage")
-    assert.ok(layout.timeline.width <= 802, "Conversation timeline remains within the explicit 800px readable stage")
+    assert.ok(Number.isFinite(layout.chatMaxWidth) && layout.chatMaxWidth > 0, "Conversation readable-stage width resolves from the rendered desktop contract")
+    assert.ok(layout.main.width <= layout.viewport + 2, "Conversation atmospheric shell stays within the viewport")
+    assert.ok(layout.screen.width <= layout.chatMaxWidth + 2, `Conversation readable stage stays within its configured ${layout.chatMaxWidth}px cap at ${layout.viewport}px`)
+    assert.ok(layout.screen.left >= layout.main.left - 1 && layout.screen.right <= layout.main.right + 1, "Conversation readable stage stays inside the atmospheric shell")
+    assert.ok(layout.head.width <= layout.chatMaxWidth + 2, "Conversation header remains within the readable stage")
+    assert.ok(layout.timeline.width <= layout.chatMaxWidth + 2, "Conversation timeline remains within the readable stage")
     assert.ok(layout.bubble.width <= 36 * layout.rootFontSize + 2, "message bubble stays within readable max width")
-    assert.ok(layout.composer.width <= 802, "composer remains within the explicit 800px desktop stage")
+    assert.ok(layout.composer.width <= layout.chatMaxWidth + 2, "composer remains within the readable Conversation stage")
     assert.ok(layout.composer.left >= layout.timeline.left - 1 && layout.composer.right <= layout.timeline.right + 1, "composer remains anchored to the readable Conversation stage")
     assertClean(a)
     assertClean(b)
@@ -378,7 +394,7 @@ test("F-10 desktop report sheet exposes dialog semantics and Escape restores foc
   }
 })
 
-test("F-10 true confirmation modal traps keyboard focus and Escape restores trigger", {timeout: 120_000}, async () => {
+test("F-10 true confirmation modal traps keyboard focus and Escape restores visible disclosure focus", {timeout: 120_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let pair
   try {
@@ -386,7 +402,9 @@ test("F-10 true confirmation modal traps keyboard focus and Escape restores trig
     const {a} = pair
     await a.page.setViewportSize(VIEWPORTS.standard)
 
-    await a.page.locator(".conversation-head-actions .overflow summary").click()
+    const overflow = a.page.locator(".conversation-head-actions .overflow")
+    const overflowSummary = overflow.locator("summary")
+    await overflowSummary.click()
     await a.page.locator("#end-conversation").click()
     const backdrop = a.page.locator("#end-confirmation-backdrop")
     const dialog = a.page.locator("#end-confirmation-dialog")
@@ -409,8 +427,13 @@ test("F-10 true confirmation modal traps keyboard focus and Escape restores trig
 
     await a.page.keyboard.press("Escape")
     await backdrop.waitFor({state: "hidden", timeout: WAIT_MS})
-    await a.page.waitForFunction(() => document.activeElement?.id === "end-conversation", null, {timeout: WAIT_MS})
-    assert.equal(await a.page.locator("#end-conversation").evaluate(node => node === document.activeElement), true, "Escape closes modal and restores trigger focus")
+    await a.page.waitForFunction(
+      () => document.activeElement?.matches(".conversation-head-actions .overflow summary") === true,
+      null,
+      {timeout: WAIT_MS}
+    )
+    assert.equal(await overflow.getAttribute("open"), null, "Escape closes the overflow disclosure after closing the modal")
+    assert.equal(await overflowSummary.evaluate(node => node === document.activeElement), true, "Escape leaves focus on the visible Conversation disclosure trigger")
     assertClean(a)
   } finally {
     await pair?.a.context.close().catch(() => {})
