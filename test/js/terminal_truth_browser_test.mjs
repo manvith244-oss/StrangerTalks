@@ -328,7 +328,7 @@ test("real UI Block collapses local transient authority and stale Conversation A
     await uiOpenConversationInfo(a4)
     await a4.click("#report-open")
     await a4.waitForSelector("#report-form:not([hidden])")
-    await a4.selectOption("#report-category", {label: "SPAM"})
+    await a4.selectOption("#report-category", "SPAM")
     await a4.fill("#report-evidence", "report then block")
     await a4.click('#report-form button[type="submit"], #report-form .primary')
     await a4.waitForFunction(() => document.querySelector("#status")?.textContent.includes("Report submitted"), null, {timeout: 10_000})
