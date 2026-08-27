@@ -25,6 +25,27 @@ function observeConversationEndFrames(page) {
   return frames
 }
 
+function observeConversationFrames(page) {
+  const frames = []
+  page.on("websocket", (socket) => {
+    socket.on("framesent", ({payload}) => {
+      const message = phoenixMessage(payload)
+      if (message?.topic?.startsWith("conversation:")) frames.push(message)
+    })
+  })
+  return frames
+}
+
+async function waitForObserved(predicate, {timeout = 10_000, message = "timed out waiting for observed state"} = {}) {
+  const deadline = Date.now() + timeout
+  while (Date.now() < deadline) {
+    const result = predicate()
+    if (result) return result
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error(message)
+}
+
 async function preparePage(page) {
   await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
   await page.waitForFunction(() => document.documentElement.dataset.instagramChatBooted === "true")
@@ -35,10 +56,11 @@ async function bootFresh(browser) {
   const context = await browser.newContext({viewport: {width: 390, height: 844}})
   const page = await context.newPage()
   const conversationEndFrames = observeConversationEndFrames(page)
+  const conversationFrames = observeConversationFrames(page)
   await preparePage(page)
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: 15_000})
   await page.locator("#conversation-language").selectOption("en")
-  return {context, page, conversationEndFrames}
+  return {context, page, conversationEndFrames, conversationFrames}
 }
 
 async function queue(page) {
@@ -112,6 +134,19 @@ async function stageReplyToPeerMessage(sender, receiver, text = "reply-target") 
   await receiver.locator("#reply-staging").waitFor({state: "visible", timeout: 10_000})
 }
 
+async function stageEdit(page, text, attemptedEdit) {
+  await sendText(page, text)
+  const ownMessage = page.locator("#messages .message.mine", {hasText: text}).last()
+  await ownMessage.waitFor({state: "visible", timeout: 10_000})
+  await ownMessage.hover()
+  await ownMessage.locator(".edit-action-btn").waitFor({state: "visible", timeout: 10_000})
+  await ownMessage.locator(".edit-action-btn").click()
+  const editor = ownMessage.locator(".message-edit-form textarea")
+  await editor.waitFor({state: "visible", timeout: 10_000})
+  await editor.fill(attemptedEdit)
+  return editor
+}
+
 async function navigateAway(page, destination = "chats") {
   await page.evaluate((screen) => {
     const control = document.querySelector(`#bottom-nav [data-go="${screen}"]`)
@@ -121,20 +156,25 @@ async function navigateAway(page, destination = "chats") {
   await page.locator(`section[data-screen="${destination}"].active`).waitFor({state: "visible", timeout: 10_000})
 }
 
-async function returnToSameConversationPresentation(page) {
-  await page.evaluate(() => {
-    let control = document.querySelector("#fx05-return-conversation")
+async function showPresentation(page, destination) {
+  await page.evaluate((screen) => {
+    const id = `fx05-present-${screen}`
+    let control = document.querySelector(`#${id}`)
     if (!control) {
       control = document.createElement("button")
-      control.id = "fx05-return-conversation"
+      control.id = id
       control.type = "button"
-      control.dataset.go = "conversation"
-      control.textContent = "Return to Conversation"
+      control.dataset.go = screen
+      control.textContent = `Present ${screen}`
       document.body.append(control)
     }
     control.click()
-  })
-  await page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 10_000})
+  }, destination)
+  await page.locator(`section[data-screen="${destination}"].active`).waitFor({state: "visible", timeout: 10_000})
+}
+
+async function returnToSameConversationPresentation(page) {
+  await showPresentation(page, "conversation")
   await waitForExpressionSurface(page, 10_000)
 }
 
@@ -271,6 +311,113 @@ test("X05-05 terminalization while away clears valid A composition instead of re
     assert.equal(await pair.a.page.locator("#reply-staging").isHidden(), true)
     assert.equal(await pair.a.page.locator("#expressive-composer").isHidden(), true)
   } finally {
+    await closePair(pair)
+    await browser.close().catch(() => {})
+  }
+})
+
+test("X05-06 edit staging survives presentation-away and same-Conversation return", {timeout: 90_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let pair
+  try {
+    pair = await matchPair(browser)
+    const editor = await stageEdit(pair.a.page, "edit-source-x05", "attempted edit survives away")
+
+    await navigateAway(pair.a.page, "chats")
+    assert.equal(await editor.inputValue(), "attempted edit survives away")
+
+    await returnToSameConversationPresentation(pair.a.page)
+    await editor.waitFor({state: "visible", timeout: 10_000})
+    assert.equal(await editor.inputValue(), "attempted edit survives away")
+    assert.equal(pair.a.conversationEndFrames.length, 0, "navigation must not emit Conversation End")
+  } finally {
+    await closePair(pair)
+    await browser.close().catch(() => {})
+  }
+})
+
+test("X05-07 sticker authority survives presentation-away and same-Conversation return", {timeout: 90_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let pair
+  try {
+    pair = await matchPair(browser)
+    await navigateAway(pair.a.page, "chats")
+    await returnToSameConversationPresentation(pair.a.page)
+    await openExpressionTools(pair.a.page)
+    await pair.a.page.locator("#expressive-open").click()
+    const sticker = pair.a.page.locator("#expressive-results button").first()
+    await sticker.waitFor({state: "visible", timeout: 10_000})
+    await sticker.click()
+
+    const expressiveSend = await waitForObserved(
+      () => pair.a.conversationFrames.find((frame) => frame.event === "message:send" && typeof frame.body?.expressive_id === "string"),
+      {message: "same-Conversation sticker selection was blocked after presentation return"}
+    )
+    assert.match(expressiveSend.topic, /^conversation:/)
+    assert.equal(pair.a.conversationEndFrames.length, 0)
+  } finally {
+    await closePair(pair)
+    await browser.close().catch(() => {})
+  }
+})
+
+test("X05-08 delayed A GIF callback cannot mutate B after accepted Conversation transition", {timeout: 150_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let pair
+  let nextPeer
+  let firstStatusRoute = null
+  let statusRequests = 0
+  try {
+    pair = await matchPair(browser)
+    await pair.a.page.route("**/api/gifs/status", async (route) => {
+      statusRequests += 1
+      if (statusRequests === 1) {
+        firstStatusRoute = route
+        return
+      }
+      await route.fulfill({status: 200, contentType: "application/json", body: JSON.stringify({available: true})})
+    })
+
+    await openExpressionTools(pair.a.page)
+    await pair.a.page.locator("#gif-open").click()
+    await waitForObserved(() => firstStatusRoute, {message: "A GIF status request was not captured"})
+
+    await endConversation(pair.b.page)
+    await pair.a.page.locator('section[data-screen="ended"].active').waitFor({state: "visible", timeout: 15_000})
+
+    await showPresentation(pair.a.page, "doors")
+    await pair.a.page.locator("#conversation-language").selectOption("en")
+    nextPeer = await bootFresh(browser)
+    await queue(pair.a.page)
+    await pair.a.page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: 10_000})
+    await queue(nextPeer.page)
+    await Promise.all([
+      pair.a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000}),
+      nextPeer.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000})
+    ])
+    await Promise.all([
+      waitForExpressionSurface(pair.a.page),
+      waitForExpressionSurface(nextPeer.page)
+    ])
+
+    const beforeStatus = await pair.a.page.locator("#gif-status").textContent()
+    const beforeDisabled = await pair.a.page.locator("#gif-search").isDisabled()
+    assert.equal(beforeDisabled, true, "B must not inherit an enabled GIF search from A")
+
+    await firstStatusRoute.fulfill({status: 200, contentType: "application/json", body: JSON.stringify({available: true})})
+    await pair.a.page.waitForTimeout(250)
+
+    assert.equal(await pair.a.page.locator("#gif-status").textContent(), beforeStatus, "stale A callback must not rewrite B status")
+    assert.equal(await pair.a.page.locator("#gif-search").isDisabled(), true, "stale A callback must not enable B search")
+
+    await openExpressionTools(pair.a.page)
+    await pair.a.page.locator("#gif-open").click()
+    await pair.a.page.locator("#gif-search").waitFor({state: "visible", timeout: 10_000})
+    await waitForObserved(() => statusRequests >= 2, {message: "B did not request fresh GIF authority"})
+    await pair.a.page.waitForFunction(() => document.querySelector("#gif-search")?.disabled === false)
+    assert.equal(await pair.a.page.locator("#gif-status").textContent(), "Search for a GIF.")
+  } finally {
+    await nextPeer?.context.close().catch(() => {})
     await closePair(pair)
     await browser.close().catch(() => {})
   }
