@@ -1,5 +1,3 @@
-import {Socket} from "/vendor/phoenix.mjs"
-import {keptConversations, listRecords} from "./local_data.mjs"
 import {
   isActivityOwnedRoute,
   parseRoute,
@@ -39,6 +37,7 @@ function activateExistingScreen(screen) {
 }
 
 async function activateSavedConversation(route) {
+  const {keptConversations, listRecords} = await import("./local_data.mjs")
   const records = await listRecords()
   const kept = keptConversations(records).sort((a, b) => b.updated_at.localeCompare(a.updated_at))
   const index = kept.findIndex((record) => record?.value?.conversation_id === route.params.conversationId)
@@ -71,7 +70,6 @@ export function createRouteRuntimeState(pathname) {
     ready: false,
     snapshot: null,
     preserveActivityAway: requested.valid && !isActivityOwnedRoute(requested),
-    internalNavigation: false,
     lastResolvedPath: requested.path
   }
 }
@@ -80,8 +78,8 @@ export function refreshResolution(pathname, snapshot) {
   return resolveRequestedRoute(parseRoute(pathname), snapshot)
 }
 
-export function installBrowserRouteRuntime() {
-  if (typeof window === "undefined" || typeof document === "undefined") return null
+export function installBrowserRouteRuntime(SocketClass) {
+  if (typeof window === "undefined" || typeof document === "undefined" || !SocketClass) return null
   if (window[ROUTE_STATE_KEY]) return window[ROUTE_STATE_KEY]
 
   const state = createRouteRuntimeState(location.pathname)
@@ -136,8 +134,8 @@ export function installBrowserRouteRuntime() {
     }
   }
 
-  const originalSocketChannel = Socket.prototype.channel
-  Socket.prototype.channel = function(topic, params) {
+  const originalSocketChannel = SocketClass.prototype.channel
+  SocketClass.prototype.channel = function(topic, params) {
     const channel = originalSocketChannel.call(this, topic, params)
 
     if (typeof topic === "string" && topic.startsWith("participant:")) {
@@ -264,4 +262,7 @@ export function installBrowserRouteRuntime() {
   return state
 }
 
-if (typeof window !== "undefined" && typeof document !== "undefined") installBrowserRouteRuntime()
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  const {Socket} = await import("/vendor/phoenix.mjs")
+  installBrowserRouteRuntime(Socket)
+}
