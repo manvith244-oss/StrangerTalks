@@ -100,6 +100,8 @@ jobs:
           set -euo pipefail
           mix test \
             test/strangertalks_new/st_work_d_terminal_truth_test.exs \
+            test/strangertalks_new/conversation_isolation_test.exs \
+            test/strangertalks_new/team3_recovery_coordination_test.exs \
             test/strangertalks_new/terminal_persistence_failure_test.exs \
             test/strangertalks_new/team4_safety_boundary_test.exs \
             test/strangertalks_new/recovery_restart_test.exs \
