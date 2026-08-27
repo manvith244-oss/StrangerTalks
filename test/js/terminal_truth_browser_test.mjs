@@ -362,7 +362,12 @@ test("real UI Block collapses local transient authority and stale Conversation A
     assert.equal(await a3.locator("#expressive-picker").isHidden(), true)
     assert.equal(await a3.locator("#prompt-helper").isHidden(), true)
     assert.equal(await a4.locator("#report-form").isHidden(), true)
-    assert.equal(await a1.evaluate(() => document.activeElement?.id), "consent")
+
+    const immediateEndedFocus = await a1.evaluate(() => document.activeElement?.id || "")
+    await a1.waitForFunction(() => document.activeElement?.id === "consent", null, {timeout: 2_000})
+    const settledEndedFocus = await a1.evaluate(() => document.activeElement?.id || "")
+    console.log("TEAM2_ENDED_FOCUS_STATE", JSON.stringify({immediateEndedFocus, settledEndedFocus}))
+    assert.equal(settledEndedFocus, "consent")
 
     // A now enters a completely new Conversation with C.
     await a1.click("#fade-conversation")
