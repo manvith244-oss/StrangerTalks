@@ -100,6 +100,15 @@ jobs:
       - name: F-07 real-browser continuity proof
         run: node --test test/js/f07_loading_transitions_browser_test.mjs
 
+      - name: F-07 failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo "=== F-07 Phoenix log ==="
+          cat /tmp/f07-phoenix.log || true
+          echo "=== F-07 root shell headers ==="
+          curl --silent --show-error --include http://127.0.0.1:4000/ | head -80 || true
+
       - name: Stop StrangerTalks
         if: always()
         shell: bash
