@@ -7,12 +7,20 @@
     <title>StrangerTalks</title>
     <link rel="stylesheet" href="/assets/app.css?v=20260807_v2">
     <link rel="stylesheet" href="/assets/expression_surface.css?v=20260824_v2">
+    <style id="flow-loading-critical">
+      #main { position: relative; }
+      #boot-bridge { display: none; }
+      .flow-booting [data-screen], .flow-booting #bottom-nav { visibility: hidden !important; }
+      .flow-booting #boot-bridge { display: block; position: absolute; inset: 0; min-height: 50vh; padding: 3rem 1.25rem; z-index: 20; }
+      #boot-bridge[hidden] { display: none !important; }
+    </style>
   </head>
-  <body>
+  <body class="flow-booting">
     <a class="skip-link" href="#main">Skip to content</a>
     <header class="site-header"><span class="brand"><span aria-hidden="true">S</span> StrangerTalks</span></header>
     <main id="main">
       <div id="status" class="sr-status" role="status" aria-live="polite"></div>
+      <section id="boot-bridge" class="focused-screen" role="status" aria-live="polite" aria-busy="true"><p class="eyebrow">StrangerTalks</p><h1>Opening StrangerTalks…</h1><p class="lede">Checking your current session…</p></section>
       <div id="expressive-composer" class="expressive-composer" hidden><button id="expressive-open" type="button" aria-expanded="false" aria-controls="expressive-picker">Stickers &amp; expressions</button><section id="expressive-picker" class="expressive-picker" role="dialog" aria-label="Stickers and expressions" hidden><div class="expressive-picker-head"><label for="expressive-search">Find an expression</label><input id="expressive-search" type="search" autocomplete="off" maxlength="40"><button id="expressive-close" type="button" aria-label="Close stickers and expressions">Close</button></div><div id="expressive-results" class="expressive-results" role="listbox" aria-label="Expressive media"></div></section></div>
 
       <section data-screen="doors" class="screen active top-level">
@@ -21,7 +29,7 @@
         <label for="conversation-language">Conversation Language</label><select id="conversation-language"><option value="">Choose a language</option></select>
         <div id="doors" class="door-grid"></div>
       </section>
-      <section data-screen="queue" class="screen focused-screen"><p class="eyebrow" id="queue-door">Deep Talk</p><h1>Finding someone…</h1><p class="lede" id="queue-lede">Looking for someone who chose Deep Talk too.</p><div class="pulse" aria-hidden="true"></div><button id="leave-queue">Leave Queue</button></section>
+      <section data-screen="queue" class="screen focused-screen" aria-busy="true"><p class="eyebrow" id="queue-door">Deep Talk</p><h1 id="queue-title">Starting matchmaking…</h1><p class="lede" id="queue-lede">Confirming your place in the queue.</p><p id="queue-phase-status" class="sr-status" role="status" aria-live="polite"></p><div class="pulse" aria-hidden="true"></div><button id="leave-queue" disabled>Leave Queue</button></section>
       <section data-screen="match" class="screen"><h1>Found someone.</h1><p>Opening your temporary conversation…</p></section>
 
       <section data-screen="conversation" class="screen conversation focused-screen">
@@ -65,6 +73,6 @@
       <div id="view-once-viewer-backdrop" class="dialog-backdrop" hidden><section id="view-once-viewer-dialog" class="view-once-viewer-dialog" role="dialog" aria-modal="true" aria-labelledby="view-once-viewer-title"><div class="dialog-heading"><h2 id="view-once-viewer-title">View-Once photo</h2><button id="view-once-viewer-close" type="button" aria-label="Close View-Once photo">Close</button></div><div id="view-once-viewer-container" class="view-once-image-container"></div><p id="view-once-viewer-note" class="view-once-viewer-note">This photo can only be opened once. Closing it closes this view permanently.</p></section></div>
     </main>
     <nav id="bottom-nav" class="bottom-nav" aria-label="Primary"><button data-go="doors">Talk</button><button data-go="chats">Chats</button><button data-go="relationships">Bonds</button><button data-go="settings">You</button></nav>
-    <script type="module" src="/assets/expression_runtime.mjs?v=20260824_v2"></script>
+    <script type="module" src="/assets/flow_loading_runtime.mjs?v=20260826_f07_v1"></script>
   </body>
 </html>
