@@ -96,8 +96,16 @@ jobs:
         continue-on-error: true
         run: node --test test/js/route_contract_test.mjs
 
-      - name: Require both route contracts
+      - name: Full precommit regression
+        id: full-precommit
+        continue-on-error: true
+        run: |
+          mix precommit
+          git diff --exit-code
+
+      - name: Require focused contracts and precommit
         if: always()
         run: |
           test "${{ steps.phoenix-route-contract.outcome }}" = "success"
           test "${{ steps.browser-route-contract.outcome }}" = "success"
+          test "${{ steps.full-precommit.outcome }}" = "success"
