@@ -69,7 +69,7 @@ export function routeForScreen(screen) {
 }
 
 export function isActivityOwnedRoute(route) {
-  return ["matchmaking", "conversation"].includes(route?.kind)
+  return route?.kind === "matchmaking" || route?.kind?.startsWith("conversation")
 }
 
 export function resolveRequestedRoute(route, snapshot) {
@@ -92,6 +92,10 @@ export function resolveRequestedRoute(route, snapshot) {
       return {path: route.path, screen: route.screen, replace: route.needsCanonicalReplace, reason: null}
     }
     return {path: "/conversation/unavailable", screen: "unrecoverable", replace: true, reason: "conversation_not_available"}
+  }
+
+  if (["conversation_ended", "conversation_unavailable"].includes(route.kind) && canonicalState === "CONVERSATION" && snapshot?.conversation) {
+    return {path: "/conversation", screen: "conversation", replace: true, reason: "active_conversation_supersedes_stale_location"}
   }
 
   return {
