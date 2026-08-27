@@ -123,7 +123,8 @@ jobs:
             test/js/team10_expression_browser_test.mjs \
             test/js/team10_expression_actions_browser_test.mjs \
             test/js/team10_expression_reliability_browser_test.mjs \
-            test/js/team10_expression_authority_browser_test.mjs
+            test/js/team10_expression_authority_browser_test.mjs \
+            test/js/fx05_expression_continuity_browser_test.mjs
 
       - name: Conversation and replay regressions
         run: |
@@ -134,7 +135,10 @@ jobs:
             test/js/pin_test.mjs \
             test/js/message_unsend_test.mjs \
             test/js/session_reconciliation_guard_test.mjs \
-            test/js/expressive_media_test.mjs
+            test/js/expressive_media_test.mjs \
+            test/js/normal_media_runtime_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/view_once_test.mjs
 
       - name: Stop Team 10 browser server
         if: always()
