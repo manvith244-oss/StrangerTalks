@@ -45,6 +45,15 @@ async function queue(page) {
   await page.locator('button.door:has-text("Advice")').click()
 }
 
+async function waitForExpressionControls(page, timeout = 15_000) {
+  await page.locator("#expressive-composer:not([hidden])").waitFor({state: "attached", timeout})
+  await Promise.all([
+    page.locator("#emoji-open").waitFor({state: "visible", timeout}),
+    page.locator("#expressive-open").waitFor({state: "visible", timeout}),
+    page.locator("#gif-open").waitFor({state: "visible", timeout})
+  ])
+}
+
 async function matchPair(browser) {
   const a = await bootFresh(browser)
   const b = await bootFresh(browser)
@@ -57,8 +66,8 @@ async function matchPair(browser) {
       b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000})
     ])
     await Promise.all([
-      a.page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible", timeout: 15_000}),
-      b.page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible", timeout: 15_000})
+      waitForExpressionControls(a.page),
+      waitForExpressionControls(b.page)
     ])
     return {a, b}
   } catch (error) {
@@ -112,7 +121,7 @@ async function returnToSameConversationPresentation(page) {
     control.click()
   })
   await page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 10_000})
-  await page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible", timeout: 10_000})
+  await waitForExpressionControls(page, 10_000)
 }
 
 async function endConversation(page) {
