@@ -33,14 +33,19 @@ function conversation(status = "temporary", connection_state = "ended") {
   })
 }
 
-async function withCanonicalIndexedDB(run) {
+async function withIndexedDB(factory, run) {
   const previous = globalThis.indexedDB
-  const native = createMemoryIndexedDB()
-  globalThis.indexedDB = createCanonicalIndexedDB(native)
-  try { return await run(native) } finally {
+  globalThis.indexedDB = factory
+  try { return await run() } finally {
     if (previous === undefined) delete globalThis.indexedDB
     else globalThis.indexedDB = previous
   }
+}
+
+async function withCanonicalIndexedDB(run) {
+  const native = createMemoryIndexedDB()
+  const canonical = createCanonicalIndexedDB(native)
+  return withIndexedDB(canonical, () => run(native, canonical))
 }
 
 async function rawPut(native, item) {
@@ -55,7 +60,17 @@ async function rawPut(native, item) {
   await new Promise((resolve, reject) => { request.onsuccess = resolve; request.onerror = reject })
 }
 
-test("CLEANUP-02 retention completion removes cursor and pending-terminal recovery records", async () => {
+test("LOCAL-01 canonical IndexedDB boundary exists and is the app-facing factory", async () => {
+  await withCanonicalIndexedDB(async (_native, canonical) => {
+    assert.equal(canonical.__f11Canonical, true)
+    assert.equal(globalThis.indexedDB, canonical)
+    assert.equal(canonical.storageStatus().mode, "pending")
+    await listRecords()
+    assert.equal(canonical.storageStatus().mode, "durable")
+  })
+})
+
+test("CLEANUP-02/LOCAL-10 retention completion removes cursor and pending-terminal recovery records", async () => {
   await withCanonicalIndexedDB(async () => {
     const records = [
       conversation(),
@@ -72,14 +87,30 @@ test("CLEANUP-02 retention completion removes cursor and pending-terminal recove
   })
 })
 
-test("CORRUPT live get discards a malformed saved identity instead of trusting it", async () => {
+test("LOCAL-02 malformed saved identity is discarded by real getRecord", async () => {
   await withCanonicalIndexedDB(async (native) => {
     await rawPut(native, record("strangertalks.identity.v1", "identity", {participant_id: participantA}))
     assert.equal(await getRecord("strangertalks.identity.v1"), null)
   })
 })
 
-test("STORAGE-05 putRecord resolves only after the native readwrite transaction completes", async () => {
+test("LOCAL-03/04 read hydration rejects malformed recovery families instead of trusting them", async () => {
+  await withCanonicalIndexedDB(async (native) => {
+    const malformed = [
+      {...conversation(), value: {...conversation().value, conversation_id: "not-a-uuid"}},
+      record(`sync_cursor:${conversationA}`, "sync_cursor", {conversation_id: conversationA, epoch_id: "epoch-a", last_applied_sequence: -1}),
+      record("settings:privacy", "settings", {reduced_motion: "yes"}),
+      record(`bond-reconnect:${relationshipA}`, "bond_reconnect_state", {relationship_id: relationshipA, status: "nonsense"}),
+      record(`terminal_retention:${conversationA}`, "terminal_retention_state", {conversation_id: conversationA, status: "completed", ended_at: now})
+    ]
+    for (const item of malformed) await rawPut(native, item)
+
+    for (const item of malformed) assert.equal(await getRecord(item.id), null)
+    assert.deepEqual(await listRecords(), [])
+  })
+})
+
+test("LOCAL-05 putRecord resolves only after the native readwrite transaction completes", async () => {
   const events = []
   const native = {
     open() {
@@ -123,10 +154,8 @@ test("STORAGE-05 putRecord resolves only after the native readwrite transaction 
       return opening
     }
   }
-  const previous = globalThis.indexedDB
-  globalThis.indexedDB = createCanonicalIndexedDB(native)
-  try {
-    // Prime hydration before measuring the write boundary.
+  const canonical = createCanonicalIndexedDB(native)
+  await withIndexedDB(canonical, async () => {
     await listRecords()
     events.length = 0
     let resolved = false
@@ -136,20 +165,67 @@ test("STORAGE-05 putRecord resolves only after the native readwrite transaction 
     await write
     assert.equal(events.at(-1), "promise-resolved")
     assert.ok(events.indexOf("native-transaction-complete") < events.indexOf("promise-resolved"))
-  } finally {
-    if (previous === undefined) delete globalThis.indexedDB
-    else globalThis.indexedDB = previous
-  }
+    assert.equal(canonical.storageStatus().mode, "durable")
+  })
 })
 
-test("PARTICIPANT-01 deleting a replaced identity invalidates old recovery-only records", async () => {
+test("LOCAL-06 native open failure degrades to explicit ephemeral storage", async () => {
+  const canonical = createCanonicalIndexedDB({open() { throw new Error("indexeddb blocked") }})
+  await withIndexedDB(canonical, async () => {
+    await putRecord(record("strangertalks.identity.v1", "identity", {participant_id: participantA, token: "online-token"}))
+    assert.equal((await getRecord("strangertalks.identity.v1")).value.token, "online-token")
+    assert.equal(canonical.storageStatus().mode, "ephemeral")
+    assert.equal(canonical.storageStatus().durable, false)
+  })
+})
+
+test("LOCAL-07 native write failure keeps usable ephemeral state without false durability", async () => {
+  const native = {
+    open() {
+      const opening = {result: null, error: null, onsuccess: null, onerror: null, onupgradeneeded: null}
+      queueMicrotask(() => {
+        const db = {
+          close() {},
+          createObjectStore() {},
+          transaction(_name, mode) {
+            if (mode === "readwrite") throw new Error("writes blocked")
+            const tx = {oncomplete: null, onerror: null, onabort: null, error: null}
+            tx.objectStore = () => ({
+              getAll() {
+                const request = {result: [], error: null, onsuccess: null, onerror: null}
+                queueMicrotask(() => { request.onsuccess?.({target: request}); tx.oncomplete?.({target: tx}) })
+                return request
+              }
+            })
+            return tx
+          }
+        }
+        opening.result = db
+        opening.onsuccess?.({target: opening})
+      })
+      return opening
+    }
+  }
+  const canonical = createCanonicalIndexedDB(native)
+  await withIndexedDB(canonical, async () => {
+    await listRecords()
+    await putRecord(record("settings:privacy", "settings", {reduced_motion: true}))
+    assert.equal((await getRecord("settings:privacy")).value.reduced_motion, true)
+    assert.equal(canonical.storageStatus().mode, "ephemeral")
+    assert.equal(canonical.storageStatus().durable, false)
+  })
+})
+
+test("LOCAL-08 participant replacement invalidates old recovery-only records", async () => {
   await withCanonicalIndexedDB(async () => {
     await putRecord(record("strangertalks.identity.v1", "identity", {participant_id: participantA, token: "token"}))
     await putRecord(conversation("temporary", "connected"))
     await putRecord(record(`message:${conversationA}:m1`, "local_message", {conversation_id: conversationA, client_message_id: "m1", message_id: "m1", type: "text", content: "temporary", mine: true, delivery_status: "delivered", sent_at: now}))
     await putRecord(record(`sync_cursor:${conversationA}`, "sync_cursor", {conversation_id: conversationA, epoch_id: "epoch-a", last_applied_sequence: 1}))
+    await putRecord(record(`terminal_retention:${conversationA}`, "terminal_retention_state", {conversation_id: conversationA, status: "pending", ended_at: now}))
     await putRecord(record(`bond-reconnect:${relationshipA}`, "bond_reconnect_state", {relationship_id: relationshipA, status: "idle"}))
     await putRecord(record("memory:keep", "memory", {text: "browser retained"}))
+    await putRecord(record(`relationship:${relationshipA}`, "relationship", {relationship_id: relationshipA, status: "created", conversation_id: conversationA}))
 
     await deleteRecord("strangertalks.identity.v1")
     const ids = new Set((await listRecords()).map(({id}) => id))
@@ -157,7 +233,35 @@ test("PARTICIPANT-01 deleting a replaced identity invalidates old recovery-only 
     assert.equal(ids.has(`conversation:${conversationA}`), false)
     assert.equal(ids.has(`message:${conversationA}:m1`), false)
     assert.equal(ids.has(`sync_cursor:${conversationA}`), false)
+    assert.equal(ids.has(`terminal_retention:${conversationA}`), false)
     assert.equal(ids.has(`bond-reconnect:${relationshipA}`), false)
     assert.equal(ids.has("memory:keep"), true)
+    assert.equal(ids.has(`relationship:${relationshipA}`), true)
+  })
+})
+
+test("LOCAL-09 one Conversation cleanup removes recovery-only state and preserves retained product data", async () => {
+  await withCanonicalIndexedDB(async (_native, canonical) => {
+    await replaceRecords([
+      conversation("temporary", "connected"),
+      record(`message:${conversationA}:m1`, "local_message", {conversation_id: conversationA, client_message_id: "m1", message_id: "m1", type: "text", content: "temporary", mine: true, delivery_status: "delivered", sent_at: now}),
+      record(`voice:${conversationA}:v1`, "local_voice_note", {conversation_id: conversationA, voice_note_id: "v1", blob: new Blob(["voice"]), mine: true, delivery_status: "delivered", sent_at: now, sequence: 1, duration_ms: 1000, byte_size: 5, media_type: "audio/webm"}),
+      record(`sync_cursor:${conversationA}`, "sync_cursor", {conversation_id: conversationA, epoch_id: "epoch-a", last_applied_sequence: 1}),
+      record(`terminal_retention:${conversationA}`, "terminal_retention_state", {conversation_id: conversationA, status: "pending", ended_at: now}),
+      record(`summary:${conversationA}`, "summary", {conversation_id: conversationA, text: "retain summary"}),
+      record("memory:keep", "memory", {text: "retain memory", conversation_id: conversationA}),
+      record(`relationship:${relationshipA}`, "relationship", {relationship_id: relationshipA, status: "created", conversation_id: conversationA})
+    ])
+
+    await canonical.cleanupConversationRecovery(conversationA)
+    const ids = new Set((await listRecords()).map(({id}) => id))
+    assert.equal(ids.has(`conversation:${conversationA}`), false)
+    assert.equal(ids.has(`message:${conversationA}:m1`), false)
+    assert.equal(ids.has(`voice:${conversationA}:v1`), false)
+    assert.equal(ids.has(`sync_cursor:${conversationA}`), false)
+    assert.equal(ids.has(`terminal_retention:${conversationA}`), false)
+    assert.equal(ids.has(`summary:${conversationA}`), true)
+    assert.equal(ids.has("memory:keep"), true)
+    assert.equal(ids.has(`relationship:${relationshipA}`), true)
   })
 })
