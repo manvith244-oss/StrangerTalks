@@ -32,6 +32,7 @@ const STATIC_ROUTES = [
 const queued = {canonical_state: "QUEUED", queue: {queue_attempt_id: "attempt-1"}}
 const active = {canonical_state: "CONVERSATION", conversation: {conversation_id: UUID}}
 const idle = {canonical_state: "IDLE"}
+const available = {canonical_state: "AVAILABLE"}
 
 test("frozen route table parses to the existing product screens", () => {
   assert.equal(CANONICAL_ROUTE_PATTERNS.length, 11)
@@ -69,11 +70,18 @@ test("route parser rejects non-canonical aliases, active-id URLs, and malformed 
   }
 })
 
-test("a single trailing slash canonicalizes without creating a second route", () => {
-  const route = parseRoute("/you/")
-  assert.equal(route.valid, true)
-  assert.equal(route.path, "/you")
-  assert.equal(route.needsCanonicalReplace, true)
+test("one trailing slash canonicalizes without creating a second route", () => {
+  const you = parseRoute("/you/")
+  assert.equal(you.valid, true)
+  assert.equal(you.path, "/you")
+  assert.equal(you.needsCanonicalReplace, true)
+
+  const detail = parseRoute(`/chats/${UUID}/`)
+  assert.equal(detail.valid, true)
+  assert.equal(detail.path, `/chats/${UUID}`)
+  assert.equal(detail.needsCanonicalReplace, true)
+
+  assert.equal(parseRoute("/you//").valid, false)
 })
 
 test("QUEUED activity may coexist with another valid route", () => {
@@ -93,25 +101,30 @@ test("ACTIVE text Conversation activity may coexist with another permitted route
 })
 
 test("activity-specific routes validate authority without taking over unrelated routes", () => {
-  assert.deepEqual(resolveRequestedRoute(parseRoute("/matchmaking"), idle), {
-    path: "/",
-    screen: "doors",
-    replace: true,
-    reason: "matchmaking_not_queued"
-  })
+  for (const nonQueued of [idle, available]) {
+    assert.deepEqual(resolveRequestedRoute(parseRoute("/matchmaking"), nonQueued), {
+      path: "/",
+      screen: "doors",
+      replace: true,
+      reason: "matchmaking_not_queued"
+    })
+  }
+
   assert.deepEqual(resolveRequestedRoute(parseRoute("/matchmaking"), active), {
     path: "/conversation",
     screen: "conversation",
     replace: true,
     reason: "matchmaking_advanced_to_conversation"
   })
-  assert.deepEqual(resolveRequestedRoute(parseRoute("/conversation"), idle), {
-    path: "/conversation/unavailable",
-    screen: "unrecoverable",
-    replace: true,
-    reason: "conversation_not_available"
-  })
-  assert.equal(resolveRequestedRoute(parseRoute("/conversation"), queued).path, "/conversation/unavailable")
+
+  for (const noConversation of [idle, available, queued]) {
+    assert.deepEqual(resolveRequestedRoute(parseRoute("/conversation"), noConversation), {
+      path: "/conversation/unavailable",
+      screen: "unrecoverable",
+      replace: true,
+      reason: "conversation_not_available"
+    })
+  }
 })
 
 test("terminal and unavailable Conversation routes remain canonical locations", () => {
