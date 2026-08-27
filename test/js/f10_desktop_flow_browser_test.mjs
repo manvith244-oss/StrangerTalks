@@ -281,10 +281,18 @@ test("F-10 Conversation resize preserves runtime, unsent draft and readable widt
       const composer = document.querySelector("#message-form")
       const screen = document.querySelector('[data-screen="conversation"].active')
       const rect = element => element?.getBoundingClientRect()
-      return {bubble: rect(bubble), composer: rect(composer), screen: rect(screen), viewport: innerWidth}
+      return {
+        bubble: rect(bubble),
+        composer: rect(composer),
+        screen: rect(screen),
+        rootFontSize: Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
+        viewport: innerWidth
+      }
     })
-    assert.ok(layout.screen.width <= 48 * 16 + 2, `Conversation stays constrained instead of stretching across ${layout.viewport}px`)
-    assert.ok(layout.bubble.width <= 36 * 16 + 2, "message bubble stays within readable max width")
+    assert.ok(Number.isFinite(layout.rootFontSize) && layout.rootFontSize > 0, "desktop root font size resolves to a finite value")
+    assert.ok(layout.screen.width <= 48 * layout.rootFontSize + 2, `Conversation respects its 48rem focused-screen cap instead of stretching across ${layout.viewport}px`)
+    assert.ok(layout.bubble.width <= 36 * layout.rootFontSize + 2, "message bubble stays within readable max width")
+    assert.ok(layout.composer.width <= 802, "composer remains within the explicit 800px desktop stage")
     assert.ok(layout.composer.left >= layout.screen.left - 1 && layout.composer.right <= layout.screen.right + 1, "composer remains anchored to Conversation region")
     assertClean(a)
     assertClean(b)
@@ -388,6 +396,7 @@ test("F-10 true confirmation modal traps keyboard focus and Escape restores trig
 
     await a.page.keyboard.press("Escape")
     await backdrop.waitFor({state: "hidden", timeout: WAIT_MS})
+    await a.page.waitForFunction(() => document.activeElement?.id === "end-conversation", null, {timeout: WAIT_MS})
     assert.equal(await a.page.locator("#end-conversation").evaluate(node => node === document.activeElement), true, "Escape closes modal and restores trigger focus")
     assertClean(a)
   } finally {
