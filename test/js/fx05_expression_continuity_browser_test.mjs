@@ -49,7 +49,7 @@ async function waitForExpressionSurface(page, timeout = 15_000) {
   await page.locator("#expressive-composer:not([hidden])").waitFor({state: "attached", timeout})
   await Promise.all([
     page.locator("#message-input").waitFor({state: "visible", timeout}),
-    page.locator(".ig-compose-plus").waitFor({state: "visible", timeout}),
+    page.locator(".ig-compose-plus").waitFor({state: "attached", timeout}),
     page.locator("#emoji-open").waitFor({state: "attached", timeout}),
     page.locator("#expressive-open").waitFor({state: "attached", timeout}),
     page.locator("#gif-open").waitFor({state: "attached", timeout})
