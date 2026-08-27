@@ -4,17 +4,14 @@ on:
   push:
     branches:
       - f03/navigation-history-wave-a-2026-08-27
-  pull_request:
-    branches:
-      - f02/route-architecture-wave-a
   workflow_dispatch:
 
 concurrency:
-  group: f03-navigation-history-${{ github.event.pull_request.head.sha || github.sha }}
+  group: f03-navigation-history-implementation-${{ github.sha }}
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   navigation-history:
@@ -45,14 +42,14 @@ jobs:
       - name: Checkout exact F-03 commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
+          fetch-depth: 0
 
       - name: Prove checkout identity
         run: |
-          expected="${{ github.event.pull_request.head.sha || github.sha }}"
-          echo "EXPECTED_F03_COMMIT=$expected"
+          echo "EXPECTED_F03_COMMIT=${{ github.sha }}"
           echo "ACTUAL_F03_COMMIT=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "$expected"
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -74,10 +71,10 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Frozen F-02 route contract
+      - name: Frozen F-02 route contract before production changes
         run: node --test test/js/route_contract_test.mjs
 
-      - name: F-03 navigation history unit contract
+      - name: F-03 unit contract before production changes
         run: node --test test/js/navigation_history_test.mjs
 
       - name: Prepare browser database
@@ -85,7 +82,7 @@ jobs:
           mix ecto.create --quiet
           mix ecto.migrate --quiet
 
-      - name: Apply J10 harness correction in diagnostic worktree
+      - name: Persist J10 activity-sensitive browser helper
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -126,6 +123,48 @@ jobs:
           path.write_text(text.replace(old, new, 1))
           PY
 
+      - name: Apply minimal canonical QUEUED route integration
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("priv/static/assets/app.js")
+          text = path.read_text()
+          old = '''  app.participant.on("queue:status", ({status, queue_attempt_id}) => {
+            if (status === "queued" && queue_attempt_id) bindQueueAttempt(queue_attempt_id)
+            if (["left", "timed_out"].includes(status) && queue_attempt_id !== app.queueAttemptId) return
+            announce(`Queue status: ${status}`)
+            if (["left", "timed_out"].includes(status)) {
+              bindQueueAttempt(null)
+              show("doors")
+            }
+            if (status === "queued" && queue_attempt_id) show("queue")
+          })
+          '''
+          new = '''  app.participant.on("queue:status", ({status, queue_attempt_id}) => {
+            if (status === "queued" && queue_attempt_id) bindQueueAttempt(queue_attempt_id)
+            if (["left", "timed_out"].includes(status) && queue_attempt_id !== app.queueAttemptId) return
+            announce(`Queue status: ${status}`)
+            if (["left", "timed_out"].includes(status)) {
+              bindQueueAttempt(null)
+              show("doors")
+            }
+            if (status === "queued" && queue_attempt_id) {
+              const currentRoute = parseRoute(location.pathname)
+              if (currentRoute.valid && currentRoute.kind === "talk") {
+                navigation.navigate("/matchmaking", {
+                  snapshot: {canonical_state: "QUEUED", queue: {queue_attempt_id}}
+                }).catch(() => announce("Matchmaking navigation could not be applied."))
+              } else if (currentRoute.valid && currentRoute.kind === "matchmaking") {
+                presentScreen("queue")
+              }
+            }
+          })
+          '''
+          if old not in text:
+            raise SystemExit("queue status anchor not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
       - name: Start Phoenix with browser-test connection pool
         run: |
           mix run --no-start -e '
@@ -151,33 +190,198 @@ jobs:
           cat /tmp/strangertalks-f03-browser.log
           exit 1
 
-      - name: J10 isolated harness proof
+      - name: J10 corrected harness GREEN
         run: node --test --test-concurrency=1 --test-name-pattern='J10' test/js/navigation_history_browser_test.mjs
 
-      - name: J07 isolated classification
+      - name: J05 J06 J15 QUEUED route GREEN
+        run: node --test --test-concurrency=1 --test-name-pattern='J05/J06/J15' test/js/navigation_history_browser_test.mjs
+
+      - name: Prove J07 RED before match-found application
         run: |
           set +e
-          node --test --test-concurrency=1 --test-name-pattern='J07/J08/J15' test/js/navigation_history_browser_test.mjs > /tmp/f03-j07.log 2>&1
+          node --test --test-concurrency=1 --test-name-pattern='J07/J08/J15' test/js/navigation_history_browser_test.mjs > /tmp/f03-j07-red.log 2>&1
           status=$?
           set -e
-          cat /tmp/f03-j07.log
-          echo "J07_ISOLATED_STATUS=$status" >> "$GITHUB_ENV"
-          echo "J07_ISOLATED_STATUS=$status"
+          cat /tmp/f03-j07-red.log
+          test "$status" -ne 0
+          grep -F "'/matchmaking'" /tmp/f03-j07-red.log
+          grep -F "'/conversation'" /tmp/f03-j07-red.log
 
-      - name: J09 isolated classification
+      - name: Apply match-found navigation event
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("priv/static/assets/app.js")
+          text = path.read_text()
+          old = '  app.participant.on("match_found", (payload) => { handleMatchedConversation(payload).catch(() => announce("Reconnecting to the Conversation…")) })'
+          new = '''  app.participant.on("match_found", (payload) => {
+            navigation.activityEvent("match_found").catch(() => announce("Conversation navigation could not be applied."))
+            handleMatchedConversation(payload).catch(() => announce("Reconnecting to the Conversation…"))
+          })'''
+          if old not in text:
+            raise SystemExit("match_found anchor not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: J07 J08 J15 match and non-destructive Back GREEN
+        run: node --test --test-concurrency=1 --test-name-pattern='J07/J08/J15' test/js/navigation_history_browser_test.mjs
+
+      - name: Prove J09 RED before terminal-history application
         run: |
           set +e
-          node --test --test-concurrency=1 --test-name-pattern='J09' test/js/navigation_history_browser_test.mjs > /tmp/f03-j09.log 2>&1
+          node --test --test-concurrency=1 --test-name-pattern='J09' test/js/navigation_history_browser_test.mjs > /tmp/f03-j09-red.log 2>&1
           status=$?
           set -e
-          cat /tmp/f03-j09.log
-          echo "J09_ISOLATED_STATUS=$status" >> "$GITHUB_ENV"
-          echo "J09_ISOLATED_STATUS=$status"
+          cat /tmp/f03-j09-red.log
+          test "$status" -ne 0
+          grep -F "'/conversation'" /tmp/f03-j09-red.log
+          grep -F "'/conversation/ended'" /tmp/f03-j09-red.log
 
-      - name: Classification summary
+      - name: Apply terminal navigation event
         run: |
-          echo "J07_ISOLATED_STATUS=${J07_ISOLATED_STATUS:-missing}"
-          echo "J09_ISOLATED_STATUS=${J09_ISOLATED_STATUS:-missing}"
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("priv/static/assets/app.js")
+          text = path.read_text()
+          old = '''    await markConversationEnded()
+            show("ended")
+            $("#consent")?.focus()
+          '''
+          new = '''    await markConversationEnded()
+            await navigation.activityEvent("conversation_ended")
+            $("#consent")?.focus()
+          '''
+          if old not in text:
+            raise SystemExit("conversation ended anchor not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: J09 terminal history GREEN
+        run: node --test --test-concurrency=1 --test-name-pattern='J09' test/js/navigation_history_browser_test.mjs
+
+      - name: Add real-browser rapid navigation attacks
+        run: |
+          cat >> test/js/navigation_history_browser_test.mjs <<'JS'
+
+          test("F03 browser rapid primary navigation and Back/Forward stays coherent", {timeout: 45_000}, async () => {
+            const browser = await chromium.launch({headless: true})
+            let observed
+            try {
+              observed = await bootObserved(browser)
+              const mark = observed.journal.mark()
+
+              await clickHiddenPrimary(observed.page, "settings")
+              await observed.page.waitForFunction(() => location.pathname === "/you", null, {timeout: WAIT_MS})
+              await clickHiddenPrimary(observed.page, "chats")
+              await observed.page.waitForFunction(() => location.pathname === "/chats", null, {timeout: WAIT_MS})
+              await clickHiddenPrimary(observed.page, "doors")
+              await observed.page.waitForFunction(() => location.pathname === "/", null, {timeout: WAIT_MS})
+
+              await observed.page.evaluate(() => history.back())
+              await observed.page.waitForFunction(() => location.pathname === "/chats", null, {timeout: WAIT_MS})
+              await observed.page.evaluate(() => history.forward())
+              await observed.page.waitForFunction(() => location.pathname === "/", null, {timeout: WAIT_MS})
+              await observed.page.evaluate(() => history.back())
+              await observed.page.waitForFunction(() => location.pathname === "/chats", null, {timeout: WAIT_MS})
+
+              await activeScreen(observed.page, "chats").waitFor({state: "visible"})
+              assert.deepEqual(destructiveFrames(observed, mark), [])
+            } finally {
+              await observed?.context.close().catch(() => {})
+              await browser.close().catch(() => {})
+            }
+          })
+
+          test("F03 browser rapid QUEUED navigation rejects a pending canonical Back completion", {timeout: 60_000}, async () => {
+            const browser = await chromium.launch({headless: true})
+            let observed
+            try {
+              observed = await bootObserved(browser)
+              await clickDoorAndQueue(observed, "Advice")
+              assert.equal(new URL(observed.page.url()).pathname, "/matchmaking")
+              await clickHiddenPrimary(observed.page, "settings")
+              await activeScreen(observed.page, "settings").waitFor({state: "visible"})
+
+              const mark = observed.journal.mark()
+              await observed.page.evaluate(() => history.back())
+              const reconcileRequest = await observed.journal.waitFor(
+                event => event.type === "frame_sent" && event.event === "session:reconcile",
+                "queued Back session:reconcile",
+                mark
+              )
+              const replyWasAlreadyApplied = observed.journal.events.slice(mark).some(event =>
+                event.type === "frame_received" && event.event === "phx_reply" && event.ref === reconcileRequest.ref
+              )
+              assert.equal(replyWasAlreadyApplied, false, "queued canonical read must still be pending for the stale-completion attack")
+
+              await clickHiddenPrimary(observed.page, "chats")
+              await activeScreen(observed.page, "chats").waitFor({state: "visible"})
+              await observed.journal.waitFor(
+                event => event.type === "frame_received" && event.event === "phx_reply" && event.ref === reconcileRequest.ref,
+                "queued Back session:reconcile reply",
+                mark
+              )
+              await observed.page.waitForTimeout(50)
+              assert.equal(new URL(observed.page.url()).pathname, "/chats")
+              assert.deepEqual(destructiveFrames(observed, mark), [])
+            } finally {
+              await observed?.context.close().catch(() => {})
+              await browser.close().catch(() => {})
+            }
+          })
+
+          test("F03 browser rapid ACTIVE Conversation navigation rejects a pending canonical Back completion", {timeout: 75_000}, async () => {
+            const browser = await chromium.launch({headless: true})
+            let pair
+            try {
+              pair = await matchPair(browser)
+              assert.equal(new URL(pair.a.page.url()).pathname, "/conversation")
+              await clickHiddenPrimary(pair.a.page, "chats")
+              await activeScreen(pair.a.page, "chats").waitFor({state: "visible"})
+
+              const mark = pair.a.journal.mark()
+              await pair.a.page.evaluate(() => history.back())
+              const reconcileRequest = await pair.a.journal.waitFor(
+                event => event.type === "frame_sent" && event.event === "session:reconcile",
+                "Conversation Back session:reconcile",
+                mark
+              )
+              const replyWasAlreadyApplied = pair.a.journal.events.slice(mark).some(event =>
+                event.type === "frame_received" && event.event === "phx_reply" && event.ref === reconcileRequest.ref
+              )
+              assert.equal(replyWasAlreadyApplied, false, "Conversation canonical read must still be pending for the stale-completion attack")
+
+              await clickHiddenPrimary(pair.a.page, "settings")
+              await activeScreen(pair.a.page, "settings").waitFor({state: "visible"})
+              await pair.a.journal.waitFor(
+                event => event.type === "frame_received" && event.event === "phx_reply" && event.ref === reconcileRequest.ref,
+                "Conversation Back session:reconcile reply",
+                mark
+              )
+              await pair.a.page.waitForTimeout(50)
+              assert.equal(new URL(pair.a.page.url()).pathname, "/you")
+              assert.deepEqual(destructiveFrames(pair.a, mark), [])
+
+              await pair.a.page.evaluate(() => history.back())
+              await activeScreen(pair.a.page, "conversation").waitFor({state: "visible"})
+              assert.equal(new URL(pair.a.page.url()).pathname, "/conversation")
+              assert.deepEqual(destructiveFrames(pair.a, mark), [])
+            } finally {
+              await pair?.a.context.close().catch(() => {})
+              await pair?.b.context.close().catch(() => {})
+              await browser.close().catch(() => {})
+            }
+          })
+          JS
+
+      - name: Full F-03 browser contract including rapid attacks
+        run: node --test --test-concurrency=1 test/js/navigation_history_browser_test.mjs
+
+      - name: Frozen F-02 route regression after production changes
+        run: node --test test/js/route_contract_test.mjs
+
+      - name: F-03 unit regression after production changes
+        run: node --test test/js/navigation_history_test.mjs
 
       - name: Stop Phoenix browser server
         if: always()
@@ -190,3 +394,18 @@ jobs:
       - name: Browser server log on failure
         if: failure()
         run: cat /tmp/strangertalks-f03-browser.log || true
+
+      - name: Full precommit
+        run: mix precommit
+
+      - name: Diff hygiene
+        run: git diff --check
+
+      - name: Commit proven F-03 implementation
+        run: |
+          git config user.name "StrangerTalks F-03R"
+          git config user.email "actions@users.noreply.github.com"
+          git add priv/static/assets/app.js test/js/navigation_history_browser_test.mjs
+          git diff --cached --check
+          git commit -m "fix(f03): apply canonical activity navigation"
+          git push origin HEAD:f03/navigation-history-wave-a-2026-08-27
