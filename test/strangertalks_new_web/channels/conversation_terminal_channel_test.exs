@@ -179,6 +179,36 @@ defmodule StrangertalksNewWeb.ConversationTerminalChannelTest do
              )
   end
 
+  test "End first then stale Block preserves and reasserts canonical End truth", context do
+    socket_a = connect_and_join(context.participant_a, context.conversation)
+    socket_b = connect_and_join(context.participant_b, context.conversation)
+
+    end_ref = push(socket_a, "conversation:end", %{})
+    assert_reply end_ref, :ok, %{status: "ended"}
+
+    for _ <- 1..2 do
+      assert_push "conversation:ended", %{status: "ended", reason: "participant_completed"}
+    end
+
+    before_block = Repo.get!(Conversation, context.conversation.conversation_id)
+    assert before_block.conversation_status == :ENDED
+    assert before_block.ending_type == :NATURAL_END
+    assert before_block.ending_initiator == context.participant_a.participant_id
+
+    block_ref = push(socket_b, "conversation:block", %{})
+    assert_reply block_ref, :ok, %{status: "blocked"}
+
+    for _ <- 1..2 do
+      assert_push "conversation:ended", %{status: "ended", reason: "participant_completed"}
+    end
+
+    after_block = Repo.get!(Conversation, context.conversation.conversation_id)
+    assert after_block.conversation_status == :ENDED
+    assert after_block.ending_type == :NATURAL_END
+    assert after_block.ending_initiator == context.participant_a.participant_id
+    assert after_block.conversation_completed == true
+  end
+
   defp participant_fixture do
     {:ok, participant} = Participants.create_participant(%{})
     participant
