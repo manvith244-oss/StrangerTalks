@@ -85,9 +85,53 @@ jobs:
           mix ecto.create --quiet
           mix ecto.migrate --quiet
 
-      - name: Start Phoenix for F-03 browser proof
+      - name: Apply J10 harness correction in diagnostic worktree
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("test/js/navigation_history_browser_test.mjs")
+          text = path.read_text()
+          anchor = '''async function bootObserved(browser, path = "/") {
+            const context = await browser.newContext({viewport: {width: 1280, height: 800}})
+            const page = await context.newPage()
+            const observed = await observePage(context, page)
+            const response = await page.goto(`${BASE_URL}${path}`, {waitUntil: "domcontentloaded"})
+            assert.ok(response?.ok(), `${path} loads`)
+            await page.waitForFunction(() => document.querySelectorAll("#doors button.door").length > 0, null, {timeout: WAIT_MS})
+            await waitForParticipantJoin(observed)
+            await page.locator("#conversation-language").selectOption("en")
+            return {context, ...observed}
+          }
+          '''
+          helper = '''
+          async function bootActivityObserved(browser, path, expectedPath) {
+            const context = await browser.newContext({viewport: {width: 1280, height: 800}})
+            const page = await context.newPage()
+            const observed = await observePage(context, page)
+            const response = await page.goto(`${BASE_URL}${path}`, {waitUntil: "domcontentloaded"})
+            assert.ok(response?.ok(), `${path} loads`)
+            await page.waitForFunction(() => document.querySelectorAll("#doors button.door").length > 0, null, {timeout: WAIT_MS})
+            await waitForParticipantJoin(observed)
+            await page.waitForFunction(expectedPathname => location.pathname === expectedPathname, expectedPath, {timeout: WAIT_MS})
+            return {context, ...observed}
+          }
+          '''
+          if anchor not in text:
+            raise SystemExit("bootObserved anchor not found")
+          text = text.replace(anchor, anchor + helper, 1)
+          old = 'observed = await bootObserved(browser, "/conversation")'
+          new = 'observed = await bootActivityObserved(browser, "/conversation", "/conversation/unavailable")'
+          if old not in text:
+            raise SystemExit("J10 call anchor not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Start Phoenix with browser-test connection pool
         run: |
           mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
             config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
             Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
@@ -107,8 +151,33 @@ jobs:
           cat /tmp/strangertalks-f03-browser.log
           exit 1
 
-      - name: F-03 browser Back Forward contract
-        run: node --test --test-concurrency=1 test/js/navigation_history_browser_test.mjs
+      - name: J10 isolated harness proof
+        run: node --test --test-concurrency=1 --test-name-pattern='J10' test/js/navigation_history_browser_test.mjs
+
+      - name: J07 isolated classification
+        run: |
+          set +e
+          node --test --test-concurrency=1 --test-name-pattern='J07/J08/J15' test/js/navigation_history_browser_test.mjs > /tmp/f03-j07.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/f03-j07.log
+          echo "J07_ISOLATED_STATUS=$status" >> "$GITHUB_ENV"
+          echo "J07_ISOLATED_STATUS=$status"
+
+      - name: J09 isolated classification
+        run: |
+          set +e
+          node --test --test-concurrency=1 --test-name-pattern='J09' test/js/navigation_history_browser_test.mjs > /tmp/f03-j09.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/f03-j09.log
+          echo "J09_ISOLATED_STATUS=$status" >> "$GITHUB_ENV"
+          echo "J09_ISOLATED_STATUS=$status"
+
+      - name: Classification summary
+        run: |
+          echo "J07_ISOLATED_STATUS=${J07_ISOLATED_STATUS:-missing}"
+          echo "J09_ISOLATED_STATUS=${J09_ISOLATED_STATUS:-missing}"
 
       - name: Stop Phoenix browser server
         if: always()
