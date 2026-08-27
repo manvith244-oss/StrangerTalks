@@ -14,6 +14,7 @@ const runtime = {
   futureLanguage: null,
   languageWriteAuthorized: false,
   readiness: createCanonicalReadiness(),
+  reconciliationGate: createCanonicalReconciliationGate(),
   memoryIndexedDB: createMemoryIndexedDB(),
   nativeIndexedDB: null,
   resilientIndexedDB: null,
@@ -92,6 +93,19 @@ export function createCanonicalReadiness() {
       return () => listeners.delete(listener)
     }
   }
+}
+
+export function createCanonicalReconciliationGate() {
+  let revision = 0
+  return Object.freeze({
+    begin() {
+      revision += 1
+      return revision
+    },
+    current(candidate) {
+      return Number.isInteger(candidate) && candidate === revision
+    }
+  })
 }
 
 function nonEmptyString(value) {
@@ -442,9 +456,10 @@ async function persistTerminalRetentionPending(conversationId) {
   await replaceLocalRecords(next)
 }
 
-async function cleanupCanonicalObsoleteRecovery(snapshot) {
+async function cleanupCanonicalObsoleteRecovery(snapshot, reconciliation) {
+  if (!runtime.reconciliationGate.current(reconciliation)) return null
   const records = await listLocalRecords()
-  if (!records.length) return null
+  if (!runtime.reconciliationGate.current(reconciliation) || !records.length) return null
   const pendingTerminal = findPendingTerminalRetention(records)
   const canonicalConversationId = snapshot?.canonical_state === "CONVERSATION" ? snapshot.conversation?.conversation_id : null
   let next = records
@@ -454,12 +469,16 @@ async function cleanupCanonicalObsoleteRecovery(snapshot) {
     if (canonicalConversationId === id) continue
     next = cleanupConversationRecoveryRecords(next, id)
   }
+  if (!runtime.reconciliationGate.current(reconciliation)) return null
   if (next.length !== records.length) await replaceLocalRecords(next)
+  if (!runtime.reconciliationGate.current(reconciliation)) return null
   return pendingTerminal
 }
 
-async function onCanonicalSnapshot(snapshot) {
-  const pendingTerminal = await cleanupCanonicalObsoleteRecovery(snapshot)
+async function onCanonicalSnapshot(snapshot, reconciliation) {
+  if (!runtime.reconciliationGate.current(reconciliation)) return runtime.readiness.get()
+  const pendingTerminal = await cleanupCanonicalObsoleteRecovery(snapshot, reconciliation)
+  if (!runtime.reconciliationGate.current(reconciliation)) return runtime.readiness.get()
   const next = runtime.readiness.accept(snapshot, pendingTerminal)
   dispatchReadiness(next)
   return next
@@ -471,6 +490,12 @@ function setReadinessPending() {
   return next
 }
 
+function beginCanonicalReconciliation() {
+  const reconciliation = runtime.reconciliationGate.begin()
+  setReadinessPending()
+  return reconciliation
+}
+
 function patchParticipantChannel(channel) {
   if (!channel || channel.__f11ParticipantPatched) return channel
   channel.__f11ParticipantPatched = true
@@ -478,16 +503,16 @@ function patchParticipantChannel(channel) {
   const originalJoin = channel.join.bind(channel)
   const originalPush = channel.push.bind(channel)
   channel.join = function(timeout) {
-    setReadinessPending()
+    const reconciliation = beginCanonicalReconciliation()
     const result = originalJoin(timeout)
-    result.receive("ok", (response) => { onCanonicalSnapshot(response?.snapshot).catch(() => {}) })
+    result.receive("ok", (response) => { onCanonicalSnapshot(response?.snapshot, reconciliation).catch(() => {}) })
     return result
   }
   channel.push = function(event, payload, timeout) {
     const result = originalPush(event, payload, timeout)
     if (event === "session:reconcile") {
-      setReadinessPending()
-      result.receive("ok", (response) => { onCanonicalSnapshot(response?.snapshot).catch(() => {}) })
+      const reconciliation = beginCanonicalReconciliation()
+      result.receive("ok", (response) => { onCanonicalSnapshot(response?.snapshot, reconciliation).catch(() => {}) })
     }
     return result
   }
