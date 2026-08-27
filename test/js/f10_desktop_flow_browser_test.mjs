@@ -280,7 +280,11 @@ test("F-10 Conversation resize preserves runtime, unsent draft and readable widt
       const bubble = document.querySelector("#messages .message")
       const composer = document.querySelector("#message-form")
       const screen = document.querySelector('[data-screen="conversation"].active')
-      const rect = element => element?.getBoundingClientRect()
+      const rect = element => {
+        if (!element) return null
+        const bounds = element.getBoundingClientRect()
+        return {left: bounds.left, right: bounds.right, width: bounds.width, top: bounds.top, bottom: bounds.bottom, height: bounds.height}
+      }
       return {
         bubble: rect(bubble),
         composer: rect(composer),
