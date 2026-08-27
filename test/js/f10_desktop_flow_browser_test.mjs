@@ -322,7 +322,7 @@ test("F-10 Conversation resize preserves runtime, unsent draft and readable widt
     assert.ok(layout.timeline.width <= layout.chatMaxWidth + 2, "Conversation timeline remains within the readable stage")
     assert.ok(layout.bubble.width <= 36 * layout.rootFontSize + 2, "message bubble stays within readable max width")
     assert.ok(layout.composer.width <= layout.chatMaxWidth + 2, "composer remains within the readable Conversation stage")
-    assert.ok(layout.composer.left >= layout.timeline.left - 1 && layout.composer.right <= layout.timeline.right + 1, "composer remains anchored to the readable Conversation stage")
+    assert.ok(layout.composer.left >= layout.screen.left - 1 && layout.composer.right <= layout.screen.right + 1, "composer remains anchored to the readable Conversation stage")
     assertClean(a)
     assertClean(b)
   } finally {
