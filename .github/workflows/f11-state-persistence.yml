@@ -1,0 +1,24 @@
+name: F11 State Persistence
+
+on:
+  push:
+    branches:
+      - f11/state-persistence-readiness-2026-08-27
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+
+permissions:
+  contents: read
+
+jobs:
+  focused-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: F11 persistence contracts
+        run: node --test test/js/f11_persistence_contract_test.mjs
