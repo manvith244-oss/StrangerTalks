@@ -10,7 +10,7 @@ import {
   replaceRecords
 } from "../../priv/static/assets/local_data.mjs"
 import {createMemoryIndexedDB} from "../../priv/static/assets/f11_persistence_runtime.mjs"
-import {createCanonicalIndexedDB} from "../../priv/static/assets/f11_local_store.mjs"
+import {createCanonicalIndexedDB, installCanonicalIndexedDB} from "../../priv/static/assets/f11_local_store.mjs"
 
 const now = "2026-08-27T06:45:00.000Z"
 const participantA = "11111111-1111-4111-8111-111111111111"
@@ -59,6 +59,15 @@ async function rawPut(native, item) {
   const request = tx.objectStore("records").put(item)
   await new Promise((resolve, reject) => { request.onsuccess = resolve; request.onerror = reject })
 }
+
+test("LOCAL-00 bootstrap installer installs the canonical store once before local_data consumers", () => {
+  const native = createMemoryIndexedDB()
+  const target = {indexedDB: native}
+  const installed = installCanonicalIndexedDB(target)
+  assert.equal(target.indexedDB, installed)
+  assert.equal(installed.__f11Canonical, true)
+  assert.equal(installCanonicalIndexedDB(target), installed)
+})
 
 test("LOCAL-01 canonical IndexedDB boundary exists and is the app-facing factory", async () => {
   await withCanonicalIndexedDB(async (_native, canonical) => {
