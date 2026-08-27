@@ -77,14 +77,18 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Prepare browser database
+      - name: Prepare pristine browser database
         run: |
-          mix ecto.create --quiet
-          mix ecto.migrate --quiet
+          MIX_ENV=test mix ecto.drop --force
+          MIX_ENV=test mix ecto.create --quiet
+          MIX_ENV=test mix ecto.migrate --quiet
 
-      - name: Start Phoenix for F-X05 Chromium proof
+      - name: Start Phoenix with browser-test connection pool
         run: |
           mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
             config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
             Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
@@ -104,21 +108,38 @@ jobs:
           cat /tmp/fx05-browser.log
           exit 1
 
-      - name: F-X05 hostile browser proof
-        run: node --test test/js/fx05_expression_continuity_browser_test.mjs
+      - name: HARNESS-01 through HARNESS-03 repeat-pair proof
+        run: node --test --test-concurrency=1 --test-name-pattern="^HARNESS-01/02/03" test/js/fx05_expression_continuity_browser_test.mjs
 
-      - name: Stop F-X05 browser server
+      - name: HARNESS-04 X05-01 isolated assertion proof
+        run: node --test --test-concurrency=1 --test-name-pattern="^X05-01 text draft" test/js/fx05_expression_continuity_browser_test.mjs
+
+      - name: Stop and verify F-X05 browser server
         if: always()
         run: |
-          if [ -f /tmp/fx05-browser.pid ]; then
-            pid="$(cat /tmp/fx05-browser.pid)"
-            kill "$pid" 2>/dev/null || true
-            for attempt in $(seq 1 20); do
-              if ! kill -0 "$pid" 2>/dev/null; then break; fi
-              sleep 0.25
-            done
-            kill -9 "$pid" 2>/dev/null || true
+          if [ ! -f /tmp/fx05-browser.pid ]; then
+            echo "browser server pid file missing"
+            exit 1
           fi
+          pid="$(cat /tmp/fx05-browser.pid)"
+          kill "$pid" 2>/dev/null || true
+          for attempt in $(seq 1 30); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "browser server did not stop cleanly"
+            cat /tmp/fx05-browser.log || true
+            kill -9 "$pid" 2>/dev/null || true
+            exit 1
+          fi
+          if curl -fsS http://localhost:4002/ >/dev/null 2>&1; then
+            echo "browser server is still accepting connections"
+            exit 1
+          fi
+          echo "F-X05 Phoenix browser server stopped"
 
       - name: Focused expression regressions
         run: |
@@ -129,8 +150,17 @@ jobs:
             test/js/view_once_test.mjs \
             test/js/normal_media_runtime_test.mjs
 
+      - name: Reset pristine test database
+        run: |
+          MIX_ENV=test mix ecto.drop --force
+          MIX_ENV=test mix ecto.create --quiet
+          MIX_ENV=test mix ecto.migrate --quiet
+
       - name: Diff hygiene
         run: git diff --check
+
+      - name: Prove no tracked mutation
+        run: git diff --exit-code
 
       - name: Prove clean checkout
         run: |
