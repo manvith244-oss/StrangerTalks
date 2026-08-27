@@ -126,7 +126,7 @@ jobs:
               assert.equal(pair.a.conversationEndFrames.length, 0)
           '''
           new = '''    assert.equal(await pair.a.page.locator("#message-input").inputValue(), "rapid continuity")
-              assert.equal(await pair.a.page.locator("#expressive-composer").isHidden(), false, "rapid return must preserve the same Conversation composer")
+              assert.equal(await pair.a.page.locator("#expressive-composer").getAttribute("hidden"), null, "rapid return must clear only the lifecycle hidden attribute")
               assert.equal(await pair.a.page.locator("#emoji-open").count(), 1, "same-Conversation expression controls must remain bound")
               assert.equal(pair.a.conversationEndFrames.length, 0)
           '''
