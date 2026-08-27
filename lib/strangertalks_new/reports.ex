@@ -56,6 +56,7 @@ defmodule StrangertalksNew.Reports do
              (is_binary(target_client_message_id) or is_nil(target_client_message_id)) do
     with %Conversation{} = conversation <- Repo.get(Conversation, conversation_id),
          true <- reporter_id in [conversation.participant_a_id, conversation.participant_b_id],
+         :ok <- reportable_conversation_status(conversation),
          {:ok, report_category} <- category_from_string(category),
          {:ok, authoritative_evidence, evidence_key} <-
            authoritative_evidence(
@@ -144,6 +145,12 @@ defmodule StrangertalksNew.Reports do
         {:error, reason}
     end
   end
+
+  defp reportable_conversation_status(%Conversation{conversation_status: status})
+       when status in [:PENDING, :ACTIVE, :PAUSED],
+       do: :ok
+
+  defp reportable_conversation_status(%Conversation{}), do: {:error, :conversation_unavailable}
 
   defp category_from_string(category) do
     case Map.fetch(@categories, category) do

@@ -297,9 +297,11 @@ test("real UI Block collapses local transient authority and stale Conversation A
     await Promise.all([a1, a2, a3, a4].map((page) => page.waitForSelector("#messages .message:not(.mine)")))
 
     await a1.fill("#message-input", "draft must lose send authority")
+    await a1.hover("#messages .message:not(.mine)")
     await a1.click("#messages .message:not(.mine) .reply-action-btn")
     await a1.waitForSelector("#reply-staging:not([hidden])")
 
+    await a2.hover("#messages .message:not(.mine)")
     await a2.click("#messages .message:not(.mine) .react-action-btn")
     await a2.waitForSelector(".reaction-picker")
 
