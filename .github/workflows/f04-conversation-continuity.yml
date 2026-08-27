@@ -9,7 +9,6 @@ on:
       - "priv/static/assets/expression_runtime.mjs"
       - "test/js/f04_conversation_runtime_cleanup_browser_test.mjs"
       - ".github/workflows/f04-conversation-continuity.yml"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -44,7 +43,20 @@ jobs:
       - name: Checkout exact PR head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Verify exact head and pristine checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          echo "expected_sha=$EXPECTED_SHA"
+          echo "actual_sha=$actual_sha"
+          test "$actual_sha" = "$EXPECTED_SHA"
+          git diff --check
+          test -z "$(git status --porcelain)"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -72,6 +84,24 @@ jobs:
           mix ecto.create --quiet
           mix ecto.migrate --quiet
 
+      - name: Relevant Conversation regressions
+        run: |
+          mix test \
+            test/strangertalks_new/conversation_lifecycle_test.exs \
+            test/strangertalks_new/conversation_isolation_test.exs \
+            test/strangertalks_new_web/channels/conversation_terminal_channel_test.exs \
+            test/strangertalks_new_web/channels/conversation_presence_channel_test.exs
+
+      - name: Full mix precommit
+        run: mix precommit
+
+      - name: Precommit must leave source pristine
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -z "$(git status --porcelain)"
+
       - name: Start Phoenix
         shell: bash
         run: |
@@ -93,7 +123,7 @@ jobs:
           cat /tmp/f04-browser-server.log
           exit 1
 
-      - name: F-04 terminal runtime cleanup browser proof
+      - name: F-04 P0 Chromium A-B-C runtime proof
         run: node --test test/js/f04_conversation_runtime_cleanup_browser_test.mjs
 
       - name: Browser server log on failure
@@ -106,3 +136,17 @@ jobs:
           if [ -f /tmp/f04-browser-server.pid ]; then
             kill "$(cat /tmp/f04-browser-server.pid)" 2>/dev/null || true
           fi
+
+      - name: Final exact-head and clean-tree proof
+        if: always()
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          echo "final_expected_sha=$EXPECTED_SHA"
+          echo "final_actual_sha=$actual_sha"
+          test "$actual_sha" = "$EXPECTED_SHA"
+          git diff --check
+          test -z "$(git status --porcelain)"
