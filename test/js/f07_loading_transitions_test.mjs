@@ -107,3 +107,30 @@ test("canonical queue leave reply exits cancelling instead of waiting forever fo
   assert.match(runtime, /MATCHMAKING_CANCELLED/)
   assert.match(runtime, /result\?\.status === "left"/)
 })
+
+test("queued presentation is gated by canonical attempt identity", () => {
+  const runtime = readFileSync(runtimePath, "utf8")
+  assert.match(runtime, /retiredQueueAttemptIds/)
+  assert.match(runtime, /if \(!queueAttemptId \|\| retiredQueueAttemptIds\.has\(queueAttemptId\)\) return false/)
+  assert.match(runtime, /if \(!queuedAttemptCanPresent\(payload\.queue_attempt_id\)\) return/)
+})
+
+test("a canonical leave retires its attempt so a late queued event cannot resurrect waiting", () => {
+  const runtime = readFileSync(runtimePath, "utf8")
+  assert.match(runtime, /const leavingQueueAttemptId = payload\?\.queue_attempt_id \|\| activeQueueAttemptId/)
+  assert.match(runtime, /retireQueueAttempt\(leavingQueueAttemptId\)/)
+  assert.doesNotMatch(runtime, /if \(!activeQueueAttemptId\) return true/)
+})
+
+test("malformed terminal queue status cannot reset F-07 presentation", () => {
+  const runtime = readFileSync(runtimePath, "utf8")
+  assert.match(runtime, /if \(!payload\?\.queue_attempt_id\) return/)
+  assert.match(runtime, /payload\.queue_attempt_id === activeQueueAttemptId/)
+})
+
+test("join completion cannot present Finding someone without a canonical attempt id", () => {
+  const runtime = readFileSync(runtimePath, "utf8")
+  assert.match(runtime, /const queueAttemptId = result\?\.queue_attempt_id/)
+  assert.match(runtime, /if \(!queueAttemptId\) return/)
+  assert.match(runtime, /if \(!queuedAttemptCanPresent\(queueAttemptId\)\) return/)
+})

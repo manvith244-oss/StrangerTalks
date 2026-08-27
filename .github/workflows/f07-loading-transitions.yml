@@ -14,10 +14,123 @@ permissions:
 jobs:
   loading-transitions:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      DB_HOST: localhost
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: strangertalks_new_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4000
+
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Prove checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: F-07 transition regressions
+          cache: npm
+
+      - name: Install Elixir tooling
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Install browser dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: F-07 focused transition regressions
         run: node --test test/js/f07_loading_transitions_test.mjs
+
+      - name: Prepare test database
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+
+      - name: Start StrangerTalks
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/f07-phoenix.log 2>&1 &
+          echo $! > /tmp/f07-phoenix.pid
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:4000/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/f07-phoenix.log
+          exit 1
+
+      - name: F-07 real-browser continuity proof
+        run: node --test test/js/f07_loading_transitions_browser_test.mjs
+
+      - name: Stop StrangerTalks
+        if: always()
+        shell: bash
+        run: |
+          if test -f /tmp/f07-phoenix.pid; then
+            kill "$(cat /tmp/f07-phoenix.pid)" || true
+          fi
+
+      - name: Reset test database before precommit
+        run: |
+          mix ecto.drop
+          mix ecto.create
+          mix ecto.migrate
+
+      - name: Full precommit
+        run: mix precommit
+
+      - name: Diff hygiene
+        run: git diff --check
+
+      - name: Clean tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+
+      - name: Record exact tested SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "F-07 tested SHA: $(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"

@@ -3,16 +3,16 @@ import {FLOW_PHASE, createOperationGuard, loadingPresentation} from "./flow_load
 
 const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"
 const BOOT_WATCHDOG_MS = 15_000
+const MAX_RETIRED_QUEUE_ATTEMPTS = 64
 const queueGuard = createOperationGuard()
+const retiredQueueAttemptIds = new Set()
 let activeQueueAttemptId = null
 let currentQueuePhase = FLOW_PHASE.MATCHMAKING_ADMISSION
 let selectedDoor = null
 let bootWatchdog = null
 let startupFailureObserver = null
 
-function node(selector) {
-  return document.querySelector(selector)
-}
+function node(selector) { return document.querySelector(selector) }
 
 function announcePhase(message) {
   const status = node("#queue-phase-status")
@@ -34,22 +34,43 @@ function renderQueue(phase, context = {}) {
   announcePhase(`${presentation.title} ${presentation.detail}`)
 }
 
-function resetQueuePresentation() {
+function rememberRetiredQueueAttempt(queueAttemptId) {
+  if (!queueAttemptId) return
+  retiredQueueAttemptIds.add(queueAttemptId)
+  while (retiredQueueAttemptIds.size > MAX_RETIRED_QUEUE_ATTEMPTS) {
+    retiredQueueAttemptIds.delete(retiredQueueAttemptIds.values().next().value)
+  }
+}
+
+function retireQueueAttempt(queueAttemptId = activeQueueAttemptId) {
+  rememberRetiredQueueAttempt(queueAttemptId)
+  if (queueAttemptId && queueAttemptId === activeQueueAttemptId) activeQueueAttemptId = null
+}
+
+function restoreCanonicalQueueAttempt(queueAttemptId) {
+  if (!queueAttemptId) return false
+  retiredQueueAttemptIds.delete(queueAttemptId)
+  activeQueueAttemptId = queueAttemptId
+  return true
+}
+
+function resetQueuePresentation({retireActive = false} = {}) {
+  if (retireActive) retireQueueAttempt()
   selectedDoor = null
   activeQueueAttemptId = null
   queueGuard.invalidate()
   renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION)
 }
 
-function queueAttemptMatches(payload) {
-  if (!activeQueueAttemptId) return true
-  return !payload?.queue_attempt_id || payload.queue_attempt_id === activeQueueAttemptId
+function queuedAttemptCanPresent(queueAttemptId) {
+  if (!queueAttemptId || retiredQueueAttemptIds.has(queueAttemptId)) return false
+  return !activeQueueAttemptId || queueAttemptId === activeQueueAttemptId
 }
 
 function applyQueueSnapshot(snapshot) {
   const queue = snapshot?.queue
   if (!queue?.queue_attempt_id) return false
-  activeQueueAttemptId = queue.queue_attempt_id
+  restoreCanonicalQueueAttempt(queue.queue_attempt_id)
   if (queue.display_door) selectedDoor = queue.display_door
   renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
   return true
@@ -107,33 +128,45 @@ function installBootWatchers() {
   startupFailureObserver.observe(status, {childList: true, characterData: true, subtree: true})
 }
 
+function settleAdmissionFailure() {
+  if (activeQueueAttemptId) {
+    renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
+  } else {
+    resetQueuePresentation()
+  }
+}
+
 function withQueueCompletion(push, event, payload) {
   if (event === "queue:join") {
     const token = queueGuard.begin("queue-admission")
     renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor})
     push.receive("ok", (result) => {
       if (!queueGuard.current(token)) return
-      activeQueueAttemptId = result?.queue_attempt_id || activeQueueAttemptId
+      const queueAttemptId = result?.queue_attempt_id
+      if (!queueAttemptId) return
+      if (!queuedAttemptCanPresent(queueAttemptId)) return
+      activeQueueAttemptId = queueAttemptId
       renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
     })
     push.receive("error", () => {
       if (!queueGuard.current(token)) return
-      resetQueuePresentation()
+      settleAdmissionFailure()
     })
     push.receive("timeout", () => {
       if (!queueGuard.current(token)) return
-      resetQueuePresentation()
+      settleAdmissionFailure()
     })
     return
   }
 
   if (event === "queue:leave") {
     const token = queueGuard.begin("queue-cancel")
+    const leavingQueueAttemptId = payload?.queue_attempt_id || activeQueueAttemptId
     renderQueue(FLOW_PHASE.MATCHMAKING_CANCELLING, {door: selectedDoor})
     push.receive("ok", (result) => {
       if (!queueGuard.current(token)) return
       if (result?.status === "left") {
-        activeQueueAttemptId = null
+        retireQueueAttempt(leavingQueueAttemptId)
         renderQueue(FLOW_PHASE.MATCHMAKING_CANCELLED, {door: selectedDoor})
       }
     })
@@ -154,7 +187,7 @@ function withQueueCompletion(push, event, payload) {
       if (!queueGuard.current(token)) return
       const activeScreen = node("section.screen.active")?.dataset?.screen
       if (activeScreen === "match" || activeScreen === "conversation") return
-      if (!applyQueueSnapshot(result?.snapshot)) resetQueuePresentation()
+      if (!applyQueueSnapshot(result?.snapshot)) resetQueuePresentation({retireActive: true})
     })
   }
 }
@@ -189,21 +222,25 @@ function patchParticipantChannel(channel) {
   channel.on = function(event, callback) {
     return originalOn(event, (payload) => {
       if (event === "queue:status") {
-        if (!queueAttemptMatches(payload)) return callback(payload)
-        if (payload?.status === "queued" && payload.queue_attempt_id) {
+        if (payload?.status === "queued") {
+          if (!queuedAttemptCanPresent(payload.queue_attempt_id)) return
           if (currentQueuePhase !== FLOW_PHASE.MATCHMAKING_CANCELLING) {
             activeQueueAttemptId = payload.queue_attempt_id
             renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
           }
         } else if (["left", "timed_out"].includes(payload?.status)) {
-          resetQueuePresentation()
+          if (!payload?.queue_attempt_id) return
+          if (payload.queue_attempt_id === activeQueueAttemptId) {
+            retireQueueAttempt(payload.queue_attempt_id)
+            resetQueuePresentation()
+          }
         }
       } else if (event === "match_found") {
         queueGuard.invalidate()
-        activeQueueAttemptId = null
+        retireQueueAttempt()
         renderQueue(FLOW_PHASE.ENTERING_CONVERSATION, {door: selectedDoor})
       } else if (event === "transition:recovery_failed") {
-        resetQueuePresentation()
+        resetQueuePresentation({retireActive: true})
       }
       return callback(payload)
     })
