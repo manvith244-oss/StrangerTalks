@@ -108,7 +108,7 @@ jobs:
           cat /tmp/f11-browser.log
           exit 1
       - name: F11 hostile browser proof
-        run: node --test --test-concurrency=1 test/js/f11_browser_hostile_test.mjs
+        run: node --test --test-concurrency=1 test/js/f11_browser_hostile_test.mjs test/js/f11_browser_corrupt_identity_test.mjs
       - name: Stop browser server
         if: always()
         run: |
