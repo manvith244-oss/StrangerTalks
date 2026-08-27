@@ -36,9 +36,15 @@ __F04Socket.prototype.channel = function(topic, params) {
     metrics.channels[topic] = channel
     metrics.listenerRefs[topic] = {}
 
+    const isApplicationListenerEvent = (event) => {
+      const name = String(event)
+      return !name.startsWith("phx_") && !name.startsWith("chan_reply_")
+    }
+
     const originalOn = channel.on.bind(channel)
     channel.on = function(event, callback) {
       const ref = originalOn(event, callback)
+      if (!isApplicationListenerEvent(event)) return ref
       const key = String(event) + ":" + String(ref)
       if (!metrics.listenerRefs[topic][key]) {
         metrics.listenerRefs[topic][key] = true
@@ -51,6 +57,7 @@ __F04Socket.prototype.channel = function(topic, params) {
 
     const originalOff = channel.off.bind(channel)
     channel.off = function(event, ref) {
+      if (!isApplicationListenerEvent(event)) return originalOff(event, ref)
       const key = String(event) + ":" + String(ref)
       if (metrics.listenerRefs[topic][key]) {
         delete metrics.listenerRefs[topic][key]
@@ -96,8 +103,8 @@ window.__f04RuntimeProbe = {
     const channel = window.__f04ConversationChannels?.channels?.[topic] || null
     return releaseConversationRuntime({conversationId, channel})
   },
-  voiceRecord(conversationId, voiceNoteId) {
-    return getRecord("voice:" + conversationId + ":" + voiceNoteId)
+  async voiceRecord(conversationId, voiceNoteId) {
+    return (await getRecord("voice:" + conversationId + ":" + voiceNoteId)) ?? null
   }
 }
 `
