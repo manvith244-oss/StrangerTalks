@@ -87,7 +87,17 @@ jobs:
           mix ecto.migrate --quiet
 
       - name: Frozen Phoenix direct-entry contract
+        id: phoenix-route-contract
+        continue-on-error: true
         run: mix test test/strangertalks_new_web/controllers/route_architecture_test.exs
 
       - name: Frozen browser route contract
+        id: browser-route-contract
+        continue-on-error: true
         run: node --test test/js/route_contract_test.mjs
+
+      - name: Require both route contracts
+        if: always()
+        run: |
+          test "${{ steps.phoenix-route-contract.outcome }}" = "success"
+          test "${{ steps.browser-route-contract.outcome }}" = "success"
