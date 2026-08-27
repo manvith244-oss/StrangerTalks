@@ -100,6 +100,7 @@ test("BROWSER-05/LANG final transport loss reconciles AVAILABLE without requeue 
   const browser = await chromium.launch({headless: true}); let s
   try {
     s = await session(browser); await ready(s.page, "AVAILABLE"); await language(s.page, "te"); await queue(s.page)
+    assert.equal(await s.page.evaluate(() => window.StrangerTalksF11.reconcileCanonicalActivity()), true)
     const queued = await ready(s.page, "QUEUED")
     const staleQueueAttemptId = queued.snapshot.queue.queue_attempt_id
     assert.ok(staleQueueAttemptId)
@@ -111,7 +112,7 @@ test("BROWSER-05/LANG final transport loss reconciles AVAILABLE without requeue 
     assert.notEqual(state.snapshot.queue?.queue_attempt_id, staleQueueAttemptId)
     assert.equal(await s.page.evaluate(() => window.StrangerTalksF11.getFutureConversationLanguage()), "hi")
     const afterFirstReconciliation = await s.page.evaluate(() => window.__f11Events.length)
-    await s.page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")))
+    assert.equal(await s.page.evaluate(() => window.StrangerTalksF11.reconcileCanonicalActivity()), true)
     await s.page.waitForFunction((n) => {
       const events = window.__f11Events || []
       return events.length >= n + 2 && events.slice(n).some(e => e.status === "CANONICAL_STATE_PENDING") && events.at(-1)?.status === "READY" && events.at(-1)?.canonical_state === "AVAILABLE"
