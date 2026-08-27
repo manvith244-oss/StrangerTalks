@@ -1,0 +1,456 @@
+name: F-X04 Apply Media Navigation Fix
+
+on:
+  push:
+    branches:
+      - fx04/media-navigation-boundary-2026-08-27
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Apply minimal media-owned navigation correction
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return text.replace(old, new, 1)
+
+          live_path = Path("priv/static/assets/live_call.mjs")
+          live = live_path.read_text()
+          if "setConversationSurfaceActive(active)" not in live:
+              live = replace_once(
+                  live,
+                  '''    this.activeMediaAcquisitionGeneration = 0
+          }
+
+          setChannel(channel) {''',
+                  '''    this.activeMediaAcquisitionGeneration = 0
+
+            // AREA-F F-X04 navigation privacy authority (document-RAM only)
+            this.conversationSurfaceActive = true
+            this.navigationGeneration = 0
+            this.navigationBlockedAttemptIds = new Set()
+          }
+
+          setChannel(channel) {''',
+                  "live constructor"
+              )
+
+              live = replace_once(
+                  live,
+                  '''  setVideoElements(localEl, remoteEl) {
+            this.localVideoElement = localEl
+            this.remoteVideoElement = remoteEl
+          }
+
+          getState() {''',
+                  '''  setVideoElements(localEl, remoteEl) {
+            this.localVideoElement = localEl
+            this.remoteVideoElement = remoteEl
+          }
+
+          blockNavigationAttempt(callAttemptId) {
+            if (!callAttemptId) return
+            this.navigationBlockedAttemptIds.add(callAttemptId)
+            if (this.navigationBlockedAttemptIds.size > 32) {
+              const oldest = this.navigationBlockedAttemptIds.values().next().value
+              this.navigationBlockedAttemptIds.delete(oldest)
+            }
+          }
+
+          pushNavigationTerminal(event, callAttemptId, {fallbackEnd = false} = {}) {
+            if (!this.channel || !callAttemptId) return
+            const push = this.channel.push(event, {call_attempt_id: callAttemptId})
+            if (!fallbackEnd || !push?.receive) return
+
+            let fallbackSent = false
+            const endIfRaceWon = () => {
+              if (fallbackSent) return
+              fallbackSent = true
+              this.channel?.push("call:end", {call_attempt_id: callAttemptId})
+            }
+            push.receive("error", endIfRaceWon).receive("timeout", endIfRaceWon)
+          }
+
+          terminateAttemptForNavigation(callAttemptId, status, role = this.role) {
+            if (!callAttemptId) return
+            if (status === CALL_STATUS.PENDING_INCOMING || (status === "PENDING" && role === "callee")) {
+              this.pushNavigationTerminal("call:decline", callAttemptId, {fallbackEnd: true})
+            } else if (status === CALL_STATUS.PENDING_OUTGOING || (status === "PENDING" && role === "caller")) {
+              this.pushNavigationTerminal("call:cancel", callAttemptId, {fallbackEnd: true})
+            } else {
+              this.pushNavigationTerminal("call:end", callAttemptId)
+            }
+          }
+
+          setConversationSurfaceActive(active) {
+            const nextActive = Boolean(active)
+            if (this.conversationSurfaceActive === nextActive) return
+            this.conversationSurfaceActive = nextActive
+            if (nextActive) return
+
+            this.navigationGeneration += 1
+            const attemptId = this.callAttemptId
+            const status = this.status
+            const hasMediaAuthority = Boolean(
+              attemptId ||
+              [CALL_STATUS.PENDING_OUTGOING, CALL_STATUS.PENDING_INCOMING, CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(status) ||
+              this.localStream || this.localCameraStream || this.localScreenStream || this.peerConnection
+            )
+
+            if (attemptId) this.blockNavigationAttempt(attemptId)
+            if (hasMediaAuthority) this.teardown("navigation_away")
+            if (attemptId) this.terminateAttemptForNavigation(attemptId, status)
+          }
+
+          applyCallStateSync(callState) {
+            if (!callState?.call_attempt_id) return false
+            const attemptId = callState.call_attempt_id
+            const blocked = this.navigationBlockedAttemptIds.has(attemptId)
+            const pendingStatus = callState.role === "caller" ? CALL_STATUS.PENDING_OUTGOING : CALL_STATUS.PENDING_INCOMING
+            const internalStatus = callState.status === "PENDING"
+              ? pendingStatus
+              : (callState.status === "ACTIVE" ? CALL_STATUS.ACTIVE : CALL_STATUS.CONNECTING)
+
+            if (!this.conversationSurfaceActive || blocked) {
+              this.blockNavigationAttempt(attemptId)
+              if (this.callAttemptId === attemptId) this.teardown("navigation_away")
+              this.terminateAttemptForNavigation(attemptId, callState.status, callState.role)
+              return false
+            }
+
+            if (!["ACTIVE", "CONNECTING", "PENDING"].includes(callState.status)) return false
+            this.callAttemptId = attemptId
+            this.role = callState.role
+            this.callType = callState.call_type || "voice"
+            this.mediaGeneration = callState.media_generation || 1
+            this.selfMuted = Boolean(callState.self_muted)
+            this.peerMuted = Boolean(callState.peer_muted)
+            this.activeAt = callState.active_at || null
+            this.status = internalStatus
+            this.notifyStateChange()
+            return true
+          }
+
+          getState() {''',
+                  "live navigation methods"
+              )
+
+              live = replace_once(
+                  live,
+                  '''  handleIncomingCall({ call_attempt_id, caller_id, call_type }) {
+            if (this.status !== CALL_STATUS.IDLE && this.status !== CALL_STATUS.TERMINAL) {''',
+                  '''  handleIncomingCall({ call_attempt_id, caller_id, call_type }) {
+            if (!this.conversationSurfaceActive || this.navigationBlockedAttemptIds.has(call_attempt_id)) {
+              this.blockNavigationAttempt(call_attempt_id)
+              this.terminateAttemptForNavigation(call_attempt_id, CALL_STATUS.PENDING_INCOMING, "callee")
+              return
+            }
+            if (this.status !== CALL_STATUS.IDLE && this.status !== CALL_STATUS.TERMINAL) {''',
+                  "incoming navigation gate"
+              )
+
+              live = replace_once(
+                  live,
+                  '''async handleCallAccepted({ call_attempt_id, callee_session_id, active_at }) {
+            if (this.callAttemptId !== call_attempt_id) return
+            this.activeAt = active_at || Math.floor(Date.now() / 1000)''',
+                  '''async handleCallAccepted({ call_attempt_id, callee_session_id, active_at }) {
+            if (!this.conversationSurfaceActive || this.navigationBlockedAttemptIds.has(call_attempt_id)) {
+              this.blockNavigationAttempt(call_attempt_id)
+              if (this.callAttemptId === call_attempt_id) this.teardown("navigation_away")
+              this.terminateAttemptForNavigation(call_attempt_id, CALL_STATUS.ACTIVE)
+              return
+            }
+            if (this.callAttemptId !== call_attempt_id) return
+            this.activeAt = active_at || Math.floor(Date.now() / 1000)''',
+                  "accepted navigation gate"
+              )
+
+              live = replace_once(
+                  live,
+                  '''  async initiate(callType = "voice") {
+            if (this.status !== CALL_STATUS.IDLE && this.status !== CALL_STATUS.TERMINAL) {
+              throw new Error("Call already in progress")
+            }
+
+            this.role = "caller"''',
+                  '''  async initiate(callType = "voice") {
+            if (!this.conversationSurfaceActive) throw new Error("Conversation surface is not active")
+            if (this.status !== CALL_STATUS.IDLE && this.status !== CALL_STATUS.TERMINAL) {
+              throw new Error("Call already in progress")
+            }
+
+            this.role = "caller"''',
+                  "initiate surface gate"
+              )
+
+              live = replace_once(
+                  live,
+                  '''    const initiationConversationId = this.conversationId
+            return new Promise((resolve, reject) => {
+              if (!this.channel) return reject(new Error("Channel unavailable"))
+              this.channel.push("call:initiate", { call_type: callType })
+                .receive("ok", (res) => {
+                  const stillCurrent =''',
+                  '''    const initiationConversationId = this.conversationId
+            const initiationNavigationGeneration = this.navigationGeneration
+            return new Promise((resolve, reject) => {
+              if (!this.channel) return reject(new Error("Channel unavailable"))
+              this.channel.push("call:initiate", { call_type: callType })
+                .receive("ok", (res) => {
+                  const invalidatedByNavigation = initiationNavigationGeneration !== this.navigationGeneration || !this.conversationSurfaceActive
+                  if (invalidatedByNavigation) {
+                    const attemptId = res?.call_attempt_id
+                    if (attemptId) {
+                      this.blockNavigationAttempt(attemptId)
+                      this.terminateAttemptForNavigation(attemptId, CALL_STATUS.PENDING_OUTGOING, "caller")
+                    }
+                    resolve({...res, stale: true})
+                    return
+                  }
+                  const stillCurrent =''',
+                  "initiate navigation generation"
+              )
+
+              live = replace_once(
+                  live,
+                  '''        .receive("error", (err) => {
+                  if (this.status === CALL_STATUS.PENDING_OUTGOING && this.role === "caller" && this.callAttemptId === null && this.conversationId === initiationConversationId) {
+                    this.teardown("initiate_failed")
+                  }
+                  reject(err)
+                })
+            })
+          }
+
+          async accept() {''',
+                  '''        .receive("error", (err) => {
+                  if (initiationNavigationGeneration !== this.navigationGeneration || !this.conversationSurfaceActive) {
+                    resolve({stale: true, error: err})
+                    return
+                  }
+                  if (this.status === CALL_STATUS.PENDING_OUTGOING && this.role === "caller" && this.callAttemptId === null && this.conversationId === initiationConversationId) {
+                    this.teardown("initiate_failed")
+                  }
+                  reject(err)
+                })
+            })
+          }
+
+          async accept() {''',
+                  "initiate stale error"
+              )
+
+              live = replace_once(
+                  live,
+                  '''  async accept() {
+            if (this.status !== CALL_STATUS.PENDING_INCOMING || !this.callAttemptId) {
+              throw new Error("No pending incoming call")
+            }
+
+            const acceptedAttemptId = this.callAttemptId
+            const acceptedConversationId = this.conversationId
+            return new Promise((resolve, reject) => {''',
+                  '''  async accept() {
+            if (!this.conversationSurfaceActive) throw new Error("Conversation surface is not active")
+            if (this.status !== CALL_STATUS.PENDING_INCOMING || !this.callAttemptId) {
+              throw new Error("No pending incoming call")
+            }
+
+            const acceptedAttemptId = this.callAttemptId
+            const acceptedConversationId = this.conversationId
+            const acceptedNavigationGeneration = this.navigationGeneration
+            return new Promise((resolve, reject) => {''',
+                  "accept navigation generation"
+              )
+
+              live = replace_once(
+                  live,
+                  '''        .receive("ok", (res) => {
+                  const stillCurrent = this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId
+                  if (!stillCurrent) { resolve({ ...res, stale: true }); return }''',
+                  '''        .receive("ok", (res) => {
+                  const stillCurrent = acceptedNavigationGeneration === this.navigationGeneration && this.conversationSurfaceActive && !this.navigationBlockedAttemptIds.has(acceptedAttemptId) && this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId
+                  if (!stillCurrent) { resolve({ ...res, stale: true }); return }''',
+                  "accept stale success"
+              )
+
+              live = replace_once(
+                  live,
+                  '''        .receive("error", (err) => {
+                  if (this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId) {
+                    this.teardown("accept_failed")
+                  }
+                  reject(err)
+                })''',
+                  '''        .receive("error", (err) => {
+                  if (acceptedNavigationGeneration !== this.navigationGeneration || !this.conversationSurfaceActive || this.navigationBlockedAttemptIds.has(acceptedAttemptId)) {
+                    resolve({stale: true, error: err})
+                    return
+                  }
+                  if (this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId) {
+                    this.teardown("accept_failed")
+                  }
+                  reject(err)
+                })''',
+                  "accept stale error"
+              )
+
+              live_path.write_text(live)
+
+          app_path = Path("priv/static/assets/app.js")
+          app = app_path.read_text()
+          if "releaseVoiceCaptureForNavigation" not in app:
+              app = replace_once(
+                  app,
+                  '''function presentScreen(name) {
+            document.querySelectorAll("[data-screen]").forEach((node) => node.classList.toggle("active", node.dataset.screen === name))''',
+                  '''function presentScreen(name) {
+            app.liveCall?.setConversationSurfaceActive(name === "conversation")
+            if (name !== "conversation") releaseVoiceCaptureForNavigation()
+            document.querySelectorAll("[data-screen]").forEach((node) => node.classList.toggle("active", node.dataset.screen === name))''',
+                  "app presentation boundary"
+              )
+
+              app = replace_once(
+                  app,
+                  '''function closeVoiceStream() {
+            clearInterval(app.voice.timer); clearTimeout(app.voice.stopTimer); cancelAnimationFrame(app.voice.activityFrame)
+            app.voice.timer = null; app.voice.stopTimer = null; app.voice.activityFrame = null
+            stopMediaTracks(app.voice.stream)
+            app.voice.stream = null; app.voice.recorder = null; $("#voice-recording").hidden = true
+            $("#voice-recording-waveform")?.classList.remove("active")
+          }
+
+          async function requestVoiceRecording() {''',
+                  '''function closeVoiceStream() {
+            clearInterval(app.voice.timer); clearTimeout(app.voice.stopTimer); cancelAnimationFrame(app.voice.activityFrame)
+            app.voice.timer = null; app.voice.stopTimer = null; app.voice.activityFrame = null
+            stopMediaTracks(app.voice.stream)
+            app.voice.stream = null; app.voice.recorder = null; $("#voice-recording").hidden = true
+            $("#voice-recording-waveform")?.classList.remove("active")
+          }
+
+          function releaseVoiceCaptureForNavigation() {
+            app.voice.captureRequestId++
+            app.voice.discard = true
+            if (app.voice.recorder?.state === "recording") app.voice.recorder.stop()
+            else closeVoiceStream()
+          }
+
+          async function requestVoiceRecording() {''',
+                  "voice capture navigation release"
+              )
+
+              app = replace_once(
+                  app,
+                  '''function initLiveCallCoordinator() {
+            if (app.liveCall) return app.liveCall
+
+            const localVideoEl = $("#live-call-local-video")''',
+                  '''function initLiveCallCoordinator() {
+            const surfaceActive = Boolean(document.querySelector('[data-screen="conversation"]')?.classList.contains("active"))
+            if (app.liveCall) {
+              app.liveCall.setConversationSurfaceActive(surfaceActive)
+              return app.liveCall
+            }
+
+            const localVideoEl = $("#live-call-local-video")''',
+                  "live coordinator surface sync"
+              )
+
+              app = replace_once(
+                  app,
+                  '''  app.liveCall.setVideoElements(localVideoEl, remoteVideoEl)
+            return app.liveCall
+          }''',
+                  '''  app.liveCall.setVideoElements(localVideoEl, remoteVideoEl)
+            app.liveCall.setConversationSurfaceActive(surfaceActive)
+            return app.liveCall
+          }''',
+                  "live coordinator initial surface"
+              )
+
+              old_sync = '''function applyCallStateSync(callState) {
+            if (!callState) return
+            const coord = initLiveCallCoordinator()
+            if (callState.status === "ACTIVE" || callState.status === "CONNECTING") {
+              coord.callAttemptId = callState.call_attempt_id
+              coord.role = callState.role
+              coord.callType = callState.call_type
+              coord.mediaGeneration = callState.media_generation || 1
+              coord.selfMuted = callState.self_muted || false
+              coord.peerMuted = callState.peer_muted || false
+              coord.activeAt = callState.active_at
+              coord.status = callState.status === "ACTIVE" ? CALL_STATUS.ACTIVE : CALL_STATUS.CONNECTING
+              renderLiveCallState(coord.getState())
+            } else if (callState.status === "PENDING") {
+              coord.callAttemptId = callState.call_attempt_id
+              coord.role = callState.role
+              coord.callType = callState.call_type
+              coord.status = callState.role === "caller" ? CALL_STATUS.PENDING_OUTGOING : CALL_STATUS.PENDING_INCOMING
+              renderLiveCallState(coord.getState())
+            }
+          }'''
+              new_sync = '''function applyCallStateSync(callState) {
+            if (!callState) return
+            const coord = initLiveCallCoordinator()
+            coord.applyCallStateSync(callState)
+          }'''
+              app = replace_once(app, old_sync, new_sync, "call state sync delegation")
+              app_path.write_text(app)
+
+      - name: Run F-X04 and existing media regressions on patched tree
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/fx04_media_navigation_boundary_test.mjs \
+            test/js/team4_media_authority_test.mjs \
+            test/js/team4_call_operation_race_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/team6_voice_note_permission_test.mjs \
+            test/js/team4_screen_share_absent_test.mjs
+          git diff --check
+
+      - name: Commit exact tested correction
+        run: |
+          if git diff --quiet; then
+            echo "F-X04 correction already applied"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add priv/static/assets/live_call.mjs priv/static/assets/app.js
+          git commit -m "fix(fx04): terminate media authority on navigation"
+          FIX_SHA="$(git rev-parse HEAD)"
+          echo "TESTED_FX04_FIX_SHA=$FIX_SHA"
+          node --test --test-concurrency=1 \
+            test/js/fx04_media_navigation_boundary_test.mjs \
+            test/js/team4_media_authority_test.mjs \
+            test/js/team4_call_operation_race_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/team6_voice_note_permission_test.mjs \
+            test/js/team4_screen_share_absent_test.mjs
+          git diff --check HEAD^
+          test -z "$(git status --porcelain)"
+          git push origin HEAD:fx04/media-navigation-boundary-2026-08-27
