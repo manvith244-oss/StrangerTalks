@@ -14,7 +14,7 @@ defmodule StrangertalksNewWeb.Router do
     get "/conversation/ended", PageController, :home
     get "/conversation/unavailable", PageController, :home
     get "/chats", PageController, :home
-    get "/chats/:conversation_id", PageController, :home
+    get "/chats/:conversation_id", PageController, :saved_conversation
     get "/bonds", PageController, :home
     get "/you", PageController, :home
     get "/you/memories", PageController, :home
