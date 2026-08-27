@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-import {cleanupConversationRecoveryRecords} from "../../priv/static/assets/f11_persistence_runtime.mjs"
+import {
+  cleanupConversationRecoveryRecords,
+  createCanonicalReadiness,
+  createCanonicalReconciliationGate
+} from "../../priv/static/assets/f11_persistence_runtime.mjs"
 
 const now = "2026-08-27T08:00:00.000Z"
 const conversationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
@@ -41,4 +45,19 @@ test("CLEANUP retained guard preserves Keep product data while removing recovery
   assert.equal(ids.has(`summary:${conversationId}`), true)
   assert.equal(ids.has(`sync_cursor:${conversationId}`), false)
   assert.equal(ids.has(`terminal_retention:${conversationId}`), false)
+})
+
+test("READINESS stale reconciliation response cannot overwrite newer canonical state", () => {
+  const gate = createCanonicalReconciliationGate()
+  const readiness = createCanonicalReadiness()
+  const first = gate.begin()
+  const second = gate.begin()
+
+  assert.equal(gate.current(first), false)
+  assert.equal(gate.current(second), true)
+
+  if (gate.current(second)) readiness.accept({canonical_state: "CONVERSATION", conversation: {conversation_id: conversationId}})
+  if (gate.current(first)) readiness.accept({canonical_state: "AVAILABLE", conversation: null})
+
+  assert.equal(readiness.get().canonical_state, "CONVERSATION")
 })
