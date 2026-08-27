@@ -129,26 +129,8 @@ jobs:
           from pathlib import Path
           path = Path("priv/static/assets/app.js")
           text = path.read_text()
-          old = '''  app.participant.on("queue:status", ({status, queue_attempt_id}) => {
-            if (status === "queued" && queue_attempt_id) bindQueueAttempt(queue_attempt_id)
-            if (["left", "timed_out"].includes(status) && queue_attempt_id !== app.queueAttemptId) return
-            announce(`Queue status: ${status}`)
-            if (["left", "timed_out"].includes(status)) {
-              bindQueueAttempt(null)
-              show("doors")
-            }
-            if (status === "queued" && queue_attempt_id) show("queue")
-          })
-          '''
-          new = '''  app.participant.on("queue:status", ({status, queue_attempt_id}) => {
-            if (status === "queued" && queue_attempt_id) bindQueueAttempt(queue_attempt_id)
-            if (["left", "timed_out"].includes(status) && queue_attempt_id !== app.queueAttemptId) return
-            announce(`Queue status: ${status}`)
-            if (["left", "timed_out"].includes(status)) {
-              bindQueueAttempt(null)
-              show("doors")
-            }
-            if (status === "queued" && queue_attempt_id) {
+          old = '    if (status === "queued" && queue_attempt_id) show("queue")'
+          new = '''    if (status === "queued" && queue_attempt_id) {
               const currentRoute = parseRoute(location.pathname)
               if (currentRoute.valid && currentRoute.kind === "talk") {
                 navigation.navigate("/matchmaking", {
@@ -157,11 +139,9 @@ jobs:
               } else if (currentRoute.valid && currentRoute.kind === "matchmaking") {
                 presentScreen("queue")
               }
-            }
-          })
-          '''
-          if old not in text:
-            raise SystemExit("queue status anchor not found")
+            }'''
+          if text.count(old) != 1:
+            raise SystemExit(f"queue status target count={text.count(old)}")
           path.write_text(text.replace(old, new, 1))
           PY
 
@@ -218,8 +198,8 @@ jobs:
             navigation.activityEvent("match_found").catch(() => announce("Conversation navigation could not be applied."))
             handleMatchedConversation(payload).catch(() => announce("Reconnecting to the Conversation…"))
           })'''
-          if old not in text:
-            raise SystemExit("match_found anchor not found")
+          if text.count(old) != 1:
+            raise SystemExit(f"match_found target count={text.count(old)}")
           path.write_text(text.replace(old, new, 1))
           PY
 
@@ -244,15 +224,11 @@ jobs:
           path = Path("priv/static/assets/app.js")
           text = path.read_text()
           old = '''    await markConversationEnded()
-            show("ended")
-            $("#consent")?.focus()
-          '''
+            show("ended")'''
           new = '''    await markConversationEnded()
-            await navigation.activityEvent("conversation_ended")
-            $("#consent")?.focus()
-          '''
-          if old not in text:
-            raise SystemExit("conversation ended anchor not found")
+            await navigation.activityEvent("conversation_ended")'''
+          if text.count(old) != 1:
+            raise SystemExit(f"conversation ended target count={text.count(old)}")
           path.write_text(text.replace(old, new, 1))
           PY
 
@@ -269,21 +245,18 @@ jobs:
             try {
               observed = await bootObserved(browser)
               const mark = observed.journal.mark()
-
               await clickHiddenPrimary(observed.page, "settings")
               await observed.page.waitForFunction(() => location.pathname === "/you", null, {timeout: WAIT_MS})
               await clickHiddenPrimary(observed.page, "chats")
               await observed.page.waitForFunction(() => location.pathname === "/chats", null, {timeout: WAIT_MS})
               await clickHiddenPrimary(observed.page, "doors")
               await observed.page.waitForFunction(() => location.pathname === "/", null, {timeout: WAIT_MS})
-
               await observed.page.evaluate(() => history.back())
               await observed.page.waitForFunction(() => location.pathname === "/chats", null, {timeout: WAIT_MS})
               await observed.page.evaluate(() => history.forward())
               await observed.page.waitForFunction(() => location.pathname === "/", null, {timeout: WAIT_MS})
               await observed.page.evaluate(() => history.back())
               await observed.page.waitForFunction(() => location.pathname === "/chats", null, {timeout: WAIT_MS})
-
               await activeScreen(observed.page, "chats").waitFor({state: "visible"})
               assert.deepEqual(destructiveFrames(observed, mark), [])
             } finally {
@@ -301,7 +274,6 @@ jobs:
               assert.equal(new URL(observed.page.url()).pathname, "/matchmaking")
               await clickHiddenPrimary(observed.page, "settings")
               await activeScreen(observed.page, "settings").waitFor({state: "visible"})
-
               const mark = observed.journal.mark()
               await observed.page.evaluate(() => history.back())
               const reconcileRequest = await observed.journal.waitFor(
@@ -313,7 +285,6 @@ jobs:
                 event.type === "frame_received" && event.event === "phx_reply" && event.ref === reconcileRequest.ref
               )
               assert.equal(replyWasAlreadyApplied, false, "queued canonical read must still be pending for the stale-completion attack")
-
               await clickHiddenPrimary(observed.page, "chats")
               await activeScreen(observed.page, "chats").waitFor({state: "visible"})
               await observed.journal.waitFor(
@@ -338,7 +309,6 @@ jobs:
               assert.equal(new URL(pair.a.page.url()).pathname, "/conversation")
               await clickHiddenPrimary(pair.a.page, "chats")
               await activeScreen(pair.a.page, "chats").waitFor({state: "visible"})
-
               const mark = pair.a.journal.mark()
               await pair.a.page.evaluate(() => history.back())
               const reconcileRequest = await pair.a.journal.waitFor(
@@ -350,7 +320,6 @@ jobs:
                 event.type === "frame_received" && event.event === "phx_reply" && event.ref === reconcileRequest.ref
               )
               assert.equal(replyWasAlreadyApplied, false, "Conversation canonical read must still be pending for the stale-completion attack")
-
               await clickHiddenPrimary(pair.a.page, "settings")
               await activeScreen(pair.a.page, "settings").waitFor({state: "visible"})
               await pair.a.journal.waitFor(
@@ -361,7 +330,6 @@ jobs:
               await pair.a.page.waitForTimeout(50)
               assert.equal(new URL(pair.a.page.url()).pathname, "/you")
               assert.deepEqual(destructiveFrames(pair.a, mark), [])
-
               await pair.a.page.evaluate(() => history.back())
               await activeScreen(pair.a.page, "conversation").waitFor({state: "visible"})
               assert.equal(new URL(pair.a.page.url()).pathname, "/conversation")
