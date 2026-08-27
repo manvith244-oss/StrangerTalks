@@ -8,7 +8,7 @@ import {
   listRecords,
   putRecord
 } from "../../priv/static/assets/local_data.mjs"
-import {createMemoryIndexedDB} from "../../priv/static/assets/f11_persistence_runtime.mjs"
+import {createMemoryIndexedDB, createResilientIndexedDB} from "../../priv/static/assets/f11_persistence_runtime.mjs"
 
 const now = "2026-08-27T06:45:00.000Z"
 const participantA = "11111111-1111-4111-8111-111111111111"
@@ -34,7 +34,7 @@ function conversation(status = "temporary", connection_state = "ended") {
 async function withMemoryIndexedDB(run) {
   const previous = globalThis.indexedDB
   const memory = createMemoryIndexedDB()
-  globalThis.indexedDB = memory
+  globalThis.indexedDB = createResilientIndexedDB(memory, createMemoryIndexedDB())
   try { return await run(memory) } finally {
     if (previous === undefined) delete globalThis.indexedDB
     else globalThis.indexedDB = previous
@@ -109,7 +109,7 @@ test("STORAGE-05 putRecord resolves only after the readwrite transaction complet
     }
   }
   const previous = globalThis.indexedDB
-  globalThis.indexedDB = fake
+  globalThis.indexedDB = createResilientIndexedDB(fake, createMemoryIndexedDB())
   try {
     let resolved = false
     const write = putRecord(record("settings:privacy", "settings", {reduced_motion: true})).then(() => { resolved = true; events.push("promise-resolved") })
