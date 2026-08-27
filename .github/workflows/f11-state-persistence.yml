@@ -8,15 +8,31 @@ on:
     branches:
       - release/prep-2026-08-22
 
+concurrency:
+  group: f11-state-persistence-${{ github.event_name }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
+
+env:
+  F11_START_SHA: 585637924ff45933c7b35b0bc27719934907c70e
+  F11_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   focused-contracts:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.F11_CANDIDATE_SHA }}
+          fetch-depth: 0
+      - name: Prove exact checkout
+        run: |
+          test "$(git rev-parse HEAD)" = "$F11_CANDIDATE_SHA"
+          git merge-base --is-ancestor "$F11_START_SHA" HEAD
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -47,7 +63,15 @@ jobs:
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
       STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.F11_CANDIDATE_SHA }}
+          fetch-depth: 0
+      - name: Prove exact checkout
+        run: |
+          test "$(git rev-parse HEAD)" = "$F11_CANDIDATE_SHA"
+          git merge-base --is-ancestor "$F11_START_SHA" HEAD
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.18.4"
@@ -92,3 +116,64 @@ jobs:
       - name: Browser log on failure
         if: failure()
         run: cat /tmp/f11-browser.log || true
+
+  repository-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.F11_CANDIDATE_SHA }}
+          fetch-depth: 0
+      - name: Prove exact checkout identity and ancestry
+        run: |
+          echo "F11_EXPECTED_COMMIT=$F11_CANDIDATE_SHA"
+          echo "F11_ACTUAL_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$F11_CANDIDATE_SHA"
+          git merge-base --is-ancestor "$F11_START_SHA" HEAD
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install Hex, Rebar, and dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Reset test database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Full repository precommit
+        run: mix precommit
+      - name: Diff integrity
+        run: |
+          git diff --check "$F11_START_SHA"...HEAD
+          git diff --check
+      - name: Prove clean tree and exact tested SHA
+        run: |
+          git status --short --branch
+          git status --porcelain | tee /tmp/f11-status
+          test ! -s /tmp/f11-status
+          test "$(git rev-parse HEAD)" = "$F11_CANDIDATE_SHA"
+          echo "F11_TESTED_COMMIT=$(git rev-parse HEAD)"
