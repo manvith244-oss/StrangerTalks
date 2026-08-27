@@ -197,7 +197,7 @@ function makeCanonicalTransaction(state, mode) {
     queueMicrotask(() => {
       if (aborted) { pending -= 1; scheduleCommit(); return }
       try {
-        if (kind === "get") request.result = cloneValue(draft.get(key))
+        if (kind === "get") request.result = draft.has(key) ? cloneValue(draft.get(key)) : null
         if (kind === "getAll") request.result = [...draft.values()].map(cloneValue)
         if (kind === "put") {
           if (mode !== "readwrite") throw new Error("ReadOnlyError")
