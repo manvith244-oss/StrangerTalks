@@ -95,7 +95,8 @@ defmodule StrangertalksNew.MatchingRules do
                 with {:ok, block} <- insert_block(blocker_id, blocked_id, "CONVERSATION"),
                      {:ok, terminal_conversation} <-
                        terminate_conversation_for_block(current_conversation, blocker_id),
-                     {:ok, terminal_truth} <- Conversations.terminal_truth(terminal_conversation) do
+                     {:ok, terminal_truth} <-
+                       Conversations.terminal_truth(terminal_conversation) do
                   {block, terminal_truth}
                 else
                   {:error, reason} -> Repo.rollback(reason)

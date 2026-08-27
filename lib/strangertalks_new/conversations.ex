@@ -63,7 +63,10 @@ defmodule StrangertalksNew.Conversations do
 
   defp terminal_reason(%Conversation{ending_type: :BLOCK}), do: "blocked"
   defp terminal_reason(%Conversation{ending_type: :NATURAL_END}), do: "participant_completed"
-  defp terminal_reason(%Conversation{ending_type: :PARTICIPANT_LEFT}), do: "left_during_transition"
+
+  defp terminal_reason(%Conversation{ending_type: :PARTICIPANT_LEFT}),
+    do: "left_during_transition"
+
   defp terminal_reason(%Conversation{ending_type: :TIMEOUT}), do: "conversation_abandoned"
   defp terminal_reason(%Conversation{ending_type: :DISCONNECT}), do: "initialization_failed"
   defp terminal_reason(%Conversation{ending_type: :SAFETY_ACTION}), do: "safety_terminated"
