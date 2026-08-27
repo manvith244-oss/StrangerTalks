@@ -20,7 +20,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: f02-route-architecture-${{ github.event.pull_request.head.sha || github.sha }}
+  group: f02-route-architecture-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
