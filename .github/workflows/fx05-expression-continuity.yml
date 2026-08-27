@@ -1,0 +1,148 @@
+name: F-X05 Expression Continuity Boundary
+
+on:
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact F-X05 candidate SHA to verify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fx05-expression-continuity-${{ github.event.pull_request.head.sha || inputs.candidate_sha }}
+  cancel-in-progress: true
+
+env:
+  MIX_ENV: test
+  PORT: "4002"
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
+  FX05_CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate_sha }}
+
+jobs:
+  verify-expression-continuity:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout exact F-X05 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FX05_CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Prove checkout identity
+        run: |
+          echo "FX05_CANDIDATE_SHA=${FX05_CANDIDATE_SHA}"
+          echo "FX05_CHECKED_OUT_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${FX05_CANDIDATE_SHA}"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix for F-X05 Chromium proof
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/fx05-browser.log 2>&1 &
+          echo $! > /tmp/fx05-browser.pid
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$(cat /tmp/fx05-browser.pid)" 2>/dev/null; then
+              cat /tmp/fx05-browser.log
+              exit 1
+            fi
+            if curl -fsS http://localhost:4002/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/fx05-browser.log
+          exit 1
+
+      - name: F-X05 hostile browser proof
+        run: node --test test/js/fx05_expression_continuity_browser_test.mjs
+
+      - name: Stop F-X05 browser server
+        if: always()
+        run: |
+          if [ -f /tmp/fx05-browser.pid ]; then
+            pid="$(cat /tmp/fx05-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            kill -9 "$pid" 2>/dev/null || true
+          fi
+
+      - name: Focused expression regressions
+        run: |
+          node --test \
+            test/js/team10_expression_surface_test.mjs \
+            test/js/expressive_media_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/normal_media_runtime_test.mjs
+
+      - name: Diff hygiene
+        run: git diff --check
+
+      - name: Prove clean checkout
+        run: |
+          git status --porcelain | tee /tmp/fx05-status
+          test ! -s /tmp/fx05-status
+
+      - name: Prove exact tested SHA
+        run: |
+          tested_sha="$(git rev-parse HEAD)"
+          echo "FX05_TESTED_SHA=${tested_sha}"
+          test "${tested_sha}" = "${FX05_CANDIDATE_SHA}"
+
+      - name: Browser log on failure
+        if: failure()
+        run: cat /tmp/fx05-browser.log || true
