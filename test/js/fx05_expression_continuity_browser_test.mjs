@@ -48,18 +48,30 @@ async function queue(page) {
 async function matchPair(browser) {
   const a = await bootFresh(browser)
   const b = await bootFresh(browser)
-  await queue(a.page)
-  await a.page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: 10_000})
-  await queue(b.page)
-  await Promise.all([
-    a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000}),
-    b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000})
-  ])
-  await Promise.all([
-    a.page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible"}),
-    b.page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible"})
-  ])
-  return {a, b}
+  try {
+    await queue(a.page)
+    await a.page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: 10_000})
+    await queue(b.page)
+    await Promise.all([
+      a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000}),
+      b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000})
+    ])
+    await Promise.all([
+      a.page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible"}),
+      b.page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible"})
+    ])
+    return {a, b}
+  } catch (error) {
+    await a.context.close().catch(() => {})
+    await b.context.close().catch(() => {})
+    throw error
+  }
+}
+
+async function closePair(pair) {
+  if (!pair) return
+  await pair.a?.context.close().catch(() => {})
+  await pair.b?.context.close().catch(() => {})
 }
 
 async function sendText(page, text) {
@@ -106,12 +118,34 @@ async function endConversation(page) {
   await page.locator("#end-confirm").click()
 }
 
-test("X05-01/X05-02 text draft and reply target survive presentation-away and same-Conversation return", {timeout: 90_000}, async () => {
+test("HARNESS-01/02/03 single pair establishes, closes, and a second pair establishes", {timeout: 120_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let first
+  let second
+  try {
+    first = await matchPair(browser)
+    assert.equal(await first.a.page.locator('section[data-screen="conversation"].active').isVisible(), true)
+    assert.equal(await first.b.page.locator('section[data-screen="conversation"].active').isVisible(), true)
+
+    await closePair(first)
+    first = null
+    assert.equal(browser.contexts().length, 0, "closing the pair must release both browser contexts")
+
+    second = await matchPair(browser)
+    assert.equal(await second.a.page.locator('section[data-screen="conversation"].active').isVisible(), true)
+    assert.equal(await second.b.page.locator('section[data-screen="conversation"].active').isVisible(), true)
+  } finally {
+    await closePair(first)
+    await closePair(second)
+    await browser.close().catch(() => {})
+  }
+})
+
+test("X05-01 text draft survives presentation-away and same-Conversation return", {timeout: 90_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let pair
   try {
     pair = await matchPair(browser)
-    await stageReplyToPeerMessage(pair.b.page, pair.a.page, "reply-target-x05")
     await pair.a.page.locator("#message-input").fill("draft survives away and return")
 
     await navigateAway(pair.a.page, "chats")
@@ -119,11 +153,27 @@ test("X05-01/X05-02 text draft and reply target survive presentation-away and sa
 
     await returnToSameConversationPresentation(pair.a.page)
     assert.equal(await pair.a.page.locator("#message-input").inputValue(), "draft survives away and return")
+    assert.equal(pair.a.conversationEndFrames.length, 0, "navigation must not emit Conversation End")
+  } finally {
+    await closePair(pair)
+    await browser.close().catch(() => {})
+  }
+})
+
+test("X05-02 valid reply target survives presentation-away and same-Conversation return", {timeout: 90_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let pair
+  try {
+    pair = await matchPair(browser)
+    await stageReplyToPeerMessage(pair.b.page, pair.a.page, "reply-target-x05")
+
+    await navigateAway(pair.a.page, "chats")
+    await returnToSameConversationPresentation(pair.a.page)
+
     assert.equal(await pair.a.page.locator("#reply-staging").isHidden(), false, "valid reply target must remain staged")
     assert.equal(pair.a.conversationEndFrames.length, 0, "navigation must not emit Conversation End")
   } finally {
-    await pair?.a?.context.close().catch(() => {})
-    await pair?.b?.context.close().catch(() => {})
+    await closePair(pair)
     await browser.close().catch(() => {})
   }
 })
@@ -144,8 +194,7 @@ test("X05-03 picker UI resets safely while Expression authority survives same-Co
     await pair.a.page.locator("#emoji-composer-picker").waitFor({state: "visible", timeout: 10_000})
     assert.equal(pair.a.conversationEndFrames.length, 0)
   } finally {
-    await pair?.a?.context.close().catch(() => {})
-    await pair?.b?.context.close().catch(() => {})
+    await closePair(pair)
     await browser.close().catch(() => {})
   }
 })
@@ -167,8 +216,7 @@ test("X05-04 rapid away/back does not destroy same-Conversation expression conti
     await pair.a.page.locator("#emoji-composer-picker").waitFor({state: "visible", timeout: 10_000})
     assert.equal(pair.a.conversationEndFrames.length, 0)
   } finally {
-    await pair?.a?.context.close().catch(() => {})
-    await pair?.b?.context.close().catch(() => {})
+    await closePair(pair)
     await browser.close().catch(() => {})
   }
 })
@@ -189,8 +237,7 @@ test("X05-05 terminalization while away clears valid A composition instead of re
     assert.equal(await pair.a.page.locator("#reply-staging").isHidden(), true)
     assert.equal(await pair.a.page.locator("#expressive-composer").isHidden(), true)
   } finally {
-    await pair?.a?.context.close().catch(() => {})
-    await pair?.b?.context.close().catch(() => {})
+    await closePair(pair)
     await browser.close().catch(() => {})
   }
 })
