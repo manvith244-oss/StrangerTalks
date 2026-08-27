@@ -37,7 +37,7 @@ jobs:
         with:
           node-version: 22
       - name: F11 persistence contracts
-        run: node --test test/js/f11_persistence_contract_test.mjs test/js/f11_local_data_integration_test.mjs
+        run: node --test test/js/f11_persistence_contract_test.mjs test/js/f11_local_data_integration_test.mjs test/js/f11_retained_cleanup_guard_test.mjs
 
   hostile-browser:
     runs-on: ubuntu-latest
