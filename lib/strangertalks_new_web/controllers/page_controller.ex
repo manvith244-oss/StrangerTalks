@@ -2,7 +2,7 @@ defmodule StrangertalksNewWeb.PageController do
   use StrangertalksNewWeb, :controller
 
   @route_runtime_tag ~s(<script type="module" src="/assets/route_runtime.mjs?v=20260827_f02"></script>)
-  @expression_runtime_tag ~s(<script type="module" src="/assets/expression_runtime.mjs?v=20260824_v2"></script>)
+  @app_bootstrap_tag ~s(<script type="module" src="/assets/flow_loading_runtime.mjs?v=20260826_f07_v1"></script>)
 
   def home(conn, _params), do: serve_client(conn)
 
@@ -18,8 +18,8 @@ defmodule StrangertalksNewWeb.PageController do
       Application.app_dir(:strangertalks_new, "priv/static/index.html")
       |> File.read!()
       |> String.replace(
-        @expression_runtime_tag,
-        @route_runtime_tag <> "\n    " <> @expression_runtime_tag
+        @app_bootstrap_tag,
+        @route_runtime_tag <> "\n    " <> @app_bootstrap_tag
       )
 
     conn
