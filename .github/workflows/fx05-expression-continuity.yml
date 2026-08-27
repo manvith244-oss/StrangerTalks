@@ -114,6 +114,9 @@ jobs:
       - name: HARNESS-04 X05-01 isolated assertion proof
         run: node --test --test-concurrency=1 --test-name-pattern="^X05-01 text draft" test/js/fx05_expression_continuity_browser_test.mjs
 
+      - name: Hostile expression browser proof
+        run: node --test --test-concurrency=1 --test-name-pattern="^X05-" test/js/fx05_expression_continuity_browser_test.mjs
+
       - name: Stop and verify F-X05 browser server
         if: always()
         run: |
