@@ -146,11 +146,20 @@ defmodule StrangertalksNew.MatchingRules do
   end
 
   defp broadcast_block_terminal_authority(conversation_id) do
-    StrangertalksNewWeb.Endpoint.broadcast(
-      "conversation:#{conversation_id}",
-      "conversation:ended",
-      %{status: "ended", reason: "blocked"}
-    )
+    case Repo.get(Conversation, conversation_id) do
+      %Conversation{conversation_status: :ENDED, ending_type: :BLOCK} ->
+        StrangertalksNewWeb.Endpoint.broadcast(
+          "conversation:#{conversation_id}",
+          "conversation:ended",
+          %{status: "ended", reason: "blocked"}
+        )
+
+      %Conversation{conversation_status: status} when status in @terminal_conversation_statuses ->
+        :ok
+
+      _other ->
+        :ok
+    end
   end
 
   defp suspend_conversation_runtime(conversation_id) do
