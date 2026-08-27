@@ -97,7 +97,7 @@ window.__f04RuntimeProbe = {
     return releaseConversationRuntime({conversationId, channel})
   },
   voiceRecord(conversationId, voiceNoteId) {
-    return getRecord(`voice:${conversationId}:${voiceNoteId}`)
+    return getRecord("voice:" + conversationId + ":" + voiceNoteId)
   }
 }
 `
@@ -210,34 +210,54 @@ async function disconnectAndReconnectConversationSocket(page, topic) {
   }, topic, {timeout: WAIT})
 }
 
+async function assertCanonicalEviction(page, canonicalSnapshot, expectedScreen) {
+  const before = await channelMetrics(page)
+  const topic = lastTopic(before)
+  assert.ok(topic, "active Conversation topic is observable")
+  assert.equal(before.active, 1, "one Conversation runtime is active before canonical correction")
+  assert.ok(before.listenerActiveByTopic[topic] > 0, "active Conversation owns realtime listener bindings")
+
+  const beforeState = await page.evaluate(() => window.__f04RuntimeProbe.state())
+  assert.ok(beforeState.conversationId, "client believes it has a Conversation before canonical correction")
+  assert.equal(beforeState.topic, topic, "probe and channel instrumentation observe the same runtime")
+
+  await page.evaluate((snapshot) => window.__f04RuntimeProbe.reconcile(snapshot), canonicalSnapshot)
+
+  const after = await channelMetrics(page)
+  const afterState = await page.evaluate(() => window.__f04RuntimeProbe.state())
+  assert.equal(afterState.conversationId, null, "canonical non-Conversation truth clears stale Conversation id authority")
+  assert.equal(afterState.currentEpochId, null, "canonical non-Conversation truth clears stale Conversation epoch authority")
+  assert.equal(afterState.topic, null, "canonical non-Conversation truth clears stale Conversation channel authority")
+  assert.equal(after.left, 1, "canonical non-Conversation truth explicitly leaves the stale Conversation channel")
+  assert.equal(after.active, 0, "canonical non-Conversation truth leaves zero active Conversation channels")
+  assert.equal(after.runtime[topic]?.socketHasChannel, false, "stale Conversation is absent from socket membership")
+  assert.equal(after.listenerActiveByTopic[topic], 0, "canonical non-Conversation truth removes stale Conversation listener bindings")
+  assert.equal(await page.locator(`section[data-screen="${expectedScreen}"].active`).count(), 1, `canonical truth presents ${expectedScreen}`)
+}
+
 test("F04 canonical AVAILABLE evicts stale Conversation runtime authority", {timeout: 120_000}, async () => {
   const browser = await chromium.launch({headless: true})
   const user = await boot(browser, {instrument: true})
   const peer = await boot(browser)
-
   try {
     await matchPair(user.page, peer.page)
-    const before = await channelMetrics(user.page)
-    const topic = lastTopic(before)
-    assert.ok(topic, "active Conversation topic is observable")
-    assert.equal(before.active, 1, "one Conversation runtime is active before canonical correction")
-    assert.ok(before.listenerActiveByTopic[topic] > 0, "active Conversation owns realtime listener bindings")
+    await assertCanonicalEviction(user.page, {canonical_state: "AVAILABLE"}, "doors")
+  } finally {
+    await Promise.all([user.context, peer.context].map((context) => context.close().catch(() => {})))
+    await browser.close().catch(() => {})
+  }
+})
 
-    const beforeState = await user.page.evaluate(() => window.__f04RuntimeProbe.state())
-    assert.ok(beforeState.conversationId, "client believes it has a Conversation before canonical correction")
-    assert.equal(beforeState.topic, topic, "probe and channel instrumentation observe the same runtime")
-
-    await user.page.evaluate(() => window.__f04RuntimeProbe.reconcile({canonical_state: "AVAILABLE"}))
-
-    const after = await channelMetrics(user.page)
-    const afterState = await user.page.evaluate(() => window.__f04RuntimeProbe.state())
-    assert.equal(afterState.conversationId, null, "canonical AVAILABLE clears stale Conversation id authority")
-    assert.equal(afterState.currentEpochId, null, "canonical AVAILABLE clears stale Conversation epoch authority")
-    assert.equal(afterState.topic, null, "canonical AVAILABLE clears stale Conversation channel authority")
-    assert.equal(after.left, 1, "canonical AVAILABLE explicitly leaves the stale Conversation channel")
-    assert.equal(after.active, 0, "canonical AVAILABLE leaves zero active Conversation channels")
-    assert.equal(after.runtime[topic]?.socketHasChannel, false, "stale Conversation is absent from socket membership")
-    assert.equal(after.listenerActiveByTopic[topic], 0, "canonical AVAILABLE removes stale Conversation listener bindings")
+test("F04 canonical QUEUED evicts stale Conversation runtime before queue presentation", {timeout: 120_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  const user = await boot(browser, {instrument: true})
+  const peer = await boot(browser)
+  try {
+    await matchPair(user.page, peer.page)
+    await assertCanonicalEviction(user.page, {
+      canonical_state: "QUEUED",
+      queue: {queue_attempt_id: "f04-canonical-queue", door_type: "EXPLORE", conversation_language: "en"}
+    }, "queue")
   } finally {
     await Promise.all([user.context, peer.context].map((context) => context.close().catch(() => {})))
     await browser.close().catch(() => {})
@@ -249,29 +269,23 @@ test("F04 released Conversation A callbacks are inert after Conversation B becom
   const user = await boot(browser, {instrument: true})
   let peerA = null
   let peerB = null
-
   try {
     peerA = await boot(browser)
     await matchPair(user.page, peerA.page)
-    const conversationA = await channelMetrics(user.page)
-    const topicA = lastTopic(conversationA)
+    const topicA = lastTopic(await channelMetrics(user.page))
     assert.ok(topicA, "Conversation A topic is observable")
-
     await endAndFade(user.page, peerA.page)
 
     peerB = await boot(browser)
     await matchPair(user.page, peerB.page)
-    const conversationB = await channelMetrics(user.page)
-    const topicB = lastTopic(conversationB)
+    const topicB = lastTopic(await channelMetrics(user.page))
     assert.ok(topicB, "Conversation B topic is observable")
     assert.notEqual(topicA, topicB, "A and B are distinct Conversation runtimes")
 
     const draft = "Conversation B must survive a queued callback from A"
     await user.page.locator("#message-input").fill(draft)
     assert.equal(await user.page.locator("#typing").textContent(), "", "B starts without stale typing UI")
-
     assert.equal(await triggerStaleChannelDirectly(user.page, topicA, "typing:status", {typing: true}), true, "hostile proof executes a queued callback on released A")
-
     assert.equal(await user.page.locator("#message-input").inputValue(), draft, "late A callback cannot alter B draft")
     assert.equal(await user.page.locator("#typing").textContent(), "", "late A typing callback cannot mutate B UI")
     assert.equal(await user.page.locator('section[data-screen="conversation"].active').count(), 1, "Conversation B remains visible after stale A callback")
@@ -286,13 +300,11 @@ test("F04 repeated and stale cleanup is idempotent and cannot release Conversati
   const user = await boot(browser, {instrument: true})
   let peerA = null
   let peerB = null
-
   try {
     peerA = await boot(browser)
     await matchPair(user.page, peerA.page)
     const stateA = await user.page.evaluate(() => window.__f04RuntimeProbe.state())
-    const metricsA = await channelMetrics(user.page)
-    const topicA = lastTopic(metricsA)
+    const topicA = lastTopic(await channelMetrics(user.page))
     assert.ok(stateA.conversationId && topicA, "Conversation A identity is captured")
 
     await endAndFade(user.page, peerA.page)
@@ -301,10 +313,7 @@ test("F04 repeated and stale cleanup is idempotent and cannot release Conversati
     assert.equal(releasedA.active, 0, "first A cleanup leaves no active channel")
     assert.equal(releasedA.listenerActiveByTopic[topicA], 0, "first A cleanup removes A listener bindings")
 
-    await user.page.evaluate(({conversationId, topic}) => window.__f04RuntimeProbe.release(conversationId, topic), {
-      conversationId: stateA.conversationId,
-      topic: topicA
-    })
+    await user.page.evaluate(({conversationId, topic}) => window.__f04RuntimeProbe.release(conversationId, topic), {conversationId: stateA.conversationId, topic: topicA})
     const repeatedA = await channelMetrics(user.page)
     assert.equal(repeatedA.left, 1, "repeating A cleanup does not leave A twice")
     assert.equal(repeatedA.listenerActiveByTopic[topicA], 0, "repeating A cleanup cannot recreate listeners")
@@ -318,14 +327,10 @@ test("F04 repeated and stale cleanup is idempotent and cannot release Conversati
     assert.notEqual(stateA.conversationId, stateB.conversationId, "A and B ids are distinct")
     assert.notEqual(topicA, topicB, "A and B channels are distinct")
 
-    await user.page.evaluate(({conversationId, topic}) => window.__f04RuntimeProbe.release(conversationId, topic), {
-      conversationId: stateA.conversationId,
-      topic: topicA
-    })
-
-    const afterStaleCleanup = await user.page.evaluate(() => window.__f04RuntimeProbe.state())
+    await user.page.evaluate(({conversationId, topic}) => window.__f04RuntimeProbe.release(conversationId, topic), {conversationId: stateA.conversationId, topic: topicA})
+    const afterState = await user.page.evaluate(() => window.__f04RuntimeProbe.state())
     const afterMetrics = await channelMetrics(user.page)
-    assert.deepEqual(afterStaleCleanup, stateB, "late cleanup for A cannot replace or clear B runtime identity")
+    assert.deepEqual(afterState, stateB, "late cleanup for A cannot replace or clear B runtime identity")
     assert.equal(afterMetrics.active, 1, "late A cleanup leaves exactly one active Conversation runtime")
     assert.equal(afterMetrics.runtime[topicB]?.socketHasChannel, true, "B remains subscribed after stale A cleanup")
     assert.ok(afterMetrics.listenerActiveByTopic[topicB] > 0, "B listener bindings remain active after stale A cleanup")
@@ -341,7 +346,6 @@ test("F04 stale terminal event from released A is inert after Conversation B beg
   const user = await boot(browser, {instrument: true})
   let peerA = null
   let peerB = null
-
   try {
     peerA = await boot(browser)
     await matchPair(user.page, peerA.page)
@@ -356,7 +360,6 @@ test("F04 stale terminal event from released A is inert after Conversation B beg
 
     assert.equal(await triggerStaleChannelDirectly(user.page, topicA, "conversation:ended", {}), true, "hostile proof triggers released A terminal callback directly")
     await user.page.waitForTimeout(50)
-
     assert.deepEqual(await user.page.evaluate(() => window.__f04RuntimeProbe.state()), beforeB, "stale A terminal event cannot alter B runtime identity")
     assert.equal(await user.page.locator("#message-input").inputValue(), draft, "stale A terminal event cannot clear B draft")
     assert.equal(await user.page.locator('section[data-screen="conversation"].active').count(), 1, "B remains the active Conversation surface")
@@ -406,13 +409,9 @@ test("F04 async work begun by A cannot resume into Conversation B", {timeout: 18
 
     releaseVoiceFetch()
     await user.page.waitForTimeout(150)
-
     assert.deepEqual(await user.page.evaluate(() => window.__f04RuntimeProbe.state()), stateB, "resumed A async work cannot alter B runtime identity")
     assert.equal(await user.page.locator(`[data-voice-note-id="${voiceNoteId}"]`).count(), 0, "resumed A voice callback cannot render a voice note into B")
-    assert.equal(await user.page.evaluate(({conversationId, noteId}) => window.__f04RuntimeProbe.voiceRecord(conversationId, noteId), {
-      conversationId: stateB.conversationId,
-      noteId: voiceNoteId
-    }), null, "resumed A async callback cannot persist its voice record under B")
+    assert.equal(await user.page.evaluate(({conversationId, noteId}) => window.__f04RuntimeProbe.voiceRecord(conversationId, noteId), {conversationId: stateB.conversationId, noteId: voiceNoteId}), null, "resumed A async callback cannot persist its voice record under B")
   } finally {
     releaseVoiceFetch?.()
     await Promise.all([user, peerA, peerB].filter(Boolean).map(({context}) => context.close().catch(() => {})))
@@ -424,7 +423,6 @@ test("F04 foreground and background visibility do not replace Conversation runti
   const browser = await chromium.launch({headless: true})
   const user = await boot(browser, {instrument: true})
   const peer = await boot(browser)
-
   try {
     await matchPair(user.page, peer.page)
     const beforeState = await user.page.evaluate(() => window.__f04RuntimeProbe.state())
@@ -436,7 +434,6 @@ test("F04 foreground and background visibility do not replace Conversation runti
       document.dispatchEvent(new Event("visibilitychange"))
     })
     await user.page.waitForTimeout(50)
-
     const hiddenState = await user.page.evaluate(() => window.__f04RuntimeProbe.state())
     const hiddenMetrics = await channelMetrics(user.page)
     assert.deepEqual(hiddenState, beforeState, "background visibility preserves Conversation identity")
@@ -449,7 +446,6 @@ test("F04 foreground and background visibility do not replace Conversation runti
       document.dispatchEvent(new Event("visibilitychange"))
     })
     await user.page.waitForTimeout(50)
-
     const visibleState = await user.page.evaluate(() => window.__f04RuntimeProbe.state())
     const visibleMetrics = await channelMetrics(user.page)
     assert.deepEqual(visibleState, beforeState, "foreground recovery preserves Conversation identity")
@@ -466,7 +462,6 @@ test("F04 socket reconnect reuses one Conversation channel and one listener set"
   const browser = await chromium.launch({headless: true})
   const user = await boot(browser, {instrument: true})
   const peer = await boot(browser)
-
   try {
     await matchPair(user.page, peer.page)
     const before = await channelMetrics(user.page)
@@ -477,7 +472,6 @@ test("F04 socket reconnect reuses one Conversation channel and one listener set"
 
     await disconnectAndReconnectConversationSocket(user.page, topic)
     await user.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: WAIT})
-
     const after = await channelMetrics(user.page)
     assert.equal(after.created, 1, "reconnect does not create another Conversation channel")
     assert.equal(after.active, 1, "reconnect leaves exactly one active Conversation channel")
@@ -501,16 +495,13 @@ test("F04 reload restores the same recoverable Conversation with one fresh page 
   const browser = await chromium.launch({headless: true})
   const user = await boot(browser, {instrument: true})
   const peer = await boot(browser)
-
   try {
     await matchPair(user.page, peer.page)
-    const before = await channelMetrics(user.page)
-    const topicBefore = lastTopic(before)
+    const topicBefore = lastTopic(await channelMetrics(user.page))
     assert.ok(topicBefore, "Conversation topic is observable before reload")
 
     await user.page.reload({waitUntil: "domcontentloaded"})
     await user.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: WAIT})
-
     const after = await channelMetrics(user.page)
     const topicAfter = lastTopic(after)
     assert.equal(topicAfter, topicBefore, "reload recovers the same canonical Conversation id")
