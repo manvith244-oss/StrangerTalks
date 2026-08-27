@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - f03/navigation-history-wave-a-2026-08-27
+  pull_request:
+    branches:
+      - f02/route-architecture-wave-a
 
 permissions:
   contents: write
