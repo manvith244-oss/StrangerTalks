@@ -186,4 +186,38 @@ test("F-02 route runtime emits no destructive lifecycle actions and owns no Back
   assert.equal(source.includes('"conversation:block"'), false)
   assert.equal(/report/i.test(source), false)
   assert.equal(source.includes("pushState"), false)
+  assert.equal(source.includes("popstate"), false)
+})
+
+test("F-02 runtime is decision-only and owns no channel, DOM, or history application", async () => {
+  const source = await readFile(new URL("../../priv/static/assets/route_runtime.mjs", import.meta.url), "utf8")
+  const forbidden = [
+    "installBrowserRouteRuntime",
+    "prototype.channel",
+    "MutationObserver",
+    "history.replaceState",
+    "history.pushState",
+    "document.addEventListener",
+    ".click()",
+    "/vendor/phoenix.mjs"
+  ]
+
+  for (const token of forbidden) {
+    assert.equal(source.includes(token), false, `F-02 runtime must not own ${token}`)
+  }
+})
+
+test("F-02 loaded before app runtime cannot intercept or duplicate Door to queue entry", async () => {
+  const routeSource = await readFile(new URL("../../priv/static/assets/route_runtime.mjs", import.meta.url), "utf8")
+  const appSource = await readFile(new URL("../../priv/static/assets/app.js", import.meta.url), "utf8")
+
+  assert.equal(routeSource.includes("#doors .door"), false)
+  assert.equal(routeSource.includes("#join-queue"), false)
+  assert.equal(routeSource.includes('"queue:join"'), false)
+  assert.equal(routeSource.includes('"queue:leave"'), false)
+  assert.equal(routeSource.includes('show("queue")'), false)
+
+  assert.match(appSource, /async function startMatchingFor\(doorLabel\)/)
+  assert.match(appSource, /show\("queue"\)/)
+  assert.equal((appSource.match(/"queue:join"/g) || []).length, 1)
 })
