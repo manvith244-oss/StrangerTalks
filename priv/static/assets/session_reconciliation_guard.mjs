@@ -1,3 +1,8 @@
+import {Socket} from "/vendor/phoenix.mjs"
+import {installF11Runtime} from "./f11_persistence_runtime.mjs"
+
+installF11Runtime({SocketClass: Socket})
+
 export function createSessionReconciliationGuard() {
   let revision = 0
 
