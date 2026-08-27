@@ -69,8 +69,10 @@ defmodule StrangertalksNewWeb.RouteArchitectureTest do
     assert html_response(conn, 200) =~ "StrangerTalks"
   end
 
-  test "unknown URLs and rejected aliases are not silently rewritten to Talk" do
-    Enum.each(["/not-a-strangertalks-route" | @rejected_aliases], fn path ->
+  test "unknown URLs, rejected aliases, and active Conversation identity URLs do not become Talk" do
+    active_id_route = "/conversation/#{Ecto.UUID.generate()}"
+
+    Enum.each(["/not-a-strangertalks-route", active_id_route | @rejected_aliases], fn path ->
       conn = get(build_conn(), path)
       assert response(conn, 404) =~ "Not Found"
     end)
