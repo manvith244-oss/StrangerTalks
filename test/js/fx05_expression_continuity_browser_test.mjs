@@ -56,6 +56,10 @@ async function matchPair(browser) {
       a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000}),
       b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000})
     ])
+    await Promise.all([
+      a.page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible", timeout: 15_000}),
+      b.page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible", timeout: 15_000})
+    ])
     return {a, b}
   } catch (error) {
     await a.context.close().catch(() => {})
@@ -79,6 +83,8 @@ async function stageReplyToPeerMessage(sender, receiver, text = "reply-target") 
   await sendText(sender, text)
   const peerMessage = receiver.locator("#messages .message:not(.mine)", {hasText: text}).last()
   await peerMessage.waitFor({state: "visible", timeout: 10_000})
+  await peerMessage.hover()
+  await peerMessage.locator(".reply-action-btn").waitFor({state: "visible", timeout: 10_000})
   await peerMessage.locator(".reply-action-btn").click()
   await receiver.locator("#reply-staging").waitFor({state: "visible", timeout: 10_000})
 }
@@ -106,6 +112,7 @@ async function returnToSameConversationPresentation(page) {
     control.click()
   })
   await page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 10_000})
+  await page.locator("#expressive-composer:not([hidden])").waitFor({state: "visible", timeout: 10_000})
 }
 
 async function endConversation(page) {
