@@ -213,12 +213,49 @@ jobs:
             node --test --test-concurrency=1 --test-name-pattern="^X05-07" test/js/fx05_expression_continuity_browser_test.mjs
           fi
 
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("test/js/fx05_expression_continuity_browser_test.mjs")
+          text = path.read_text()
+          old = '''async function openExpressionTools(page, timeout = 10_000) {
+            const plus = page.locator(".ig-compose-plus")
+            await plus.waitFor({state: "visible", timeout})
+            if (await plus.getAttribute("aria-expanded") !== "true") await plus.click()
+            await page.locator("#message-form.ig-tray-open").waitFor({state: "attached", timeout})
+            await Promise.all([
+              page.locator("#emoji-open").waitFor({state: "visible", timeout}),
+              page.locator("#expressive-open").waitFor({state: "visible", timeout}),
+              page.locator("#gif-open").waitFor({state: "visible", timeout})
+            ])
+          }
+          '''
+          new = '''async function openExpressionTools(page, timeout = 10_000) {
+            const plus = page.locator(".ig-compose-plus")
+            const form = page.locator("#message-form")
+            await plus.waitFor({state: "visible", timeout})
+            const trayOpen = await form.evaluate((node) => node.classList.contains("ig-tray-open"))
+            if (!trayOpen) await plus.click()
+            await page.locator("#message-form.ig-tray-open").waitFor({state: "attached", timeout})
+            await Promise.all([
+              page.locator("#emoji-open").waitFor({state: "visible", timeout}),
+              page.locator("#expressive-open").waitFor({state: "visible", timeout}),
+              page.locator("#gif-open").waitFor({state: "visible", timeout})
+            ])
+          }
+          '''
+          if old not in text:
+              raise SystemExit("expected openExpressionTools helper not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+          node --test --test-concurrency=1 --test-name-pattern="^X05-08" test/js/fx05_expression_continuity_browser_test.mjs
           node --test --test-concurrency=1 --test-name-pattern="^X05-" test/js/fx05_expression_continuity_browser_test.mjs
           git diff --check
 
           git config user.name "StrangerTalks F-X05"
           git config user.email "actions@users.noreply.github.com"
-          git show HEAD^:.github/workflows/fx05-expression-continuity.yml > .github/workflows/fx05-expression-continuity.yml
+          git show HEAD^^:.github/workflows/fx05-expression-continuity.yml > .github/workflows/fx05-expression-continuity.yml
           git add test/js/fx05_expression_continuity_browser_test.mjs priv/static/assets/expression_surface.mjs .github/workflows/fx05-expression-continuity.yml
           if git diff --cached --quiet; then
             echo "No F-X05 correction commit required"
