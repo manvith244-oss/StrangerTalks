@@ -12,7 +12,7 @@ env:
   MIX_ENV: test
   STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
   STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-  TARGET_SHA: 2a90d15dedc3fd62e886420ce9ca6ee76cdcda78
+  TARGET_SHA: 987c297b0058627b7e988b4f857aaeadb9a5c87c
   PORT: "4000"
   STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
 
