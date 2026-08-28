@@ -245,13 +245,17 @@ test("F01 #64: active Conversation exposes ordinary nav and breakpoint crossing 
   let pair
   try {
     const compact = {width: 390, height: 844}
+    const draft = "F-01 draft survives navigation and shell breakpoint crossing"
     pair = await matchPair(browser, compact)
     const page = pair.a.page
+    const input = page.locator("#message-input")
     assert.equal(new URL(page.url()).pathname, "/conversation")
 
     const mark = pair.a.journal.mark()
     await assertCompactBottomNav(page, compact)
     await assertCompactConversationCoexistence(page)
+    await input.fill(draft)
+    assert.equal(await input.inputValue(), draft, "active Conversation draft is established before navigation and resize")
 
     await page.locator('#bottom-nav [data-go="settings"]').click()
     await activeScreen(page, "settings").waitFor({state: "visible"})
@@ -262,6 +266,18 @@ test("F01 #64: active Conversation exposes ordinary nav and breakpoint crossing 
     await page.goBack({waitUntil: "domcontentloaded"})
     await activeScreen(page, "conversation").waitFor({state: "visible"})
     assert.equal(new URL(page.url()).pathname, "/conversation")
+    assert.equal(await input.inputValue(), draft, "draft survives You -> Back -> Conversation")
+    assert.deepEqual(destructiveFrames(pair.a, mark), [])
+
+    await page.goForward({waitUntil: "domcontentloaded"})
+    await activeScreen(page, "settings").waitFor({state: "visible"})
+    assert.equal(new URL(page.url()).pathname, "/you")
+    assert.deepEqual(destructiveFrames(pair.a, mark), [])
+
+    await page.goBack({waitUntil: "domcontentloaded"})
+    await activeScreen(page, "conversation").waitFor({state: "visible"})
+    assert.equal(new URL(page.url()).pathname, "/conversation")
+    assert.equal(await input.inputValue(), draft, "draft survives You -> Back/Forward/Back -> Conversation")
     assert.deepEqual(destructiveFrames(pair.a, mark), [])
 
     const resizeJoinCount = conversationJoinCount(pair.a, pair.conversationTopic)
@@ -275,6 +291,7 @@ test("F01 #64: active Conversation exposes ordinary nav and breakpoint crossing 
       await page.waitForTimeout(50)
       assert.equal(new URL(page.url()).pathname, "/conversation")
       assert.equal(conversationJoinCount(pair.a, pair.conversationTopic), resizeJoinCount, "breakpoint crossing does not recreate ConversationChannel")
+      assert.equal(await input.inputValue(), draft, `draft survives breakpoint crossing at ${viewport.width}px`)
       assert.deepEqual(destructiveFrames(pair.a, mark), [])
       if (viewport.width < 992) await assertCompactBottomNav(page, viewport)
       else await assertDesktopLeftRail(page, viewport)
@@ -282,6 +299,7 @@ test("F01 #64: active Conversation exposes ordinary nav and breakpoint crossing 
 
     await page.setViewportSize({width: 1024, height: 700})
     await assertDesktopLeftRail(page, {width: 1024, height: 700})
+    assert.equal(await input.inputValue(), draft, "draft survives 1024px desktop shell")
     await page.locator('#bottom-nav [data-go="chats"]').click()
     await activeScreen(page, "chats").waitFor({state: "visible"})
     assert.equal(new URL(page.url()).pathname, "/chats")
@@ -291,6 +309,18 @@ test("F01 #64: active Conversation exposes ordinary nav and breakpoint crossing 
     await page.goBack({waitUntil: "domcontentloaded"})
     await activeScreen(page, "conversation").waitFor({state: "visible"})
     assert.equal(new URL(page.url()).pathname, "/conversation")
+    assert.equal(await input.inputValue(), draft, "draft survives Chats -> Back -> Conversation")
+    assert.deepEqual(destructiveFrames(pair.a, mark), [])
+
+    await page.goForward({waitUntil: "domcontentloaded"})
+    await activeScreen(page, "chats").waitFor({state: "visible"})
+    assert.equal(new URL(page.url()).pathname, "/chats")
+    assert.deepEqual(destructiveFrames(pair.a, mark), [])
+
+    await page.goBack({waitUntil: "domcontentloaded"})
+    await activeScreen(page, "conversation").waitFor({state: "visible"})
+    assert.equal(new URL(page.url()).pathname, "/conversation")
+    assert.equal(await input.inputValue(), draft, "draft survives Chats -> Back/Forward/Back -> Conversation")
     assert.deepEqual(destructiveFrames(pair.a, mark), [])
   } finally {
     await pair?.a.context.close().catch(() => {})
