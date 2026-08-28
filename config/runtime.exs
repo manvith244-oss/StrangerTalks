@@ -108,7 +108,7 @@ if config_env() == :prod do
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
   config :strangertalks_new, StrangertalksNew.Repo,
-    ssl: true,
+    ssl: [cacertfile: System.get_env("DB_CA_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")],
     url: database_url,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
     # For machines with several cores, consider starting multiple pools of `pool_size`
@@ -203,7 +203,7 @@ if config_env() == :prod do
   #
   # Most non-SMTP adapters require an API client. Swoosh supports Req, Hackney,
   # and Finch out-of-the-box. This configuration is typically done at
-  # compile-time in your config/prod.exs:
+  # compile-time in config/prod.exs:
   #
   #     config :swoosh, :api_client, Swoosh.ApiClient.Req
   #
