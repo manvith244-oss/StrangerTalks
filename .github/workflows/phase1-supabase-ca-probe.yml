@@ -13,9 +13,9 @@ jobs:
   probe:
     runs-on: ubuntu-24.04
     env:
-      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
-      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
-      SUPABASE_CA_CERT: ${{ secrets.SUPABASE_CA_CERT }}
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || vars.SUPABASE_DATABASE_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT || vars.SUPABASE_DB_CA_CERT }}
+      SUPABASE_CA_CERT: ${{ secrets.SUPABASE_CA_CERT || vars.SUPABASE_CA_CERT }}
     steps:
       - name: Guard isolated inputs
         shell: bash
