@@ -3,6 +3,7 @@ import test from "node:test"
 import {chromium} from "playwright"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+// Pairing retries isolate the pre-existing post-match transition race from this send/retry regression.
 const PAIR_ATTEMPTS = 5
 
 async function freshPage(browser) {
