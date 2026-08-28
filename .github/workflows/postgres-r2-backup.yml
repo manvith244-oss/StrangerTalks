@@ -26,12 +26,13 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL || vars.DATABASE_URL || secrets.PRODUCTION_DATABASE_URL || vars.PRODUCTION_DATABASE_URL }}
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || vars.SUPABASE_DATABASE_URL }}
       R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID || vars.R2_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
       R2_ENDPOINT: ${{ secrets.R2_ENDPOINT || vars.R2_ENDPOINT || secrets.R2_ENDPOINT_URL || vars.R2_ENDPOINT_URL || secrets.R2_S3_ENDPOINT || vars.R2_S3_ENDPOINT }}
       R2_BUCKET: ${{ secrets.R2_BUCKET || vars.R2_BUCKET || secrets.R2_BUCKET_NAME || vars.R2_BUCKET_NAME }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || vars.R2_ACCESS_KEY_ID || secrets.CLOUDFLARE_R2_ACCESS_KEY_ID || vars.CLOUDFLARE_R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || vars.R2_SECRET_ACCESS_KEY || secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY || vars.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      SUPABASE_CA_URL: https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt
       AWS_DEFAULT_REGION: auto
       AWS_EC2_METADATA_DISABLED: 'true'
     steps:
@@ -41,9 +42,11 @@ jobs:
           set -euo pipefail
           echo "phase2_event_name=${GITHUB_EVENT_NAME}"
           echo "phase2_run_id=${GITHUB_RUN_ID}"
-          echo "phase2_production_database_operation=read_only_dump"
+          echo "phase2_source=supabase"
+          echo "phase2_source_operation=read_only_dump"
+          echo "phase2_render_database_url_used=false"
           missing=0
-          for name in DATABASE_URL R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
+          for name in SUPABASE_DATABASE_URL R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
             if [ -n "${!name:-}" ]; then
               echo "phase2_${name}_present=true"
             else
@@ -64,7 +67,7 @@ jobs:
             exit 2
           fi
 
-      - name: Checkout production backup scripts only
+      - name: Checkout backup scripts only
         uses: actions/checkout@v4
         with:
           ref: release/prep-2026-08-22
@@ -96,11 +99,22 @@ jobs:
           python3 -m pip install --user --break-system-packages awscli
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Capture production read-only inventory and create backup
+      - name: Download Supabase root CA
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location "$SUPABASE_CA_URL" -o /tmp/prod-ca-2021.crt
+          openssl x509 -in /tmp/prod-ca-2021.crt -noout -subject -issuer -fingerprint -sha256
+          echo "phase2_supabase_ca_ready=true"
+
+      - name: Capture Supabase read-only inventory and create backup
         shell: bash
         run: |
           set -euo pipefail
           export PATH="/usr/lib/postgresql/17/bin:$HOME/.local/bin:$PATH"
+          export PGSSLMODE=verify-full
+          export PGSSLROOTCERT=/tmp/prod-ca-2021.crt
+          export PGOPTIONS='-c default_transaction_read_only=on'
           echo "phase2_pg_dump_version=$(pg_dump --version)"
           work="$RUNNER_TEMP/phase2"
           mkdir -p "$work"
@@ -111,23 +125,20 @@ jobs:
           schema_norm="$work/source_schema.norm"
           dump="$work/source.dump"
 
-          PGSSLMODE=require PGOPTIONS='-c default_transaction_read_only=on' \
-            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c \
+          psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c \
             "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename" > "$tables"
 
           : > "$counts"
           while IFS= read -r table; do
             [ -n "$table" ] || continue
             q=${table//\"/\"\"}
-            rows=$(PGSSLMODE=require PGOPTIONS='-c default_transaction_read_only=on' \
-              psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c \
+            rows=$(psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c \
               "SELECT count(*)::bigint FROM public.\"$q\"")
             printf '%s\t%s\n' "$table" "$rows" >> "$counts"
           done < "$tables"
           sort -o "$counts" "$counts"
 
-          PGSSLMODE=require PGOPTIONS='-c default_transaction_read_only=on' \
-            pg_dump --schema-only --no-owner --no-acl "$DATABASE_URL" > "$schema"
+          pg_dump --schema-only --no-owner --no-acl "$SUPABASE_DATABASE_URL" > "$schema"
           grep -Ev '^(--|\\restrict |\\unrestrict |$)' "$schema" > "$schema_norm"
 
           echo "PHASE2_SOURCE_ROW_COUNTS_BEGIN"
@@ -135,8 +146,7 @@ jobs:
           echo "PHASE2_SOURCE_ROW_COUNTS_END"
           echo "phase2_source_schema_sha256=$(sha256sum "$schema_norm" | awk '{print $1}')"
 
-          PGSSLMODE=require PGOPTIONS='-c default_transaction_read_only=on' \
-            DATABASE_URL="$DATABASE_URL" bash ops/postgres_backup.sh "$dump"
+          DATABASE_URL="$SUPABASE_DATABASE_URL" bash ops/postgres_backup.sh "$dump"
           bytes=$(stat -c%s "$dump")
           sha=$(sha256sum "$dump" | awk '{print $1}')
           echo "phase2_backup_size_bytes=$bytes"
