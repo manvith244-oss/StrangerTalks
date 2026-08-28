@@ -13,14 +13,16 @@ jobs:
   chain:
     runs-on: ubuntu-24.04
     steps:
-      - name: Inspect live Supabase pooler chain with OS trust
+      - name: Prove OS trust fails and Supabase root fixes chain
         shell: bash
         env:
           SUPABASE_POOLER_HOST: aws-0-ap-southeast-1.pooler.supabase.com
           SUPABASE_POOLER_PORT: '5432'
+          SUPABASE_CA_URL: https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt
         run: |
           set -euo pipefail
           echo "phase1_chain_target=${SUPABASE_POOLER_HOST}:${SUPABASE_POOLER_PORT}"
+
           set +e
           timeout 20 openssl s_client \
             -starttls postgres \
@@ -29,21 +31,37 @@ jobs:
             -showcerts \
             -verify_return_error \
             -CAfile /etc/ssl/certs/ca-certificates.crt \
-            </dev/null > /tmp/sclient.txt 2>&1
-          rc=$?
+            </dev/null > /tmp/os-trust.txt 2>&1
+          os_rc=$?
           set -e
-          echo "phase1_openssl_verify_exit=$rc"
-          grep -E '^(depth=|verify return:|verify error:|subject=|issuer=|Verify return code:|New, TLS|Protocol  :|Cipher    :)' /tmp/sclient.txt || true
-          awk '/-----BEGIN CERTIFICATE-----/{n++;f=sprintf("/tmp/cert-%02d.pem",n)} n{print > f}' /tmp/sclient.txt
-          for cert in /tmp/cert-*.pem; do
-            [ -f "$cert" ] || continue
-            echo "CERT=$(basename "$cert")"
-            openssl x509 -in "$cert" -noout -subject -issuer -serial -fingerprint -sha256 -dates
-          done
-          if [ "$rc" -eq 0 ] && grep -q 'Verify return code: 0 (ok)' /tmp/sclient.txt; then
-            echo "PHASE1_OS_CA_CHAIN_VERIFY=PASS"
+          echo "phase1_os_trust_exit=$os_rc"
+          grep -E '^(depth=|verify return:|verify error:|subject=|issuer=|Verify return code:|New, TLS|Protocol  :|Cipher    :)' /tmp/os-trust.txt || true
+          if grep -q 'Verify return code: 19 (self-signed certificate in certificate chain)' /tmp/os-trust.txt; then
+            echo "PHASE1_OS_TRUST_REPRODUCED=PASS"
           else
-            echo "PHASE1_OS_CA_CHAIN_VERIFY=FAIL"
-            cat /tmp/sclient.txt
+            echo "PHASE1_OS_TRUST_REPRODUCED=FAIL"
+            cat /tmp/os-trust.txt
+            exit 1
+          fi
+
+          curl --fail --silent --show-error --location "$SUPABASE_CA_URL" -o /tmp/prod-ca-2021.crt
+          echo "phase1_downloaded_ca_subject=$(openssl x509 -in /tmp/prod-ca-2021.crt -noout -subject | sed 's/^subject=//')"
+          echo "phase1_downloaded_ca_issuer=$(openssl x509 -in /tmp/prod-ca-2021.crt -noout -issuer | sed 's/^issuer=//')"
+          echo "phase1_downloaded_ca_fingerprint=$(openssl x509 -in /tmp/prod-ca-2021.crt -noout -fingerprint -sha256 | cut -d= -f2)"
+
+          timeout 20 openssl s_client \
+            -starttls postgres \
+            -connect "${SUPABASE_POOLER_HOST}:${SUPABASE_POOLER_PORT}" \
+            -servername "$SUPABASE_POOLER_HOST" \
+            -showcerts \
+            -verify_return_error \
+            -CAfile /tmp/prod-ca-2021.crt \
+            </dev/null > /tmp/supabase-trust.txt 2>&1
+          grep -E '^(depth=|verify return:|verify error:|subject=|issuer=|Verify return code:|New, TLS|Protocol  :|Cipher    :)' /tmp/supabase-trust.txt || true
+          if grep -q 'Verify return code: 0 (ok)' /tmp/supabase-trust.txt; then
+            echo "PHASE1_SUPABASE_CA_CHAIN_VERIFY=PASS"
+          else
+            echo "PHASE1_SUPABASE_CA_CHAIN_VERIFY=FAIL"
+            cat /tmp/supabase-trust.txt
             exit 1
           fi
