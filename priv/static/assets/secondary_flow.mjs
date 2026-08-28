@@ -18,6 +18,10 @@ function storageDurability() {
   }
 }
 
+function afterInteractionSettles() {
+  return new Promise((resolve) => setTimeout(resolve, 25))
+}
+
 async function restorePreviousRecord(recordId, record) {
   if (record) await putRecord(record)
   else await deleteRecord(recordId)
@@ -81,6 +85,14 @@ async function persistToggle({
     const lostDurability = durableBeforeSave === true && storageDurability() === false
     if (lostDurability && preferenceQueue.isCurrent(key, result.version)) {
       const canonical = previousRecord?.value?.[valueKey] === true
+
+      // Let the originating checkbox interaction commit first, then reconcile
+      // the optimistic UI once the persistence boundary has declared the write
+      // non-durable. This keeps browser-native change semantics intact while
+      // still restoring canonical state immediately after a failed save.
+      await afterInteractionSettles()
+      if (!preferenceQueue.isCurrent(key, result.version)) return
+
       try { await restorePreviousRecord(recordId, previousRecord) } catch (_error) {}
       if (!preferenceQueue.isCurrent(key, result.version)) return
 
