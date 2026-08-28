@@ -4,8 +4,28 @@ import {createPreferenceSaveQueue, saveBooleanPreference} from "./preference_sav
 const preferenceQueue = createPreferenceSaveQueue()
 let installed = false
 
+function ensurePreferenceStatus(documentRef) {
+  const settings = documentRef.querySelector('section[data-screen="settings"]')
+  if (!settings) return null
+
+  const existing = settings.querySelector("#settings-preference-status")
+  if (existing) return existing
+
+  const status = documentRef.createElement("p")
+  status.id = "settings-preference-status"
+  status.setAttribute("role", "status")
+  status.setAttribute("aria-live", "polite")
+  status.setAttribute("aria-atomic", "true")
+
+  const reducedMotion = documentRef.querySelector("#reduced-motion")
+  const preferenceRow = reducedMotion?.closest?.("label")
+  if (preferenceRow?.insertAdjacentElement) preferenceRow.insertAdjacentElement("afterend", status)
+  else settings.append(status)
+  return status
+}
+
 function announce(documentRef, message) {
-  const status = documentRef.querySelector("#status")
+  const status = ensurePreferenceStatus(documentRef)
   if (status) status.textContent = message
 }
 
@@ -123,6 +143,7 @@ export function initializeSecondaryFlow(documentRef = document) {
   if (installed || !documentRef?.querySelector) return
   installed = true
   ensureSecondaryEntries(documentRef)
+  ensurePreferenceStatus(documentRef)
   installPreferenceHandlers(documentRef)
 }
 
