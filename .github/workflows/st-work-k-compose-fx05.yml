@@ -1,0 +1,217 @@
+name: ST-WORK-K Compose F-X05
+
+on:
+  push:
+    branches:
+      - st-work-k/fx05-integration-carrier-2026-08-28
+
+permissions:
+  contents: write
+
+concurrency:
+  group: st-work-k-fx05-integration
+  cancel-in-progress: false
+
+env:
+  MIX_ENV: test
+  PORT: "4002"
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
+  EXPECTED_INTEGRATION_BASE: 7bbac3d7810f59945542db1d3a71ae8fbe0d8b41
+  FX05_SHA: 20dee5c0fbebb3117f93e525369659151d537e69
+
+jobs:
+  compose-and-prove:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout exact integration base
+        uses: actions/checkout@v4
+        with:
+          ref: release/integration-2026-08-28
+          fetch-depth: 0
+
+      - name: Prove base and fetch exact F-X05 authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_INTEGRATION_BASE"
+          git fetch origin fx05/expression-continuity-boundary-2026-08-27
+          test "$(git rev-parse FETCH_HEAD)" = "$FX05_SHA"
+          git config user.name "ST-WORK-K Integration"
+          git config user.email "actions@users.noreply.github.com"
+
+      - name: Merge F-X05 and resolve only the obsolete show() seam
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          git merge --no-commit --no-ff "$FX05_SHA"
+          merge_rc=$?
+          set -e
+
+          conflicts="$(git diff --name-only --diff-filter=U)"
+          if [ "$merge_rc" -ne 0 ]; then
+            printf 'conflicts=%s\n' "$conflicts"
+            test "$conflicts" = "priv/static/assets/app.js"
+            git checkout --ours -- priv/static/assets/app.js
+          else
+            test -z "$conflicts"
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("priv/static/assets/app.js")
+          text = path.read_text()
+          target = '  if (name !== "conversation") cancelReplyStaging()\n'
+          count = text.count(target)
+          if count > 1:
+              raise SystemExit(f"unexpected duplicate reply-presentation coupling: {count}")
+          if count == 1:
+              text = text.replace(target, "", 1)
+              path.write_text(text)
+          PY
+          git add priv/static/assets/app.js
+
+          test -z "$(git diff --name-only --diff-filter=U)"
+          grep -F 'function presentScreen(name)' priv/static/assets/app.js
+          grep -F 'createNavigationHistory' priv/static/assets/app.js
+          grep -F 'releaseConversationRuntime' priv/static/assets/app.js
+          grep -F 'navigation.activityEvent("conversation_ended")' priv/static/assets/app.js
+          if grep -F 'if (name !== "conversation") cancelReplyStaging()' priv/static/assets/app.js; then
+            echo "ordinary presentation still terminalizes reply staging"
+            exit 1
+          fi
+
+          for path in \
+            .github/workflows/fx05-expression-continuity.yml \
+            priv/static/assets/expression_runtime.mjs \
+            priv/static/assets/expression_surface.mjs \
+            priv/static/assets/normal_media_runtime.mjs \
+            test/js/fx05_expression_continuity_browser_test.mjs
+          do
+            expected="$(git rev-parse "$FX05_SHA:$path")"
+            actual="$(git hash-object "$path")"
+            echo "$path expected=$expected actual=$actual"
+            test "$actual" = "$expected"
+          done
+
+          git diff --cached --check
+          node --check priv/static/assets/app.js
+          node --check priv/static/assets/expression_runtime.mjs
+          node --check priv/static/assets/expression_surface.mjs
+          node --check priv/static/assets/normal_media_runtime.mjs
+          node --check test/js/fx05_expression_continuity_browser_test.mjs
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Focused unit and backend regressions
+        run: |
+          node --test \
+            test/js/team10_expression_surface_test.mjs \
+            test/js/expressive_media_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/normal_media_test.mjs
+          node --import='data:text/javascript,globalThis.document={readyState:%22loading%22,addEventListener(){}}' \
+            --test test/js/view_once_test.mjs
+          mix test \
+            test/strangertalks_new/conversation_lifecycle_test.exs \
+            test/strangertalks_new/conversation_isolation_test.exs \
+            test/strangertalks_new_web/channels/conversation_terminal_channel_test.exs \
+            test/strangertalks_new_web/channels/conversation_presence_channel_test.exs
+
+      - name: Full precommit on composed tree
+        run: mix precommit
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.drop --force || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            endpoint_config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint_config, :server, true))
+            repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo_config |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/st-work-k-browser.log 2>&1 &
+          echo $! > /tmp/st-work-k-browser.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/st-work-k-browser.pid)" 2>/dev/null; then cat /tmp/st-work-k-browser.log; exit 1; fi
+            sleep 1
+          done
+          cat /tmp/st-work-k-browser.log
+          exit 1
+
+      - name: F-X05 hostile browser proof on composed tree
+        run: node --test --test-concurrency=1 test/js/fx05_expression_continuity_browser_test.mjs
+
+      - name: F-04 runtime proofs remain green after F-X05 composition
+        run: |
+          node --test --test-concurrency=1 test/js/f04_conversation_runtime_cleanup_browser_test.mjs
+          node --test --test-concurrency=1 test/js/f04_conversation_runtime_hostile_browser_test.mjs
+
+      - name: Stop Phoenix
+        if: always()
+        run: |
+          if [ -f /tmp/st-work-k-browser.pid ]; then
+            kill "$(cat /tmp/st-work-k-browser.pid)" 2>/dev/null || true
+          fi
+
+      - name: Prove tested merge tree is unchanged and publish merge commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --check
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git commit -m "integrate(F-X05): compose proven expression continuity"
+          test -z "$(git status --porcelain)"
+          git fetch origin release/integration-2026-08-28
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_INTEGRATION_BASE"
+          git push origin HEAD:release/integration-2026-08-28
+          echo "PUBLISHED_INTEGRATION_SHA=$(git rev-parse HEAD)"
+
+      - name: Browser log on failure
+        if: failure()
+        run: cat /tmp/st-work-k-browser.log || true
