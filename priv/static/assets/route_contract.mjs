@@ -117,11 +117,11 @@ export function resolveActivityEventRoute(route, event) {
     return {path: "/conversation", screen: "conversation", replace: true, reason: "match_found_handoff"}
   }
 
-  if (event === "conversation_ended" && route.kind === "conversation") {
+  if (event === "conversation_ended") {
     return {path: "/conversation/ended", screen: "ended", replace: true, reason: "conversation_ended"}
   }
 
-  if (event === "conversation_unavailable" && route.kind === "conversation") {
+  if (event === "conversation_unavailable") {
     return {path: "/conversation/unavailable", screen: "unrecoverable", replace: true, reason: "conversation_unavailable"}
   }
 
