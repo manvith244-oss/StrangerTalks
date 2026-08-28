@@ -134,3 +134,12 @@ test("join completion cannot present Finding someone without a canonical attempt
   assert.match(runtime, /if \(!queueAttemptId\) return/)
   assert.match(runtime, /if \(!queuedAttemptCanPresent\(queueAttemptId\)\) return/)
 })
+
+test("text-send timeout fails only while the channel transport is still authoritative", async () => {
+  const {messageSendTimeoutDisposition} = await import(flowModuleUrl.href)
+
+  assert.equal(messageSendTimeoutDisposition({socketConnected: true, channelState: "joined"}), "failed")
+  assert.equal(messageSendTimeoutDisposition({socketConnected: false, channelState: "joined"}), "reconcile")
+  assert.equal(messageSendTimeoutDisposition({socketConnected: true, channelState: "errored"}), "reconcile")
+  assert.equal(messageSendTimeoutDisposition({socketConnected: true, channelState: "joining"}), "reconcile")
+})
