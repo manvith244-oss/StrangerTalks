@@ -23,7 +23,7 @@ env:
   FX07_PROVEN_SHA: 01d20a8261fed0a490e3c6c1ac723f37f2f19b72
   F04_PROVEN_SHA: 2b0424745414e4eff7c3e56750287c4fafecaad5
   FX05_PROVEN_SHA: 20dee5c0fbebb3117f93e525369659151d537e69
-  F09_PROVEN_SHA: 9fdcf4db49185c55331944cd74381dd4c603e7c2
+  F09_SOURCE_SHA: 9fdcf4db49185c55331944cd74381dd4c603e7c2
   F10_PROVEN_SHA: ce486b617cbf81b198d6c872ce312dc82ea50ada
   EXCLUDED_PR84_HEAD_SHA: c58da669a82bd89ecfa1d4e154e2415651425387
 
@@ -39,31 +39,39 @@ jobs:
           POSTGRES_USER: strangertalks_local
           POSTGRES_PASSWORD: strangertalks_test
           POSTGRES_DB: strangertalks_new_test
-        ports:
-          - 5432:5432
+        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - name: Exact SHA and authority ancestry
+      - name: Exact SHA, merged authorities, excluded lineage
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-          for sha in "$FROZEN_BASE_SHA" "$PRIOR_K_HEAD_SHA" "$F01_PROVEN_SHA" "$FX07_PROVEN_SHA" "$F04_PROVEN_SHA" "$FX05_PROVEN_SHA" "$F09_PROVEN_SHA" "$F10_PROVEN_SHA"; do
+          for sha in "$FROZEN_BASE_SHA" "$PRIOR_K_HEAD_SHA" "$F01_PROVEN_SHA" "$FX07_PROVEN_SHA" "$F04_PROVEN_SHA" "$FX05_PROVEN_SHA" "$F10_PROVEN_SHA"; do
+            echo "ASSERT_ANCESTOR=$sha"
             git merge-base --is-ancestor "$sha" HEAD
           done
           if git merge-base --is-ancestor "$EXCLUDED_PR84_HEAD_SHA" HEAD; then
             echo "Excluded PR #84 head is unexpectedly in candidate ancestry"
             exit 1
           fi
-          echo "K2_CONTRACT_SHA=$(git rev-parse HEAD)"
+          echo "PR84_EXCLUDED=yes"
+      - name: Prove semantically composed F-09 source-owned files survived
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code "$F09_SOURCE_SHA" HEAD -- \
+            priv/static/assets/mobile_flow.mjs \
+            test/js/f09_mobile_flow_test.mjs \
+            test/js/f09_mobile_flow_browser_test.mjs \
+            .github/workflows/f09-mobile-flow.yml
+          echo "F09_SOURCE_OWNED_FILES_PRESERVED=$F09_SOURCE_SHA"
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.18.4"
@@ -78,7 +86,7 @@ jobs:
           mix local.rebar --force
           mix deps.get
           npm ci
-      - name: F-02/F-03/F-06/F-07/F-09/F-11 focused JS contracts
+      - name: F-02 F-03 F-06 F-07 F-09 F-11 focused contracts
         run: |
           node --test \
             test/js/route_contract_test.mjs \
@@ -91,7 +99,7 @@ jobs:
             test/js/f11_persistence_contract_test.mjs \
             test/js/f11_local_data_integration_test.mjs \
             test/js/f11_retained_cleanup_guard_test.mjs
-      - name: Expression media terminal and stale-callback JS contracts
+      - name: Expression media terminal stale-callback contracts
         run: |
           node --test \
             test/js/team10_expression_surface_test.mjs \
@@ -107,20 +115,14 @@ jobs:
             test/js/message_unsend_test.mjs \
             test/js/pin_test.mjs
           node --import ./test/js/browser_module_harness.mjs --test test/js/view_once_test.mjs
-      - name: Conversation reconnect delivery and messaging JS matrix
+      - name: Conversation reconnect delivery messaging JS matrix
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t tests < <(
-            find test/js -maxdepth 1 -type f \
-              \( -name '*delivery*test.mjs' \
-                 -o -name '*reconnect*test.mjs' \
-                 -o -name '*presence*test.mjs' \
-                 -o -name '*message*test.mjs' \
-                 -o -name '*atomic_restore*test.mjs' \
-                 -o -name '*ephemeral_conversation*test.mjs' \) \
-              -print | sort
-          )
+          mapfile -t tests < <(find test/js -maxdepth 1 -type f \
+            \( -name '*delivery*test.mjs' -o -name '*reconnect*test.mjs' -o -name '*presence*test.mjs' \
+               -o -name '*message*test.mjs' -o -name '*atomic_restore*test.mjs' -o -name '*ephemeral_conversation*test.mjs' \) \
+            -print | sort)
           test "${#tests[@]}" -gt 0
           printf '%s\n' "${tests[@]}"
           node --test "${tests[@]}"
@@ -129,27 +131,20 @@ jobs:
           mix ecto.drop --quiet || true
           mix ecto.create --quiet
           mix ecto.migrate --quiet
-      - name: Conversation Matchmaking recovery and terminal backend matrix
+      - name: Conversation Matchmaking recovery terminal backend matrix
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t tests < <(
-            find test/strangertalks_new test/strangertalks_new_web -type f \
-              \( -name '*match*test.exs' \
-                 -o -name '*queue*test.exs' \
-                 -o -name '*conversation*test.exs' \
-                 -o -name '*recovery*test.exs' \
-                 -o -name '*presence*test.exs' \
-                 -o -name '*participant_channel_test.exs' \
-                 -o -name '*session_reconciliation*test.exs' \) \
-              -print | sort
-          )
+          mapfile -t tests < <(find test/strangertalks_new test/strangertalks_new_web -type f \
+            \( -name '*match*test.exs' -o -name '*queue*test.exs' -o -name '*conversation*test.exs' \
+               -o -name '*recovery*test.exs' -o -name '*presence*test.exs' -o -name '*participant_channel_test.exs' \
+               -o -name '*session_reconciliation*test.exs' \) -print | sort)
           test "${#tests[@]}" -gt 0
           printf '%s\n' "${tests[@]}"
           mix test "${tests[@]}"
       - name: Full repository precommit
         run: mix precommit
-      - name: Contract job diff and clean tree
+      - name: Contract diff clean exact-SHA proof
         shell: bash
         run: |
           set -euo pipefail
@@ -158,10 +153,14 @@ jobs:
           test -z "$(git status --porcelain)"
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
 
-  browser-presentation:
-    name: Browser shell nav settings loading mobile desktop
+  browser-matrix:
+    name: Browser ${{ matrix.group }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [presentation, runtime, composed-e2e]
     services:
       postgres:
         image: postgres:16
@@ -169,209 +168,10 @@ jobs:
           POSTGRES_USER: strangertalks_local
           POSTGRES_PASSWORD: strangertalks_test
           POSTGRES_DB: strangertalks_new_test
-        ports:
-          - 5432:5432
+        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      PORT: "4000"
-      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-      - name: Exact checkout
-        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-      - uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.18.4"
-          otp-version: "27.3.4"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-      - name: Install browser dependencies
-        run: |
-          mix local.hex --force
-          mix local.rebar --force
-          mix deps.get
-          npm ci
-          npx playwright install --with-deps chromium
-      - name: Prepare browser database
-        run: |
-          mix ecto.drop --quiet || true
-          mix ecto.create --quiet
-          mix ecto.migrate --quiet
-      - name: Start Phoenix
-        shell: bash
-        run: |
-          set -euo pipefail
-          mix run --no-start -e '
-            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
-            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
-            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
-            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
-            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
-            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
-            Process.sleep(:infinity)
-          ' > /tmp/k2-presentation.log 2>&1 &
-          echo $! > /tmp/k2-presentation.pid
-          for attempt in $(seq 1 60); do
-            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
-            if ! kill -0 "$(cat /tmp/k2-presentation.pid)" 2>/dev/null; then cat /tmp/k2-presentation.log; exit 1; fi
-            sleep 1
-          done
-          cat /tmp/k2-presentation.log
-          exit 1
-      - name: F-01 App Shell and F-03 Back Forward
-        run: |
-          node --test --test-concurrency=1 test/js/f01_app_shell_browser_test.mjs
-          node --test --test-concurrency=1 test/js/navigation_history_browser_test.mjs
-      - name: F-06 Settings and F-07 loading continuity
-        run: |
-          node --test --test-concurrency=1 test/js/f06_secondary_flow_browser_test.mjs
-          node --test --test-concurrency=1 test/js/f07_loading_transitions_browser_test.mjs
-      - name: F-09 mobile and F-10 desktop composed viewport proof
-        run: |
-          node --test --test-concurrency=1 test/js/f09_mobile_flow_browser_test.mjs
-          node --test --test-concurrency=1 test/js/f10_desktop_flow_browser_test.mjs
-      - name: Stop Phoenix
-        if: always()
-        run: |
-          if [ -f /tmp/k2-presentation.pid ]; then kill "$(cat /tmp/k2-presentation.pid)" 2>/dev/null || true; fi
-      - name: Browser log on failure
-        if: failure()
-        run: cat /tmp/k2-presentation.log || true
-      - name: Presentation job clean tree
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          git diff --check
-          git diff --exit-code -- .
-          test -z "$(git status --porcelain)"
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-
-  browser-runtime:
-    name: Browser conversation expression persistence terminal runtime
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: strangertalks_local
-          POSTGRES_PASSWORD: strangertalks_test
-          POSTGRES_DB: strangertalks_new_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      PORT: "4002"
-      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-      - name: Exact checkout
-        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-      - uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.18.4"
-          otp-version: "27.3.4"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-      - name: Install browser dependencies
-        run: |
-          mix local.hex --force
-          mix local.rebar --force
-          mix deps.get
-          npm ci
-          npx playwright install --with-deps chromium
-      - name: Prepare browser database
-        run: |
-          mix ecto.drop --quiet || true
-          mix ecto.create --quiet
-          mix ecto.migrate --quiet
-      - name: Start Phoenix
-        shell: bash
-        run: |
-          set -euo pipefail
-          mix run --no-start -e '
-            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
-            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
-            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
-            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
-            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
-            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
-            Process.sleep(:infinity)
-          ' > /tmp/k2-runtime.log 2>&1 &
-          echo $! > /tmp/k2-runtime.pid
-          for attempt in $(seq 1 60); do
-            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
-            if ! kill -0 "$(cat /tmp/k2-runtime.pid)" 2>/dev/null; then cat /tmp/k2-runtime.log; exit 1; fi
-            sleep 1
-          done
-          cat /tmp/k2-runtime.log
-          exit 1
-      - name: F-04 leave return reconnect stale-runtime isolation
-        run: |
-          node --test --test-concurrency=1 test/js/f04_conversation_runtime_cleanup_browser_test.mjs
-          node --test --test-concurrency=1 test/js/f04_conversation_runtime_hostile_browser_test.mjs
-      - name: F-X05 composer expression continuity and stale callbacks
-        run: node --test --test-concurrency=1 test/js/fx05_expression_continuity_browser_test.mjs
-      - name: F-11 persistence hostile and corrupt identity
-        run: node --test --test-concurrency=1 test/js/f11_browser_hostile_test.mjs test/js/f11_browser_corrupt_identity_test.mjs
-      - name: F-X07 terminal truth cannot resurrect
-        run: node --test --test-concurrency=1 test/js/terminal_truth_browser_test.mjs
-      - name: Two-browser Conversation reconnect messaging journey
-        run: node --test --test-concurrency=1 test/js/conversation_reliability_browser_test.mjs
-      - name: Stop Phoenix
-        if: always()
-        run: |
-          if [ -f /tmp/k2-runtime.pid ]; then kill "$(cat /tmp/k2-runtime.pid)" 2>/dev/null || true; fi
-      - name: Browser log on failure
-        if: failure()
-        run: cat /tmp/k2-runtime.log || true
-      - name: Runtime job clean tree
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          git diff --check
-          git diff --exit-code -- .
-          test -z "$(git status --porcelain)"
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
-
-  browser-composed-e2e:
-    name: Browser composed Matchmaking Conversation messaging E2E
-    runs-on: ubuntu-latest
-    timeout-minutes: 40
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: strangertalks_local
-          POSTGRES_PASSWORD: strangertalks_test
-          POSTGRES_DB: strangertalks_new_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 10s --health-timeout 5s --health-retries 5
     env:
       PORT: "4000"
       STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
@@ -414,25 +214,48 @@ jobs:
             Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
             Process.sleep(:infinity)
-          ' > /tmp/k2-e2e.log 2>&1 &
-          echo $! > /tmp/k2-e2e.pid
+          ' > /tmp/k2-${{ matrix.group }}.log 2>&1 &
+          echo $! > /tmp/k2-${{ matrix.group }}.pid
           for attempt in $(seq 1 60); do
             if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
-            if ! kill -0 "$(cat /tmp/k2-e2e.pid)" 2>/dev/null; then cat /tmp/k2-e2e.log; exit 1; fi
+            if ! kill -0 "$(cat /tmp/k2-${{ matrix.group }}.pid)" 2>/dev/null; then cat /tmp/k2-${{ matrix.group }}.log; exit 1; fi
             sleep 1
           done
-          cat /tmp/k2-e2e.log
+          cat /tmp/k2-${{ matrix.group }}.log
           exit 1
-      - name: Full maintained browser E2E suite
-        run: node --test --test-concurrency=1 test/js/browser_e2e_test.mjs
+      - name: Run composed browser group
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.group }}" in
+            presentation)
+              node --test --test-concurrency=1 test/js/f01_app_shell_browser_test.mjs
+              node --test --test-concurrency=1 test/js/navigation_history_browser_test.mjs
+              node --test --test-concurrency=1 test/js/f06_secondary_flow_browser_test.mjs
+              node --test --test-concurrency=1 test/js/f07_loading_transitions_browser_test.mjs
+              node --test --test-concurrency=1 test/js/f09_mobile_flow_browser_test.mjs
+              node --test --test-concurrency=1 test/js/f10_desktop_flow_browser_test.mjs
+              ;;
+            runtime)
+              node --test --test-concurrency=1 test/js/f04_conversation_runtime_cleanup_browser_test.mjs
+              node --test --test-concurrency=1 test/js/f04_conversation_runtime_hostile_browser_test.mjs
+              node --test --test-concurrency=1 test/js/fx05_expression_continuity_browser_test.mjs
+              node --test --test-concurrency=1 test/js/f11_browser_hostile_test.mjs test/js/f11_browser_corrupt_identity_test.mjs
+              node --test --test-concurrency=1 test/js/terminal_truth_browser_test.mjs
+              node --test --test-concurrency=1 test/js/conversation_reliability_browser_test.mjs
+              ;;
+            composed-e2e)
+              node --test --test-concurrency=1 test/js/browser_e2e_test.mjs
+              ;;
+          esac
       - name: Stop Phoenix
         if: always()
         run: |
-          if [ -f /tmp/k2-e2e.pid ]; then kill "$(cat /tmp/k2-e2e.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/k2-${{ matrix.group }}.pid ]; then kill "$(cat /tmp/k2-${{ matrix.group }}.pid)" 2>/dev/null || true; fi
       - name: Browser log on failure
         if: failure()
-        run: cat /tmp/k2-e2e.log || true
-      - name: E2E job clean tree
+        run: cat /tmp/k2-${{ matrix.group }}.log || true
+      - name: Browser group clean exact-SHA proof
         if: always()
         shell: bash
         run: |
@@ -443,12 +266,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
 
   final-same-sha-proof:
-    name: Final same-SHA diff clean tree live-head proof
-    needs:
-      - contracts-and-precommit
-      - browser-presentation
-      - browser-runtime
-      - browser-composed-e2e
+    name: Final same-SHA diff clean live-head proof
+    needs: [contracts-and-precommit, browser-matrix]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     services:
@@ -458,30 +277,29 @@ jobs:
           POSTGRES_USER: strangertalks_local
           POSTGRES_PASSWORD: strangertalks_test
           POSTGRES_DB: strangertalks_new_test
-        ports:
-          - 5432:5432
+        ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - name: Prove exact final checkout and required ancestry
+      - name: Exact final checkout and authority proof
         shell: bash
         run: |
           set -euo pipefail
-          actual="$(git rev-parse HEAD)"
-          echo "K2_EXPECTED_SHA=${{ github.sha }}"
-          echo "K2_ACTUAL_SHA=$actual"
-          test "$actual" = "${{ github.sha }}"
-          for sha in "$FROZEN_BASE_SHA" "$PRIOR_K_HEAD_SHA" "$F01_PROVEN_SHA" "$FX07_PROVEN_SHA" "$F04_PROVEN_SHA" "$FX05_PROVEN_SHA" "$F09_PROVEN_SHA" "$F10_PROVEN_SHA"; do
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          for sha in "$FROZEN_BASE_SHA" "$PRIOR_K_HEAD_SHA" "$F01_PROVEN_SHA" "$FX07_PROVEN_SHA" "$F04_PROVEN_SHA" "$FX05_PROVEN_SHA" "$F10_PROVEN_SHA"; do
             git merge-base --is-ancestor "$sha" HEAD
           done
           if git merge-base --is-ancestor "$EXCLUDED_PR84_HEAD_SHA" HEAD; then exit 1; fi
+          git diff --exit-code "$F09_SOURCE_SHA" HEAD -- \
+            priv/static/assets/mobile_flow.mjs \
+            test/js/f09_mobile_flow_test.mjs \
+            test/js/f09_mobile_flow_browser_test.mjs \
+            .github/workflows/f09-mobile-flow.yml
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.18.4"
@@ -491,23 +309,22 @@ jobs:
           mix local.hex --force
           mix local.rebar --force
           mix deps.get
-      - name: Reset database and rerun full precommit on final SHA
+      - name: Reset DB and rerun full precommit on final SHA
         run: |
           mix ecto.drop --quiet || true
           mix ecto.create --quiet
           mix ecto.migrate --quiet
           mix precommit
-      - name: Full diff hygiene no mutation clean tree
+      - name: Diff hygiene no mutation clean tree
         shell: bash
         run: |
           set -euo pipefail
           git diff --check "$FROZEN_BASE_SHA"...HEAD
           git diff --check
           git diff --exit-code -- .
-          status="$(git status --porcelain)"
-          if [ -n "$status" ]; then printf '%s\n' "$status"; exit 1; fi
+          test -z "$(git status --porcelain)"
           echo "K2_WORKING_TREE=clean"
-      - name: Prove tested SHA equals live integration branch SHA
+      - name: Tested SHA equals live integration head
         shell: bash
         run: |
           set -euo pipefail
