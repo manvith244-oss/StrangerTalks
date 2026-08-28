@@ -32,7 +32,7 @@ async function freshPage(browser, {rejectFirstTextSend = false} = {}) {
                 if (!probe.rejectedMessageId) {
                   probe.rejectedMessageId = body.client_message_id
                   const rejectedFrame = [...frame]
-                  rejectedFrame[4] = {...body, content: ""}
+                  rejectedFrame[4] = {...body, content: null}
                   return nativeSend.call(this, JSON.stringify(rejectedFrame))
                 }
 
