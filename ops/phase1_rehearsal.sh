@@ -91,9 +91,10 @@ write_counts() {
   : >"$output"
   while IFS= read -r table_name; do
     [[ -n "$table_name" ]] || continue
+    local quoted_table_name=${table_name//\"/\"\"}
     local row_count
-    row_count=$(PGSSLMODE=require psql "$url" -X -v ON_ERROR_STOP=1 -v table_name="$table_name" -At -c \
-      'SELECT count(*)::bigint FROM public.:"table_name";') || return $?
+    row_count=$(PGSSLMODE=require psql "$url" -X -v ON_ERROR_STOP=1 -At -c \
+      "SELECT count(*)::bigint FROM public.\"$quoted_table_name\";") || return $?
     printf '%s\t%s\n' "$table_name" "$row_count" >>"$output"
   done <"$tables_file"
   sort -o "$output" "$output"
@@ -109,7 +110,7 @@ printf 'table\trows\n'
 cat "$source_counts"
 echo "PHASE1_SOURCE_ROW_COUNTS_END"
 
-constraint_sql="SELECT cls.relname || E'\\t' || con.conname || E'\\t' || con.contype || E'\\t' || regexp_replace(pg_get_constraintdef(con.oid, true), E'[\\n\\r\\t]+', ' ', 'g') FROM pg_constraint con JOIN pg_class cls ON cls.oid = con.conrelid JOIN pg_namespace ns ON ns.oid = cls.relnamespace WHERE ns.nspname = 'public' ORDER BY cls.relname, con.conname, con.contype, pg_get_constraintdef(con.oid, true);"
+constraint_sql="SELECT cls.relname || E'\\t' || con.conname || E'\\t' || con.contype::text || E'\\t' || regexp_replace(pg_get_constraintdef(con.oid, true), E'[\\n\\r\\t]+', ' ', 'g') FROM pg_constraint con JOIN pg_class cls ON cls.oid = con.conrelid JOIN pg_namespace ns ON ns.oid = cls.relnamespace WHERE ns.nspname = 'public' ORDER BY cls.relname, con.conname, con.contype, pg_get_constraintdef(con.oid, true);"
 
 PGSSLMODE=require psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c "$constraint_sql" | sort >"$source_constraints"
 source_constraints_rc=${PIPESTATUS[0]}
