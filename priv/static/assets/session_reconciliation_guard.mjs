@@ -1,7 +1,3 @@
-if (typeof window !== "undefined" && window === globalThis) {
-  await import("./session_reconciliation_browser_bootstrap.mjs")
-}
-
 export function createSessionReconciliationGuard() {
   let revision = 0
 
