@@ -63,6 +63,10 @@ export function loadingPresentation(phase, context = {}) {
   }
 }
 
+export function messageSendTimeoutDisposition({socketConnected, channelState}) {
+  return socketConnected === true && channelState === "joined" ? "failed" : "reconcile"
+}
+
 export function createOperationGuard() {
   let generation = 0
 
