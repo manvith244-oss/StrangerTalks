@@ -171,7 +171,7 @@ async function assertCompactBottomNav(page, viewport) {
 
 async function assertCompactConversationCoexistence(page) {
   const nav = await assertOnePrimaryNav(page)
-  const composer = page.locator("#expressive-composer")
+  const composer = page.locator("#message-form")
   const input = page.locator("#message-input")
   await composer.waitFor({state: "visible"})
   await input.focus()
