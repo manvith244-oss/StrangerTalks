@@ -7,6 +7,7 @@ defmodule StrangertalksNew.MatchingRules do
   import Ecto.Query, warn: false
   alias StrangertalksNew.Repo
   alias StrangertalksNew.Conversation
+  alias StrangertalksNew.Conversations
   alias StrangertalksNew.Relationship
   alias StrangertalksNew.ParticipantActivityLock
   alias StrangertalksNew.ConversationLifecycle.{ConversationServer, Transitions}
@@ -92,19 +93,21 @@ defmodule StrangertalksNew.MatchingRules do
                 current_conversation = Repo.get!(Conversation, conversation_id)
 
                 with {:ok, block} <- insert_block(blocker_id, blocked_id, "CONVERSATION"),
-                     {:ok, _conversation} <-
-                       terminate_conversation_for_block(current_conversation, blocker_id) do
-                  block
+                     {:ok, terminal_conversation} <-
+                       terminate_conversation_for_block(current_conversation, blocker_id),
+                     {:ok, terminal_truth} <-
+                       Conversations.terminal_truth(terminal_conversation) do
+                  {block, terminal_truth}
                 else
                   {:error, reason} -> Repo.rollback(reason)
                 end
               end)
 
             case result do
-              {:ok, block} ->
+              {:ok, {block, terminal_truth}} ->
                 terminate_suspended_runtime(suspended_runtime)
                 stop_conversation_runtime(conversation_id)
-                broadcast_block_terminal_authority(conversation_id)
+                broadcast_terminal_authority(conversation_id, terminal_truth.client_event)
                 {:ok, block}
 
               {:error, reason} ->
@@ -145,11 +148,11 @@ defmodule StrangertalksNew.MatchingRules do
     })
   end
 
-  defp broadcast_block_terminal_authority(conversation_id) do
+  defp broadcast_terminal_authority(conversation_id, client_event) do
     StrangertalksNewWeb.Endpoint.broadcast(
       "conversation:#{conversation_id}",
       "conversation:ended",
-      %{status: "ended", reason: "blocked"}
+      client_event
     )
   end
 
