@@ -27,6 +27,11 @@ body:has(.screen.active:is(
   display: flex;
 }
 
+/* Conversation visual mode must not suppress the canonical F-01 primary nav. */
+body.st-chat-mode #bottom-nav.bottom-nav {
+  display: flex !important;
+}
+
 /* Active Conversation keeps its composer above the compact primary navigation. */
 @media (max-width: 61.999rem) {
   body:has([data-screen="conversation"].active) .conversation.active {
