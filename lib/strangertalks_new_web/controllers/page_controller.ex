@@ -6,7 +6,6 @@ defmodule StrangertalksNewWeb.PageController do
   @app_bootstrap_tag ~s(<script type="module" src="/assets/flow_loading_runtime.mjs?v=20260826_f07_v1"></script>)
   @viewport_tag ~s(<meta name="viewport" content="width=device-width, initial-scale=1">)
   @mobile_viewport_tag ~s(<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">)
-  @conversation_motion_tag ~s(<link rel="stylesheet" href="/assets/conversation_motion.css?v=20260829_v1">)
 
   def home(conn, _params), do: serve_client(conn)
 
@@ -22,7 +21,6 @@ defmodule StrangertalksNewWeb.PageController do
       Application.app_dir(:strangertalks_new, "priv/static/index.html")
       |> File.read!()
       |> String.replace(@viewport_tag, @mobile_viewport_tag)
-      |> String.replace("</head>", "    " <> @conversation_motion_tag <> "\n  </head>")
       |> String.replace(
         @app_bootstrap_tag,
         @route_runtime_tag <> "\n    " <> @mobile_runtime_tag <> "\n    " <> @app_bootstrap_tag
