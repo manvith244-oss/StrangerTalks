@@ -187,7 +187,31 @@ export function createNavigationHistory({history, location, getCanonicalSnapshot
 
   async function activityEvent(eventName) {
     const intentRevision = revision.begin()
-    const decision = resolveRuntimeActivityEvent(location.pathname, eventName)
+    const presentedRoute = parseRoute(location.pathname)
+    let decision = resolveRuntimeActivityEvent(location.pathname, eventName)
+
+    const terminalPath = eventName === "conversation_ended"
+      ? "/conversation/ended"
+      : eventName === "conversation_unavailable"
+        ? "/conversation/unavailable"
+        : null
+
+    if (
+      terminalPath &&
+      presentedRoute.valid &&
+      presentedRoute.path !== terminalPath &&
+      decision?.path === presentedRoute.path
+    ) {
+      const snapshot = await getCanonicalSnapshot()
+
+      if (!revision.current(intentRevision)) {
+        return {applied: false, stale: true, invalid: false, decision, historyMode: "none"}
+      }
+
+      if (snapshot && snapshot.canonical_state !== "CONVERSATION") {
+        decision = refreshResolution(terminalPath, snapshot)
+      }
+    }
 
     if (!revision.current(intentRevision)) {
       return {applied: false, stale: true, invalid: false, decision, historyMode: "none"}
