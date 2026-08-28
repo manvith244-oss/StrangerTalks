@@ -50,9 +50,9 @@ pg_restore --version
 
 echo "PHASE1_SOURCE_INVENTORY_BEGIN"
 source_inventory=$(PGSSLMODE=require psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -F $'\t' -c \
-  "WITH s AS (SELECT pg_database_size(current_database())::bigint AS bytes) SELECT current_database(), bytes, pg_size_pretty(bytes), 524288000::bigint, (524288000::bigint - bytes), round(bytes::numeric * 100 / 524288000::numeric, 4) FROM s;")
+  "WITH s AS (SELECT pg_database_size(current_database())::bigint AS bytes) SELECT current_database(), bytes, pg_size_pretty(bytes), 524288000::bigint, (524288000::bigint - bytes), round(bytes::numeric * 100 / 524288000::numeric, 4), current_setting('server_version') FROM s;")
 source_inventory_rc=$?
-printf 'database\tsize_bytes\tsize_pretty\tcap_bytes\tbytes_remaining\tpct_of_500mb_cap\n'
+printf 'database\tsize_bytes\tsize_pretty\tcap_bytes\tbytes_remaining\tpct_of_500mb_cap\tserver_version\n'
 printf '%s\n' "$source_inventory"
 echo "phase1_source_inventory_exit=$source_inventory_rc"
 if (( source_inventory_rc != 0 )); then status=1; fi
@@ -110,7 +110,8 @@ printf 'table\trows\n'
 cat "$source_counts"
 echo "PHASE1_SOURCE_ROW_COUNTS_END"
 
-constraint_sql="SELECT cls.relname || E'\\t' || con.conname || E'\\t' || con.contype::text || E'\\t' || regexp_replace(pg_get_constraintdef(con.oid, true), E'[\\n\\r\\t]+', ' ', 'g') FROM pg_constraint con JOIN pg_class cls ON cls.oid = con.conrelid JOIN pg_namespace ns ON ns.oid = cls.relnamespace WHERE ns.nspname = 'public' ORDER BY cls.relname, con.conname, con.contype, pg_get_constraintdef(con.oid, true);"
+constraint_sql="SELECT cls.relname || E'\\t' || con.conname || E'\\t' || con.contype::text || E'\\t' || replace(replace(regexp_replace(pg_get_constraintdef(con.oid, true), E'[\\n\\r\\t]+', ' ', 'g'), '::character varying::text', '::character varying'), '::text[]', '') FROM pg_constraint con JOIN pg_class cls ON cls.oid = con.conrelid JOIN pg_namespace ns ON ns.oid = cls.relnamespace WHERE ns.nspname = 'public' ORDER BY cls.relname, con.conname, con.contype, pg_get_constraintdef(con.oid, true);"
+echo "phase1_constraint_comparison=normalized_redundant_cross_version_text_casts"
 
 PGSSLMODE=require psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c "$constraint_sql" | sort >"$source_constraints"
 source_constraints_rc=${PIPESTATUS[0]}
@@ -240,19 +241,19 @@ echo "PHASE1_SCHEMA_MIGRATIONS_COMPARISON_END"
 
 echo "PHASE1_TARGET_SIZE_AFTER_RESTORE_BEGIN"
 PGSSLMODE=require psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -F $'\t' -c \
-  "WITH s AS (SELECT pg_database_size(current_database())::bigint AS bytes) SELECT current_database(), bytes, pg_size_pretty(bytes) FROM s;"
+  "WITH s AS (SELECT pg_database_size(current_database())::bigint AS bytes) SELECT current_database(), bytes, pg_size_pretty(bytes), current_setting('server_version') FROM s;"
 target_size_rc=$?
 echo "phase1_target_size_query_exit=$target_size_rc"
 if (( target_size_rc != 0 )); then status=1; fi
 echo "PHASE1_TARGET_SIZE_AFTER_RESTORE_END"
 
 echo "PHASE1_ECTO_POSTGREX_TLS_BEGIN"
-ecto_expr='Application.load(:strangertalks_new); config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo); IO.puts("phase1_ecto_ssl_config=#{inspect(Keyword.get(config, :ssl))}"); {:ok, _, _} = Ecto.Migrator.with_repo(StrangertalksNew.Repo, fn repo -> result = Ecto.Adapters.SQL.query!(repo, "SELECT current_database(), ssl, version, cipher, bits FROM pg_stat_ssl WHERE pid = pg_backend_pid()", []); IO.inspect(result.rows, label: "phase1_ecto_pg_stat_ssl"); case result.rows do [[database, true, tls_version, cipher, bits]] -> IO.puts("phase1_ecto_tls_negotiated=true database=#{database} tls_version=#{tls_version} cipher=#{cipher} bits=#{bits}"); other -> IO.puts("phase1_ecto_tls_negotiated=unconfirmed rows=#{inspect(other)}") end end)'
+ecto_expr='Application.load(:strangertalks_new); config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo); ssl_config = Keyword.get(config, :ssl); ssl_enabled = ssl_config == true or is_list(ssl_config); ssl_cacertfile = if is_list(ssl_config), do: Keyword.get(ssl_config, :cacertfile), else: nil; IO.puts("phase1_ecto_ssl_enabled=#{ssl_enabled}"); IO.puts("phase1_ecto_ssl_cacertfile=#{inspect(ssl_cacertfile)}"); {:ok, _, _} = Ecto.Migrator.with_repo(StrangertalksNew.Repo, fn repo -> result = Ecto.Adapters.SQL.query!(repo, "SELECT current_database(), ssl, version, cipher, bits FROM pg_stat_ssl WHERE pid = pg_backend_pid()", []); IO.inspect(result.rows, label: "phase1_ecto_pg_stat_ssl"); case result.rows do [[database, true, tls_version, cipher, bits]] -> IO.puts("phase1_ecto_tls_negotiated=true database=#{database} tls_version=#{tls_version} cipher=#{cipher} bits=#{bits}"); other -> IO.puts("phase1_ecto_tls_negotiated=unconfirmed rows=#{inspect(other)}") end end)'
 DATABASE_URL="$SUPABASE_DATABASE_URL" "$release_bin" eval "$ecto_expr" 2>&1 | tee "$workdir/ecto_tls.log"
 ecto_tls_rc=${PIPESTATUS[0]}
 echo "phase1_ecto_tls_exit=$ecto_tls_rc"
 if (( ecto_tls_rc != 0 )); then status=1; fi
-if ! grep -q '^phase1_ecto_ssl_config=true$' "$workdir/ecto_tls.log"; then
+if ! grep -q '^phase1_ecto_ssl_enabled=true$' "$workdir/ecto_tls.log"; then
   echo "phase1_ecto_ssl_config_proven=false"
   status=1
 else
