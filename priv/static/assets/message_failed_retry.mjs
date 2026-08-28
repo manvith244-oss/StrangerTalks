@@ -1,5 +1,6 @@
+import {Socket} from "/vendor/phoenix.mjs"
 import {getRecord, putRecord} from "./local_data.mjs"
-import {messageSendTimeoutDisposition} from "./flow_loading.mjs"
+import {messageSendTimeoutDisposition} from "./message_retry_policy.mjs"
 
 const retryableMessages = new Map()
 let retryInteractionInstalled = false
@@ -23,8 +24,7 @@ function messageNode(id) {
 }
 
 function normalizeDeliveryStatus(status) {
-  if (status === "sent_to_server") return "sent"
-  return status || "sent"
+  return status === "sent_to_server" ? "sent" : (status || "sent")
 }
 
 function renderState(id, state) {
@@ -55,11 +55,10 @@ async function persistState(entry, state, result = null) {
   const record = await getRecord(key).catch(() => null)
   if (!record || record.type !== "local_message" || !record.value?.mine || record.value?.type !== "text") return
 
-  const nextStatus = normalizeDeliveryStatus(state)
   const sequence = Number.isInteger(result?.sequence) ? result.sequence : record.value.sequence
   await putRecord({
     ...record,
-    value: {...record.value, delivery_status: nextStatus, sequence},
+    value: {...record.value, delivery_status: normalizeDeliveryStatus(state), sequence},
     updated_at: new Date().toISOString()
   }).catch(() => {})
 }
@@ -156,7 +155,7 @@ function installRetryInteraction() {
   })
 
   document.addEventListener("keydown", (event) => {
-    if (!new Set(["Enter", " "]).has(event.key)) return
+    if (event.key !== "Enter" && event.key !== " ") return
     const item = retryTarget(event)
     if (!item || event.target !== item) return
     event.preventDefault()
@@ -164,11 +163,23 @@ function installRetryInteraction() {
   })
 }
 
-export function installFailedTextMessageRetry(channel, originalPush) {
-  installRetryInteraction()
-  return function pushWithFailedTextRetry(event, payload = {}, timeout) {
+function patchConversationChannel(channel) {
+  if (channel.__failedTextRetryPatched) return channel
+  channel.__failedTextRetryPatched = true
+  const originalPush = channel.push.bind(channel)
+  channel.push = function(event, payload = {}, timeout) {
     const push = originalPush(event, payload, timeout)
     observeTextPush(channel, event, payload, push)
     return push
   }
+  return channel
+}
+
+installRetryInteraction()
+
+const originalSocketChannel = Socket.prototype.channel
+Socket.prototype.channel = function(topic, params) {
+  const channel = originalSocketChannel.call(this, topic, params)
+  if (typeof topic === "string" && topic.startsWith("conversation:")) return patchConversationChannel(channel)
+  return channel
 }
