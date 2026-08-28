@@ -191,7 +191,7 @@ test("failed text send retries in the same optimistic bubble", {timeout: 120_000
 
     await installFailedSendProbe(sender)
     await sender.locator('section[data-screen="conversation"].active #message-input').fill(text)
-    await sender.locator('section[data-screen="conversation"].active #message-form button.primary').click()
+    await sender.locator('section[data-screen="conversation"].active #message-form').getByRole("button", {name: "Send message"}).click()
 
     const senderRows = sender.locator("#messages li.message", {hasText: text})
     await senderRows.first().waitFor({state: "visible"})
