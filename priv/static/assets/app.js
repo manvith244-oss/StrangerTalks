@@ -39,6 +39,9 @@ import {
 } from "./live_call.mjs"
 import {ReflectionManager} from "./reflections.mjs"
 import {applyReconciliationIfCurrent, createSessionReconciliationGuard} from "./session_reconciliation_guard.mjs"
+import {parseRoute, routeNavigationPathForScreen} from "./route_contract.mjs"
+import {createRouteRuntimeState} from "./route_runtime.mjs"
+import {createNavigationHistory} from "./navigation_history.mjs"
 
 const identityKey = "strangertalks.identity.v1"
 const conversationLanguageKey = "strangertalks.conversation-language.v1"
@@ -129,17 +132,71 @@ function accountFetch(path, options = {}) {
 }
 
 function announce(message) { $("#status").textContent = message }
+
+function presentScreen(name) {
+  document.querySelectorAll("[data-screen]").forEach((node) => node.classList.toggle("active", node.dataset.screen === name))
+  $("#expressive-composer").hidden = name !== "conversation"
+  if (name !== "conversation") closeExpressivePicker(false)
+  if (name === "chats") renderChats()
+  if (name === "relationships") renderLocalViews()
+  if (name === "reflections") loadAndRenderReflections()
+}
+
+function updatePrimaryNavigation(primaryDestination) {
+  const destinationByScreen = {doors: "talk", chats: "chats", relationships: "bonds", settings: "you"}
+  document.querySelectorAll("#bottom-nav [data-go]").forEach((button) => {
+    const selected = destinationByScreen[button.dataset.go] === primaryDestination
+    if (selected) button.setAttribute("aria-current", "page")
+    else button.removeAttribute("aria-current")
+  })
+}
+
+function presentRoute(decision) {
+  const route = parseRoute(decision.path)
+  updatePrimaryNavigation(decision.primaryDestination)
+
+  if (decision.screen === "history" && route.valid && route.params?.conversationId) {
+    renderHistory(route.params.conversationId).catch(() => announce("This saved Conversation is not available on this device."))
+    return
+  }
+
+  presentScreen(decision.screen)
+}
+
+async function readCanonicalNavigationSnapshot() {
+  if (!app.participantJoined || !app.participant) return null
+  const response = await push(app.participant, "session:reconcile")
+  return response?.snapshot || null
+}
+
+let navigationInitialized = false
+const navigation = createNavigationHistory({
+  history,
+  location,
+  getCanonicalSnapshot: readCanonicalNavigationSnapshot,
+  applyRoute: presentRoute
+})
+
+async function initializeOrReconcileNavigation(snapshot) {
+  if (!navigationInitialized) {
+    navigationInitialized = true
+    return navigation.initialize({snapshot})
+  }
+  return navigation.reconcile(snapshot)
+}
+
+async function navigateToScreen(name, conversationId = null) {
+  const path = routeNavigationPathForScreen(name, conversationId)
+  if (!path) return {applied: false, invalid: true}
+  return navigation.navigate(path)
+}
+
 function show(name) {
   closeDisclosureDialog({restoreFocus: false})
   if (name !== "relationships") app.reconnectCountdown.stop()
   if (name !== "conversation") cancelReplyStaging()
-  document.querySelectorAll("[data-screen]").forEach((node) => node.classList.toggle("active", node.dataset.screen === name))
-  $("#expressive-composer").hidden = name !== "conversation"
-  if (name !== "conversation") closeExpressivePicker(false)
-  $("#bottom-nav").hidden = !["doors", "chats", "relationships", "settings"].includes(name)
-  if (name === "chats") renderChats()
-  if (name === "relationships") renderLocalViews()
-  if (name === "reflections") loadAndRenderReflections()
+  presentScreen(name)
+  $("#bottom-nav").hidden = !["doors", "chats", "relationships", "settings", "conversation"].includes(name)
 }
 
 function disclosureFocusables(dialog) {
@@ -301,9 +358,21 @@ function connectSocket() {
       bindQueueAttempt(null)
       show("doors")
     }
-    if (status === "queued" && queue_attempt_id) show("queue")
+    if (status === "queued" && queue_attempt_id) {
+      const currentRoute = parseRoute(location.pathname)
+      if (currentRoute.valid && currentRoute.kind === "talk") {
+        navigation.navigate("/matchmaking", {
+          snapshot: {canonical_state: "QUEUED", queue: {queue_attempt_id}}
+        }).catch(() => announce("Matchmaking navigation could not be applied."))
+      } else if (currentRoute.valid && currentRoute.kind === "matchmaking") {
+        presentScreen("queue")
+      }
+    }
   })
-  app.participant.on("match_found", (payload) => { handleMatchedConversation(payload).catch(() => announce("Reconnecting to the Conversation…")) })
+  app.participant.on("match_found", (payload) => {
+    navigation.activityEvent("match_found").catch(() => announce("Conversation navigation could not be applied."))
+    handleMatchedConversation(payload).catch(() => announce("Reconnecting to the Conversation…"))
+  })
   app.participant.on("transition:recovery_failed", () => {
     announce("That Conversation ended before it opened. Returning to Doors.")
     resumeLocalConversation().catch(() => show("doors"))
@@ -315,6 +384,7 @@ function connectSocket() {
   app.participant.join().receive("ok", async (response) => {
     app.participantJoined = true
     await reconcileWithServer(response?.snapshot)
+    await initializeOrReconcileNavigation(response?.snapshot)
     if (document.querySelector('[data-screen="relationships"]')?.classList.contains("active")) renderLocalViews()
   }).receive("error", (error) => {
     handleDomainError(error, {fallbackMessage: "Could not restore session. Please try again.", fallbackScreen: "doors"})
@@ -338,6 +408,7 @@ async function reconcileWithServer(snapshot, expectedRevision = null) {
     updateDoorLabels()
     await handleMatchedConversation({status: "matched", conversation_id: id})
   } else if (snapshot.canonical_state === "QUEUED" && snapshot.queue) {
+    if (app.conversation || app.conversationId) releaseConversationRuntime()
     bindQueueAttempt(snapshot.queue.queue_attempt_id)
     app.selectedDoor = doorLabelForBackend(snapshot.queue.door_type) || DOORS[0].label
     app.conversationLanguage = snapshot.queue.conversation_language
@@ -347,6 +418,7 @@ async function reconcileWithServer(snapshot, expectedRevision = null) {
     announce(`Looking for someone who chose ${app.selectedDoor} too.`)
     show("queue")
   } else {
+    if (app.conversation || app.conversationId) releaseConversationRuntime()
     bindQueueAttempt(null)
     const appliedRevision = app.sessionReconciliationGuard.capture()
     await invalidateStaleActiveConversations()
@@ -747,40 +819,57 @@ async function joinConversation(id) {
   const clientEpochId = cursorRecord?.value?.epoch_id || null
   const lastAppliedSequence = cursorRecord?.value?.last_applied_sequence || 0
 
-  app.conversation = app.socket.channel(`conversation:${id}`, {
-    epoch_id: clientEpochId,
-    last_applied_sequence: lastAppliedSequence
-  })
+  const channel = app.socket.channel(`conversation:${id}`, {
+  epoch_id: clientEpochId,
+  last_applied_sequence: lastAppliedSequence
+})
+  app.conversation = channel
+  const runtimeBindings = []
+  const runtimeIsCurrent = () => app.conversation === channel && app.conversationId === id
+  const onCurrent = (event, handler) => {
+    const ref = channel.on(event, (...args) => {
+      if (!runtimeIsCurrent()) return
+      return handler(...args)
+    })
+    runtimeBindings.push([event, ref])
+    return ref
+  }
+  channel.__f04ReleaseRuntimeBindings = () => {
+    for (const [event, ref] of runtimeBindings.splice(0)) {
+      try { channel.off(event, ref) } catch (_) {}
+    }
+  }
 
-  app.conversation.on("conversation:presence", ({status}) => {
+  onCurrent("conversation:presence", ({status}) => {
     updatePresenceDisplay(status)
     if (status === "connected") scrollTimelineToNewest()
   })
 
-  app.conversation.on("typing:status", ({typing}) => {
+  onCurrent("typing:status", ({typing}) => {
     $("#typing").textContent = typing ? "The other person is typing…" : ""
   })
 
-  app.conversation.on("message:new", async (message) => {
+  onCurrent("message:new", async (message) => {
     if (app.currentEpochId && message.epoch_id && message.epoch_id !== app.currentEpochId) return
     await renderMessage(message, false)
     await applyCanonicalMessageRevision(message, {source: "live"})
     await markCanonicalSequenceApplied(message.sequence)
   })
 
-  app.conversation.on("message:status", updateMessageStatus)
-  app.conversation.on("message:edited", (message) => applyCanonicalMessageRevision(message, {source: "live"}))
-  app.conversation.on("message:unsent", (message) => applyCanonicalMessageUnsent(message, {source: "live"}))
-  app.conversation.on("message:content_status", updateMessageContentStatus)
-  app.conversation.on("message:reaction", handleLiveReaction)
-  app.conversation.on("conversation:pins", (payload) => handleLivePins(payload, id))
-  app.conversation.on("conversation:icebreaker", applyCanonicalIcebreaker)
-  app.conversation.on("voice_note:new", async (note) => {
-    await receiveVoiceNote(note)
+  onCurrent("message:status", updateMessageStatus)
+  onCurrent("message:edited", (message) => applyCanonicalMessageRevision(message, {source: "live"}))
+  onCurrent("message:unsent", (message) => applyCanonicalMessageUnsent(message, {source: "live"}))
+  onCurrent("message:content_status", updateMessageContentStatus)
+  onCurrent("message:reaction", handleLiveReaction)
+  onCurrent("conversation:pins", (payload) => handleLivePins(payload, id))
+  onCurrent("conversation:icebreaker", applyCanonicalIcebreaker)
+  onCurrent("voice_note:new", async (note) => {
+    await receiveVoiceNote(note, {conversationId: id, channel, isCurrent: runtimeIsCurrent})
+    if (!runtimeIsCurrent()) return
     await markCanonicalSequenceApplied(note.sequence)
   })
-  app.conversation.on("voice_note:status", updateVoiceNoteStatus)
-  app.conversation.on("view_once:viewed", (payload) => {
+  onCurrent("voice_note:status", updateVoiceNoteStatus)
+  onCurrent("view_once:viewed", (payload) => {
     updateViewOnceState(
       payload.client_message_id || payload.message_id,
       payload.view_once_state || "viewed",
@@ -788,7 +877,7 @@ async function joinConversation(id) {
       payload.presentation_limit
     )
   })
-  app.conversation.on("view_once:unavailable", (payload) => {
+  onCurrent("view_once:unavailable", (payload) => {
     updateViewOnceState(
       payload.client_message_id || payload.message_id,
       "unavailable",
@@ -797,25 +886,26 @@ async function joinConversation(id) {
     )
   })
   const coord = initLiveCallCoordinator()
-  coord.setChannel(app.conversation)
+  coord.setChannel(channel)
   coord.setParticipantId(app.identity?.participant_id)
   coord.setConversationId(id)
 
-  app.conversation.on("call:incoming", (payload) => coord.handleIncomingCall(payload))
-  app.conversation.on("call:accepted", (payload) => coord.handleCallAccepted(payload))
-  app.conversation.on("call:ended", (payload) => coord.handleCallEnded(payload))
-  app.conversation.on("call:mute_changed", (payload) => coord.handleMuteChanged(payload))
-  app.conversation.on("call:effect_changed", (payload) => coord.handleEffectChanged(payload))
-  app.conversation.on("call:signal", (payload) => coord.handleSignal(payload))
-  app.conversation.on("call:media_requested", (payload) => coord.handleMediaRequested(payload))
-  app.conversation.on("call:media_updated", (payload) => coord.handleMediaUpdated(payload))
-  app.conversation.on("call:media_declined", (payload) => coord.handleMediaDeclined(payload))
-  app.conversation.on("call:reveal_ready", (payload) => coord.handleRevealReady(payload))
-  app.conversation.on("call:reveal_committed", (payload) => coord.handleRevealCommitted(payload))
-  app.conversation.on("call:reaction", (payload) => coord.handleReaction(payload))
+  onCurrent("call:incoming", (payload) => coord.handleIncomingCall(payload))
+  onCurrent("call:accepted", (payload) => coord.handleCallAccepted(payload))
+  onCurrent("call:ended", (payload) => coord.handleCallEnded(payload))
+  onCurrent("call:mute_changed", (payload) => coord.handleMuteChanged(payload))
+  onCurrent("call:effect_changed", (payload) => coord.handleEffectChanged(payload))
+  onCurrent("call:signal", (payload) => coord.handleSignal(payload))
+  onCurrent("call:media_requested", (payload) => coord.handleMediaRequested(payload))
+  onCurrent("call:media_updated", (payload) => coord.handleMediaUpdated(payload))
+  onCurrent("call:media_declined", (payload) => coord.handleMediaDeclined(payload))
+  onCurrent("call:reveal_ready", (payload) => coord.handleRevealReady(payload))
+  onCurrent("call:reveal_committed", (payload) => coord.handleRevealCommitted(payload))
+  onCurrent("call:reaction", (payload) => coord.handleReaction(payload))
 
-  app.conversation.on("conversation:ended", async () => {
+  onCurrent("conversation:ended", async () => {
     if (app.conversationId !== id) return
+    clearConversationTypingRuntime()
     app.liveCall?.teardown()
     closeViewOnceModal()
     clearViewOncePreview()
@@ -830,7 +920,7 @@ async function joinConversation(id) {
     const composerInput = $("#message-input")
     if (composerInput) {
       composerInput.value = ""
-      composerInput.dispatchEvent(new Event("input", {bubbles: true}))
+      renderPromptDraftAvailability()
     }
     resetPinnedMessages()
     app.peerPresence = null
@@ -843,17 +933,21 @@ async function joinConversation(id) {
     resetAvatars()
     app.messageAvailability.clear()
     await markConversationEnded()
-    show("ended")
+    await navigation.activityEvent("conversation_ended")
     $("#consent")?.focus()
     announce("Conversation ended. Choose what this device should retain.")
   })
 
-  app.conversation.join()
+  channel.join()
     .receive("ok", async (syncPayload) => {
+      if (!runtimeIsCurrent()) { releaseConversationChannel(channel); return }
       await ensureTemporaryConversation(id)
+      if (!runtimeIsCurrent()) return
       await renderCachedConversation(id)
+      if (!runtimeIsCurrent()) return
       if (syncPayload) {
         await applySyncPayload(id, syncPayload)
+        if (!runtimeIsCurrent()) return
       }
       updateLocalConnection("connected")
       app.ambient?.setConversationActive(true)
@@ -864,6 +958,8 @@ async function joinConversation(id) {
       announce("Conversation joined.")
     })
     .receive("error", async (error) => {
+      if (!runtimeIsCurrent()) { releaseConversationChannel(channel); return }
+      releaseConversationRuntime({conversationId: id, channel})
       cancelMessageEdit({restoreFocus: false})
       closeMessageUnsend({restoreFocus: false})
       app.matchedTransition.release(id)
@@ -884,6 +980,7 @@ async function joinConversation(id) {
 async function handleMatchedConversation(payload, relationshipId = null) {
   const conversationId = app.matchedTransition.claim(payload)
   if (!conversationId) return
+  if (app.conversation || app.conversationId) releaseConversationRuntime()
   markConversationAuthorityTransition()
   app.queueAttemptId = null
   cancelMessageEdit({restoreFocus: false})
@@ -951,6 +1048,35 @@ function reportCurrentVisibility() {
   if (!app.conversation) return
   const visibility = document.visibilityState === "hidden" ? "hidden" : "visible"
   push(app.conversation, "session:visibility", {visibility}).catch(() => {})
+}
+
+function clearConversationTypingRuntime() {
+  clearTimeout(app.typingTimer)
+  app.typingTimer = null
+  const typing = $("#typing")
+  if (typing) typing.textContent = ""
+}
+
+const releasedConversationChannels = new WeakSet()
+
+function releaseConversationChannel(channel) {
+  if (!channel || releasedConversationChannels.has(channel)) return
+  releasedConversationChannels.add(channel)
+  try { channel.__f04ReleaseRuntimeBindings?.() } catch (_) {}
+  try { channel.leave() } catch (_) {}
+}
+
+function releaseConversationRuntime({conversationId = app.conversationId, channel = app.conversation} = {}) {
+  const targetsCurrent = Boolean(conversationId || channel) && app.conversation === channel && app.conversationId === conversationId
+  if (targetsCurrent) {
+    clearConversationTypingRuntime()
+    app.conversation = null
+    app.conversationId = null
+    app.currentEpochId = null
+    app.matchedTransition.release(conversationId)
+  }
+  releaseConversationChannel(channel)
+  return targetsCurrent
 }
 
 function isQuietModeActive() {
@@ -2769,28 +2895,36 @@ function createVoicePlayerControls(audio, declaredDurationMs = 0) {
   return controls
 }
 
-async function receiveVoiceNote(note) {
+async function receiveVoiceNote(note, runtime = null) {
+  const conversationId = runtime?.conversationId || app.conversationId
+  const channel = runtime?.channel || app.conversation
+  const runtimeIsCurrent = runtime?.isCurrent || (() => app.conversationId === conversationId && app.conversation === channel)
+  if (!runtimeIsCurrent()) return
   if (note?.epoch_id && app.currentEpochId && note.epoch_id !== app.currentEpochId) return
   const shouldFollow = timelineNearBottom()
-  const id = `voice:${app.conversationId}:${note.voice_note_id}`
+  const id = `voice:${conversationId}:${note.voice_note_id}`
   const existing = await getRecord(id)
+  if (!runtimeIsCurrent()) return
   if (existing?.value.blob) {
     renderVoiceNoteNode(existing.value, $("#messages"), false)
-    await push(app.conversation, "voice_note:ack", {voice_note_id: note.voice_note_id})
+    await push(channel, "voice_note:ack", {voice_note_id: note.voice_note_id})
     return
   }
 
   try {
-    const response = await fetch(`/api/conversations/${app.conversationId}/voice-notes/${note.voice_note_id}`, {headers: {authorization: `Bearer ${app.identity.token}`}})
+    const response = await fetch(`/api/conversations/${conversationId}/voice-notes/${note.voice_note_id}`, {headers: {authorization: `Bearer ${app.identity.token}`}})
+    if (!runtimeIsCurrent()) return
     if (!response.ok) throw new Error("download_failed")
     const blob = await response.blob()
+    if (!runtimeIsCurrent()) return
     if (!validVoiceBlob(blob)) throw new Error("invalid_voice_note")
-    const record = localVoiceNote({conversation_id: app.conversationId, voice_note_id: note.voice_note_id, blob, mine: false, delivery_status: "delivered", sent_at: note.timestamp, sequence: note.sequence, duration_ms: note.duration_ms, byte_size: note.byte_size, media_type: note.media_type})
-    try { await putRecord(record) } catch { announce("Voice note received, but it may not survive refresh because local storage is unavailable.") }
+    const record = localVoiceNote({conversation_id: conversationId, voice_note_id: note.voice_note_id, blob, mine: false, delivery_status: "delivered", sent_at: note.timestamp, sequence: note.sequence, duration_ms: note.duration_ms, byte_size: note.byte_size, media_type: note.media_type})
+    try { await putRecord(record) } catch { if (runtimeIsCurrent()) announce("Voice note received, but it may not survive refresh because local storage is unavailable.") }
+    if (!runtimeIsCurrent()) return
     renderVoiceNoteNode(record.value, $("#messages"), false)
-    requestAnimationFrame(() => { if (shouldFollow) scrollTimelineToNewest({smooth: true}); else $("#new-messages").hidden = false })
-    await push(app.conversation, "voice_note:ack", {voice_note_id: note.voice_note_id})
-  } catch { announce("A voice note could not be downloaded before it expired.") }
+    requestAnimationFrame(() => { if (!runtimeIsCurrent()) return; if (shouldFollow) scrollTimelineToNewest({smooth: true}); else $("#new-messages").hidden = false })
+    await push(channel, "voice_note:ack", {voice_note_id: note.voice_note_id})
+  } catch { if (runtimeIsCurrent()) announce("A voice note could not be downloaded before it expired.") }
 }
 
 function updateVoiceNoteStatus({voice_note_id, status, epoch_id}) {
@@ -3377,6 +3511,7 @@ async function applyRetention(choice, summaryText) {
   await replaceRecords(next)
   if (["kept", "summary_only"].includes(choice)) { await offerContinuity(); await maybeAutoSync() }
   releaseAllVoiceUrls()
+  releaseConversationRuntime()
   app.conversationId = null
   if (choice === "kept") show("chats"); else show("doors")
 }
@@ -3496,15 +3631,19 @@ function scrollHistoryToNewest() {
   requestAnimationFrame(() => $("#history-messages").lastElementChild?.scrollIntoView({block: "end", behavior: "auto"}))
 }
 
-async function openHistory(conversationId) {
+async function renderHistory(conversationId) {
   app.historyConversationId = conversationId; app.rendered.clear(); releaseAllVoiceUrls(); $("#history-messages").replaceChildren()
   const records = await listRecords(); const conversation = records.find(({id}) => id === `conversation:${conversationId}`)
   $("#history-title").textContent = conversation.value.display_door
   const ribbon = signatureRibbon(conversation.value.abstract_signature_seed); $("#history-signature").replaceWith(ribbon); ribbon.id = "history-signature"
   chronologicalTimeline(records.filter((record) => ["local_message", "local_voice_note"].includes(record.type) && record.value.conversation_id === conversationId)).forEach((record) => record.type === "local_voice_note" ? renderVoiceNoteNode(record.value, $("#history-messages"), true) : renderMessageNode(record.value, record.value.mine, $("#history-messages")))
   $("#history-summary").value = records.find(({id}) => id === `summary:${conversationId}`)?.value.text || ""
-  show("history")
+  presentScreen("history")
   scrollHistoryToNewest()
+}
+
+async function openHistory(conversationId) {
+  return navigateToScreen("history", conversationId)
 }
 
 function releaseVoiceUrl(voiceNoteId) {
@@ -3896,8 +4035,14 @@ async function sendExpressive(expressiveId) {
 
 initializeLifetimePresentation()
 
+const initialNavigationRuntimeState = createRouteRuntimeState(location.pathname)
+if (!initialNavigationRuntimeState.requiresCanonicalReadiness) {
+  initializeOrReconcileNavigation(null).catch(() => announce("Navigation could not be initialized."))
+}
+
 DOORS.forEach((door) => { const button = document.createElement("button"); button.className = "door"; button.type = "button"; button.dataset.door = door.value; button.setAttribute("aria-pressed", "false"); const mark = document.createElement("i"); mark.className = "door-mark"; mark.setAttribute("aria-hidden", "true"); const title = document.createElement("strong"); title.textContent = door.label; const description = document.createElement("span"); description.textContent = door.description; button.append(mark, title, description); button.addEventListener("click", () => { document.querySelectorAll(".door").forEach((node) => node.setAttribute("aria-pressed", String(node === button))); startMatchingFor(door.label) }); $("#doors").append(button) })
-document.addEventListener("click", (event) => { const target = event.target.closest("[data-go]"); if (target) show(target.dataset.go) })
+document.addEventListener("click", (event) => { const target = event.target.closest("[data-go]"); if (target) navigateToScreen(target.dataset.go).catch(() => announce("Navigation could not be completed.")) })
+window.addEventListener("popstate", () => { navigation.popstate().catch(() => announce("Navigation could not be restored.")) })
 const joinQueueBtn = $("#join-queue"); if (joinQueueBtn) joinQueueBtn.addEventListener("click", () => startMatchingFor(app.selectedDoor))
 $("#leave-queue").addEventListener("click", async () => {
   try {
@@ -4093,7 +4238,21 @@ $("#prompt-helper")?.addEventListener("keydown", (event) => {
     closePromptCards()
   }
 })
-$("#message-input").addEventListener("input", () => { renderPromptDraftAvailability(); push(app.conversation, "typing:start").catch(() => {}); clearTimeout(app.typingTimer); app.typingTimer = setTimeout(() => push(app.conversation, "typing:stop").catch(() => {}), 1500) })
+$("#message-input").addEventListener("input", () => {
+  renderPromptDraftAvailability()
+  const conversation = app.conversation
+  if (!conversation || !app.conversationId) {
+    clearConversationTypingRuntime()
+    return
+  }
+  push(conversation, "typing:start").catch(() => {})
+  clearTimeout(app.typingTimer)
+  app.typingTimer = setTimeout(() => {
+    if (app.conversation !== conversation || !app.conversationId) return
+    app.typingTimer = null
+    push(conversation, "typing:stop").catch(() => {})
+  }, 1500)
+})
 $("#voice-start").addEventListener("click", requestVoiceRecording)
 $("#voice-warning-help").addEventListener("click", () => { $("#voice-warning").hidden = false })
 $("#voice-warning-cancel").addEventListener("click", () => { $("#voice-warning").hidden = true })
@@ -4696,4 +4855,4 @@ languageSelect.addEventListener("change", () => {
   else localStorage.removeItem(conversationLanguageKey)
 })
 
-ensureBootstrap().then(async () => { const settings = await getRecord("settings:privacy"); if (settings?.value.reduced_motion) { $("#reduced-motion").checked = true; document.body.classList.add("reduce-motion") } const accountResult = new URLSearchParams(location.search).get("account"); if (accountResult === "connected" && app.account.connected) await restoreFromGoogle(true).catch(() => announce("Connected privately. Unlock encrypted sync from You when you are ready.")); if (accountResult) history.replaceState({}, "", "/") }).catch(() => announce("StrangerTalks could not start. Please reload."))
+ensureBootstrap().then(async () => { const settings = await getRecord("settings:privacy"); if (settings?.value.reduced_motion) { $("#reduced-motion").checked = true; document.body.classList.add("reduce-motion") } const accountResult = new URLSearchParams(location.search).get("account"); if (accountResult === "connected" && app.account.connected) await restoreFromGoogle(true).catch(() => announce("Connected privately. Unlock encrypted sync from You when you are ready.")); if (accountResult) history.replaceState(history.state, "", location.pathname) }).catch(() => announce("StrangerTalks could not start. Please reload."))

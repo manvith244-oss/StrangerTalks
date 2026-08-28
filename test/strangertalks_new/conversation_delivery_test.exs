@@ -548,7 +548,9 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
     assert_receive {:conversation_message, %{message_id: ^message_id}}
     assert_receive {:conversation_message_status, %{message_id: ^message_id}}
 
-    deleted_conversation = Repo.delete!(context.conversation)
+    canonical_conversation = Repo.get!(Conversation, conversation_id)
+    assert canonical_conversation.conversation_status == :ACTIVE
+    deleted_conversation = Repo.delete!(canonical_conversation)
     {:ok, pid} = ConversationServer.lookup(conversation_id)
     :ok = ConversationServer.trigger_safety_terminate(conversation_id)
     _ = :sys.get_state(pid)

@@ -54,17 +54,17 @@ defmodule StrangertalksNewWeb.GoogleAuthController do
       conn
       |> delete_session(:google_oauth_nonce)
       |> put_account_cookie(result.raw_token)
-      |> redirect(to: "/?account=connected")
+      |> redirect(to: "/you?account=connected")
     else
       {:error, :existing_account_available} ->
-        redirect(conn, to: "/?account=existing_account_available")
+        redirect(conn, to: "/you?account=existing_account_available")
 
       _ ->
-        redirect(conn, to: "/?account=google_connection_failed")
+        redirect(conn, to: "/you?account=google_connection_failed")
     end
   end
 
-  def callback(conn, _params), do: redirect(conn, to: "/?account=google_connection_failed")
+  def callback(conn, _params), do: redirect(conn, to: "/you?account=google_connection_failed")
 
   def cookie_name, do: @cookie
 

@@ -145,6 +145,20 @@ async function uiWaitForEnded(page) {
   await page.waitForSelector('section[data-screen="ended"].active', {timeout: 15_000})
 }
 
+async function uiOpenMessageTools(page) {
+  await page.click(".ig-compose-plus")
+  await page.waitForFunction(() => {
+    const form = document.querySelector("#message-form")
+    const tray = document.querySelector("#ig-message-tools")
+    return form?.classList.contains("ig-tray-open") && tray && getComputedStyle(tray).display !== "none"
+  })
+}
+
+async function uiOpenConversationInfo(page) {
+  await page.click(".conversation-head-actions .overflow summary")
+  await page.waitForFunction(() => document.querySelector(".conversation-head-actions .overflow")?.open === true)
+}
+
 async function uiMatch(pageA, pageB) {
   await Promise.all([prepareUiPage(pageA), prepareUiPage(pageB)])
   await Promise.all([uiJoinQueue(pageA), uiJoinQueue(pageB)])
@@ -297,26 +311,47 @@ test("real UI Block collapses local transient authority and stale Conversation A
     await Promise.all([a1, a2, a3, a4].map((page) => page.waitForSelector("#messages .message:not(.mine)")))
 
     await a1.fill("#message-input", "draft must lose send authority")
+    await a1.hover("#messages .message:not(.mine)")
     await a1.click("#messages .message:not(.mine) .reply-action-btn")
     await a1.waitForSelector("#reply-staging:not([hidden])")
 
+    await a2.hover("#messages .message:not(.mine)")
     await a2.click("#messages .message:not(.mine) .react-action-btn")
     await a2.waitForSelector(".reaction-picker")
 
+    await uiOpenMessageTools(a3)
     await a3.click("#expressive-open")
     await a3.waitForSelector("#expressive-picker:not([hidden])")
     await a3.click("#prompt-control")
     await a3.waitForSelector("#prompt-helper:not([hidden])")
 
+    await uiOpenConversationInfo(a4)
     await a4.click("#report-open")
     await a4.waitForSelector("#report-form:not([hidden])")
-    await a4.selectOption("#report-category", {label: "SPAM"})
+    await a4.selectOption("#report-category", "SPAM")
     await a4.fill("#report-evidence", "report then block")
     await a4.click('#report-form button[type="submit"], #report-form .primary')
     await a4.waitForFunction(() => document.querySelector("#status")?.textContent.includes("Report submitted"), null, {timeout: 10_000})
+
+    const secondReportState = await a4.evaluate(() => ({
+      overflowOpen: document.querySelector(".conversation-head-actions .overflow")?.open ?? null,
+      activeScreen: document.querySelector("[data-screen].active")?.dataset.screen ?? null,
+      reportFormHidden: document.querySelector("#report-form")?.hidden ?? null
+    }))
+    secondReportState.reportOpenVisible = await a4.locator("#report-open").isVisible()
+    console.log("TEAM2_SECOND_REPORT_STATE", JSON.stringify(secondReportState))
+    assert.deepEqual(secondReportState, {
+      overflowOpen: false,
+      activeScreen: "conversation",
+      reportFormHidden: true,
+      reportOpenVisible: false
+    })
+
+    await uiOpenConversationInfo(a4)
     await a4.click("#report-open")
     await a4.waitForSelector("#report-form:not([hidden])")
 
+    await uiOpenConversationInfo(a1)
     a1.once("dialog", (dialog) => dialog.accept())
     await a1.click("#block")
     await Promise.all([a1, a2, a3, a4, b].map(uiWaitForEnded))
@@ -327,7 +362,12 @@ test("real UI Block collapses local transient authority and stale Conversation A
     assert.equal(await a3.locator("#expressive-picker").isHidden(), true)
     assert.equal(await a3.locator("#prompt-helper").isHidden(), true)
     assert.equal(await a4.locator("#report-form").isHidden(), true)
-    assert.equal(await a1.evaluate(() => document.activeElement?.id), "consent")
+
+    const immediateEndedFocus = await a1.evaluate(() => document.activeElement?.id || "")
+    await a1.waitForFunction(() => document.activeElement?.id === "consent", null, {timeout: 2_000})
+    const settledEndedFocus = await a1.evaluate(() => document.activeElement?.id || "")
+    console.log("TEAM2_ENDED_FOCUS_STATE", JSON.stringify({immediateEndedFocus, settledEndedFocus}))
+    assert.equal(settledEndedFocus, "consent")
 
     // A now enters a completely new Conversation with C.
     await a1.click("#fade-conversation")

@@ -1,3 +1,13 @@
+import {Socket} from "/vendor/phoenix.mjs"
+import {installCanonicalIndexedDB} from "./f11_local_store.mjs"
+import {installF11Runtime} from "./f11_persistence_runtime.mjs"
+
+// F-11 persistence must be established before app.js performs bootstrap reads.
+// This installs only the browser-storage boundary; it does not decide routes,
+// Matchmaking state, or Conversation lifecycle.
+installCanonicalIndexedDB(globalThis)
+installF11Runtime({SocketClass: Socket})
+
 export function createSessionReconciliationGuard() {
   let revision = 0
 

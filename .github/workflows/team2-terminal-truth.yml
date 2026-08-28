@@ -99,6 +99,9 @@ jobs:
         run: |
           set -euo pipefail
           mix test \
+            test/strangertalks_new/st_work_d_terminal_truth_test.exs \
+            test/strangertalks_new/conversation_isolation_test.exs \
+            test/strangertalks_new/team3_recovery_coordination_test.exs \
             test/strangertalks_new/terminal_persistence_failure_test.exs \
             test/strangertalks_new/team4_safety_boundary_test.exs \
             test/strangertalks_new/recovery_restart_test.exs \
@@ -118,13 +121,13 @@ jobs:
             test/js/session_reconciliation_guard_test.mjs \
             test/js/live_call_test.mjs \
             test/js/voice_notes_test.mjs \
-            test/js/view_once_test.mjs \
             test/js/reply_quote_test.mjs \
             test/js/reaction_test.mjs \
             test/js/message_edit_test.mjs \
             test/js/message_unsend_test.mjs \
             test/js/pin_test.mjs \
             test/js/expressive_media_test.mjs
+          node --import ./test/js/browser_module_harness.mjs --test test/js/view_once_test.mjs
 
       - name: Prepare isolated browser terminal database
         env:

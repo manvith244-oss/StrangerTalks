@@ -1,3 +1,4 @@
+import "./desktop_flow.mjs"
 import {Socket} from "/vendor/phoenix.mjs"
 import {getRecord} from "./local_data.mjs"
 
@@ -17,10 +18,14 @@ let currentConversationId = null
 let conversationGeneration = 0
 let stickerPickerAuthority = null
 
+function resetBrowserExpressionPresentation() {
+  stickerPickerAuthority = null
+}
+
 function terminateBrowserExpressionAuthority() {
   conversationGeneration += 1
   currentConversationId = null
-  stickerPickerAuthority = null
+  resetBrowserExpressionPresentation()
 }
 
 if (!Socket.prototype.__team10GifAuthorityPatched) {
@@ -30,9 +35,16 @@ if (!Socket.prototype.__team10GifAuthorityPatched) {
   Socket.prototype.channel = function(topic, params) {
     const channel = originalChannel.call(this, topic, params)
     if (typeof topic === "string" && topic.startsWith("conversation:")) {
+      const conversationId = topic.slice("conversation:".length)
       conversationGeneration += 1
-      currentConversationId = topic.slice("conversation:".length)
-      stickerPickerAuthority = null
+      currentConversationId = conversationId
+      resetBrowserExpressionPresentation()
+      const generation = conversationGeneration
+      channel.on("conversation:ended", () => {
+        if (currentConversationId === conversationId && conversationGeneration === generation) {
+          terminateBrowserExpressionAuthority()
+        }
+      })
     }
     return channel
   }
@@ -80,7 +92,7 @@ document.addEventListener("click", (event) => {
 const expressiveComposer = document.querySelector("#expressive-composer")
 if (expressiveComposer) {
   new MutationObserver(() => {
-    if (expressiveComposer.hidden) terminateBrowserExpressionAuthority()
+    if (expressiveComposer.hidden) resetBrowserExpressionPresentation()
   }).observe(expressiveComposer, {attributes: true, attributeFilter: ["hidden"]})
 }
 

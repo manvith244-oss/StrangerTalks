@@ -1,0 +1,223 @@
+import assert from "node:assert/strict"
+import {readFile} from "node:fs/promises"
+import test from "node:test"
+
+const contract = await import("../../priv/static/assets/route_contract.mjs")
+const runtime = await import("../../priv/static/assets/route_runtime.mjs")
+
+const {
+  CANONICAL_ROUTE_PATTERNS,
+  parseRoute,
+  resolveActivityEventRoute,
+  resolveRequestedRoute,
+  screenForRoute
+} = contract
+const {createRouteRuntimeState, refreshResolution} = runtime
+
+const UUID = "123e4567-e89b-42d3-a456-426614174000"
+
+const STATIC_ROUTES = [
+  ["/", "doors"],
+  ["/matchmaking", "queue"],
+  ["/conversation", "conversation"],
+  ["/conversation/ended", "ended"],
+  ["/conversation/unavailable", "unrecoverable"],
+  ["/chats", "chats"],
+  ["/bonds", "relationships"],
+  ["/you", "settings"],
+  ["/you/memories", "memories"],
+  ["/you/reflections", "reflections"]
+]
+
+const queued = {canonical_state: "QUEUED", queue: {queue_attempt_id: "attempt-1"}}
+const active = {canonical_state: "CONVERSATION", conversation: {conversation_id: UUID}}
+const idle = {canonical_state: "IDLE"}
+const available = {canonical_state: "AVAILABLE"}
+
+test("frozen route table parses to the existing product screens", () => {
+  assert.equal(CANONICAL_ROUTE_PATTERNS.length, 11)
+
+  for (const [path, screen] of STATIC_ROUTES) {
+    const route = parseRoute(path)
+    assert.equal(route.valid, true, path)
+    assert.equal(route.path, path)
+    assert.equal(screenForRoute(route), screen, path)
+  }
+
+  const detail = parseRoute(`/chats/${UUID}`)
+  assert.equal(detail.valid, true)
+  assert.equal(detail.path, `/chats/${UUID}`)
+  assert.equal(detail.params.conversationId, UUID)
+  assert.equal(screenForRoute(detail), "history")
+})
+
+test("route parser rejects non-canonical aliases, active-id URLs, and malformed saved Conversation ids", () => {
+  for (const path of [
+    "/matching",
+    "/settings",
+    "/settings/memories",
+    "/talk",
+    "/home",
+    "/language",
+    "/door",
+    "/match-found",
+    "/conversation/123",
+    `/conversation/${UUID}`,
+    "/chats/not-a-uuid",
+    "/unknown"
+  ]) {
+    assert.equal(parseRoute(path).valid, false, path)
+  }
+})
+
+test("one trailing slash canonicalizes without creating a second route", () => {
+  const you = parseRoute("/you/")
+  assert.equal(you.valid, true)
+  assert.equal(you.path, "/you")
+  assert.equal(you.needsCanonicalReplace, true)
+
+  const detail = parseRoute(`/chats/${UUID}/`)
+  assert.equal(detail.valid, true)
+  assert.equal(detail.path, `/chats/${UUID}`)
+  assert.equal(detail.needsCanonicalReplace, true)
+
+  assert.equal(parseRoute("/you//").valid, false)
+})
+
+test("QUEUED activity may coexist with another valid route", () => {
+  assert.equal(resolveRequestedRoute(parseRoute("/"), queued).path, "/")
+  assert.equal(resolveRequestedRoute(parseRoute("/you"), queued).path, "/you")
+  assert.equal(resolveRequestedRoute(parseRoute("/chats"), queued).path, "/chats")
+  assert.equal(resolveRequestedRoute(parseRoute("/bonds"), queued).path, "/bonds")
+  assert.equal(resolveRequestedRoute(parseRoute("/matchmaking"), queued).path, "/matchmaking")
+})
+
+test("ACTIVE text Conversation activity may coexist with another permitted route", () => {
+  assert.equal(resolveRequestedRoute(parseRoute("/"), active).path, "/")
+  assert.equal(resolveRequestedRoute(parseRoute("/you"), active).path, "/you")
+  assert.equal(resolveRequestedRoute(parseRoute("/chats"), active).path, "/chats")
+  assert.equal(resolveRequestedRoute(parseRoute("/bonds"), active).path, "/bonds")
+  assert.equal(resolveRequestedRoute(parseRoute("/conversation"), active).path, "/conversation")
+})
+
+test("activity-specific routes validate authority without taking over unrelated routes", () => {
+  for (const nonQueued of [idle, available]) {
+    assert.deepEqual(resolveRequestedRoute(parseRoute("/matchmaking"), nonQueued), {
+      path: "/",
+      screen: "doors",
+      replace: true,
+      reason: "matchmaking_not_queued"
+    })
+  }
+
+  assert.deepEqual(resolveRequestedRoute(parseRoute("/matchmaking"), active), {
+    path: "/conversation",
+    screen: "conversation",
+    replace: true,
+    reason: "matchmaking_advanced_to_conversation"
+  })
+
+  for (const noConversation of [idle, available, queued]) {
+    assert.deepEqual(resolveRequestedRoute(parseRoute("/conversation"), noConversation), {
+      path: "/conversation/unavailable",
+      screen: "unrecoverable",
+      replace: true,
+      reason: "conversation_not_available"
+    })
+  }
+})
+
+test("terminal and unavailable Conversation routes remain canonical locations", () => {
+  for (const path of ["/conversation/ended", "/conversation/unavailable"]) {
+    const resolved = resolveRequestedRoute(parseRoute(path), idle)
+    assert.equal(resolved.path, path)
+    assert.equal(resolved.replace, false)
+  }
+})
+
+test("activity events only move activity-owned routes", () => {
+  assert.equal(resolveActivityEventRoute(parseRoute("/matchmaking"), "match_found").path, "/conversation")
+  assert.equal(resolveActivityEventRoute(parseRoute("/you"), "match_found").path, "/you")
+  assert.equal(resolveActivityEventRoute(parseRoute("/chats"), "match_found").path, "/chats")
+
+  const slashYou = resolveActivityEventRoute(parseRoute("/you/"), "match_found")
+  assert.equal(slashYou.path, "/you")
+  assert.equal(slashYou.reason, "canonical_trailing_slash")
+
+  assert.equal(resolveActivityEventRoute(parseRoute("/conversation"), "conversation_ended").path, "/conversation/ended")
+  assert.equal(resolveActivityEventRoute(parseRoute("/you"), "conversation_ended").path, "/you")
+  assert.equal(resolveActivityEventRoute(parseRoute("/chats"), "conversation_ended").path, "/chats")
+
+  assert.equal(resolveActivityEventRoute(parseRoute("/conversation"), "conversation_unavailable").path, "/conversation/unavailable")
+  assert.equal(resolveActivityEventRoute(parseRoute("/you"), "conversation_unavailable").path, "/you")
+})
+
+test("refresh resolution covers every frozen canonical route", () => {
+  const cases = [
+    ["/", queued, "/"],
+    ["/matchmaking", queued, "/matchmaking"],
+    ["/conversation", active, "/conversation"],
+    ["/conversation/ended", idle, "/conversation/ended"],
+    ["/conversation/unavailable", idle, "/conversation/unavailable"],
+    ["/chats", active, "/chats"],
+    [`/chats/${UUID}`, queued, `/chats/${UUID}`],
+    ["/bonds", queued, "/bonds"],
+    ["/you", active, "/you"],
+    ["/you/memories", queued, "/you/memories"],
+    ["/you/reflections", active, "/you/reflections"]
+  ]
+
+  for (const [path, snapshot, expected] of cases) {
+    assert.equal(refreshResolution(path, snapshot).path, expected, path)
+  }
+})
+
+test("runtime starts non-activity routes in preserve-away mode until canonical readiness", () => {
+  assert.equal(createRouteRuntimeState("/you").preserveActivityAway, true)
+  assert.equal(createRouteRuntimeState("/chats").preserveActivityAway, true)
+  assert.equal(createRouteRuntimeState("/matchmaking").preserveActivityAway, false)
+  assert.equal(createRouteRuntimeState("/conversation").preserveActivityAway, false)
+})
+
+test("F-02 route runtime emits no destructive lifecycle actions and owns no Back-stack policy", async () => {
+  const source = await readFile(new URL("../../priv/static/assets/route_runtime.mjs", import.meta.url), "utf8")
+  assert.equal(source.includes('"queue:leave"'), false)
+  assert.equal(source.includes('"conversation:end"'), false)
+  assert.equal(source.includes('"conversation:block"'), false)
+  assert.equal(/report/i.test(source), false)
+  assert.equal(source.includes("pushState"), false)
+  assert.equal(source.includes("popstate"), false)
+})
+
+test("F-02 runtime is decision-only and owns no channel, DOM, or history application", async () => {
+  const source = await readFile(new URL("../../priv/static/assets/route_runtime.mjs", import.meta.url), "utf8")
+  const forbidden = [
+    "installBrowserRouteRuntime",
+    "prototype.channel",
+    "MutationObserver",
+    "history.replaceState",
+    "history.pushState",
+    "document.addEventListener",
+    ".click()",
+    "/vendor/phoenix.mjs"
+  ]
+
+  for (const token of forbidden) {
+    assert.equal(source.includes(token), false, `F-02 runtime must not own ${token}`)
+  }
+})
+
+test("F-02 loaded before app runtime cannot intercept or duplicate Door to queue entry", async () => {
+  const routeSource = await readFile(new URL("../../priv/static/assets/route_runtime.mjs", import.meta.url), "utf8")
+  const appSource = await readFile(new URL("../../priv/static/assets/app.js", import.meta.url), "utf8")
+
+  assert.equal(routeSource.includes("#doors .door"), false)
+  assert.equal(routeSource.includes("#join-queue"), false)
+  assert.equal(routeSource.includes('"queue:join"'), false)
+  assert.equal(routeSource.includes('"queue:leave"'), false)
+  assert.equal(routeSource.includes('show("queue")'), false)
+
+  assert.match(appSource, /async function startMatchingFor\(doorLabel\)/)
+  assert.match(appSource, /show\("queue"\)/)
+  assert.equal((appSource.match(/"queue:join"/g) || []).length, 1)
+})

@@ -1,0 +1,200 @@
+name: F-09 Mobile Flow Proof
+
+on:
+  pull_request:
+    branches:
+      - release/integration-2026-08-28
+  workflow_dispatch:
+
+concurrency:
+  group: f09-mobile-flow-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mobile-flow:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4002"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
+      F09_FROZEN_BASE_SHA: 585637924ff45933c7b35b0bc27719934907c70e
+      F09_INTEGRATION_BASE_SHA: 7bbac3d7810f59945542db1d3a71ae8fbe0d8b41
+      F03_MERGED_SHA: f7de0a65b33a934f877976db8ced4a5238834d19
+
+    steps:
+      - name: Checkout exact F-09 head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Prove exact head and integrated authority lineage
+        run: |
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          actual="$(git rev-parse HEAD)"
+          echo "EXPECTED_F09_COMMIT=$expected"
+          echo "ACTUAL_F09_COMMIT=$actual"
+          echo "F09_INTEGRATION_BASE_SHA=$F09_INTEGRATION_BASE_SHA"
+          echo "F03_MERGED_SHA=$F03_MERGED_SHA"
+          test "$actual" = "$expected"
+          git merge-base --is-ancestor "$F09_FROZEN_BASE_SHA" HEAD
+          git merge-base --is-ancestor "$F09_INTEGRATION_BASE_SHA" HEAD
+          git merge-base --is-ancestor "$F03_MERGED_SHA" HEAD
+          test -f priv/static/assets/navigation_history.mjs
+          test -f priv/static/assets/mobile_flow.mjs
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install dependencies
+        run: |
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: F-03 plus focused F-09 contracts
+        run: |
+          node --test \
+            test/js/route_contract_test.mjs \
+            test/js/navigation_history_test.mjs \
+            test/js/f09_mobile_flow_test.mjs \
+            test/js/instagram_chat_test.mjs
+
+      - name: Prepare pristine browser database
+        run: |
+          MIX_ENV=test mix ecto.drop --force
+          MIX_ENV=test mix ecto.create --quiet
+          MIX_ENV=test mix ecto.migrate --quiet
+
+      - name: Start Phoenix for F-03/F-09 browser proof
+        run: |
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/f09-browser.log 2>&1 &
+          echo $! > /tmp/f09-browser.pid
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$(cat /tmp/f09-browser.pid)" 2>/dev/null; then
+              echo "Phoenix exited before becoming ready."
+              cat /tmp/f09-browser.log
+              exit 1
+            fi
+            if curl -fsS http://localhost:4002/ >/dev/null; then
+              echo "Phoenix F-09 browser endpoint is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Phoenix did not become ready."
+          cat /tmp/f09-browser.log
+          exit 1
+
+      - name: Consume canonical F-03 browser history contract
+        run: node --test --test-concurrency=1 test/js/navigation_history_browser_test.mjs
+
+      - name: Responsive mobile Chromium proof
+        run: node --test --test-concurrency=1 test/js/f09_mobile_flow_browser_test.mjs
+
+      - name: Upload F-09 browser screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: f09-mobile-flow-${{ github.event.pull_request.head.sha || github.sha }}
+          path: tmp/chat-ui-screenshots/f09-*.png
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop and verify F-09 browser server
+        if: always()
+        run: |
+          if [ ! -f /tmp/f09-browser.pid ]; then
+            echo "browser server pid file missing"
+            exit 1
+          fi
+          pid="$(cat /tmp/f09-browser.pid)"
+          kill "$pid" 2>/dev/null || true
+          for attempt in $(seq 1 30); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              break
+            fi
+            sleep 0.25
+          done
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "browser server did not stop cleanly"
+            cat /tmp/f09-browser.log || true
+            kill -9 "$pid" 2>/dev/null || true
+            exit 1
+          fi
+          if curl -fsS http://localhost:4002/ >/dev/null 2>&1; then
+            echo "browser server is still accepting connections"
+            exit 1
+          fi
+          echo "Phoenix browser server stopped"
+
+      - name: Browser server log on failure
+        if: failure()
+        run: cat /tmp/f09-browser.log || true
+
+      - name: Reset pristine test database before precommit
+        run: |
+          MIX_ENV=test mix ecto.drop --force
+          MIX_ENV=test mix ecto.create --quiet
+          MIX_ENV=test mix ecto.migrate --quiet
+
+      - name: Full relevant precommit
+        run: mix precommit
+
+      - name: Diff hygiene and clean tree
+        run: |
+          git diff --check "$F09_INTEGRATION_BASE_SHA"...HEAD
+          git diff --exit-code
+          status="$(git status --porcelain)"
+          if [ -n "$status" ]; then
+            printf '%s\n' "$status"
+            exit 1
+          fi
+          echo "working tree clean"
+
+      - name: Record exact tested SHA
+        run: |
+          echo "F09_TESTED_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"

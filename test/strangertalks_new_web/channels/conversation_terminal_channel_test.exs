@@ -4,7 +4,7 @@ defmodule StrangertalksNewWeb.ConversationTerminalChannelTest do
 
   @endpoint StrangertalksNewWeb.Endpoint
 
-  alias StrangertalksNew.{Conversation, Participants, Repo}
+  alias StrangertalksNew.{Conversation, Conversations, Participants, Repo}
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNewWeb.{ConversationChannel, ParticipantToken, UserSocket}
 
@@ -98,6 +98,11 @@ defmodule StrangertalksNewWeb.ConversationTerminalChannelTest do
     assert terminal.safety_flagged == true
     assert terminal.conversation_completed == false
 
+    assert {:ok, truth} = Conversations.terminal_truth(terminal)
+    assert truth.conversation_status == :ENDED
+    assert truth.ending_type == :BLOCK
+    assert truth.client_event == %{status: "ended", reason: "blocked"}
+
     assert_eventually(fn ->
       ConversationServer.lookup(context.conversation.conversation_id) == {:error, :not_started}
     end)
@@ -161,9 +166,18 @@ defmodule StrangertalksNewWeb.ConversationTerminalChannelTest do
     assert terminal.ending_initiator == context.participant_a.participant_id
     assert terminal.conversation_completed == true
 
+    assert {:ok, truth} = Conversations.terminal_truth(terminal)
+    assert truth.client_event == %{status: "ended", reason: "participant_completed"}
+
     assert_eventually(fn ->
       ConversationServer.lookup(context.conversation.conversation_id) == {:error, :not_started}
     end)
+
+    assert {:ok, %{status: "ended"}} =
+             ConversationServer.complete_conversation(
+               context.conversation.conversation_id,
+               context.participant_a.participant_id
+             )
 
     stale_ref = push(socket_b, "typing:start", %{})
     assert_reply stale_ref, :error, %{code: "CONVERSATION_UNAVAILABLE"}
@@ -177,6 +191,68 @@ defmodule StrangertalksNewWeb.ConversationTerminalChannelTest do
                "conversation:#{context.conversation.conversation_id}",
                %{}
              )
+  end
+
+  test "End first then stale Block preserves and reasserts canonical End truth", context do
+    socket_a = connect_and_join(context.participant_a, context.conversation)
+    socket_b = connect_and_join(context.participant_b, context.conversation)
+
+    end_ref = push(socket_a, "conversation:end", %{})
+    assert_reply end_ref, :ok, %{status: "ended"}
+
+    for _ <- 1..2 do
+      assert_push "conversation:ended", %{status: "ended", reason: "participant_completed"}
+    end
+
+    before_block = Repo.get!(Conversation, context.conversation.conversation_id)
+    assert before_block.conversation_status == :ENDED
+    assert before_block.ending_type == :NATURAL_END
+    assert before_block.ending_initiator == context.participant_a.participant_id
+
+    block_ref = push(socket_b, "conversation:block", %{})
+    assert_reply block_ref, :ok, %{status: "blocked"}
+
+    for _ <- 1..2 do
+      assert_push "conversation:ended", %{status: "ended", reason: "participant_completed"}
+    end
+
+    after_block = Repo.get!(Conversation, context.conversation.conversation_id)
+    assert after_block.conversation_status == :ENDED
+    assert after_block.ending_type == :NATURAL_END
+    assert after_block.ending_initiator == context.participant_a.participant_id
+    assert after_block.conversation_completed == true
+
+    assert {:ok, truth} = Conversations.terminal_truth(after_block)
+    assert truth.client_event == %{status: "ended", reason: "participant_completed"}
+  end
+
+  test "Block first then duplicate End cannot replace canonical Block truth", context do
+    socket_a = connect_and_join(context.participant_a, context.conversation)
+    socket_b = connect_and_join(context.participant_b, context.conversation)
+
+    block_ref = push(socket_a, "conversation:block", %{})
+    assert_reply block_ref, :ok, %{status: "blocked"}
+
+    for _ <- 1..2 do
+      assert_push "conversation:ended", %{status: "ended", reason: "blocked"}
+    end
+
+    assert_eventually(fn ->
+      ConversationServer.lookup(context.conversation.conversation_id) == {:error, :not_started}
+    end)
+
+    end_ref = push(socket_b, "conversation:end", %{})
+    assert_reply end_ref, :error, %{code: "CONVERSATION_UNAVAILABLE"}
+    refute_push "conversation:ended", %{reason: "participant_completed"}, 100
+
+    terminal = Repo.get!(Conversation, context.conversation.conversation_id)
+    assert terminal.conversation_status == :ENDED
+    assert terminal.ending_type == :BLOCK
+    assert terminal.ending_initiator == context.participant_a.participant_id
+    assert terminal.conversation_completed == false
+
+    assert {:ok, truth} = Conversations.terminal_truth(terminal)
+    assert truth.client_event == %{status: "ended", reason: "blocked"}
   end
 
   defp participant_fixture do
