@@ -196,7 +196,7 @@ function show(name) {
   if (name !== "relationships") app.reconnectCountdown.stop()
   if (name !== "conversation") cancelReplyStaging()
   presentScreen(name)
-  $("#bottom-nav").hidden = !["doors", "chats", "relationships", "settings"].includes(name)
+  $("#bottom-nav").hidden = !["doors", "chats", "relationships", "settings", "conversation"].includes(name)
 }
 
 function disclosureFocusables(dialog) {
