@@ -3,35 +3,133 @@ import test from "node:test"
 import {chromium} from "playwright"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+const BOUNDARY_TIMEOUT_MS = 15_000
 
-async function freshPage(browser) {
+function phoenixMessage(payload) {
+  if (typeof payload !== "string") return null
+  try {
+    const [joinRef, ref, topic, event, body] = JSON.parse(payload)
+    return {joinRef, ref, topic, event, body}
+  } catch (_error) {
+    return null
+  }
+}
+
+function observeFrames(page, label) {
+  const events = []
+  const waiters = new Set()
+
+  function add(event) {
+    events.push(event)
+    for (const waiter of [...waiters]) {
+      if (!waiter.predicate(event)) continue
+      clearTimeout(waiter.timer)
+      waiters.delete(waiter)
+      waiter.resolve(event)
+    }
+  }
+
+  page.on("websocket", (socket) => {
+    socket.on("framesent", ({payload}) => {
+      const message = phoenixMessage(payload)
+      if (message) add({direction: "sent", ...message})
+    })
+    socket.on("framereceived", ({payload}) => {
+      const message = phoenixMessage(payload)
+      if (message) add({direction: "received", ...message})
+    })
+  })
+
+  function recent() {
+    return events.slice(-20).map(({direction, topic, event, body}) => ({
+      direction,
+      topic,
+      event,
+      status: body?.status,
+      responseStatus: body?.response?.status,
+      code: body?.response?.code,
+      reason: body?.response?.reason
+    }))
+  }
+
+  function waitFor(predicate, description) {
+    const existing = events.find(predicate)
+    if (existing) return Promise.resolve(existing)
+    return new Promise((resolve, reject) => {
+      const waiter = {predicate, resolve, timer: null}
+      waiter.timer = setTimeout(() => {
+        waiters.delete(waiter)
+        reject(new Error(`${label} timed out waiting for ${description}; recent frames: ${JSON.stringify(recent())}`))
+      }, BOUNDARY_TIMEOUT_MS)
+      waiters.add(waiter)
+    })
+  }
+
+  return {events, recent, waitFor}
+}
+
+async function freshPage(browser, label) {
   const context = await browser.newContext({viewport: {width: 390, height: 844}})
   const page = await context.newPage()
+  const frames = observeFrames(page, label)
   const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
   assert.ok(response?.ok(), "root page loads")
   await page.locator('body:not(.flow-booting)').waitFor({state: "attached", timeout: 15_000})
+  await frames.waitFor(
+    event => event.direction === "received" && event.topic?.startsWith("participant:") &&
+      event.event === "phx_reply" && event.body?.status === "ok" && event.body?.response?.status === "connected",
+    "successful ParticipantChannel join"
+  )
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: 15_000})
   await page.locator("#conversation-language").selectOption("en")
-  return {context, page}
+  return {context, page, frames}
 }
 
-async function stableConversation(client) {
+async function waitForConversationBoundary(client, label) {
+  const match = await client.frames.waitFor(
+    event => event.direction === "received" && event.event === "match_found" && event.body?.conversation_id,
+    "match_found"
+  )
+  const conversationId = match.body.conversation_id
+  const topic = `conversation:${conversationId}`
+
+  const join = await client.frames.waitFor(
+    event => event.direction === "sent" && event.topic === topic && event.event === "phx_join",
+    `ConversationChannel phx_join for ${conversationId}`
+  )
+  const reply = await client.frames.waitFor(
+    event => event.direction === "received" && event.topic === topic && event.event === "phx_reply" &&
+      (event.ref === join.ref || event.joinRef === join.ref || event.joinRef === join.joinRef),
+    `ConversationChannel join reply for ${conversationId}`
+  )
+  assert.equal(
+    reply.body?.status,
+    "ok",
+    `${label} ConversationChannel join rejected: ${JSON.stringify(reply.body)}; recent frames: ${JSON.stringify(client.frames.recent())}`
+  )
+
   const input = client.page.locator('section[data-screen="conversation"].active #message-input')
   await input.waitFor({state: "visible", timeout: 15_000})
   await client.page.waitForTimeout(300)
-  assert.equal(await input.isVisible(), true, "conversation transition remains stable")
+  assert.equal(await input.isVisible(), true, `${label} conversation transition remains stable`)
+  return conversationId
 }
 
 async function matchPair(browser) {
-  const a = await freshPage(browser)
-  const b = await freshPage(browser)
+  const a = await freshPage(browser, "A")
+  const b = await freshPage(browser, "B")
 
   try {
     await a.page.getByRole("button", {name: /Deep Talk/}).click()
     await a.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: 10_000})
+    await a.page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: 10_000})
     await b.page.getByRole("button", {name: /Deep Talk/}).click()
 
-    await Promise.all([stableConversation(a), stableConversation(b)])
+    const [conversationA, conversationB] = await Promise.all([
+      waitForConversationBoundary(a, "A"),
+      waitForConversationBoundary(b, "B")
+    ])
+    assert.equal(conversationA, conversationB, "both participants enter the same Conversation")
     return {a, b}
   } catch (error) {
     await a.context.close().catch(() => {})
