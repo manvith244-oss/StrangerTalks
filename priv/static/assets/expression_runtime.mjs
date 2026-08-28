@@ -31,15 +31,19 @@ function currentAuthority(channel, generation, conversationId) {
     channelAuthority.conversationId === conversationId
 }
 
-function terminateExpressionAuthority() {
-  channelAuthority.generation += 1
-  channelAuthority.channel = null
-  channelAuthority.conversationId = null
+function resetExpressionPresentation() {
   gifSearchGuard.invalidate()
   clearTimeout(gifSearchTimer)
   gifSearchTimer = null
   closeEmojiPicker(false)
   closeGifPicker(false)
+}
+
+function terminateExpressionAuthority() {
+  channelAuthority.generation += 1
+  channelAuthority.channel = null
+  channelAuthority.conversationId = null
+  resetExpressionPresentation()
 }
 
 function pushPromise(channel, event, payload) {
@@ -56,6 +60,10 @@ function patchExpressiveRetry(channel, conversationId, generation) {
   channel.__team10ExpressiveRetryPatched = true
   const originalPush = channel.push.bind(channel)
   const originalJoin = channel.join.bind(channel)
+
+  channel.on("conversation:ended", () => {
+    if (currentAuthority(channel, generation, conversationId)) terminateExpressionAuthority()
+  })
 
   channel.push = function(event, payload, timeout) {
     const push = originalPush(event, payload, timeout)
@@ -199,7 +207,7 @@ function initializeExpressionSurface() {
   document.querySelector("#end-confirm")?.addEventListener("click", terminateExpressionAuthority, true)
 
   const observer = new MutationObserver(() => {
-    if (composer.hidden) terminateExpressionAuthority()
+    if (composer.hidden) resetExpressionPresentation()
   })
   observer.observe(composer, {attributes: true, attributeFilter: ["hidden"]})
 }
