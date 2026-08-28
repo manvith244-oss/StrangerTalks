@@ -1,0 +1,26 @@
+name: production-health-proof
+
+on:
+  push:
+    branches:
+      - ops/prod-health-proof-20260828
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Capture raw production readiness response
+        shell: bash
+        run: |
+          set -u
+          url="https://strangertalks-phoenix.onrender.com/health/ready"
+          echo "=== RAW_HTTP_BEGIN ==="
+          status=$(curl -sS --max-time 60 -o /tmp/ready.body -w '%{http_code}' "$url")
+          curl_rc=$?
+          echo "HTTP_STATUS=$status"
+          echo "CURL_EXIT=$curl_rc"
+          echo "BODY_BEGIN"
+          cat /tmp/ready.body 2>/dev/null || true
+          echo
+          echo "BODY_END"
+          echo "=== RAW_HTTP_END ==="
