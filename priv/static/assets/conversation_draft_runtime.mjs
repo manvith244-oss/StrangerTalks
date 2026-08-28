@@ -184,7 +184,23 @@ function installComposerListeners() {
       runtime.pendingSubmit = null
       return
     }
-    runtime.pendingSubmit = {conversationId, rawText, content}
+
+    const pending = {
+      conversationId,
+      rawText,
+      content,
+      messageCount: document.querySelectorAll("#messages > .message").length
+    }
+    runtime.pendingSubmit = pending
+
+    queueMicrotask(() => {
+      if (runtime.pendingSubmit !== pending || runtime.activeConversationId !== conversationId) return
+      const composer = document.querySelector("#message-input")
+      const messageCount = document.querySelectorAll("#messages > .message").length
+      if (!composer || composer.value !== rawText || messageCount <= pending.messageCount) return
+      composer.value = ""
+      clearMatchingDraft(conversationId, rawText).catch(() => {})
+    })
   }, true)
 }
 
