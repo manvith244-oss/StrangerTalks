@@ -1,37 +1,15 @@
 name: StrangerTalks PostgreSQL R2 Backup
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/postgres-r2-backup.yml
   workflow_dispatch:
   schedule:
     - cron: '17 2 * * *'
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
-  bootstrap-dispatch:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Dispatch real workflow_dispatch proof run
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/postgres-r2-backup.yml/dispatches" \
-            -f ref=main
-          echo "phase2_bootstrap_dispatch=accepted"
-
   backup-restore-proof:
-    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     services:
       postgres:
