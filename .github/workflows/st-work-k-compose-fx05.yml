@@ -56,7 +56,7 @@ jobs:
           git config user.name "ST-WORK-K Integration"
           git config user.email "actions@users.noreply.github.com"
 
-      - name: Merge F-X05 and resolve only the obsolete show() seam
+      - name: Merge F-X05 and compose shared seams
         shell: bash
         run: |
           set -euo pipefail
@@ -76,17 +76,69 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
-          path = Path("priv/static/assets/app.js")
-          text = path.read_text()
+
+          app = Path("priv/static/assets/app.js")
+          app_text = app.read_text()
           target = '  if (name !== "conversation") cancelReplyStaging()\n'
-          count = text.count(target)
+          count = app_text.count(target)
           if count > 1:
               raise SystemExit(f"unexpected duplicate reply-presentation coupling: {count}")
           if count == 1:
-              text = text.replace(target, "", 1)
-              path.write_text(text)
+              app.write_text(app_text.replace(target, "", 1))
+
+          team10 = Path("test/js/team10_expression_surface_test.mjs")
+          team10_text = team10.read_text()
+          runtime_read = 'const runtimeSource = await readFile(new URL("../../priv/static/assets/expression_runtime.mjs", import.meta.url), "utf8")\n'
+          flow_read = 'const flowRuntimeSource = await readFile(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")\n'
+          if flow_read not in team10_text:
+              if runtime_read not in team10_text:
+                  raise SystemExit("team10 runtime loader read seam moved")
+              team10_text = team10_text.replace(runtime_read, runtime_read + flow_read, 1)
+          old_team10 = '''test("Team 10 has one formatting-independent canonical loader and no PageController surgery", () => {
+            assert.equal((indexHtml.match(/expression_runtime\\.mjs/g) || []).length, 1)
+            assert.equal((indexHtml.match(/<script[^>]+\\/assets\\/app\\.js/g) || []).length, 0)
+            assert.equal((runtimeSource.match(/await import\\(APP_ENTRY\\)/g) || []).length, 1)
+            assert.match(runtimeSource, /const APP_ENTRY = "\\/assets\\/app\\.js\\?v=20260807_v2"/)
+            assert.doesNotMatch(pageController, /String\\.replace|@app_script|@expression_script/)
+            assert.match(pageController, /send_file/)
+          })'''
+          new_team10 = '''test("Team 10 composes through the F-07 loader without PageController surgery", () => {
+            assert.equal((indexHtml.match(/flow_loading_runtime\\.mjs/g) || []).length, 1)
+            assert.equal((indexHtml.match(/expression_runtime\\.mjs/g) || []).length, 0)
+            assert.equal((indexHtml.match(/<script[^>]+\\/assets\\/app\\.js/g) || []).length, 0)
+            assert.equal((flowRuntimeSource.match(/await import\\(APP_ENTRY\\)/g) || []).length, 1)
+            assert.match(flowRuntimeSource, /const APP_ENTRY = "\\/assets\\/expression_runtime\\.mjs\\?v=20260824_v2"/)
+            assert.equal((runtimeSource.match(/await import\\(APP_ENTRY\\)/g) || []).length, 1)
+            assert.match(runtimeSource, /const APP_ENTRY = "\\/assets\\/app\\.js\\?v=20260807_v2"/)
+            assert.doesNotMatch(pageController, /String\\.replace|@app_script|@expression_script/)
+            assert.match(pageController, /send_file/)
+          })'''
+          if old_team10 not in team10_text:
+              raise SystemExit("team10 canonical-loader assertion seam moved")
+          team10.write_text(team10_text.replace(old_team10, new_team10, 1))
+
+          expressive = Path("test/js/expressive_media_test.mjs")
+          expressive_text = expressive.read_text()
+          expressive_runtime_read = 'const runtimeSource = await readFile(new URL("../../priv/static/assets/expression_runtime.mjs", import.meta.url), "utf8")\n'
+          expressive_flow_read = 'const flowRuntimeSource = await readFile(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")\n'
+          if expressive_flow_read not in expressive_text:
+              if expressive_runtime_read not in expressive_text:
+                  raise SystemExit("expressive runtime loader read seam moved")
+              expressive_text = expressive_text.replace(expressive_runtime_read, expressive_runtime_read + expressive_flow_read, 1)
+          old_expressive = '''test("Team 10 canonical entry exposes composer emoji and provider-controlled GIF seam", () => {
+            assert.equal((html.match(/expression_runtime\\.mjs/g) || []).length, 1)
+            assert.equal((html.match(/<script[^>]+\\/assets\\/app\\.js/g) || []).length, 0)'''
+          new_expressive = '''test("Team 10 canonical entry preserves F-07 boot and exposes Expression authority", () => {
+            assert.equal((html.match(/flow_loading_runtime\\.mjs/g) || []).length, 1)
+            assert.equal((html.match(/expression_runtime\\.mjs/g) || []).length, 0)
+            assert.equal((html.match(/<script[^>]+\\/assets\\/app\\.js/g) || []).length, 0)
+            assert.match(flowRuntimeSource, /const APP_ENTRY = "\\/assets\\/expression_runtime\\.mjs\\?v=20260824_v2"/)'''
+          if old_expressive not in expressive_text:
+              raise SystemExit("expressive canonical-loader assertion seam moved")
+          expressive.write_text(expressive_text.replace(old_expressive, new_expressive, 1))
           PY
-          git add priv/static/assets/app.js
+
+          git add priv/static/assets/app.js test/js/team10_expression_surface_test.mjs test/js/expressive_media_test.mjs
 
           test -z "$(git diff --name-only --diff-filter=U)"
           grep -F 'function presentScreen(name)' priv/static/assets/app.js
@@ -111,12 +163,18 @@ jobs:
             test "$actual" = "$expected"
           done
 
+          grep -F 'src="/assets/flow_loading_runtime.mjs?v=20260826_f07_v1"' priv/static/index.html
+          grep -F 'const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"' priv/static/assets/flow_loading_runtime.mjs
+          grep -F 'const APP_ENTRY = "/assets/app.js?v=20260807_v2"' priv/static/assets/expression_runtime.mjs
+
           git diff --cached --check
           node --check priv/static/assets/app.js
           node --check priv/static/assets/expression_runtime.mjs
           node --check priv/static/assets/expression_surface.mjs
           node --check priv/static/assets/normal_media_runtime.mjs
           node --check test/js/fx05_expression_continuity_browser_test.mjs
+          node --check test/js/team10_expression_surface_test.mjs
+          node --check test/js/expressive_media_test.mjs
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
