@@ -75,3 +75,7 @@ jobs:
           IO.puts("PHASE1_POSTGREX_CA_PROOF=PASS")
           EXS
           elixir /tmp/probe.exs
+
+  backup-proof:
+    uses: manvith244-oss/StrangerTalks/.github/workflows/postgres-r2-backup.yml@main
+    secrets: inherit
