@@ -236,7 +236,7 @@ test("Conversation draft survives reload, stays scoped, and clears at optimistic
     )
 
     const sendMark = a.journal.mark()
-    await a.page.locator("#message-form button.primary").click()
+    await a.page.locator('section[data-screen="conversation"].active #message-form').getByRole("button", {name: "Send message"}).click()
     const bubble = a.page.locator("#messages li", {hasText: draftText})
     await bubble.waitFor({state: "visible"})
     assert.equal(await a.page.locator("#message-input").inputValue(), "", "composer clears when optimistic bubble appears")
