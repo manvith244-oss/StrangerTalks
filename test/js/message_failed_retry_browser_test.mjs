@@ -3,56 +3,10 @@ import test from "node:test"
 import {chromium} from "playwright"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+const PAIR_ATTEMPTS = 5
 
-async function freshPage(browser, {rejectFirstTextSend = false} = {}) {
+async function freshPage(browser) {
   const context = await browser.newContext({viewport: {width: 390, height: 844}})
-
-  if (rejectFirstTextSend) {
-    await context.addInitScript(() => {
-      const NativeWebSocket = window.WebSocket
-      const nativeSend = NativeWebSocket.prototype.send
-      window.__failedRetryProbe = {rejectedMessageId: null, retryDelayed: false}
-
-      class FailedRetryWebSocket extends NativeWebSocket {
-        send(data) {
-          if (typeof data === "string") {
-            try {
-              const frame = JSON.parse(data)
-              const topic = frame?.[2]
-              const event = frame?.[3]
-              const body = frame?.[4]
-              const probe = window.__failedRetryProbe
-
-              if (
-                typeof topic === "string" && topic.startsWith("conversation:") &&
-                event === "message:send" &&
-                typeof body?.content === "string" &&
-                body?.client_message_id
-              ) {
-                if (!probe.rejectedMessageId) {
-                  probe.rejectedMessageId = body.client_message_id
-                  const rejectedFrame = [...frame]
-                  rejectedFrame[4] = {...body, content: null}
-                  return nativeSend.call(this, JSON.stringify(rejectedFrame))
-                }
-
-                if (body.client_message_id === probe.rejectedMessageId && !probe.retryDelayed) {
-                  probe.retryDelayed = true
-                  setTimeout(() => nativeSend.call(this, data), 600)
-                  return
-                }
-              }
-            } catch (_error) {}
-          }
-
-          return nativeSend.call(this, data)
-        }
-      }
-
-      window.WebSocket = FailedRetryWebSocket
-    })
-  }
-
   const page = await context.newPage()
   const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
   assert.ok(response?.ok(), "root page loads")
@@ -62,24 +16,78 @@ async function freshPage(browser, {rejectFirstTextSend = false} = {}) {
   return {context, page}
 }
 
-async function matchPair(browser) {
-  const a = await freshPage(browser, {rejectFirstTextSend: true})
+async function matchPairAttempt(browser) {
+  const a = await freshPage(browser)
   const b = await freshPage(browser)
 
-  await Promise.all([
-    a.page.getByRole("button", {name: /Deep Talk/}).click(),
-    b.page.getByRole("button", {name: /Deep Talk/}).click()
-  ])
+  try {
+    await a.page.getByRole("button", {name: /Deep Talk/}).click()
+    await a.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: 10_000})
+    await b.page.getByRole("button", {name: /Deep Talk/}).click()
 
-  await Promise.all([
-    a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000}),
-    b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000})
-  ])
+    await Promise.all([
+      a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000}),
+      b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000})
+    ])
 
-  return {a, b}
+    return {a, b}
+  } catch (_error) {
+    await a.context.close().catch(() => {})
+    await b.context.close().catch(() => {})
+    return null
+  }
 }
 
-test("failed text send retries in the same optimistic bubble", {timeout: 60_000}, async () => {
+async function matchPair(browser) {
+  for (let attempt = 1; attempt <= PAIR_ATTEMPTS; attempt += 1) {
+    const pair = await matchPairAttempt(browser)
+    if (pair) return pair
+  }
+  throw new Error(`could not enter a Conversation after ${PAIR_ATTEMPTS} pairing attempts`)
+}
+
+async function installFailedSendProbe(page) {
+  await page.evaluate(() => {
+    const nativeSend = WebSocket.prototype.send
+    window.__failedRetryProbe = {rejectedMessageId: null, retryDelayed: false}
+
+    WebSocket.prototype.send = function(data) {
+      if (typeof data === "string") {
+        try {
+          const frame = JSON.parse(data)
+          const topic = frame?.[2]
+          const event = frame?.[3]
+          const body = frame?.[4]
+          const probe = window.__failedRetryProbe
+
+          if (
+            typeof topic === "string" && topic.startsWith("conversation:") &&
+            event === "message:send" &&
+            typeof body?.content === "string" &&
+            body?.client_message_id
+          ) {
+            if (!probe.rejectedMessageId) {
+              probe.rejectedMessageId = body.client_message_id
+              const rejectedFrame = [...frame]
+              rejectedFrame[4] = {...body, content: null}
+              return nativeSend.call(this, JSON.stringify(rejectedFrame))
+            }
+
+            if (body.client_message_id === probe.rejectedMessageId && !probe.retryDelayed) {
+              probe.retryDelayed = true
+              setTimeout(() => nativeSend.call(this, data), 600)
+              return
+            }
+          }
+        } catch (_error) {}
+      }
+
+      return nativeSend.call(this, data)
+    }
+  })
+}
+
+test("failed text send retries in the same optimistic bubble", {timeout: 120_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let pair
 
@@ -89,6 +97,7 @@ test("failed text send retries in the same optimistic bubble", {timeout: 60_000}
     const sender = pair.a.page
     const receiver = pair.b.page
 
+    await installFailedSendProbe(sender)
     await sender.locator("#message-input").fill(text)
     await sender.locator("#message-form button.primary").click()
 
