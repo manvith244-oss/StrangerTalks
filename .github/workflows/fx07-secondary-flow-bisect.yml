@@ -1,0 +1,94 @@
+name: F-X07 secondary_flow bisect
+
+on:
+  push:
+    branches:
+      - bisect/fx07-secondary-flow-20260828
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  TARGET_SHA: 2a90d15dedc3fd62e886420ce9ca6ee76cdcda78
+  PORT: "4000"
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+
+jobs:
+  fx07-regression-probe:
+    name: F-X07 exact failing test @ target
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Prove exact target checkout
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install browser dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Prepare isolated browser database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start isolated Phoenix runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/fx07-bisect.log 2>&1 &
+          echo $! > /tmp/fx07-bisect.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/fx07-bisect.pid)" 2>/dev/null; then cat /tmp/fx07-bisect.log; exit 1; fi
+            sleep 1
+          done
+          cat /tmp/fx07-bisect.log
+          exit 1
+      - name: Run exact F-X07 failing test
+        shell: bash
+        run: |
+          node --test --test-concurrency=1 \
+            --test-name-pattern="real UI Block collapses local transient authority and stale Conversation A cannot terminate new Conversation B" \
+            test/js/terminal_truth_browser_test.mjs
+      - name: Stop Phoenix
+        if: always()
+        run: if [ -f /tmp/fx07-bisect.pid ]; then kill "$(cat /tmp/fx07-bisect.pid)" 2>/dev/null || true; fi
+      - name: Browser log on failure
+        if: failure()
+        run: cat /tmp/fx07-bisect.log || true
