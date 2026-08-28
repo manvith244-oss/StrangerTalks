@@ -1,0 +1,145 @@
+name: Phase 1 Supabase Postgrex CA Probe
+
+on:
+  push:
+    branches:
+      - ops/phase1-supabase-ca-2026-08-28
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    env:
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+      SUPABASE_DB_CA_CERT: ${{ secrets.SUPABASE_DB_CA_CERT }}
+      SUPABASE_CA_CERT: ${{ secrets.SUPABASE_CA_CERT }}
+    steps:
+      - name: Guard isolated inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_DATABASE_URL:-}" ]; then
+            echo "phase1_supabase_url_present=false"
+            exit 2
+          fi
+          echo "phase1_supabase_url_present=true"
+          [ -n "${SUPABASE_DB_CA_CERT:-}" ] && echo "phase1_db_ca_secret_present=true" || echo "phase1_db_ca_secret_present=false"
+          [ -n "${SUPABASE_CA_CERT:-}" ] && echo "phase1_alt_ca_secret_present=true" || echo "phase1_alt_ca_secret_present=false"
+          echo "phase1_production_database_url_used=false"
+
+      - name: Resolve target without exposing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, urllib.parse
+          u=urllib.parse.urlparse(os.environ['SUPABASE_DATABASE_URL'])
+          print(f"phase1_target_host={u.hostname}")
+          print(f"phase1_target_port={u.port or 5432}")
+          print(f"phase1_target_database={(u.path or '/postgres').lstrip('/')}")
+          PY
+
+      - name: Inspect PostgreSQL TLS certificate chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          read host port < <(python3 - <<'PY'
+          import os, urllib.parse
+          u=urllib.parse.urlparse(os.environ['SUPABASE_DATABASE_URL'])
+          print(u.hostname, u.port or 5432)
+          PY
+          )
+          echo "phase1_tls_chain_host=$host"
+          timeout 20 openssl s_client -starttls postgres -connect "$host:$port" -servername "$host" -showcerts </dev/null > /tmp/sclient.txt 2>&1 || true
+          grep -E '^(depth=|verify return:|verify error:|subject=|issuer=|Verify return code:|New, TLS|Protocol  :|Cipher    :)' /tmp/sclient.txt || true
+          awk '/-----BEGIN CERTIFICATE-----/{n++;f=sprintf("/tmp/cert-%02d.pem",n)} n{print > f}' /tmp/sclient.txt
+          for cert in /tmp/cert-*.pem; do
+            [ -f "$cert" ] || continue
+            echo "CERT=$(basename "$cert")"
+            openssl x509 -in "$cert" -noout -subject -issuer -serial -fingerprint -sha256 -dates
+          done
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '28.0.2'
+
+      - name: Run standalone Postgrex probes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/probe.exs <<'EXS'
+          Mix.install([{:postgrex, "0.22.4"}])
+
+          url = System.fetch_env!("SUPABASE_DATABASE_URL")
+          uri = URI.parse(url)
+          [raw_user, raw_pass] = String.split(uri.userinfo || "", ":", parts: 2)
+          username = URI.decode(raw_user)
+          password = URI.decode(raw_pass)
+          database = String.trim_leading(uri.path || "/postgres", "/")
+          hostname = uri.host
+          port = uri.port || 5432
+
+          base = [
+            hostname: hostname,
+            port: port,
+            username: username,
+            password: password,
+            database: database,
+            timeout: 15_000,
+            connect_timeout: 15_000,
+            handshake_timeout: 15_000,
+            show_sensitive_data_on_connection_error: false
+          ]
+
+          query = "SELECT current_database(), current_user, ssl, version, cipher, bits FROM pg_stat_ssl WHERE pid = pg_backend_pid()"
+
+          probe = fn label, ssl ->
+            IO.puts("PROBE_BEGIN=#{label}")
+            case Postgrex.start_link(Keyword.put(base, :ssl, ssl)) do
+              {:ok, pid} ->
+                result = Postgrex.query!(pid, query, [])
+                IO.inspect(result.rows, label: "#{label}_rows")
+                GenServer.stop(pid)
+                IO.puts("PROBE_RESULT=#{label}:PASS")
+                :pass
+              {:error, reason} ->
+                IO.puts("PROBE_RESULT=#{label}:FAIL")
+                IO.puts("#{label}_error=#{Exception.format(:error, reason, []) |> String.replace(~r/(password|userinfo):[^,\]\n]+/i, "\\1:[REDACTED]")}")
+                :fail
+            end
+          end
+
+          default_result = probe.("ssl_true", true)
+          public_result = probe.("public_key_cacerts", [cacerts: :public_key.cacerts_get()])
+          os_result = probe.("os_ca_file", [cacertfile: "/etc/ssl/certs/ca-certificates.crt"])
+
+          ca = System.get_env("SUPABASE_DB_CA_CERT") || ""
+          ca = if ca == "", do: System.get_env("SUPABASE_CA_CERT") || "", else: ca
+          ca_result =
+            if ca != "" do
+              path = "/tmp/supabase-ca.crt"
+              File.write!(path, ca)
+              probe.("supabase_ca_secret", [cacertfile: path])
+            else
+              IO.puts("PROBE_RESULT=supabase_ca_secret:SKIP_SECRET_MISSING")
+              :skip
+            end
+
+          IO.puts("phase1_ssl_true=#{default_result}")
+          IO.puts("phase1_public_key_cacerts=#{public_result}")
+          IO.puts("phase1_os_ca_file=#{os_result}")
+          IO.puts("phase1_supabase_ca_secret=#{ca_result}")
+
+          if :pass in [public_result, os_result, ca_result] do
+            IO.puts("PHASE1_POSTGREX_CA_PROOF=PASS")
+          else
+            IO.puts("PHASE1_POSTGREX_CA_PROOF=FAIL")
+            System.halt(1)
+          end
+          EXS
+          elixir /tmp/probe.exs
