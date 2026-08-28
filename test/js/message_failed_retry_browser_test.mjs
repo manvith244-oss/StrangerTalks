@@ -3,8 +3,6 @@ import test from "node:test"
 import {chromium} from "playwright"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
-// Pairing retries isolate the pre-existing post-match transition race from this send/retry regression.
-const PAIR_ATTEMPTS = 5
 
 async function freshPage(browser) {
   const context = await browser.newContext({viewport: {width: 390, height: 844}})
@@ -21,10 +19,10 @@ async function stableConversation(client) {
   const input = client.page.locator('section[data-screen="conversation"].active #message-input')
   await input.waitFor({state: "visible", timeout: 15_000})
   await client.page.waitForTimeout(300)
-  return input.isVisible()
+  assert.equal(await input.isVisible(), true, "conversation transition remains stable")
 }
 
-async function matchPairAttempt(browser) {
+async function matchPair(browser) {
   const a = await freshPage(browser)
   const b = await freshPage(browser)
 
@@ -33,24 +31,13 @@ async function matchPairAttempt(browser) {
     await a.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: 10_000})
     await b.page.getByRole("button", {name: /Deep Talk/}).click()
 
-    const [aStable, bStable] = await Promise.all([stableConversation(a), stableConversation(b)])
-    if (!aStable || !bStable) throw new Error("conversation transition did not remain stable")
-
+    await Promise.all([stableConversation(a), stableConversation(b)])
     return {a, b}
-  } catch (_error) {
+  } catch (error) {
     await a.context.close().catch(() => {})
     await b.context.close().catch(() => {})
-    return null
+    throw error
   }
-}
-
-async function matchPair(browser) {
-  for (let attempt = 1; attempt <= PAIR_ATTEMPTS; attempt += 1) {
-    const pair = await matchPairAttempt(browser)
-    if (pair) return pair
-    await new Promise(resolve => setTimeout(resolve, 500))
-  }
-  throw new Error(`could not enter a stable Conversation after ${PAIR_ATTEMPTS} pairing attempts`)
 }
 
 async function installFailedSendProbe(page) {
