@@ -97,6 +97,9 @@ jobs:
           cat /tmp/f07-phoenix.log
           exit 1
 
+      - name: Failed-send retry browser proof on fresh F-07 state
+        run: node --test test/js/message_failed_retry_browser_test.mjs
+
       - name: F-07 real-browser continuity proof
         run: node --test test/js/f07_loading_transitions_browser_test.mjs
 
