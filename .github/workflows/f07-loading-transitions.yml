@@ -81,7 +81,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mix run --no-start -e '
+          STRANGERTALKS_PERSISTENT_TEST_SERVER=1 mix run --no-start -e '
             config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
             Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
