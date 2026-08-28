@@ -1,0 +1,47 @@
+name: ST-WORK-K Integration Carrier
+
+on:
+  push:
+    branches:
+      - k/integration-compose-2026-08-28
+
+permissions:
+  contents: write
+
+jobs:
+  compose-f04:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: k/integration-compose-2026-08-28
+      - name: Verify authority heads
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin release/integration-2026-08-28 f04/conversation-continuity-2026-08-26
+          test "$(git rev-parse origin/release/integration-2026-08-28)" = "2858ad45a485bd0a83ea5537d0d06bb64934e58e"
+          test "$(git rev-parse origin/f04/conversation-continuity-2026-08-26)" = "2b0424745414e4eff7c3e56750287c4fafecaad5"
+          echo "workbench=$(git rev-parse HEAD)"
+      - name: Attempt controlled F-04 merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "ST-WORK-K"
+          git config user.email "actions@users.noreply.github.com"
+          set +e
+          git merge --no-ff --no-commit 2b0424745414e4eff7c3e56750287c4fafecaad5
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "MERGE_CONFLICTS"
+            git status --short
+            echo "UNMERGED_PATHS"
+            git diff --name-only --diff-filter=U
+            echo "APP_JS_CONFLICT"
+            git diff --cc -- priv/static/assets/app.js | sed -n '1,900p'
+            exit 1
+          fi
+          git commit -m "integrate(F-04): consume proven Conversation continuity"
+          git push origin HEAD:k/integration-compose-2026-08-28
