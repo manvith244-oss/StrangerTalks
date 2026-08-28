@@ -1,0 +1,1 @@
+Trigger diagnostic stale-callback contract matrix on an already-registered branch workflow.
