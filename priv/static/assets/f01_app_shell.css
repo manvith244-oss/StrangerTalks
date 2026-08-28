@@ -49,6 +49,11 @@ body.st-chat-mode #bottom-nav.bottom-nav {
     min-height: 100dvh;
   }
 
+  /* Conversation's visual framing must not inset the app-shell rail itself. */
+  html body.st-chat-mode {
+    padding: 0;
+  }
+
   .site-header {
     grid-column: 1 / -1;
     grid-row: 1;
