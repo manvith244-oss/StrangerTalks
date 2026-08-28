@@ -247,4 +247,46 @@ if (!BASE_URL) {
       await browser.close()
     }
   })
+
+  test("F-09 mobile emulation consumes F-03 Back/Forward history without redefining it", async () => {
+    const browser = await chromium.launch({headless: true})
+    let context
+
+    try {
+      const opened = await openMobilePage(browser)
+      context = opened.context
+      const page = opened.page
+
+      await page.waitForFunction(() => history.state?.__strangertalks_navigation_v1 === true)
+      assert.equal(new URL(page.url()).pathname, "/")
+
+      await page.locator('#bottom-nav [data-go="settings"]').tap()
+      await page.waitForFunction(() => location.pathname === "/you")
+      await page.locator('section[data-screen="settings"].active').waitFor({state: "visible"})
+      assert.equal((await page.locator('#bottom-nav [aria-current="page"]').textContent()).trim(), "You")
+
+      await page.locator('#bottom-nav [data-go="chats"]').tap()
+      await page.waitForFunction(() => location.pathname === "/chats")
+      await page.locator('section[data-screen="chats"].active').waitFor({state: "visible"})
+      assert.equal((await page.locator('#bottom-nav [aria-current="page"]').textContent()).trim(), "Chats")
+
+      await page.evaluate(() => history.back())
+      await page.waitForFunction(() => location.pathname === "/you")
+      await page.locator('section[data-screen="settings"].active').waitFor({state: "visible"})
+      assert.equal((await page.locator('#bottom-nav [aria-current="page"]').textContent()).trim(), "You")
+
+      await page.evaluate(() => history.back())
+      await page.waitForFunction(() => location.pathname === "/")
+      await page.locator('section[data-screen="doors"].active').waitFor({state: "visible"})
+      assert.equal((await page.locator('#bottom-nav [aria-current="page"]').textContent()).trim(), "Talk")
+
+      await page.evaluate(() => history.forward())
+      await page.waitForFunction(() => location.pathname === "/you")
+      await page.locator('section[data-screen="settings"].active').waitFor({state: "visible"})
+      assert.equal(await page.evaluate(() => document.documentElement.dataset.f09MobileFlowBooted), "true")
+    } finally {
+      await context?.close()
+      await browser.close()
+    }
+  })
 }
