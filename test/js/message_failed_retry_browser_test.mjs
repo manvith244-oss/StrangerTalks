@@ -17,6 +17,13 @@ async function freshPage(browser) {
   return {context, page}
 }
 
+async function stableConversation(client) {
+  const input = client.page.locator('section[data-screen="conversation"].active #message-input')
+  await input.waitFor({state: "visible", timeout: 15_000})
+  await client.page.waitForTimeout(300)
+  return input.isVisible()
+}
+
 async function matchPairAttempt(browser) {
   const a = await freshPage(browser)
   const b = await freshPage(browser)
@@ -26,10 +33,8 @@ async function matchPairAttempt(browser) {
     await a.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: 10_000})
     await b.page.getByRole("button", {name: /Deep Talk/}).click()
 
-    await Promise.all([
-      a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000}),
-      b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 15_000})
-    ])
+    const [aStable, bStable] = await Promise.all([stableConversation(a), stableConversation(b)])
+    if (!aStable || !bStable) throw new Error("conversation transition did not remain stable")
 
     return {a, b}
   } catch (_error) {
@@ -43,8 +48,9 @@ async function matchPair(browser) {
   for (let attempt = 1; attempt <= PAIR_ATTEMPTS; attempt += 1) {
     const pair = await matchPairAttempt(browser)
     if (pair) return pair
+    await new Promise(resolve => setTimeout(resolve, 500))
   }
-  throw new Error(`could not enter a Conversation after ${PAIR_ATTEMPTS} pairing attempts`)
+  throw new Error(`could not enter a stable Conversation after ${PAIR_ATTEMPTS} pairing attempts`)
 }
 
 async function installFailedSendProbe(page) {
@@ -99,8 +105,8 @@ test("failed text send retries in the same optimistic bubble", {timeout: 120_000
     const receiver = pair.b.page
 
     await installFailedSendProbe(sender)
-    await sender.locator("#message-input").fill(text)
-    await sender.locator("#message-form button.primary").click()
+    await sender.locator('section[data-screen="conversation"].active #message-input').fill(text)
+    await sender.locator('section[data-screen="conversation"].active #message-form button.primary').click()
 
     const senderRows = sender.locator("#messages li.message", {hasText: text})
     await senderRows.first().waitFor({state: "visible"})
