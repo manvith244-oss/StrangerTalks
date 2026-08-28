@@ -1,3 +1,4 @@
+import "./message_failed_retry_browser_test.mjs"
 import assert from "node:assert/strict"
 import test from "node:test"
 import {chromium} from "playwright"
