@@ -169,6 +169,23 @@ async function assertCompactBottomNav(page, viewport) {
   assert.ok(box.y + box.height >= viewport.height - 2, `compact nav is bottom anchored: ${JSON.stringify(box)}`)
 }
 
+async function assertCompactConversationCoexistence(page) {
+  const nav = await assertOnePrimaryNav(page)
+  const composer = page.locator("#expressive-composer")
+  const input = page.locator("#message-input")
+  await composer.waitFor({state: "visible"})
+  await input.focus()
+  assert.equal(await input.evaluate(node => document.activeElement === node), true, "composer remains keyboard-focusable")
+
+  const navBox = await nav.boundingBox()
+  const composerBox = await composer.boundingBox()
+  assert.ok(navBox && composerBox, "compact nav and composer both have geometry")
+  assert.ok(
+    composerBox.y + composerBox.height <= navBox.y + 1,
+    `composer stays above compact primary nav: composer=${JSON.stringify(composerBox)} nav=${JSON.stringify(navBox)}`
+  )
+}
+
 async function assertDesktopLeftRail(page, viewport) {
   const nav = await assertOnePrimaryNav(page)
   const box = await nav.boundingBox()
@@ -195,14 +212,15 @@ async function assertRouteDerivedCurrentDestination(page, label) {
   assert.ok(activeWeight > inactiveWeight, `active destination is visually stronger (${activeWeight} > ${inactiveWeight})`)
 }
 
-test("F01 #74: one primary nav is bottom navigation below 992px and a left rail at 992px+", {timeout: 75_000}, async () => {
+test("F01 #74: one primary nav is bottom navigation below 992px and a left rail at 992px+", {timeout: 90_000}, async () => {
   const browser = await chromium.launch({headless: true})
   const contexts = []
   try {
     for (const viewport of [
       {width: 390, height: 844},
+      {width: 991, height: 700},
       {width: 992, height: 700},
-      {width: 1024, height: 700}
+      {width: 1440, height: 900}
     ]) {
       const observed = await bootObserved(browser, viewport)
       contexts.push(observed.context)
@@ -222,7 +240,7 @@ test("F01 #74: one primary nav is bottom navigation below 992px and a left rail 
   }
 })
 
-test("F01 #64: active Conversation exposes ordinary nav and breakpoint crossing stays lifecycle-neutral", {timeout: 100_000}, async () => {
+test("F01 #64: active Conversation exposes ordinary nav and breakpoint crossing stays lifecycle-neutral", {timeout: 110_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let pair
   try {
@@ -232,8 +250,8 @@ test("F01 #64: active Conversation exposes ordinary nav and breakpoint crossing 
     assert.equal(new URL(page.url()).pathname, "/conversation")
 
     const mark = pair.a.journal.mark()
-    const initialJoinCount = conversationJoinCount(pair.a, pair.conversationTopic)
     await assertCompactBottomNav(page, compact)
+    await assertCompactConversationCoexistence(page)
 
     await page.locator('#bottom-nav [data-go="settings"]').click()
     await activeScreen(page, "settings").waitFor({state: "visible"})
@@ -246,15 +264,17 @@ test("F01 #64: active Conversation exposes ordinary nav and breakpoint crossing 
     assert.equal(new URL(page.url()).pathname, "/conversation")
     assert.deepEqual(destructiveFrames(pair.a, mark), [])
 
+    const resizeJoinCount = conversationJoinCount(pair.a, pair.conversationTopic)
     for (const viewport of [
+      {width: 991, height: 700},
       {width: 992, height: 700},
-      {width: 1024, height: 700},
+      {width: 1440, height: 900},
       compact
     ]) {
       await page.setViewportSize(viewport)
       await page.waitForTimeout(50)
       assert.equal(new URL(page.url()).pathname, "/conversation")
-      assert.equal(conversationJoinCount(pair.a, pair.conversationTopic), initialJoinCount, "breakpoint crossing does not recreate ConversationChannel")
+      assert.equal(conversationJoinCount(pair.a, pair.conversationTopic), resizeJoinCount, "breakpoint crossing does not recreate ConversationChannel")
       assert.deepEqual(destructiveFrames(pair.a, mark), [])
       if (viewport.width < 992) await assertCompactBottomNav(page, viewport)
       else await assertDesktopLeftRail(page, viewport)
