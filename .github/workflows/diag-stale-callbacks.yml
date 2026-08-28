@@ -1,0 +1,53 @@
+name: Diagnostic stale-callback contracts
+
+on:
+  push:
+    branches:
+      - diag/stale-callbacks-5e3060d3
+
+jobs:
+  node-contract:
+    name: contract ${{ matrix.test }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - test/js/team10_expression_surface_test.mjs
+          - test/js/expressive_media_test.mjs
+          - test/js/normal_media_test.mjs
+          - test/js/voice_notes_test.mjs
+          - test/js/terminal_truth_client_test.mjs
+          - test/js/session_reconciliation_guard_test.mjs
+          - test/js/live_call_test.mjs
+          - test/js/reply_quote_test.mjs
+          - test/js/reaction_test.mjs
+          - test/js/message_edit_test.mjs
+          - test/js/message_unsend_test.mjs
+          - test/js/pin_test.mjs
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Run unchanged contract
+        run: node --test "${{ matrix.test }}"
+
+  view-once:
+    name: contract test/js/view_once_test.mjs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Run unchanged contract with browser harness
+        run: node --import ./test/js/browser_module_harness.mjs --test test/js/view_once_test.mjs
