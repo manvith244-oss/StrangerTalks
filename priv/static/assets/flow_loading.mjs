@@ -1,3 +1,9 @@
+export {messageSendTimeoutDisposition} from "./message_retry_policy.mjs"
+
+if (typeof window !== "undefined") {
+  await import("./message_failed_retry.mjs")
+}
+
 export const FLOW_PHASE = Object.freeze({
   APP_BOOT: "app_boot",
   MATCHMAKING_ADMISSION: "matchmaking_admission",
@@ -61,10 +67,6 @@ export function loadingPresentation(phase, context = {}) {
     default:
       throw new Error(`Unknown F-07 flow phase: ${phase}`)
   }
-}
-
-export function messageSendTimeoutDisposition({socketConnected, channelState}) {
-  return socketConnected === true && channelState === "joined" ? "failed" : "reconcile"
 }
 
 export function createOperationGuard() {
