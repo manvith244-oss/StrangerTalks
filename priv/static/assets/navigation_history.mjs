@@ -65,11 +65,6 @@ function isNavigationState(state) {
   return Boolean(state && typeof state === "object" && state[NAVIGATION_STATE_KEY] === true)
 }
 
-function settleTerminalPresentation() {
-  if (typeof globalThis.requestAnimationFrame !== "function") return Promise.resolve()
-  return new Promise((resolve) => globalThis.requestAnimationFrame(() => resolve()))
-}
-
 export function createNavigationHistory({history, location, getCanonicalSnapshot, applyRoute}) {
   if (!history || typeof history.pushState !== "function" || typeof history.replaceState !== "function") {
     throw new TypeError("history with pushState/replaceState is required")
@@ -223,7 +218,9 @@ export function createNavigationHistory({history, location, getCanonicalSnapshot
     }
 
     const result = applyDecision(decision, "none")
-    if (terminalPath && result.applied) await settleTerminalPresentation()
+    if (eventName === "conversation_ended" && result.applied) {
+      globalThis.document?.querySelector?.("#consent")?.focus()
+    }
     return result
   }
 
