@@ -1,11 +1,7 @@
 name: StrangerTalks PostgreSQL R2 Backup
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - .github/workflows/postgres-r2-backup.yml
+  workflow_call:
   workflow_dispatch:
   schedule:
     - cron: '17 2 * * *'
