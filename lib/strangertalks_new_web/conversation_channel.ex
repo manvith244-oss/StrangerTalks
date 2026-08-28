@@ -725,6 +725,7 @@ defmodule StrangertalksNewWeb.ConversationChannel do
     with true <- allowed_keys?(params, ["category", "evidence", "target_client_message_id"]),
          true <- is_nil(evidence) or is_binary(evidence),
          {:ok, validated_target_id} <- validate_reply_target_id(target_client_message_id),
+         :ok <- authorize_live_report_channel(socket),
          :ok <- rate_limit(socket, :report, 10, 3_600_000),
          {:ok, report} <-
            Reports.submit_conversation_report(
@@ -1396,6 +1397,27 @@ defmodule StrangertalksNewWeb.ConversationChannel do
        do: {:ok, rev}
 
   defp validate_expected_revision(_), do: {:error, :invalid_revision}
+
+  defp authorize_live_report_channel(socket) do
+    participant_id = socket.assigns.participant_id
+
+    case Conversations.get_conversation(conversation_id(socket)) do
+      nil ->
+        {:error, :conversation_not_found}
+
+      conversation ->
+        cond do
+          participant_id not in [conversation.participant_a_id, conversation.participant_b_id] ->
+            {:error, :not_conversation_member}
+
+          conversation.conversation_status not in [:PENDING, :ACTIVE, :PAUSED] ->
+            {:error, :conversation_unavailable}
+
+          true ->
+            :ok
+        end
+    end
+  end
 
   defp rate_limit(socket, bucket, limit, window_ms) do
     case StrangertalksNew.RateLimiter.allow(

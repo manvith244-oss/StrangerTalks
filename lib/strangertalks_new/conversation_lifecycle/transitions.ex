@@ -6,6 +6,8 @@ defmodule StrangertalksNew.ConversationLifecycle.Transitions do
   consistently applies durable timestamps and ending metadata.
   """
 
+  import Ecto.Query, warn: false
+
   alias StrangertalksNew.Conversation
   alias StrangertalksNew.Repo
 
@@ -183,29 +185,53 @@ defmodule StrangertalksNew.ConversationLifecycle.Transitions do
 
   defp apply_transition(conv, target_status, event, attrs) do
     try do
-      case conv
-           |> Conversation.changeset(attrs)
-           |> Repo.update() do
-        {:ok, updated} ->
-          StrangertalksNew.Telemetry.execute(
-            [:conversation, :transitioned],
-            %{count: 1},
-            %{
-              from_status: conv.conversation_status,
-              to_status: target_status,
-              lifecycle_event: event
-            }
-          )
+      changeset = Conversation.changeset(conv, attrs)
 
-          {:ok, updated}
-
-        {:error, reason} ->
-          {:error, reason}
+      if changeset.valid? do
+        persist_if_canonical(conv, changeset, target_status, event)
+      else
+        {:error, changeset}
       end
     rescue
       exception -> {:error, exception}
     catch
       :exit, reason -> {:error, reason}
+    end
+  end
+
+  defp persist_if_canonical(conv, changeset, target_status, event) do
+    expected_status = conv.conversation_status
+
+    query =
+      from current in Conversation,
+        where:
+          current.conversation_id == ^conv.conversation_id and
+            current.conversation_status == ^expected_status
+
+    case Repo.update_all(query, set: Map.to_list(changeset.changes)) do
+      {1, _} ->
+        updated = Repo.get!(Conversation, conv.conversation_id)
+
+        StrangertalksNew.Telemetry.execute(
+          [:conversation, :transitioned],
+          %{count: 1},
+          %{
+            from_status: expected_status,
+            to_status: target_status,
+            lifecycle_event: event
+          }
+        )
+
+        {:ok, updated}
+
+      {0, _} ->
+        case Repo.get(Conversation, conv.conversation_id) do
+          nil ->
+            {:error, :conversation_not_found}
+
+          %Conversation{conversation_status: canonical_status} ->
+            {:error, {:invalid_transition, canonical_status, event}}
+        end
     end
   end
 end
