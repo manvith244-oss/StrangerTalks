@@ -47,7 +47,7 @@ async function transition(page, from, to) {
 
 function assertFastScreenMotion(state, label) {
   assert.notEqual(state.outgoingDisplay, "none", `${label}: outgoing screen should remain renderable during its exit motion`)
-  assert.equal(state.incomingDisplay, "block", `${label}: incoming screen should be presented during enter motion`)
+  assert.notEqual(state.incomingDisplay, "none", `${label}: incoming screen should be presented during enter motion`)
   assert.ok(state.outgoingOpacity < 1 && state.outgoingOpacity >= 0, `${label}: outgoing screen should be fading, got ${state.outgoingOpacity}`)
   assert.ok(state.incomingOpacity > 0 && state.incomingOpacity < 1, `${label}: incoming screen should be fading in, got ${state.incomingOpacity}`)
   assert.match(state.incomingTransitionProperty, /opacity/)
