@@ -39,8 +39,6 @@ function conversationScreenActive() {
 }
 
 async function currentRuntime() {
-  if (!conversationScreenActive()) return null
-
   const identity = await getRecord(IDENTITY_KEY).catch(() => null)
   if (!identity?.value?.participant_id || !identity?.value?.token) return null
 
@@ -203,7 +201,7 @@ function injectUi() {
 
 async function selectFile(file) {
   const runtime = await currentRuntime()
-  if (!runtime) {
+  if (!runtime || !conversationScreenActive()) {
     announce("Open an active Conversation before choosing media.")
     return
   }
@@ -365,7 +363,7 @@ async function openPhoto(item, runtime, trigger) {
   try {
     const url = await mediaUrl(runtime, item)
     const current = await currentRuntime()
-    if (!current || current.conversationId !== runtime.conversationId) return
+    if (!current || current.conversationId !== runtime.conversationId || !conversationScreenActive()) return
 
     const image = document.createElement("img")
     image.src = url
@@ -511,6 +509,11 @@ async function syncNormalMedia() {
     }
 
     transitionConversation(runtime.conversationId)
+    if (!conversationScreenActive()) {
+      closeViewer({restoreFocus: false})
+      return
+    }
+
     const response = await fetch(
       `/api/conversations/${encodeURIComponent(runtime.conversationId)}/normal-media`,
       {headers: {authorization: `Bearer ${runtime.token}`}, cache: "no-store"}
@@ -523,7 +526,7 @@ async function syncNormalMedia() {
     const body = await response.json().catch(() => ({items: []}))
     const items = dedupeNormalMedia(body.items || [])
     const current = await currentRuntime()
-    if (!current || current.conversationId !== runtime.conversationId) return
+    if (!current || current.conversationId !== runtime.conversationId || !conversationScreenActive()) return
 
     for (const item of items) await renderMedia(item, runtime)
     await reconcileTimeline(runtime, items)
