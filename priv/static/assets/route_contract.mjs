@@ -107,8 +107,8 @@ export function resolveRequestedRoute(route, snapshot) {
     if (canonicalState === "CONVERSATION" && snapshot?.conversation) {
       return {path: "/conversation", screen: "conversation", replace: true, reason: "active_conversation_supersedes_stale_location"}
     }
-    if (canonicalState === "AVAILABLE") {
-      return {path: "/", screen: "doors", replace: true, reason: "available_supersedes_terminal_location"}
+    if (canonicalState === "AVAILABLE" && snapshot?.terminal_retention_pending === false) {
+      return {path: "/", screen: "doors", replace: true, reason: "available_supersedes_resolved_terminal_location"}
     }
   }
 
