@@ -187,6 +187,7 @@ export class LiveCallCoordinator {
     this.transportAudioTransceiver = null
     this.transportVideoTransceiver = null
     this.activeMediaAcquisitionGeneration = 0
+    this.initiationOperationGeneration = 0
   }
 
   setChannel(channel) {
@@ -532,25 +533,26 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
     this.peerVoiceEffectActive = false
     this.notifyStateChange()
 
+    const initiationOperationGeneration = ++this.initiationOperationGeneration
     const initiationConversationId = this.conversationId
+    const initiationIsCurrent = () =>
+      this.initiationOperationGeneration === initiationOperationGeneration &&
+      this.status === CALL_STATUS.PENDING_OUTGOING &&
+      this.role === "caller" &&
+      this.callAttemptId === null &&
+      this.conversationId === initiationConversationId
+
     return new Promise((resolve, reject) => {
       if (!this.channel) return reject(new Error("Channel unavailable"))
       this.channel.push("call:initiate", { call_type: callType })
         .receive("ok", (res) => {
-          const stillCurrent =
-            this.status === CALL_STATUS.PENDING_OUTGOING &&
-            this.role === "caller" &&
-            this.callAttemptId === null &&
-            this.conversationId === initiationConversationId
-          if (!stillCurrent) { resolve({ ...res, stale: true }); return }
+          if (!initiationIsCurrent()) { resolve({ ...res, stale: true }); return }
           this.callAttemptId = res.call_attempt_id
           this.notifyStateChange()
           resolve(res)
         })
         .receive("error", (err) => {
-          if (this.status === CALL_STATUS.PENDING_OUTGOING && this.role === "caller" && this.callAttemptId === null && this.conversationId === initiationConversationId) {
-            this.teardown("initiate_failed")
-          }
+          if (initiationIsCurrent()) this.teardown("initiate_failed")
           reject(err)
         })
     })
