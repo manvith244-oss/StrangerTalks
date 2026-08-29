@@ -10,10 +10,9 @@ permissions:
 
 jobs:
   implement:
-    if: ${{ contains(github.event.head_commit.message, '[run-initiation-aba-fix]') }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout exact fix branch
+      - name: Checkout exact RED-tested fix branch
         uses: actions/checkout@v4
         with:
           ref: fix/media-call-initiation-aba-2026-08-29
@@ -38,31 +37,30 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
           path = Path("priv/static/assets/live_call.mjs")
           source = path.read_text()
 
-          old_state = '''    this.transportAudioTransceiver = null
+          old_state = """    this.transportAudioTransceiver = null
     this.transportVideoTransceiver = null
     this.activeMediaAcquisitionGeneration = 0
-'''
-          new_state = '''    this.transportAudioTransceiver = null
+"""
+          new_state = """    this.transportAudioTransceiver = null
     this.transportVideoTransceiver = null
     this.activeMediaAcquisitionGeneration = 0
     this.initiationOperationGeneration = 0
-'''
+"""
           if source.count(old_state) != 1:
               raise SystemExit(f"initiation generation state anchor count={source.count(old_state)}")
           source = source.replace(old_state, new_state, 1)
 
-          old_initiate = '''    const initiationConversationId = this.conversationId
+          old_initiate = """    const initiationConversationId = this.conversationId
     return new Promise((resolve, reject) => {
-      if (!this.channel) return reject(new Error("Channel unavailable"))
-      this.channel.push("call:initiate", { call_type: callType })
-        .receive("ok", (res) => {
+      if (!this.channel) return reject(new Error(\"Channel unavailable\"))
+      this.channel.push(\"call:initiate\", { call_type: callType })
+        .receive(\"ok\", (res) => {
           const stillCurrent =
             this.status === CALL_STATUS.PENDING_OUTGOING &&
-            this.role === "caller" &&
+            this.role === \"caller\" &&
             this.callAttemptId === null &&
             this.conversationId === initiationConversationId
           if (!stillCurrent) { resolve({ ...res, stale: true }); return }
@@ -70,48 +68,46 @@ jobs:
           this.notifyStateChange()
           resolve(res)
         })
-        .receive("error", (err) => {
-          if (this.status === CALL_STATUS.PENDING_OUTGOING && this.role === "caller" && this.callAttemptId === null && this.conversationId === initiationConversationId) {
-            this.teardown("initiate_failed")
+        .receive(\"error\", (err) => {
+          if (this.status === CALL_STATUS.PENDING_OUTGOING && this.role === \"caller\" && this.callAttemptId === null && this.conversationId === initiationConversationId) {
+            this.teardown(\"initiate_failed\")
           }
           reject(err)
         })
     })
-'''
-          new_initiate = '''    const initiationOperationGeneration = ++this.initiationOperationGeneration
+"""
+          new_initiate = """    const initiationOperationGeneration = ++this.initiationOperationGeneration
     const initiationConversationId = this.conversationId
     const initiationIsCurrent = () =>
       this.initiationOperationGeneration === initiationOperationGeneration &&
       this.status === CALL_STATUS.PENDING_OUTGOING &&
-      this.role === "caller" &&
+      this.role === \"caller\" &&
       this.callAttemptId === null &&
       this.conversationId === initiationConversationId
 
     return new Promise((resolve, reject) => {
-      if (!this.channel) return reject(new Error("Channel unavailable"))
-      this.channel.push("call:initiate", { call_type: callType })
-        .receive("ok", (res) => {
+      if (!this.channel) return reject(new Error(\"Channel unavailable\"))
+      this.channel.push(\"call:initiate\", { call_type: callType })
+        .receive(\"ok\", (res) => {
           if (!initiationIsCurrent()) { resolve({ ...res, stale: true }); return }
           this.callAttemptId = res.call_attempt_id
           this.notifyStateChange()
           resolve(res)
         })
-        .receive("error", (err) => {
-          if (initiationIsCurrent()) this.teardown("initiate_failed")
+        .receive(\"error\", (err) => {
+          if (initiationIsCurrent()) this.teardown(\"initiate_failed\")
           reject(err)
         })
     })
-'''
+"""
           if source.count(old_initiate) != 1:
               raise SystemExit(f"initiate authority anchor count={source.count(old_initiate)}")
           source = source.replace(old_initiate, new_initiate, 1)
           path.write_text(source)
           PY
-
           git diff --check
-          git diff -- priv/static/assets/live_call.mjs
 
-      - name: Prove hostile GREEN and preserve T4 suite
+      - name: Prove hostile GREEN and preserve T4-007
         run: node --test --test-concurrency=1 test/js/team4_initiation_aba_test.mjs test/js/team4_media_authority_test.mjs
 
       - name: Commit only production fix
