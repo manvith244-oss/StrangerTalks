@@ -103,7 +103,7 @@ test("real browser Keep -> encrypted restore -> Delete tombstone -> hostile stal
     ;({a, b} = await matchPair(browser))
 
     await a.page.locator("#message-input").fill("continuity-browser-message")
-    await a.page.locator("#message-form button.primary").click()
+    await a.page.getByRole("button", {name: "Send message", exact: true}).click()
     await b.page.locator("#messages li", {hasText: "continuity-browser-message"}).waitFor({state: "visible", timeout: WAIT})
 
     await endConversation(a.page)
@@ -242,7 +242,7 @@ test("real browser Bond -> reconnect -> Block -> stale Bond reconnect is safety-
     if ((await actions.getAttribute("open")) === null) await actions.locator("summary").click()
     a.page.once("dialog", (dialog) => dialog.accept())
     await a.page.locator("#block").click()
-    await a.page.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("blocked from future matching"), null, {timeout: WAIT})
+    await a.page.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("Conversation ended. Choose what this device should retain."), null, {timeout: WAIT})
 
     assert.ok((await records(a.page)).some((record) => record.type === "relationship" && record.value?.relationship_id === relationshipId), "private retained Bond may remain locally after Block")
 
