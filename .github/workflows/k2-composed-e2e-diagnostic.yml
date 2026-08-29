@@ -1,0 +1,143 @@
+name: K2 Composed E2E Diagnostic Run
+
+on:
+  push:
+    branches:
+      - ci/composed-tap-summary-2026-08-29
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  TARGET_SHA: 142f30949a2e1e4c4bd87360152c9e7bc66e7ba3
+  PORT: "4000"
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+
+jobs:
+  composed-e2e:
+    name: Browser composed-e2e diagnostics
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Exact checkout
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install browser dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Prepare isolated browser database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start isolated Phoenix runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/k2-composed-e2e.log 2>&1 &
+          echo $! > /tmp/k2-composed-e2e.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/k2-composed-e2e.pid)" 2>/dev/null; then cat /tmp/k2-composed-e2e.log; exit 1; fi
+            sleep 1
+          done
+          cat /tmp/k2-composed-e2e.log
+          exit 1
+      - name: Run exact composed E2E authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 test/js/browser_e2e_test.mjs 2>&1 | tee /tmp/k2-composed-e2e.tap
+      - name: Publish composed TAP summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          tap=/tmp/k2-composed-e2e.tap
+          {
+            echo "## Browser TAP summary — composed-e2e"
+            echo
+            echo "- Tested SHA: \`$TARGET_SHA\`"
+            if [ ! -s "$tap" ]; then
+              echo "- TAP output unavailable: browser authority did not produce a TAP file."
+            else
+              echo
+              echo "### Totals"
+              echo '```text'
+              grep -E '^# (tests|pass|fail|cancelled|skipped|todo|duration_ms) ' "$tap" || true
+              echo '```'
+              echo
+              echo "### Failing TAP blocks"
+              echo '```text'
+              awk '
+                /^not ok / {
+                  if (capture) print ""
+                  capture=1
+                  print
+                  next
+                }
+                capture && (/^# Subtest:/ || /^ok / || /^1\.\.[0-9]+$/) { capture=0 }
+                capture {
+                  print
+                  if ($0 ~ /^  \.\.\.$/) {
+                    capture=0
+                    print ""
+                  }
+                }
+              ' "$tap"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Stop Phoenix
+        if: always()
+        run: |
+          if [ -f /tmp/k2-composed-e2e.pid ]; then kill "$(cat /tmp/k2-composed-e2e.pid)" 2>/dev/null || true; fi
+      - name: Phoenix log on failure
+        if: failure()
+        run: cat /tmp/k2-composed-e2e.log || true
+      - name: Exact-SHA clean proof
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
