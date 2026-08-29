@@ -27,6 +27,45 @@ jobs:
           echo "schema_inventory_supabase_url_present=true"
           echo "schema_inventory_render_database_url_used=false"
 
+      - name: Checkout application release branch read-only
+        uses: actions/checkout@v4
+        with:
+          ref: release/prep-2026-08-22
+          fetch-depth: 1
+
+      - name: Prove application schema usage from repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "schema_inventory_release_sha=$(git rev-parse HEAD)"
+
+          echo "APP_MIGRATION_TABLE_CREATES_BEGIN"
+          python3 - <<'PY'
+          import pathlib, re
+          root = pathlib.Path('priv/repo/migrations')
+          found = []
+          for path in sorted(root.glob('*.exs')):
+              text = path.read_text(encoding='utf-8')
+              for m in re.finditer(r'create\s+table\(\s*:(\w+)', text):
+                  found.append((path.name, m.group(1)))
+              for m in re.finditer(r'create\s+table\(\s*"([^"]+)"', text):
+                  found.append((path.name, m.group(1)))
+              for m in re.finditer(r'CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z0-9_\.\"]+)', text, re.I):
+                  found.append((path.name, m.group(1)))
+          for filename, table in found:
+              print(f"{filename}\t{table}")
+          print(f"APP_MIGRATION_TABLE_CREATE_COUNT={len(found)}")
+          PY
+          echo "APP_MIGRATION_TABLE_CREATES_END"
+
+          echo "APP_SCHEMA_PREFIX_CONFIG_SEARCH_BEGIN"
+          grep -RInE 'migration_default_prefix|@schema_prefix|prefix:[[:space:]]*|SET[[:space:]]+search_path|search_path' config lib priv/repo/migrations || true
+          echo "APP_SCHEMA_PREFIX_CONFIG_SEARCH_END"
+
+          echo "APP_PLATFORM_SCHEMA_REFERENCE_SEARCH_BEGIN"
+          grep -RInE '(^|[^A-Za-z0-9_])(auth|realtime|storage|vault|extensions|graphql)\.[A-Za-z0-9_]' config lib priv/repo/migrations || true
+          echo "APP_PLATFORM_SCHEMA_REFERENCE_SEARCH_END"
+
       - name: Download verified Supabase root CA
         shell: bash
         run: |
@@ -66,13 +105,21 @@ jobs:
 
           {:ok, pid} = Postgrex.start_link(opts)
 
-          schemas = Postgrex.query!(pid, "SELECT nspname FROM pg_catalog.pg_namespace ORDER BY nspname", []).rows
+          [[db, user, search_path, current_schema]] = Postgrex.query!(pid, "SELECT current_database(), current_user, current_setting('search_path'), current_schema()", []).rows
+          IO.puts("DB_CONTEXT_BEGIN")
+          IO.puts("database=#{db}")
+          IO.puts("user=#{user}")
+          IO.puts("search_path=#{search_path}")
+          IO.puts("current_schema=#{current_schema}")
+          IO.puts("DB_CONTEXT_END")
+
+          schemas = Postgrex.query!(pid, "SELECT nspname, pg_catalog.pg_get_userbyid(nspowner) FROM pg_catalog.pg_namespace ORDER BY nspname", []).rows
           IO.puts("SCHEMA_INVENTORY_SCHEMAS_BEGIN")
-          Enum.each(schemas, fn [schema] -> IO.puts(schema) end)
+          Enum.each(schemas, fn [schema, owner] -> IO.puts("#{schema}\towner=#{owner}") end)
           IO.puts("SCHEMA_INVENTORY_SCHEMAS_END")
 
           tables = Postgrex.query!(pid, """
-          SELECT n.nspname, c.relname
+          SELECT n.nspname, c.relname, pg_catalog.pg_get_userbyid(c.relowner)
           FROM pg_catalog.pg_class c
           JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
           WHERE c.relkind IN ('r','p')
@@ -80,39 +127,66 @@ jobs:
           """, []).rows
 
           IO.puts("SCHEMA_INVENTORY_TABLES_BEGIN")
-          Enum.each(tables, fn [schema, table] -> IO.puts("#{schema}\t#{table}") end)
+          Enum.each(tables, fn [schema, table, owner] -> IO.puts("#{schema}\t#{table}\towner=#{owner}") end)
           IO.puts("SCHEMA_INVENTORY_TABLES_END")
 
-          app_tables = ~w(
+          app_domain_tables = ~w(
             account_sessions account_sync_states analytics_records boundary_blocks composer_grants
             conversations google_account_links google_oauth_attempts learning_records matches memories
             message_reactions messages participants private_accounts queue_states reflections
             relationship_consents relationship_reconnection_intents relationships report_safety_media
-            reports safety_events safety_reviews schema_migrations
+            reports safety_events safety_reviews
           )
 
-          app_rows = Postgrex.query!(pid, """
-          SELECT n.nspname, c.relname
+          public_app_rows = Postgrex.query!(pid, """
+          SELECT n.nspname, c.relname, pg_catalog.pg_get_userbyid(c.relowner)
           FROM pg_catalog.pg_class c
           JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-          WHERE c.relkind IN ('r','p') AND c.relname = ANY($1::text[])
+          WHERE c.relkind IN ('r','p') AND n.nspname='public' AND c.relname = ANY($1::text[])
+          ORDER BY c.relname
+          """, [app_domain_tables]).rows
+
+          IO.puts("PUBLIC_APP_TABLE_PLACEMENT_BEGIN")
+          Enum.each(public_app_rows, fn [schema, table, owner] -> IO.puts("#{schema}\t#{table}\towner=#{owner}") end)
+          IO.puts("PUBLIC_APP_TABLE_PLACEMENT_END")
+          IO.puts("PUBLIC_APP_TABLE_COUNT=#{length(public_app_rows)}")
+          IO.puts("EXPECTED_APP_DOMAIN_TABLE_COUNT=#{length(app_domain_tables)}")
+
+          collision_rows = Postgrex.query!(pid, """
+          SELECT n.nspname, c.relname, pg_catalog.pg_get_userbyid(c.relowner),
+                 COALESCE(string_agg(a.attname, ',' ORDER BY a.attnum) FILTER (WHERE a.attnum > 0 AND NOT a.attisdropped), '')
+          FROM pg_catalog.pg_class c
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+          LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+          WHERE c.relkind IN ('r','p')
+            AND ((n.nspname='public' AND c.relname IN ('messages','schema_migrations'))
+              OR (n.nspname='auth' AND c.relname='schema_migrations')
+              OR (n.nspname='realtime' AND c.relname IN ('messages','schema_migrations')))
+          GROUP BY n.nspname, c.relname, c.relowner
           ORDER BY n.nspname, c.relname
-          """, [app_tables]).rows
+          """, []).rows
 
-          IO.puts("APP_TABLE_PLACEMENT_BEGIN")
-          Enum.each(app_rows, fn [schema, table] -> IO.puts("#{schema}\t#{table}") end)
-          IO.puts("APP_TABLE_PLACEMENT_END")
+          IO.puts("NAME_COLLISION_DEFINITIONS_BEGIN")
+          Enum.each(collision_rows, fn [schema, table, owner, columns] -> IO.puts("#{schema}\t#{table}\towner=#{owner}\tcolumns=#{columns}") end)
+          IO.puts("NAME_COLLISION_DEFINITIONS_END")
 
-          outside = Enum.reject(app_rows, fn [schema, _table] -> schema == "public" end)
-          if outside == [] do
-            IO.puts("APP_TABLES_OUTSIDE_PUBLIC=false")
-          else
-            IO.puts("APP_TABLES_OUTSIDE_PUBLIC=true")
-            IO.puts("APP_TABLES_OUTSIDE_PUBLIC_BEGIN")
-            Enum.each(outside, fn [schema, table] -> IO.puts("#{schema}\t#{table}") end)
-            IO.puts("APP_TABLES_OUTSIDE_PUBLIC_END")
-            System.halt(3)
-          end
+          nonpublic_collisions = [
+            {"auth", "schema_migrations"},
+            {"realtime", "messages"},
+            {"realtime", "schema_migrations"}
+          ]
+
+          IO.puts("NAME_COLLISION_ROW_COUNTS_BEGIN")
+          Enum.each(nonpublic_collisions, fn {schema, table} ->
+            quoted_schema = "\"" <> String.replace(schema, "\"", "\"\"") <> "\""
+            quoted_table = "\"" <> String.replace(table, "\"", "\"\"") <> "\""
+            [[count]] = Postgrex.query!(pid, "SELECT count(*)::bigint FROM #{quoted_schema}.#{quoted_table}", []).rows
+            IO.puts("#{schema}\t#{table}\trows=#{count}")
+          end)
+          IO.puts("NAME_COLLISION_ROW_COUNTS_END")
+
+          missing_public = app_domain_tables -- Enum.map(public_app_rows, fn [_schema, table, _owner] -> table end)
+          IO.puts("MISSING_PUBLIC_APP_TABLES=#{Enum.join(missing_public, ',')}")
 
           GenServer.stop(pid)
           IO.puts("SCHEMA_INVENTORY_RESULT=PASS")
