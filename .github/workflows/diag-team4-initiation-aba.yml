@@ -6,26 +6,31 @@ on:
       - diag/team4-initiation-aba-proof-2026-08-29
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   proof:
     runs-on: ubuntu-latest
-    env:
-      TARGET_SHA: 408f28ac747276022aab955c7de9ef1fa04b6c2e
     steps:
-      - name: Checkout exact target
+      - name: Checkout diagnostic tooling
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.TARGET_SHA }}
+          ref: diag/team4-initiation-aba-proof-2026-08-29
+          path: diag
 
-      - name: Prove exact target and clean checkout
+      - name: Checkout exact RED-tested fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/media-call-initiation-aba-2026-08-29
+          fetch-depth: 0
+          path: target
+
+      - name: Prove RED-tested parent
         shell: bash
+        working-directory: target
         run: |
           set -euo pipefail
-          echo "TARGET_SHA=$TARGET_SHA"
-          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD)" = "408f28ac747276022aab955c7de9ef1fa04b6c2e"
           git diff --check
           test -z "$(git status --porcelain)"
 
@@ -34,5 +39,24 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Run initiation ABA hostile test
-        run: node --test --test-concurrency=1 test/js/team4_initiation_aba_test.mjs
+      - name: Apply narrow initiation identity
+        run: python3 diag/.github/scripts/apply_team4_initiation_aba_fix.py target
+
+      - name: Prove hostile GREEN and preserve T4-007
+        working-directory: target
+        run: node --test --test-concurrency=1 test/js/team4_initiation_aba_test.mjs test/js/team4_media_authority_test.mjs
+
+      - name: Commit only production fix
+        shell: bash
+        working-directory: target
+        run: |
+          set -euo pipefail
+          git diff --check
+          test "$(git status --porcelain | wc -l)" -eq 1
+          git status --short | grep '^ M priv/static/assets/live_call.mjs$'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add priv/static/assets/live_call.mjs
+          git commit -m 'fix: scope call initiation transport authority'
+          git push origin HEAD:fix/media-call-initiation-aba-2026-08-29
+          echo "FIX_SHA=$(git rev-parse HEAD)"
