@@ -57,10 +57,10 @@ async function doorVisualState(door) {
   })
 }
 
-async function tabUntil(page, predicate, label, maxTabs = 24) {
+async function tabUntil(page, predicate, label, maxTabs = 24, argument = null) {
   for (let attempt = 0; attempt < maxTabs; attempt += 1) {
     await page.keyboard.press("Tab")
-    const matched = await page.evaluate(predicate)
+    const matched = await page.evaluate(predicate, argument)
     if (matched) return
   }
   assert.fail(`keyboard focus never reached ${label}`)
@@ -90,7 +90,8 @@ test("all four Doors have identical computed geometry regardless of data-door", 
   let app
   try {
     app = await openDoors(browser, {width: 1440, height: 900})
-    const states = await Promise.all(await app.page.locator("button.door").all().then(doors => doors.map(door => doorVisualState(door))))
+    const doors = await app.page.locator("button.door").all()
+    const states = await Promise.all(doors.map(door => doorVisualState(door)))
     const geometry = states.map(({height, minHeight, paddingTop, paddingRight, paddingBottom, paddingLeft, borderRadius, headingFontSize, copyFontSize}) => ({
       height,
       minHeight,
@@ -164,8 +165,7 @@ test("unselected Doors are neutral, hover/focus preview is restrained, and selec
 
     await app.page.mouse.move(0, 0)
     await tabUntil(app.page, () => document.activeElement?.matches("button.door") === true, "a Door")
-    const focusedDoor = app.page.locator("button.door").filter({has: app.page.locator(":focus")})
-    const focused = await doorVisualState(focusedDoor)
+    const focused = await doorVisualState(app.page.locator("button.door:focus"))
     assert.ok(focused.accentOpacity >= 0.03 && focused.accentOpacity <= 0.05, `focus preview stays within 3–5%, got ${focused.accentOpacity}`)
     assert.notEqual(focused.backgroundColor, resting.backgroundColor, "keyboard focus reveals a subtle Door tint")
 
@@ -192,7 +192,7 @@ test("keyboard-only focus indicator is visible and fixed across all Doors and la
         const active = document.activeElement
         const doors = [...document.querySelectorAll("button.door")]
         return doors.indexOf(active) === expectedIndex
-      }, `Door ${index + 1}`, 12)
+      }, `Door ${index + 1}`, 12, index)
       const state = await doorVisualState(app.page.locator("button.door").nth(index))
       assert.notEqual(state.outlineStyle, "none", `Door ${index + 1} has a visible focus outline`)
       assert.ok(Number.parseFloat(state.outlineWidth) >= 3, `Door ${index + 1} focus outline is at least 3px`)
@@ -202,7 +202,7 @@ test("keyboard-only focus indicator is visible and fixed across all Doors and la
     await tabUntil(app.page, () => document.activeElement?.id === "conversation-language", "Conversation Language", 8)
     const languageIndicator = await app.page.locator("#conversation-language").evaluate(element => {
       const style = getComputedStyle(element)
-      return {color: style.outlineColor, style: style.outlineStyle, width: style.outlineWidth, minHeight: style.minHeight, height: style.height}
+      return {color: style.outlineColor, style: style.outlineStyle, width: style.outlineWidth, height: style.height}
     })
     assert.notEqual(languageIndicator.style, "none", "language control has a visible focus outline")
     assert.ok(Number.parseFloat(languageIndicator.width) >= 3, "language focus outline is at least 3px")
