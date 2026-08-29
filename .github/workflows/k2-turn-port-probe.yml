@@ -10,17 +10,172 @@ on:
 permissions:
   contents: read
 
+env:
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  PORT: "4000"
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+  SOURCE_SHA: 2c53f29dbde5d7848b42bfe3d3c44054d01f153f
+
 jobs:
   probe:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
-      - name: Show TURN listener state
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+      - name: Prove exact source
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install app dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Prove baseline TURN listener is absent
         shell: bash
         run: |
           set -euo pipefail
-          ss -lntu
           if ss -lntu | grep -Eq ':3478[[:space:]]'; then
             echo 'TURN_BASELINE_LISTENER=present'
-          else
-            echo 'TURN_BASELINE_LISTENER=absent'
+            exit 1
           fi
+          echo 'TURN_BASELINE_LISTENER=absent'
+      - name: Start coturn matching test credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y coturn
+          cat > /tmp/turnserver.conf <<'EOF'
+          listening-ip=127.0.0.1
+          relay-ip=127.0.0.1
+          listening-port=3478
+          min-port=49160
+          max-port=49200
+          fingerprint
+          use-auth-secret
+          static-auth-secret=team6-test-only-coturn-secret
+          realm=strangertalks.test
+          allow-loopback-peers
+          no-multicast-peers
+          no-cli
+          no-tls
+          no-dtls
+          EOF
+          sudo turnserver -c /tmp/turnserver.conf > /tmp/k2-coturn.log 2>&1 &
+          echo $! > /tmp/k2-coturn.pid
+          for attempt in $(seq 1 30); do
+            if ss -lun | grep -Eq ':3478[[:space:]]'; then
+              echo 'TURN_LISTENER=present'
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/k2-coturn.log
+          exit 1
+      - name: Require real ACTIVE state in targeted browser scenarios
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('test/js/browser_e2e_test.mjs')
+          text = path.read_text()
+          pair_wait = '''    await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
+          await pair.b.page.locator("#live-call-active").waitFor({state: "visible"})
+          '''
+          active_wait = pair_wait + '''    await pair.a.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+          await pair.b.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+          '''
+          if text.count(pair_wait) < 2:
+            raise SystemExit('expected pair wait in RTV and REACTION')
+          text = text.replace(pair_wait, active_wait, 2)
+          ring_old = '''    await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
+
+          // In active call, Ring has active class
+          '''
+          ring_new = '''    await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
+          await pair.a.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+          await pair.b.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+
+          // In active call, Ring has active class
+          '''
+          if text.count(ring_old) != 1:
+            raise SystemExit(f'expected one ring wait, found {text.count(ring_old)}')
+          path.write_text(text.replace(ring_old, ring_new, 1))
+          PY
+      - name: Prepare isolated browser database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start Phoenix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/k2-turn-phoenix.log 2>&1 &
+          echo $! > /tmp/k2-turn-phoenix.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/k2-turn-phoenix.pid)" 2>/dev/null; then
+              cat /tmp/k2-turn-phoenix.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/k2-turn-phoenix.log
+          exit 1
+      - name: Run 85 86 87 with real TURN and ACTIVE proof
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test --test-concurrency=1 --test-name-pattern='Feature 1Q E2E-(RTV|REACTION|RING)' test/js/browser_e2e_test.mjs 2>&1 | tee /tmp/k2-turn-proof.tap
+      - name: Report targeted TAP
+        if: always()
+        shell: bash
+        run: |
+          grep -E '^# (tests|pass|fail|cancelled|skipped|todo|duration_ms) |^not ok |^ok ' /tmp/k2-turn-proof.tap || true
+          echo '--- COTURN LOG TAIL ---'
+          tail -100 /tmp/k2-coturn.log || true
+      - name: Stop runtimes
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/k2-turn-phoenix.pid ]; then kill "$(cat /tmp/k2-turn-phoenix.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/k2-coturn.pid ]; then sudo kill "$(cat /tmp/k2-coturn.pid)" 2>/dev/null || true; fi
