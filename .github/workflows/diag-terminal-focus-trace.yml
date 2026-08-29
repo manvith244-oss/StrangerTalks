@@ -1,0 +1,174 @@
+name: Diagnostic Terminal Focus Trace
+
+on:
+  push:
+    branches:
+      - diag/terminal-truth-proof-2026-08-29
+
+permissions:
+  contents: read
+
+jobs:
+  focus-trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4002"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
+      TARGET_SHA: 4f8cfe09ca1b444c8e1f3c82a751a3aa876ab8f3
+      MIX_TEST_PARTITION: _diag_terminal_focus
+
+    steps:
+      - name: Checkout exact PR head under diagnosis
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+
+      - name: Prove exact target and pristine checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "TARGET_SHA=$TARGET_SHA"
+          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare isolated browser database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            endpoint_config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint_config, :server, true))
+            repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo_config |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 16))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/diag-terminal-focus-server.log 2>&1 &
+          echo $! > /tmp/diag-terminal-focus-server.pid
+          for attempt in $(seq 1 45); do
+            pid="$(cat /tmp/diag-terminal-focus-server.pid)"
+            if ! kill -0 "$pid" 2>/dev/null; then cat /tmp/diag-terminal-focus-server.log; exit 1; fi
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/diag-terminal-focus-server.log
+          exit 1
+
+      - name: Build diagnostic-only copy of hostile test
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          src_path = Path('test/js/terminal_truth_browser_test.mjs')
+          src = src_path.read_text()
+          old = '''    const immediateEndedFocus = await a1.evaluate(() => document.activeElement?.id || "")
+              await a1.waitForFunction(() => document.activeElement?.id === "consent", null, {timeout: 2_000})
+              const settledEndedFocus = await a1.evaluate(() => document.activeElement?.id || "")
+              console.log("TEAM2_ENDED_FOCUS_STATE", JSON.stringify({immediateEndedFocus, settledEndedFocus}))
+              assert.equal(settledEndedFocus, "consent")'''.replace('          ', '')
+          new = '''    const immediateEndedFocus = await a1.evaluate(() => ({
+                id: document.activeElement?.id || "",
+                tag: document.activeElement?.tagName || "",
+                cls: document.activeElement?.className || "",
+                activeScreen: document.querySelector("[data-screen].active")?.dataset.screen || ""
+              }))
+              await a1.waitForTimeout(2500)
+              const settledEndedFocus = await a1.evaluate(() => ({
+                id: document.activeElement?.id || "",
+                tag: document.activeElement?.tagName || "",
+                cls: document.activeElement?.className || "",
+                activeScreen: document.querySelector("[data-screen].active")?.dataset.screen || ""
+              }))
+              console.log("TEAM2_ENDED_FOCUS_DIAGNOSTIC", JSON.stringify({immediateEndedFocus, settledEndedFocus}))'''.replace('          ', '')
+          if old not in src:
+              raise SystemExit('expected focus block not found; refusing diagnostic transform')
+          out = src.replace(old, new, 1)
+          Path('test/js/.diag_terminal_truth_browser_test.mjs').write_text(out)
+          PY
+
+      - name: Run only hostile A-to-B test with focus trace
+        run: node --test --test-concurrency=1 --test-name-pattern="real UI Block collapses local transient authority and stale Conversation A cannot terminate new Conversation B" test/js/.diag_terminal_truth_browser_test.mjs
+
+      - name: Remove diagnostic copy
+        if: always()
+        run: rm -f test/js/.diag_terminal_truth_browser_test.mjs
+
+      - name: Stop Phoenix
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/diag-terminal-focus-server.pid ]; then
+            pid="$(cat /tmp/diag-terminal-focus-server.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Browser server log on failure
+        if: failure()
+        run: cat /tmp/diag-terminal-focus-server.log || true
+
+      - name: Drop isolated browser database
+        if: always()
+        run: mix ecto.drop --quiet || true
+
+      - name: Confirm diagnosis left exact source pristine
+        if: always()
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git diff --check
+          test -z "$(git status --porcelain)"
