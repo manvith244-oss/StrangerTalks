@@ -26,11 +26,12 @@ jobs:
           --health-retries 10
     env:
       PROOF_DATABASE_URL: postgresql://postgres:pairing_proof_password@127.0.0.1:5432/pairing_proof
-      PROOF_REPORT_PATH: ${{ runner.temp }}/participant-pairing-proof.txt
       EXPECTED_DRIVER_SHA256: 61f2bb634304d5545b5bdd604dc063f2b9a2a3f7ca1a16dd7d44f194dd1041c4
 
     steps:
       - name: Prove ephemeral GitHub PostgreSQL environment
+        env:
+          PROOF_REPORT_PATH: ${{ runner.temp }}/participant-pairing-proof.txt
         shell: bash
         run: |
           set -euo pipefail
@@ -66,6 +67,8 @@ jobs:
           python3 -m pip install --user --break-system-packages asyncpg==0.30.0
 
       - name: Materialize and verify proof-only concurrency driver
+        env:
+          PROOF_REPORT_PATH: ${{ runner.temp }}/participant-pairing-proof.txt
         shell: bash
         run: |
           set -euo pipefail
@@ -76,6 +79,8 @@ jobs:
           test "$actual_sha" = "$EXPECTED_DRIVER_SHA256"
 
       - name: Execute frozen 29-test concurrency matrix
+        env:
+          PROOF_REPORT_PATH: ${{ runner.temp }}/participant-pairing-proof.txt
         shell: bash
         run: |
           set -euo pipefail
