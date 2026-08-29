@@ -842,7 +842,7 @@ async function joinConversation(id) {
 
   onCurrent("conversation:presence", ({status}) => {
     updatePresenceDisplay(status)
-    if (status === "connected") scrollTimelineToNewest()
+    if (status === "connected" && timelineNearBottom()) scrollTimelineToNewest()
   })
 
   onCurrent("typing:status", ({typing}) => {
