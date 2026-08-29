@@ -6,57 +6,89 @@ on:
       - diag/team4-initiation-aba-proof-2026-08-29
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   proof:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      MIX_TEST_PARTITION: _diag_team4_initiation_aba
+      TARGET_SHA: 212304167f6e65b27a416a01bf35a4f4c72019c5
     steps:
-      - name: Checkout diagnostic tooling
+      - name: Checkout exact candidate
         uses: actions/checkout@v4
         with:
-          ref: diag/team4-initiation-aba-proof-2026-08-29
-          path: diag
+          ref: ${{ env.TARGET_SHA }}
 
-      - name: Checkout exact RED-tested fix branch
-        uses: actions/checkout@v4
-        with:
-          ref: fix/media-call-initiation-aba-2026-08-29
-          fetch-depth: 0
-          path: target
-
-      - name: Prove RED-tested parent
+      - name: Prove exact candidate and clean checkout
         shell: bash
-        working-directory: target
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "408f28ac747276022aab955c7de9ef1fa04b6c2e"
+          echo "TARGET_SHA=$TARGET_SHA"
+          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           git diff --check
           test -z "$(git status --porcelain)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
 
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Apply narrow initiation identity
-        run: python3 diag/.github/scripts/apply_team4_initiation_aba_fix.py target
-
-      - name: Prove hostile GREEN and preserve T4-007
-        working-directory: target
-        run: node --test --test-concurrency=1 test/js/team4_initiation_aba_test.mjs test/js/team4_media_authority_test.mjs
-
-      - name: Commit only production fix
+      - name: Install Elixir dependencies
         shell: bash
-        working-directory: target
         run: |
           set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Reset isolated test database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Prove ABA hostile test and existing Team 4 authority suite
+        run: node --test --test-concurrency=1 test/js/team4_initiation_aba_test.mjs test/js/team4_media_authority_test.mjs
+
+      - name: Full repository precommit
+        run: mix precommit
+
+      - name: Prove exact tested SHA and pristine source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           git diff --check
-          test "$(git status --porcelain | wc -l)" -eq 1
-          git status --short | grep '^ M priv/static/assets/live_call.mjs$'
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add priv/static/assets/live_call.mjs
-          git commit -m 'fix: scope call initiation transport authority'
-          git push origin HEAD:fix/media-call-initiation-aba-2026-08-29
-          echo "FIX_SHA=$(git rev-parse HEAD)"
+          test -z "$(git status --porcelain)"
+
+      - name: Drop isolated test database
+        if: always()
+        run: mix ecto.drop --quiet || true
