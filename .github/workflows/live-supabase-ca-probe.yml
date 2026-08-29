@@ -1,4 +1,4 @@
-name: Live Supabase CA probe
+name: PREP-A exact SHA compiled-config proof
 
 on:
   push:
@@ -9,59 +9,123 @@ on:
 permissions:
   contents: read
 
+env:
+  BASE_SHA: 2f4d7e3733f7b1cdf63abb9020ef2600b20def20
+  CANDIDATE_SHA: c3be0418ae885953df2338395691cbbabe286afb
+  MIX_ENV: prod
+
 jobs:
-  probe:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+  prove:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - name: Probe live PostgreSQL TLS chain
+      - name: Checkout exact PREP-A candidate
+        uses: actions/checkout@v4
+        with:
+          ref: c3be0418ae885953df2338395691cbbabe286afb
+          fetch-depth: 0
+
+      - name: Prove candidate identity and scope
         shell: bash
         run: |
           set -euo pipefail
-          HOST=aws-0-ap-southeast-1.pooler.supabase.com
-          PORT=5432
-          CA_URL=https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt
+          actual=$(git rev-parse HEAD)
+          echo "BASE_SHA=$BASE_SHA"
+          echo "CANDIDATE_SHA=$CANDIDATE_SHA"
+          echo "CHECKED_OUT_SHA=$actual"
+          test "$actual" = "$CANDIDATE_SHA"
+          echo "PREP_A_CHANGED_FILES_BEGIN"
+          git diff --name-status "$BASE_SHA" "$CANDIDATE_SHA"
+          echo "PREP_A_CHANGED_FILES_END"
+          changed=$(git diff --name-only "$BASE_SHA" "$CANDIDATE_SHA" | sort)
+          expected=$(printf '%s\n' config/runtime.exs priv/certs/prod-ca-2021.crt | sort)
+          test "$changed" = "$expected"
+          git diff --check "$BASE_SHA" "$CANDIDATE_SHA"
 
-          echo "=== target ==="
-          echo "${HOST}:${PORT}"
-          getent ahostsv4 "$HOST" | head -n 5 || true
+      - name: Verify committed CA is the live-probed root
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl x509 -in priv/certs/prod-ca-2021.crt -noout \
+            -subject -issuer -serial -startdate -enddate -fingerprint -sha256
+          fp=$(openssl x509 -in priv/certs/prod-ca-2021.crt -noout -fingerprint -sha256 | cut -d= -f2)
+          echo "COMMITTED_CA_SHA256=$fp"
+          test "$fp" = '80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA'
 
-          timeout 20 openssl s_client \
-            -starttls postgres \
-            -connect "${HOST}:${PORT}" \
-            -servername "$HOST" \
-            -showcerts \
-            </dev/null > /tmp/probe.txt 2>&1
+      - name: Set up release BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
 
-          awk '
-            /-----BEGIN CERTIFICATE-----/ {
-              n++
-              file=sprintf("/tmp/cert-%02d.pem", n)
-              in_cert=1
-            }
-            in_cert {print > file}
-            /-----END CERTIFICATE-----/ {
-              close(file)
-              in_cert=0
-            }
-          ' /tmp/probe.txt
+      - name: Build exact production release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --only prod
+          mix deps.compile
+          mix compile --warnings-as-errors
+          mix release --overwrite
+          test -x _build/prod/rel/strangertalks_new/bin/strangertalks_new
+          echo "PROD_RELEASE_BUILD=PASS"
 
-          shopt -s nullglob
-          certs=(/tmp/cert-*.pem)
-          test "${#certs[@]}" -eq 3
+      - name: Prove DB_CA_CERT_PATH unset means ssl false
+        shell: bash
+        env:
+          DATABASE_URL: ecto://prep_a:prep_a@127.0.0.1/prep_a
+          SECRET_KEY_BASE: 6f8d8948de21f7683641d97ea2b6178e7c9e5af554ee4f2db5f6063aa8d1f165
+          PHX_HOST: prep-a.invalid
+        run: |
+          set -euo pipefail
+          release=_build/prod/rel/strangertalks_new/bin/strangertalks_new
+          env -u DB_CA_CERT_PATH \
+            DATABASE_URL="$DATABASE_URL" \
+            SECRET_KEY_BASE="$SECRET_KEY_BASE" \
+            PHX_HOST="$PHX_HOST" \
+            "$release" eval '
+              repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+              ssl = Keyword.fetch!(repo, :ssl)
+              IO.puts("UNSET_REPO_SSL=#{inspect(ssl)}")
+              if ssl != false, do: raise("expected ssl:false when DB_CA_CERT_PATH is unset")
+            '
+          echo "UNSET_DB_CA_CERT_PATH_PROOF=PASS"
 
-          for cert in "${certs[@]}"; do
-            echo "=== $(basename "$cert") ==="
-            openssl x509 -in "$cert" -noout -subject -issuer -serial -startdate -enddate -fingerprint -sha256
-          done
+      - name: Prove DB_CA_CERT_PATH resolves through Application.app_dir
+        shell: bash
+        env:
+          DATABASE_URL: ecto://prep_a:prep_a@127.0.0.1/prep_a
+          SECRET_KEY_BASE: 6f8d8948de21f7683641d97ea2b6178e7c9e5af554ee4f2db5f6063aa8d1f165
+          PHX_HOST: prep-a.invalid
+          DB_CA_CERT_PATH: priv/certs/prod-ca-2021.crt
+        run: |
+          set -euo pipefail
+          release=_build/prod/rel/strangertalks_new/bin/strangertalks_new
+          DATABASE_URL="$DATABASE_URL" \
+          SECRET_KEY_BASE="$SECRET_KEY_BASE" \
+          PHX_HOST="$PHX_HOST" \
+          DB_CA_CERT_PATH="$DB_CA_CERT_PATH" \
+            "$release" eval '
+              relative = System.fetch_env!("DB_CA_CERT_PATH")
+              expected = Application.app_dir(:strangertalks_new, relative)
+              repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+              ssl = Keyword.fetch!(repo, :ssl)
+              actual = Keyword.fetch!(ssl, :cacertfile)
+              exists = File.regular?(actual)
+              IO.puts("SET_REPO_SSL=#{inspect(ssl)}")
+              IO.puts("APPLICATION_APP_DIR_CA=#{expected}")
+              IO.puts("ACTUAL_CA_PATH=#{actual}")
+              IO.puts("CA_FILE_EXISTS=#{exists}")
+              if actual != expected, do: raise("cacertfile did not resolve via Application.app_dir/2")
+              if not exists, do: raise("release-packaged CA file missing")
+            '
+          echo "SET_DB_CA_CERT_PATH_PROOF=PASS"
 
-          openssl verify -CAfile /tmp/cert-03.pem -untrusted /tmp/cert-02.pem /tmp/cert-01.pem
-
-          curl --fail --silent --show-error --location "$CA_URL" -o /tmp/official-prod-ca-2021.crt
-          live_root_fp=$(openssl x509 -in /tmp/cert-03.pem -noout -fingerprint -sha256 | cut -d= -f2)
-          official_fp=$(openssl x509 -in /tmp/official-prod-ca-2021.crt -noout -fingerprint -sha256 | cut -d= -f2)
-          echo "LIVE_ROOT_SHA256=$live_root_fp"
-          echo "OFFICIAL_DOWNLOAD_SHA256=$official_fp"
-          test "$live_root_fp" = "$official_fp"
-          echo "LIVE_ROOT_MATCHES_OFFICIAL_DOWNLOAD=true"
-          echo "LIVE_ROOT_PEM_BASE64=$(base64 -w0 /tmp/cert-03.pem)"
+      - name: Final proof summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "PREP_A_TESTED_SHA=$CANDIDATE_SHA"
+          echo "PREP_A_BASE_SHA=$BASE_SHA"
+          echo "PREP_A_COMPILED_CONFIG_PROOF=PASS"
