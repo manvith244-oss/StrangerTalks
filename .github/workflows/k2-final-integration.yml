@@ -5,6 +5,19 @@ on:
     branches:
       - release/integration-2026-08-28
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact source SHA to test; defaults to the workflow ref SHA
+        required: false
+        type: string
+      browser_group:
+        description: Browser authority scope for manual diagnostics
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - composed-e2e
 
 concurrency:
   group: k2-final-integration-${{ github.sha }}
@@ -17,6 +30,7 @@ env:
   MIX_ENV: test
   STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
   STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.target_sha != '' && inputs.target_sha || github.sha }}
   FROZEN_BASE_SHA: 585637924ff45933c7b35b0bc27719934907c70e
   PRIOR_K_HEAD_SHA: a9e181e3c3d109aad0d7b7b888e4162fd060ff84
   F01_PROVEN_SHA: 048f0be02fc210decb1f6cc5db46504b587f217d
@@ -29,6 +43,7 @@ env:
 
 jobs:
   contracts-and-precommit:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.browser_group == 'all' }}
     name: Contracts + backend + precommit
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -46,13 +61,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
       - name: Exact SHA, merged authorities, excluded lineage
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           for sha in "$FROZEN_BASE_SHA" "$PRIOR_K_HEAD_SHA" "$F01_PROVEN_SHA" "$FX07_PROVEN_SHA" "$F04_PROVEN_SHA" "$FX05_PROVEN_SHA" "$F10_PROVEN_SHA"; do
             echo "ASSERT_ANCESTOR=$sha"
             git merge-base --is-ancestor "$sha" HEAD
@@ -147,7 +162,7 @@ jobs:
           git diff --check
           git diff --exit-code -- .
           test -z "$(git status --porcelain)"
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
 
   browser-authorities:
     name: Browser ${{ matrix.group }}
@@ -156,21 +171,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group:
-          - f01-shell
-          - f03-history
-          - f06-settings
-          - f07-loading
-          - f09-mobile
-          - f10-desktop
-          - f04-cleanup
-          - f04-hostile
-          - fx05-expression
-          - f11-hostile
-          - f11-corrupt-identity
-          - fx07-terminal
-          - conversation-reliability
-          - composed-e2e
+        group: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.browser_group == 'composed-e2e' && '["composed-e2e"]' || '["f01-shell","f03-history","f06-settings","f07-loading","f09-mobile","f10-desktop","f04-cleanup","f04-hostile","fx05-expression","f11-hostile","f11-corrupt-identity","fx07-terminal","conversation-reliability","composed-e2e"]') }}
     services:
       postgres:
         image: postgres:16
@@ -188,10 +189,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
       - name: Exact checkout
-        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.18.4"
@@ -237,23 +238,64 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          tap="/tmp/k2-${{ matrix.group }}.tap"
           case "${{ matrix.group }}" in
-            f01-shell) node --test --test-concurrency=1 test/js/f01_app_shell_browser_test.mjs ;;
-            f03-history) node --test --test-concurrency=1 test/js/navigation_history_browser_test.mjs ;;
-            f06-settings) node --test --test-concurrency=1 test/js/f06_secondary_flow_browser_test.mjs ;;
-            f07-loading) node --test --test-concurrency=1 test/js/f07_loading_transitions_browser_test.mjs ;;
-            f09-mobile) node --test --test-concurrency=1 test/js/f09_mobile_flow_browser_test.mjs ;;
-            f10-desktop) node --test --test-concurrency=1 test/js/f10_desktop_flow_browser_test.mjs ;;
-            f04-cleanup) node --test --test-concurrency=1 test/js/f04_conversation_runtime_cleanup_browser_test.mjs ;;
-            f04-hostile) node --test --test-concurrency=1 test/js/f04_conversation_runtime_hostile_browser_test.mjs ;;
-            fx05-expression) node --test --test-concurrency=1 test/js/fx05_expression_continuity_browser_test.mjs ;;
-            f11-hostile) node --test --test-concurrency=1 test/js/f11_browser_hostile_test.mjs ;;
-            f11-corrupt-identity) node --test --test-concurrency=1 test/js/f11_browser_corrupt_identity_test.mjs ;;
-            fx07-terminal) node --test --test-concurrency=1 test/js/terminal_truth_browser_test.mjs ;;
-            conversation-reliability) node --test --test-concurrency=1 test/js/conversation_reliability_browser_test.mjs ;;
-            composed-e2e) node --test --test-concurrency=1 test/js/browser_e2e_test.mjs ;;
+            f01-shell) node --test --test-concurrency=1 test/js/f01_app_shell_browser_test.mjs 2>&1 | tee "$tap" ;;
+            f03-history) node --test --test-concurrency=1 test/js/navigation_history_browser_test.mjs 2>&1 | tee "$tap" ;;
+            f06-settings) node --test --test-concurrency=1 test/js/f06_secondary_flow_browser_test.mjs 2>&1 | tee "$tap" ;;
+            f07-loading) node --test --test-concurrency=1 test/js/f07_loading_transitions_browser_test.mjs 2>&1 | tee "$tap" ;;
+            f09-mobile) node --test --test-concurrency=1 test/js/f09_mobile_flow_browser_test.mjs 2>&1 | tee "$tap" ;;
+            f10-desktop) node --test --test-concurrency=1 test/js/f10_desktop_flow_browser_test.mjs 2>&1 | tee "$tap" ;;
+            f04-cleanup) node --test --test-concurrency=1 test/js/f04_conversation_runtime_cleanup_browser_test.mjs 2>&1 | tee "$tap" ;;
+            f04-hostile) node --test --test-concurrency=1 test/js/f04_conversation_runtime_hostile_browser_test.mjs 2>&1 | tee "$tap" ;;
+            fx05-expression) node --test --test-concurrency=1 test/js/fx05_expression_continuity_browser_test.mjs 2>&1 | tee "$tap" ;;
+            f11-hostile) node --test --test-concurrency=1 test/js/f11_browser_hostile_test.mjs 2>&1 | tee "$tap" ;;
+            f11-corrupt-identity) node --test --test-concurrency=1 test/js/f11_browser_corrupt_identity_test.mjs 2>&1 | tee "$tap" ;;
+            fx07-terminal) node --test --test-concurrency=1 test/js/terminal_truth_browser_test.mjs 2>&1 | tee "$tap" ;;
+            conversation-reliability) node --test --test-concurrency=1 test/js/conversation_reliability_browser_test.mjs 2>&1 | tee "$tap" ;;
+            composed-e2e) node --test --test-concurrency=1 test/js/browser_e2e_test.mjs 2>&1 | tee "$tap" ;;
             *) echo "Unknown group ${{ matrix.group }}"; exit 1 ;;
           esac
+      - name: Publish browser TAP summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          tap="/tmp/k2-${{ matrix.group }}.tap"
+          {
+            echo "## Browser TAP summary — ${{ matrix.group }}"
+            echo
+            echo "- Tested SHA: \`$TARGET_SHA\`"
+            if [ ! -s "$tap" ]; then
+              echo "- TAP output unavailable: browser authority did not produce a TAP file."
+            else
+              echo
+              echo "### Totals"
+              echo '```text'
+              grep -E '^# (tests|pass|fail|cancelled|skipped|todo|duration_ms) ' "$tap" || true
+              echo '```'
+              echo
+              echo "### Failing TAP blocks"
+              echo '```text'
+              awk '
+                /^not ok / {
+                  if (capture) print ""
+                  capture=1
+                  print
+                  next
+                }
+                capture && (/^# Subtest:/ || /^ok / || /^1\.\.[0-9]+$/) { capture=0 }
+                capture {
+                  print
+                  if ($0 ~ /^  \.\.\.$/) {
+                    capture=0
+                    print ""
+                  }
+                }
+              ' "$tap"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Stop Phoenix
         if: always()
         run: |
@@ -269,9 +311,10 @@ jobs:
           git diff --check
           git diff --exit-code -- .
           test -z "$(git status --porcelain)"
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
 
   final-same-sha-proof:
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.browser_group == 'all' }}
     name: Final same-SHA diff clean live-head proof
     needs: [contracts-and-precommit, browser-authorities]
     runs-on: ubuntu-latest
@@ -290,13 +333,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
       - name: Exact final checkout and authority proof
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           for sha in "$FROZEN_BASE_SHA" "$PRIOR_K_HEAD_SHA" "$F01_PROVEN_SHA" "$FX07_PROVEN_SHA" "$F04_PROVEN_SHA" "$FX05_PROVEN_SHA" "$F10_PROVEN_SHA"; do
             git merge-base --is-ancestor "$sha" HEAD
           done
