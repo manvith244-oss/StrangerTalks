@@ -1,0 +1,177 @@
+name: Diagnostic Terminal Truth Exact-Head Proof
+
+on:
+  push:
+    branches:
+      - diag/terminal-truth-proof-2026-08-29
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4002"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
+      TARGET_SHA: 4f8cfe09ca1b444c8e1f3c82a751a3aa876ab8f3
+
+    steps:
+      - name: Checkout exact PR head under proof
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+
+      - name: Prove exact target and pristine checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "TARGET_SHA=$TARGET_SHA"
+          echo "ACTUAL_SHA=$actual"
+          test "$actual" = "$TARGET_SHA"
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Isolated Terminal Truth client contract
+        run: node --test test/js/terminal_truth_client_test.mjs
+
+      - name: Prepare isolated terminal browser database
+        env:
+          MIX_TEST_PARTITION: _diag_terminal_truth
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix for exact-head hostile browser proof
+        env:
+          MIX_TEST_PARTITION: _diag_terminal_truth
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            endpoint_config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNewWeb.Endpoint,
+              Keyword.put(endpoint_config, :server, true)
+            )
+
+            repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            browser_repo_config =
+              repo_config
+              |> Keyword.put(:pool, DBConnection.ConnectionPool)
+              |> Keyword.put(:pool_size, 16)
+
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNew.Repo,
+              browser_repo_config
+            )
+
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/diag-terminal-truth-server.log 2>&1 &
+          echo $! > /tmp/diag-terminal-truth-server.pid
+
+          for attempt in $(seq 1 45); do
+            pid="$(cat /tmp/diag-terminal-truth-server.pid)"
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "Phoenix exited before becoming ready."
+              cat /tmp/diag-terminal-truth-server.log
+              exit 1
+            fi
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null; then
+              echo "Phoenix terminal proof endpoint is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "Phoenix did not become ready."
+          cat /tmp/diag-terminal-truth-server.log
+          exit 1
+
+      - name: Real browser terminal truth hostile re-attack
+        run: node --test --test-concurrency=1 test/js/terminal_truth_browser_test.mjs
+
+      - name: Stop Phoenix terminal proof server
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/diag-terminal-truth-server.pid ]; then
+            pid="$(cat /tmp/diag-terminal-truth-server.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Browser server log on failure
+        if: failure()
+        run: cat /tmp/diag-terminal-truth-server.log || true
+
+      - name: Drop isolated terminal browser database
+        if: always()
+        env:
+          MIX_TEST_PARTITION: _diag_terminal_truth
+        run: mix ecto.drop --quiet || true
+
+      - name: Full repository precommit
+        run: mix precommit
+
+      - name: Final exact-head clean-tree proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          echo "TERMINAL_TRUTH_TESTED_SHA=$(git rev-parse HEAD)"
