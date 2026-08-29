@@ -131,7 +131,7 @@ jobs:
 
           old = '    const pinControlA = pair.a.page.locator("#pinned-messages-control")'
           new = '    await openConversationInfo(pair.a.page)\n    const pinControlA = pair.a.page.locator("#pinned-messages-control")'
-          replace_exact(old, new, expected=2, label="pinned A visible paths")
+          replace_exact(old, new, expected=1, label="pinned A visible paths")
           old = '    const pinControlA2 = aTab2.locator("#pinned-messages-control")'
           new = '    await openConversationInfo(aTab2)\n    const pinControlA2 = aTab2.locator("#pinned-messages-control")'
           replace_exact(old, new, expected=1, label="pinned sibling visible path")
