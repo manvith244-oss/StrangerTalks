@@ -133,6 +133,8 @@ jobs:
           mix ecto.migrate --quiet
 
       - name: Start Phoenix for continuity browser proof
+        env:
+          STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
         run: |
           mix run --no-start -e '
             config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)

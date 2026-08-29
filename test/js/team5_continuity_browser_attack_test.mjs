@@ -103,7 +103,7 @@ test("real browser Keep -> encrypted restore -> Delete tombstone -> hostile stal
     ;({a, b} = await matchPair(browser))
 
     await a.page.locator("#message-input").fill("continuity-browser-message")
-    await a.page.locator("#message-form button.primary").click()
+    await a.page.getByRole("button", {name: "Send message", exact: true}).click()
     await b.page.locator("#messages li", {hasText: "continuity-browser-message"}).waitFor({state: "visible", timeout: WAIT})
 
     await endConversation(a.page)
@@ -242,22 +242,17 @@ test("real browser Bond -> reconnect -> Block -> stale Bond reconnect is safety-
     if ((await actions.getAttribute("open")) === null) await actions.locator("summary").click()
     a.page.once("dialog", (dialog) => dialog.accept())
     await a.page.locator("#block").click()
-    await a.page.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("blocked from future matching"), null, {timeout: WAIT})
+    await a.page.waitForFunction(() => document.querySelector("#status")?.textContent?.includes("Conversation ended. Choose what this device should retain."), null, {timeout: WAIT})
 
     assert.ok((await records(a.page)).some((record) => record.type === "relationship" && record.value?.relationship_id === relationshipId), "private retained Bond may remain locally after Block")
 
     await openBonds(a.page)
     const reconnect = a.page.locator(`.bond-reconnect[data-relationship-id="${relationshipId}"]`)
     await reconnect.waitFor({state: "visible", timeout: WAIT})
-
-    const privateButton = reconnect.getByRole("button", {name: "Reconnect privately"})
-    if (await privateButton.count()) {
-      await privateButton.click()
-      const advice = reconnect.getByRole("button", {name: "Advice", exact: true})
-      if (await advice.count()) await advice.click()
-    }
-
     await reconnect.getByText("Private reconnection is unavailable right now.").waitFor({state: "visible", timeout: WAIT})
+
+    const afterDeniedReconnect = await records(a.page)
+    assert.ok(afterDeniedReconnect.some((record) => record.id === `bond-reconnect:${relationshipId}` && record.value?.status === "unavailable"), "authoritative reconnect status persists the durable Block denial")
     assert.equal(await a.page.locator('section[data-screen="conversation"].active').count(), 0, "stale retained Bond cannot create a forbidden Conversation after durable Block")
   } finally {
     await Promise.all([a, b].filter(Boolean).map(({context}) => context.close().catch(() => {})))
