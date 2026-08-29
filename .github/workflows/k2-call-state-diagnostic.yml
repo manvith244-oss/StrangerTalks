@@ -1,0 +1,235 @@
+name: K2 Call State Diagnostic
+
+on:
+  push:
+    branches:
+      - diagnostics/call-state-2026-08-29
+    paths:
+      - .github/workflows/k2-call-state-diagnostic.yml
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  PORT: "4000"
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+  SOURCE_SHA: 142f30949a2e1e4c4bd87360152c9e7bc66e7ba3
+
+jobs:
+  trace-call-state:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+      - name: Exact source proof
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Add runtime-only call diagnostics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          app_path = Path("priv/static/assets/app.js")
+          app = app_path.read_text()
+          needle = "function renderLiveCallState(state) {\n"
+          assert app.count(needle) == 1, app.count(needle)
+          diagnostic = '''function renderLiveCallState(state) {
+            globalThis.__ST_CALL_DEBUG__ = {
+              status: state?.status || null,
+              selfVideo: Boolean(state?.selfVideo),
+              peerVideo: Boolean(state?.peerVideo),
+              localVisualFloorClosed: Boolean(state?.localVisualFloorClosed),
+              callAttemptId: state?.callAttemptId || null,
+              mediaGeneration: Number.isInteger(state?.mediaGeneration) ? state.mediaGeneration : null,
+              iceConnectionState: app.liveCall?.peerConnection?.iceConnectionState || null
+            }
+          '''
+          app_path.write_text(app.replace(needle, diagnostic, 1))
+
+          test_path = Path("test/js/browser_e2e_test.mjs")
+          test = test_path.read_text()
+          marker = 'test("Feature 1Q E2E-RTV: Video to Return to Voice closes camera and render while voice continues"'
+          assert test.count(marker) == 1, test.count(marker)
+          helper = r'''
+          async function traceLiveCallRuntime(pair, label, {expectVideo = false, timeoutMs = 20_000} = {}) {
+            const startedAt = Date.now()
+            let lastSerialized = null
+            let reachedActiveAt = null
+            let reachedVideoAt = null
+            let finalSnapshot = null
+
+            while (Date.now() - startedAt <= timeoutMs) {
+              const snapshot = {
+                a: await pair.a.page.evaluate(() => globalThis.__ST_CALL_DEBUG__ || null),
+                b: await pair.b.page.evaluate(() => globalThis.__ST_CALL_DEBUG__ || null)
+              }
+              finalSnapshot = snapshot
+              const serialized = JSON.stringify(snapshot)
+              if (serialized !== lastSerialized) {
+                console.log(`[CALL_STATE_TRACE ${label} +${Date.now() - startedAt}ms] ${serialized}`)
+                lastSerialized = serialized
+              }
+
+              const bothActive = snapshot.a?.status === "ACTIVE" && snapshot.b?.status === "ACTIVE"
+              const anyVideo = Boolean(
+                snapshot.a?.selfVideo || snapshot.a?.peerVideo ||
+                snapshot.b?.selfVideo || snapshot.b?.peerVideo
+              )
+
+              if (bothActive && reachedActiveAt === null) {
+                reachedActiveAt = Date.now() - startedAt
+                console.log(`[CALL_STATE_TRACE ${label} ACTIVE] reached in ${reachedActiveAt}ms; iceA=${snapshot.a?.iceConnectionState}; iceB=${snapshot.b?.iceConnectionState}`)
+              }
+              if (expectVideo && anyVideo && reachedVideoAt === null) {
+                reachedVideoAt = Date.now() - startedAt
+                console.log(`[CALL_STATE_TRACE ${label} VIDEO] reached in ${reachedVideoAt}ms; self/peer A=${snapshot.a?.selfVideo}/${snapshot.a?.peerVideo}; B=${snapshot.b?.selfVideo}/${snapshot.b?.peerVideo}`)
+              }
+
+              if (bothActive && (!expectVideo || anyVideo)) break
+              await new Promise((resolve) => setTimeout(resolve, 250))
+            }
+
+            console.log(`[CALL_STATE_TRACE ${label} FINAL] activeMs=${reachedActiveAt}; videoMs=${reachedVideoAt}; snapshot=${JSON.stringify(finalSnapshot)}`)
+            return {reachedActiveAt, reachedVideoAt, finalSnapshot}
+          }
+
+          '''
+          test = test.replace(marker, helper + marker, 1)
+
+          old85 = '''    await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
+              await pair.b.page.locator("#live-call-active").waitFor({state: "visible"})
+
+              // Video active: Return to Voice button is visible
+          '''
+          new85 = '''    await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
+              await pair.b.page.locator("#live-call-active").waitFor({state: "visible"})
+              await traceLiveCallRuntime(pair, "#85-video", {expectVideo: true})
+
+              // Video active: Return to Voice button is visible
+          '''
+          assert test.count(old85) == 1, test.count(old85)
+          test = test.replace(old85, new85, 1)
+
+          old86 = '''    await pair.b.page.locator("#btn-call-accept").click()
+              await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
+              await pair.b.page.locator("#live-call-active").waitFor({state: "visible"})
+
+              // A sends Heart reaction
+          '''
+          new86 = '''    await pair.b.page.locator("#btn-call-accept").click()
+              await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
+              await pair.b.page.locator("#live-call-active").waitFor({state: "visible"})
+              await traceLiveCallRuntime(pair, "#86-reaction")
+
+              // A sends Heart reaction
+          '''
+          assert test.count(old86) == 1, test.count(old86)
+          test = test.replace(old86, new86, 1)
+
+          old87 = '''    await pair.b.page.locator("#btn-call-accept").click()
+              await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
+
+              // In active call, Ring has active class
+          '''
+          new87 = '''    await pair.b.page.locator("#btn-call-accept").click()
+              await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
+              await traceLiveCallRuntime(pair, "#87-ring")
+
+              // In active call, Ring has active class
+          '''
+          assert test.count(old87) == 1, test.count(old87)
+          test = test.replace(old87, new87, 1)
+          test_path.write_text(test)
+          PY
+      - name: Prepare isolated browser database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start isolated Phoenix runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/k2-call-state-phoenix.log 2>&1 &
+          echo $! > /tmp/k2-call-state-phoenix.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/k2-call-state-phoenix.pid)" 2>/dev/null; then cat /tmp/k2-call-state-phoenix.log; exit 1; fi
+            sleep 1
+          done
+          cat /tmp/k2-call-state-phoenix.log
+          exit 1
+      - name: Run #85 #86 #87 with real state tracing
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test --test-concurrency=1 --test-name-pattern='Feature 1Q E2E-(RTV|REACTION|RING)' test/js/browser_e2e_test.mjs 2>&1 | tee /tmp/k2-call-state.tap
+      - name: Build diagnostic report
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "SOURCE_SHA=$SOURCE_SHA"
+            echo "--- TRACE ---"
+            grep -F 'CALL_STATE_TRACE' /tmp/k2-call-state.tap || true
+            echo "--- TOTALS ---"
+            grep -E '^# (tests|pass|fail|cancelled|skipped|todo|duration_ms) ' /tmp/k2-call-state.tap || true
+            echo "--- FAILURES ---"
+            grep -A30 '^not ok ' /tmp/k2-call-state.tap || true
+          } | tee /tmp/k2-call-state-report.txt
+      - name: Upload diagnostic artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k2-call-state-diagnostic
+          path: |
+            /tmp/k2-call-state.tap
+            /tmp/k2-call-state-report.txt
+            /tmp/k2-call-state-phoenix.log
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Stop Phoenix
+        if: always()
+        run: |
+          if [ -f /tmp/k2-call-state-phoenix.pid ]; then kill "$(cat /tmp/k2-call-state-phoenix.pid)" 2>/dev/null || true; fi
