@@ -94,42 +94,57 @@ jobs:
           from pathlib import Path
           p = Path('test/js/browser_e2e_test.mjs')
           text = p.read_text()
-          old = '''  await page.locator("#end-conversation").click()
-          await page.locator("#end-confirmation-dialog").waitFor({state: "visible"})
-          '''
-          new = r'''  const stackingTrace = await page.locator("#end-conversation").evaluate((button) => {
-            const rect = button.getBoundingClientRect()
-            const pointX = rect.left + rect.width / 2
-            const pointY = rect.top + rect.height / 2
-            const ids = [
-              ["button", button],
-              ["overflow-menu", button.closest(".overflow-menu")],
-              ["overflow", button.closest("details.overflow")],
-              ["conversation-head", button.closest(".conversation-head")],
-              ["live-panel", document.querySelector("#live-call-active")],
-              ["live-controls", document.querySelector("#live-call-active .live-call-controls")]
-            ]
-            return {
-              point: {x: pointX, y: pointY},
-              hit: (() => {
-                const hit = document.elementFromPoint(pointX, pointY)
-                return {tag: hit?.tagName || null, id: hit?.id || null, className: typeof hit?.className === "string" ? hit.className : null}
-              })(),
-              elements: ids.map(([name, node]) => {
+          old = '  if ((await actions.getAttribute("open")) === null) await actions.locator("summary").click()\n  await page.locator("#end-conversation").click()\n'
+          trace = r'''  if ((await actions.getAttribute("open")) === null) await actions.locator("summary").click()
+            const stackingTrace = await page.locator("#end-conversation").evaluate((button) => {
+              const rect = button.getBoundingClientRect()
+              const pointX = rect.left + rect.width / 2
+              const pointY = rect.top + rect.height / 2
+              const nodes = [
+                ["button", button],
+                ["overflow-menu", button.closest(".overflow-menu")],
+                ["overflow", button.closest("details.overflow")],
+                ["conversation-head-actions", button.closest(".conversation-head-actions")],
+                ["conversation-head", button.closest(".conversation-head")],
+                ["conversation-screen", button.closest('section[data-screen="conversation"]')],
+                ["live-panel", document.querySelector("#live-call-active")],
+                ["live-controls", document.querySelector("#live-call-active .live-call-controls")]
+              ]
+              const describe = ([name, node]) => {
                 if (!node) return {name, missing: true}
                 const style = getComputedStyle(node)
                 const box = node.getBoundingClientRect()
-                return {name, zIndex: style.zIndex, position: style.position, overflow: style.overflow, pointerEvents: style.pointerEvents, display: style.display, box: {left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height}}
-              })
-            }
-          })
-          console.log(`[STACKING_TRACE] ${JSON.stringify(stackingTrace)}`)
-          await page.locator("#end-conversation").click()
-          await page.locator("#end-confirmation-dialog").waitFor({state: "visible"})
+                return {
+                  name,
+                  tag: node.tagName,
+                  id: node.id || null,
+                  className: typeof node.className === "string" ? node.className : null,
+                  zIndex: style.zIndex,
+                  position: style.position,
+                  transform: style.transform,
+                  opacity: style.opacity,
+                  isolation: style.isolation,
+                  overflow: style.overflow,
+                  pointerEvents: style.pointerEvents,
+                  display: style.display,
+                  visibility: style.visibility,
+                  box: {left: box.left, top: box.top, right: box.right, bottom: box.bottom, width: box.width, height: box.height}
+                }
+              }
+              const hit = document.elementFromPoint(pointX, pointY)
+              return {
+                point: {x: pointX, y: pointY},
+                hit: hit ? {tag: hit.tagName, id: hit.id || null, className: typeof hit.className === "string" ? hit.className : null} : null,
+                elements: nodes.map(describe)
+              }
+            })
+            console.log(`[STACKING_TRACE] ${JSON.stringify(stackingTrace)}`)
+            await page.locator("#end-conversation").click()
           '''
+          trace = '\n'.join(line[10:] if line.startswith('          ') else line for line in trace.splitlines()) + '\n'
           if text.count(old) != 1:
-            raise SystemExit(f'expected one end click helper, found {text.count(old)}')
-          p.write_text(text.replace(old, new, 1))
+            raise SystemExit(f'expected openEndConfirmation click sequence once, found {text.count(old)}')
+          p.write_text(text.replace(old, trace, 1))
           PY
       - name: Prepare database
         run: |
@@ -155,6 +170,7 @@ jobs:
             if ! kill -0 "$(cat /tmp/k2-stack-phoenix.pid)" 2>/dev/null; then cat /tmp/k2-stack-phoenix.log; exit 1; fi
             sleep 1
           done
+          cat /tmp/k2-stack-phoenix.log
           exit 1
       - name: Run call teardown scenario
         shell: bash
