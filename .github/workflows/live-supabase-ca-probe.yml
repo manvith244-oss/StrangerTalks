@@ -24,25 +24,14 @@ jobs:
 
           echo "=== target ==="
           echo "${HOST}:${PORT}"
-          echo "=== dns ==="
           getent ahostsv4 "$HOST" | head -n 5 || true
-          echo "=== openssl ==="
-          openssl version -a | head -n 2
 
-          set +e
           timeout 20 openssl s_client \
             -starttls postgres \
             -connect "${HOST}:${PORT}" \
             -servername "$HOST" \
             -showcerts \
             </dev/null > /tmp/probe.txt 2>&1
-          rc=$?
-          set -e
-
-          echo "=== s_client exit ==="
-          echo "$rc"
-          echo "=== s_client summary ==="
-          grep -E '^(depth=|verify error:|Verification error:|Verify return code:|subject=|issuer=|Server certificate|CONNECTED)' /tmp/probe.txt || true
 
           awk '
             /-----BEGIN CERTIFICATE-----/ {
@@ -59,44 +48,20 @@ jobs:
 
           shopt -s nullglob
           certs=(/tmp/cert-*.pem)
-          echo "=== certificates extracted ==="
-          echo "${#certs[@]}"
-          if [ "${#certs[@]}" -eq 0 ]; then
-            echo "No certificates extracted from live probe" >&2
-            cat /tmp/probe.txt >&2
-            exit 1
-          fi
+          test "${#certs[@]}" -eq 3
 
           for cert in "${certs[@]}"; do
             echo "=== $(basename "$cert") ==="
-            openssl x509 -in "$cert" -noout \
-              -subject -issuer -serial -startdate -enddate -fingerprint -sha256
-            subj=$(openssl x509 -in "$cert" -noout -subject | sed 's/^subject=//')
-            issuer=$(openssl x509 -in "$cert" -noout -issuer | sed 's/^issuer=//')
-            if [ "$subj" = "$issuer" ]; then
-              echo "self_signed_subject_issuer=true"
-            else
-              echo "self_signed_subject_issuer=false"
-            fi
+            openssl x509 -in "$cert" -noout -subject -issuer -serial -startdate -enddate -fingerprint -sha256
           done
 
-          test "${#certs[@]}" -eq 3
-          echo "=== verify extracted live chain against extracted live root ==="
           openssl verify -CAfile /tmp/cert-03.pem -untrusted /tmp/cert-02.pem /tmp/cert-01.pem
 
-          echo "=== official download comparison only ==="
           curl --fail --silent --show-error --location "$CA_URL" -o /tmp/official-prod-ca-2021.crt
-          openssl x509 -in /tmp/official-prod-ca-2021.crt -noout \
-            -subject -issuer -serial -startdate -enddate -fingerprint -sha256
-
           live_root_fp=$(openssl x509 -in /tmp/cert-03.pem -noout -fingerprint -sha256 | cut -d= -f2)
           official_fp=$(openssl x509 -in /tmp/official-prod-ca-2021.crt -noout -fingerprint -sha256 | cut -d= -f2)
           echo "LIVE_ROOT_SHA256=$live_root_fp"
           echo "OFFICIAL_DOWNLOAD_SHA256=$official_fp"
-          if [ "$live_root_fp" = "$official_fp" ]; then
-            echo "LIVE_ROOT_MATCHES_OFFICIAL_DOWNLOAD=true"
-          else
-            echo "LIVE_ROOT_MATCHES_OFFICIAL_DOWNLOAD=false"
-          fi
-
-          echo "=== live probe complete ==="
+          test "$live_root_fp" = "$official_fp"
+          echo "LIVE_ROOT_MATCHES_OFFICIAL_DOWNLOAD=true"
+          echo "LIVE_ROOT_PEM_BASE64=$(base64 -w0 /tmp/cert-03.pem)"
