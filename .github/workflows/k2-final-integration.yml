@@ -30,7 +30,7 @@ env:
   MIX_ENV: test
   STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
   STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-  TARGET_SHA: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[composed-diagnostic]') && github.event.before || github.event_name == 'workflow_dispatch' && inputs.target_sha != '' && inputs.target_sha || github.sha }}
+  TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.target_sha != '' && inputs.target_sha || github.sha }}
   FROZEN_BASE_SHA: 585637924ff45933c7b35b0bc27719934907c70e
   PRIOR_K_HEAD_SHA: a9e181e3c3d109aad0d7b7b888e4162fd060ff84
   F01_PROVEN_SHA: 048f0be02fc210decb1f6cc5db46504b587f217d
@@ -189,8 +189,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TARGET_SHA }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
+      - name: Resolve exact browser target
+        if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[composed-diagnostic]') || github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="$TARGET_SHA"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            target="$GITHUB_SHA"
+            while git log -1 --format=%B "$target" | grep -Fq '[composed-diagnostic]'; do
+              target="$(git rev-parse "$target^")"
+            done
+          fi
+          git checkout --detach "$target"
+          echo "TARGET_SHA=$target" >> "$GITHUB_ENV"
+          echo "RESOLVED_BROWSER_TARGET_SHA=$target"
       - name: Exact checkout
         run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
       - uses: erlef/setup-beam@v1
@@ -262,6 +277,7 @@ jobs:
         run: |
           set -euo pipefail
           tap="/tmp/k2-${{ matrix.group }}.tap"
+          summary="/tmp/k2-${{ matrix.group }}-tap-summary.md"
           {
             echo "## Browser TAP summary — ${{ matrix.group }}"
             echo
@@ -295,7 +311,16 @@ jobs:
               ' "$tap"
               echo '```'
             fi
-          } >> "$GITHUB_STEP_SUMMARY"
+          } > "$summary"
+          cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload browser TAP summary artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k2-${{ matrix.group }}-tap-summary
+          path: /tmp/k2-${{ matrix.group }}-tap-summary.md
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Stop Phoenix
         if: always()
         run: |
