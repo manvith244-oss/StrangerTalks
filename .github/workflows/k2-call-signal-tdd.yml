@@ -1,0 +1,255 @@
+name: K2 Call Signal Queue TDD
+
+on:
+  push:
+    branches:
+      - fix/composed-call-signal-queue-2026-08-29
+    paths:
+      - .github/workflows/k2-call-signal-tdd.yml
+
+permissions:
+  contents: write
+
+jobs:
+  red-green:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/composed-call-signal-queue-2026-08-29
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Write regression tests first
+        shell: bash
+        run: |
+          cat > test/js/live_call_signal_queue_regression_test.mjs <<'EOF'
+          import assert from "node:assert/strict"
+          import test from "node:test"
+          import {CALL_STATUS, LiveCallCoordinator} from "../../priv/static/assets/live_call.mjs"
+
+          function installRtcDescriptionMocks() {
+            const previous = {
+              RTCSessionDescription: globalThis.RTCSessionDescription,
+              RTCIceCandidate: globalThis.RTCIceCandidate
+            }
+            globalThis.RTCSessionDescription = class RTCSessionDescription {
+              constructor(value) { Object.assign(this, value) }
+            }
+            globalThis.RTCIceCandidate = class RTCIceCandidate {
+              constructor(value) { Object.assign(this, value) }
+            }
+            return () => {
+              if (previous.RTCSessionDescription === undefined) delete globalThis.RTCSessionDescription
+              else globalThis.RTCSessionDescription = previous.RTCSessionDescription
+              if (previous.RTCIceCandidate === undefined) delete globalThis.RTCIceCandidate
+              else globalThis.RTCIceCandidate = previous.RTCIceCandidate
+            }
+          }
+
+          function createPeerConnection() {
+            return {
+              remoteDescription: null,
+              localDescription: null,
+              candidates: [],
+              async setRemoteDescription(description) { this.remoteDescription = description },
+              async createAnswer() { return {type: "answer", sdp: "answer-sdp"} },
+              async setLocalDescription(description) { this.localDescription = description },
+              async addIceCandidate(candidate) { this.candidates.push(candidate) }
+            }
+          }
+
+          function createCoordinator(sentSignals = []) {
+            const channel = {
+              push(event, payload) {
+                sentSignals.push({event, payload})
+                return {receive() { return this }}
+              }
+            }
+            const coord = new LiveCallCoordinator({
+              participantId: "callee",
+              conversationId: "conv-1",
+              channel
+            })
+            coord.callAttemptId = "attempt-1"
+            coord.status = CALL_STATUS.CONNECTING
+            coord.mediaGeneration = 1
+            return coord
+          }
+
+          test("queued SDP offer received before peer connection is applied and answered after peer connection exists", async () => {
+            const restore = installRtcDescriptionMocks()
+            const sentSignals = []
+            try {
+              const coord = createCoordinator(sentSignals)
+              await coord.handleSignal({
+                call_attempt_id: "attempt-1",
+                media_generation: 1,
+                sender_id: "caller",
+                signal: {type: "offer", sdp: "offer-sdp"}
+              })
+              assert.equal(coord.pendingCandidates.length, 1)
+
+              coord.peerConnection = createPeerConnection()
+              await coord.flushPendingCandidates()
+
+              assert.equal(coord.peerConnection.remoteDescription?.type, "offer")
+              assert.equal(coord.peerConnection.localDescription?.type, "answer")
+              assert.equal(coord.pendingCandidates.length, 0)
+              const answers = sentSignals.filter(({event, payload}) => event === "call:signal" && payload.signal?.type === "answer")
+              assert.equal(answers.length, 1)
+            } finally {
+              restore()
+            }
+          })
+
+          test("queued SDP answer received before peer connection is applied after peer connection exists", async () => {
+            const restore = installRtcDescriptionMocks()
+            const sentSignals = []
+            try {
+              const coord = createCoordinator(sentSignals)
+              coord.participantId = "caller"
+              await coord.handleSignal({
+                call_attempt_id: "attempt-1",
+                media_generation: 1,
+                sender_id: "callee",
+                signal: {type: "answer", sdp: "answer-sdp"}
+              })
+              assert.equal(coord.pendingCandidates.length, 1)
+
+              coord.peerConnection = createPeerConnection()
+              await coord.flushPendingCandidates()
+
+              assert.equal(coord.peerConnection.remoteDescription?.type, "answer")
+              assert.equal(coord.pendingCandidates.length, 0)
+              assert.equal(sentSignals.length, 0)
+            } finally {
+              restore()
+            }
+          })
+
+          test("SDP offer received after peer connection exists is still answered immediately", async () => {
+            const restore = installRtcDescriptionMocks()
+            const sentSignals = []
+            try {
+              const coord = createCoordinator(sentSignals)
+              coord.peerConnection = createPeerConnection()
+
+              await coord.handleSignal({
+                call_attempt_id: "attempt-1",
+                media_generation: 1,
+                sender_id: "caller",
+                signal: {type: "offer", sdp: "offer-sdp"}
+              })
+
+              assert.equal(coord.peerConnection.remoteDescription?.type, "offer")
+              assert.equal(coord.peerConnection.localDescription?.type, "answer")
+              const answers = sentSignals.filter(({event, payload}) => event === "call:signal" && payload.signal?.type === "answer")
+              assert.equal(answers.length, 1)
+            } finally {
+              restore()
+            }
+          })
+          EOF
+      - name: Prove normal existing timing path is GREEN before fix
+        shell: bash
+        run: node --test --test-name-pattern='after peer connection exists' test/js/live_call_signal_queue_regression_test.mjs
+      - name: Prove early signaling regression is RED before fix
+        shell: bash
+        run: |
+          set +e
+          node --test --test-name-pattern='before peer connection' test/js/live_call_signal_queue_regression_test.mjs > /tmp/red.tap 2>&1
+          status=$?
+          cat /tmp/red.tap
+          test "$status" -ne 0
+          grep -F 'queued SDP offer received before peer connection' /tmp/red.tap
+          grep -F 'queued SDP answer received before peer connection' /tmp/red.tap
+      - name: Apply minimal queued-session-description fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("priv/static/assets/live_call.mjs")
+          text = path.read_text()
+          old = '''  async flushPendingCandidates() {
+              if (!this.peerConnection || !this.peerConnection.remoteDescription) return
+              while (this.pendingCandidates.length > 0) {
+                const cand = this.pendingCandidates.shift()
+                try {
+                  if (cand.candidate) {
+                    await this.peerConnection.addIceCandidate(new RTCIceCandidate(cand))
+                  }
+                } catch {
+                  // Ignore candidate addition errors
+                }
+              }
+            }
+          '''
+          new = '''  async flushPendingCandidates() {
+              if (!this.peerConnection) return
+
+              const peerConnection = this.peerConnection
+              const callAttemptId = this.callAttemptId
+              const mediaGeneration = this.mediaGeneration
+              const stillCurrent = () => this.mediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)
+              const queued = this.pendingCandidates.splice(0)
+              const queuedIceCandidates = []
+
+              for (const signal of queued) {
+                try {
+                  if (signal.type === "offer") {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(signal))
+                    if (!stillCurrent()) return
+                    const answer = await peerConnection.createAnswer()
+                    if (!stillCurrent()) return
+                    await peerConnection.setLocalDescription(answer)
+                    if (!stillCurrent()) return
+                    this.sendSignal(peerConnection.localDescription)
+                  } else if (signal.type === "answer") {
+                    await peerConnection.setRemoteDescription(new RTCSessionDescription(signal))
+                    if (!stillCurrent()) return
+                  } else if (signal.candidate) {
+                    queuedIceCandidates.push(signal)
+                  }
+                } catch (error) {
+                  if (stillCurrent()) this.onError(error)
+                }
+              }
+
+              if (!stillCurrent()) return
+              if (!peerConnection.remoteDescription) {
+                this.pendingCandidates.unshift(...queuedIceCandidates)
+                return
+              }
+
+              for (const candidate of queuedIceCandidates) {
+                try {
+                  await peerConnection.addIceCandidate(new RTCIceCandidate(candidate))
+                } catch {
+                  // Ignore candidate addition errors
+                }
+              }
+            }
+          '''
+          if text.count(old) != 1:
+            raise SystemExit(f"expected one flushPendingCandidates block, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: GREEN regression tests and existing live-call unit matrix
+        shell: bash
+        run: |
+          node --test test/js/live_call_signal_queue_regression_test.mjs
+          node --test test/js/live_call_test.mjs
+      - name: Commit tested fix to branch
+        shell: bash
+        run: |
+          git config user.name "Manvith"
+          git config user.email "manvithh24@gmail.com"
+          git add priv/static/assets/live_call.mjs test/js/live_call_signal_queue_regression_test.mjs
+          git commit -m "fix: process queued SDP session descriptions"
+          git push origin HEAD:fix/composed-call-signal-queue-2026-08-29
