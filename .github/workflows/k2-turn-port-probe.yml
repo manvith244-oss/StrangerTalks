@@ -67,12 +67,23 @@ jobs:
             exit 1
           fi
           echo 'TURN_BASELINE_LISTENER=absent'
-      - name: Start coturn matching test credentials
+      - name: Start configured coturn matching test credentials
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y coturn
+          sudo systemctl stop coturn 2>/dev/null || true
+          sudo pkill -x turnserver 2>/dev/null || true
+          for attempt in $(seq 1 10); do
+            if ! ss -lntu | grep -Eq ':3478[[:space:]]'; then break; fi
+            sleep 1
+          done
+          if ss -lntu | grep -Eq ':3478[[:space:]]'; then
+            echo 'TURN_PORT_NOT_RELEASED_AFTER_PACKAGE_SERVICE_STOP'
+            sudo ss -lntup | grep ':3478' || true
+            exit 1
+          fi
           cat > /tmp/turnserver.conf <<'EOF'
           listening-ip=127.0.0.1
           relay-ip=127.0.0.1
@@ -90,45 +101,43 @@ jobs:
           no-dtls
           EOF
           sudo turnserver -c /tmp/turnserver.conf > /tmp/k2-coturn.log 2>&1 &
-          echo $! > /tmp/k2-coturn.pid
+          pid=$!
+          echo "$pid" > /tmp/k2-coturn.pid
           for attempt in $(seq 1 30); do
-            if ss -lun | grep -Eq ':3478[[:space:]]'; then
-              echo 'TURN_LISTENER=present'
+            if ! sudo kill -0 "$pid" 2>/dev/null; then
+              echo 'CONFIGURED_TURN_PROCESS_EXITED'
+              cat /tmp/k2-coturn.log
+              exit 1
+            fi
+            if sudo ss -lunp | grep ':3478' | grep -Fq 'turnserver'; then
+              echo "TURN_CONFIGURED_PID=$pid"
+              sudo ss -lunp | grep ':3478'
               exit 0
             fi
             sleep 1
           done
           cat /tmp/k2-coturn.log
           exit 1
-      - name: Require real ACTIVE state in targeted browser scenarios
+      - name: Add ACTIVE proof gates to targeted scenarios
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           path = Path('test/js/browser_e2e_test.mjs')
           text = path.read_text()
-          pair_wait = '''    await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
-          await pair.b.page.locator("#live-call-active").waitFor({state: "visible"})
-          '''
-          active_wait = pair_wait + '''    await pair.a.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
-          await pair.b.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
-          '''
-          if text.count(pair_wait) < 2:
-            raise SystemExit('expected pair wait in RTV and REACTION')
-          text = text.replace(pair_wait, active_wait, 2)
-          ring_old = '''    await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
-
-          // In active call, Ring has active class
-          '''
-          ring_new = '''    await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
-          await pair.a.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+          active = '''    await pair.a.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
           await pair.b.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
 
-          // In active call, Ring has active class
           '''
-          if text.count(ring_old) != 1:
-            raise SystemExit(f'expected one ring wait, found {text.count(ring_old)}')
-          path.write_text(text.replace(ring_old, ring_new, 1))
+          for marker in [
+              '    // Video active: Return to Voice button is visible\n',
+              '    // A sends Heart reaction\n',
+              '    // In active call, Ring has active class\n',
+          ]:
+              if text.count(marker) != 1:
+                  raise SystemExit(f'expected unique marker {marker!r}, found {text.count(marker)}')
+              text = text.replace(marker, active + marker, 1)
+          path.write_text(text)
           PY
       - name: Prepare isolated browser database
         run: |
@@ -171,7 +180,7 @@ jobs:
         shell: bash
         run: |
           grep -E '^# (tests|pass|fail|cancelled|skipped|todo|duration_ms) |^not ok |^ok ' /tmp/k2-turn-proof.tap || true
-          echo '--- COTURN LOG TAIL ---'
+          echo '--- CONFIGURED COTURN LOG TAIL ---'
           tail -100 /tmp/k2-coturn.log || true
       - name: Stop runtimes
         if: always()
