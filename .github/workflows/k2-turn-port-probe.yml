@@ -1,0 +1,26 @@
+name: K2 TURN Port Probe
+
+on:
+  push:
+    branches:
+      - diagnostics/turn-port-2026-08-29
+    paths:
+      - .github/workflows/k2-turn-port-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show TURN listener state
+        shell: bash
+        run: |
+          set -euo pipefail
+          ss -lntu
+          if ss -lntu | grep -Eq ':3478[[:space:]]'; then
+            echo 'TURN_BASELINE_LISTENER=present'
+          else
+            echo 'TURN_BASELINE_LISTENER=absent'
+          fi
