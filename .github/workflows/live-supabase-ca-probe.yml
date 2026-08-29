@@ -1,0 +1,75 @@
+name: Live Supabase CA probe
+
+on:
+  push:
+    branches:
+      - probe/live-supabase-ca-2026-08-29
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe live PostgreSQL TLS chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST=aws-0-ap-southeast-1.pooler.supabase.com
+          PORT=5432
+
+          echo "=== target ==="
+          echo "${HOST}:${PORT}"
+          echo "=== dns ==="
+          getent ahostsv4 "$HOST" | head -n 5 || true
+          echo "=== openssl ==="
+          openssl version -a | head -n 2
+
+          set +e
+          timeout 20 openssl s_client \
+            -starttls postgres \
+            -connect "${HOST}:${PORT}" \
+            -servername "$HOST" \
+            -showcerts \
+            </dev/null > /tmp/probe.txt 2>&1
+          rc=$?
+          set -e
+
+          echo "=== s_client exit ==="
+          echo "$rc"
+          echo "=== s_client summary ==="
+          grep -E '^(depth=|verify error:|Verification error:|Verify return code:|subject=|issuer=|Server certificate|CONNECTED)' /tmp/probe.txt || true
+
+          awk '
+            /-----BEGIN CERTIFICATE-----/ {n++; file=sprintf("/tmp/cert-%02d.pem", n)}
+            n > 0 {print > file}
+            /-----END CERTIFICATE-----/ {close(file)}
+          ' /tmp/probe.txt
+
+          shopt -s nullglob
+          certs=(/tmp/cert-*.pem)
+          echo "=== certificates extracted ==="
+          echo "${#certs[@]}"
+          if [ "${#certs[@]}" -eq 0 ]; then
+            echo "No certificates extracted from live probe" >&2
+            cat /tmp/probe.txt >&2
+            exit 1
+          fi
+
+          for cert in "${certs[@]}"; do
+            echo "=== $(basename "$cert") ==="
+            openssl x509 -in "$cert" -noout \
+              -subject -issuer -serial -startdate -enddate -fingerprint -sha256
+            subj=$(openssl x509 -in "$cert" -noout -subject | sed 's/^subject=//')
+            issuer=$(openssl x509 -in "$cert" -noout -issuer | sed 's/^issuer=//')
+            if [ "$subj" = "$issuer" ]; then
+              echo "self_signed_subject_issuer=true"
+            else
+              echo "self_signed_subject_issuer=false"
+            fi
+          done
+
+          echo "=== live probe complete ==="
