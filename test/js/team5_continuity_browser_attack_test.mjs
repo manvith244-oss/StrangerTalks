@@ -249,15 +249,10 @@ test("real browser Bond -> reconnect -> Block -> stale Bond reconnect is safety-
     await openBonds(a.page)
     const reconnect = a.page.locator(`.bond-reconnect[data-relationship-id="${relationshipId}"]`)
     await reconnect.waitFor({state: "visible", timeout: WAIT})
-
-    const privateButton = reconnect.getByRole("button", {name: "Reconnect privately"})
-    if (await privateButton.count()) {
-      await privateButton.click()
-      const advice = reconnect.getByRole("button", {name: "Advice", exact: true})
-      if (await advice.count()) await advice.click()
-    }
-
     await reconnect.getByText("Private reconnection is unavailable right now.").waitFor({state: "visible", timeout: WAIT})
+
+    const afterDeniedReconnect = await records(a.page)
+    assert.ok(afterDeniedReconnect.some((record) => record.id === `bond-reconnect:${relationshipId}` && record.value?.status === "unavailable"), "authoritative reconnect status persists the durable Block denial")
     assert.equal(await a.page.locator('section[data-screen="conversation"].active').count(), 0, "stale retained Bond cannot create a forbidden Conversation after durable Block")
   } finally {
     await Promise.all([a, b].filter(Boolean).map(({context}) => context.close().catch(() => {})))
