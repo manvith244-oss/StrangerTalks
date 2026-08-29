@@ -16,7 +16,7 @@ env:
   STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
   PORT: "4000"
   STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
-  SOURCE_SHA: 2c53f29dbde5d7848b42bfe3d3c44054d01f153f
+  SOURCE_SHA: 03b50ea8a53ef31e4de505d75be19681f1a19ee9
 
 jobs:
   trace:
