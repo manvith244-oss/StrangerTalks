@@ -55,60 +55,39 @@ jobs:
           mix deps.get
           npm ci
           npx playwright install --with-deps chromium
-      - name: Add style trace only
+      - name: Add screen caller trace only
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('test/js/browser_e2e_test.mjs')
-          text = p.read_text()
-          old = '    await recoverablePair.a.disconnectSocket()\n    await recoverablePair.a.page.locator("#presence", {hasText: "Reconnecting…"}).waitFor({state: "visible"})\n'
-          new = r'''    await recoverablePair.a.disconnectSocket()
-              await recoverablePair.a.page.waitForFunction(() => document.querySelector("#presence")?.textContent?.includes("Reconnecting"))
-              const presenceStyleTrace = await recoverablePair.a.page.locator("#presence").evaluate((node) => {
-                const chain = []
-                let current = node
-                while (current && chain.length < 12) {
-                  const style = getComputedStyle(current)
-                  const rect = current.getBoundingClientRect()
-                  chain.push({
-                    tag: current.tagName,
-                    id: current.id || null,
-                    className: typeof current.className === "string" ? current.className : null,
-                    hidden: Boolean(current.hidden),
-                    display: style.display,
-                    visibility: style.visibility,
-                    opacity: style.opacity,
-                    position: style.position,
-                    zIndex: style.zIndex,
-                    overflow: style.overflow,
-                    width: rect.width,
-                    height: rect.height,
-                    clientRects: current.getClientRects().length
-                  })
-                  current = current.parentElement
-                }
-                const rect = node.getBoundingClientRect()
-                const x = rect.left + rect.width / 2
-                const y = rect.top + rect.height / 2
-                const hit = rect.width > 0 && rect.height > 0 ? document.elementFromPoint(x, y) : null
-                return {
-                  text: node.textContent,
-                  hidden: node.hidden,
-                  checkVisibility: typeof node.checkVisibility === "function" ? node.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}) : null,
-                  point: {x, y},
-                  hit: hit ? {tag: hit.tagName, id: hit.id || null, className: typeof hit.className === "string" ? hit.className : null} : null,
-                  chain
-                }
-              })
-              console.log(`[PRESENCE_STYLE_TRACE] ${JSON.stringify(presenceStyleTrace)}`)
-              await recoverablePair.a.page.locator("#presence", {hasText: "Reconnecting…"}).waitFor({state: "visible"})
-          '''
-          # Normalize the diagnostic block's indentation back to the test's 4-space body indent.
-          new = '\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines()) + '\n'
-          if text.count(old) != 1:
-            raise SystemExit(f'expected one reconnect wait, found {text.count(old)}')
-          p.write_text(text.replace(old, new, 1))
+
+          app_path = Path('priv/static/assets/app.js')
+          app_text = app_path.read_text()
+          app_old = 'function presentScreen(name) {\n  document.querySelectorAll("[data-screen]").forEach((node) => node.classList.toggle("active", node.dataset.screen === name))\n'
+          app_new = 'function presentScreen(name) {\n  globalThis.__presentScreenTrace = [...(globalThis.__presentScreenTrace || []), {name, stack: new Error("presentScreen").stack}]\n  document.querySelectorAll("[data-screen]").forEach((node) => node.classList.toggle("active", node.dataset.screen === name))\n'
+          if app_text.count(app_old) != 1:
+            raise SystemExit(f'expected presentScreen once, found {app_text.count(app_old)}')
+          app_path.write_text(app_text.replace(app_old, app_new, 1))
+
+          test_path = Path('test/js/browser_e2e_test.mjs')
+          test_text = test_path.read_text()
+          test_old = '    await recoverablePair.a.disconnectSocket()\n    await recoverablePair.a.page.locator("#presence", {hasText: "Reconnecting…"}).waitFor({state: "visible"})\n'
+          test_lines = [
+            '    await recoverablePair.a.disconnectSocket()',
+            '    await recoverablePair.a.page.waitForFunction(() => document.querySelector("#presence")?.textContent?.includes("Reconnecting"))',
+            '    const screenCallerTrace = await recoverablePair.a.page.evaluate(() => ({',
+            '      activeScreens: Array.from(document.querySelectorAll("[data-screen].active"), (node) => node.dataset.screen),',
+            '      presence: document.querySelector("#presence")?.textContent,',
+            '      status: document.querySelector("#status")?.textContent,',
+            '      presentScreenTrace: globalThis.__presentScreenTrace || []',
+            '    }))',
+            '    console.log(`[SCREEN_CALLER_TRACE] ${JSON.stringify(screenCallerTrace)}`)',
+            '    await recoverablePair.a.page.locator("#presence", {hasText: "Reconnecting…"}).waitFor({state: "visible"})'
+          ]
+          test_new = '\n'.join(test_lines) + '\n'
+          if test_text.count(test_old) != 1:
+            raise SystemExit(f'expected reconnect wait once, found {test_text.count(test_old)}')
+          test_path.write_text(test_text.replace(test_old, test_new, 1))
           PY
       - name: Prepare database
         run: |
@@ -146,14 +125,14 @@ jobs:
         shell: bash
         run: |
           {
-            grep -F '[PRESENCE_STYLE_TRACE]' /tmp/k2-presence.tap || true
+            grep -F '[SCREEN_CALLER_TRACE]' /tmp/k2-presence.tap || true
             grep -E '^# (tests|pass|fail|duration_ms) |^not ok ' /tmp/k2-presence.tap || true
           } | tee /tmp/k2-presence-report.txt
       - name: Upload trace
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: k2-presence-visibility-trace
+          name: k2-presence-screen-caller-trace
           path: /tmp/k2-presence-report.txt
           retention-days: 7
       - name: Stop Phoenix
