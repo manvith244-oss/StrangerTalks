@@ -62,37 +62,50 @@ jobs:
           from pathlib import Path
           p = Path('test/js/browser_e2e_test.mjs')
           text = p.read_text()
-          old = '''    await recoverablePair.a.disconnectSocket()
-    await recoverablePair.a.page.locator("#presence", {hasText: "Reconnecting…"}).waitFor({state: "visible"})
-'''
+          old = '    await recoverablePair.a.disconnectSocket()\n    await recoverablePair.a.page.locator("#presence", {hasText: "Reconnecting…"}).waitFor({state: "visible"})\n'
           new = r'''    await recoverablePair.a.disconnectSocket()
-    await recoverablePair.a.page.waitForFunction(() => document.querySelector("#presence")?.textContent?.includes("Reconnecting"))
-    const presenceStyleTrace = await recoverablePair.a.page.locator("#presence").evaluate((node) => {
-      const chain = []
-      let current = node
-      while (current && chain.length < 10) {
-        const style = getComputedStyle(current)
-        const rect = current.getBoundingClientRect()
-        chain.push({
-          tag: current.tagName,
-          id: current.id || null,
-          className: typeof current.className === "string" ? current.className : null,
-          hidden: Boolean(current.hidden),
-          display: style.display,
-          visibility: style.visibility,
-          opacity: style.opacity,
-          position: style.position,
-          overflow: style.overflow,
-          width: rect.width,
-          height: rect.height
-        })
-        current = current.parentElement
-      }
-      return {chain}
-    })
-    console.log(`[PRESENCE_STYLE_TRACE] ${JSON.stringify(presenceStyleTrace)}`)
-    await recoverablePair.a.page.locator("#presence", {hasText: "Reconnecting…"}).waitFor({state: "visible"})
-'''
+              await recoverablePair.a.page.waitForFunction(() => document.querySelector("#presence")?.textContent?.includes("Reconnecting"))
+              const presenceStyleTrace = await recoverablePair.a.page.locator("#presence").evaluate((node) => {
+                const chain = []
+                let current = node
+                while (current && chain.length < 12) {
+                  const style = getComputedStyle(current)
+                  const rect = current.getBoundingClientRect()
+                  chain.push({
+                    tag: current.tagName,
+                    id: current.id || null,
+                    className: typeof current.className === "string" ? current.className : null,
+                    hidden: Boolean(current.hidden),
+                    display: style.display,
+                    visibility: style.visibility,
+                    opacity: style.opacity,
+                    position: style.position,
+                    zIndex: style.zIndex,
+                    overflow: style.overflow,
+                    width: rect.width,
+                    height: rect.height,
+                    clientRects: current.getClientRects().length
+                  })
+                  current = current.parentElement
+                }
+                const rect = node.getBoundingClientRect()
+                const x = rect.left + rect.width / 2
+                const y = rect.top + rect.height / 2
+                const hit = rect.width > 0 && rect.height > 0 ? document.elementFromPoint(x, y) : null
+                return {
+                  text: node.textContent,
+                  hidden: node.hidden,
+                  checkVisibility: typeof node.checkVisibility === "function" ? node.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}) : null,
+                  point: {x, y},
+                  hit: hit ? {tag: hit.tagName, id: hit.id || null, className: typeof hit.className === "string" ? hit.className : null} : null,
+                  chain
+                }
+              })
+              console.log(`[PRESENCE_STYLE_TRACE] ${JSON.stringify(presenceStyleTrace)}`)
+              await recoverablePair.a.page.locator("#presence", {hasText: "Reconnecting…"}).waitFor({state: "visible"})
+          '''
+          # Normalize the diagnostic block's indentation back to the test's 4-space body indent.
+          new = '\n'.join(line[10:] if line.startswith('          ') else line for line in new.splitlines()) + '\n'
           if text.count(old) != 1:
             raise SystemExit(f'expected one reconnect wait, found {text.count(old)}')
           p.write_text(text.replace(old, new, 1))
@@ -121,6 +134,7 @@ jobs:
             if ! kill -0 "$(cat /tmp/k2-presence-phoenix.pid)" 2>/dev/null; then cat /tmp/k2-presence-phoenix.log; exit 1; fi
             sleep 1
           done
+          cat /tmp/k2-presence-phoenix.log
           exit 1
       - name: Run reconnect presence scenario
         shell: bash
