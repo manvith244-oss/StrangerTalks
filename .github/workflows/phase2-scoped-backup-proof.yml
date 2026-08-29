@@ -1,0 +1,15 @@
+name: Phase 2 Scoped Backup Proof
+
+on:
+  push:
+    branches:
+      - ops/phase2-schema-scope-2026-08-29
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup-proof:
+    uses: manvith244-oss/StrangerTalks/.github/workflows/postgres-r2-backup.yml@main
+    secrets: inherit
