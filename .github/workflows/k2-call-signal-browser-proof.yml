@@ -59,41 +59,66 @@ jobs:
         run: |
           node --test test/js/live_call_signal_queue_regression_test.mjs
           node --test test/js/live_call_test.mjs
-      - name: Add logging-only call-state instrumentation
+      - name: Add logging-only transport instrumentation
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          live = Path("priv/static/assets/live_call.mjs")
+          s = live.read_text()
+          needle = 'async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {\n'
+          assert s.count(needle) == 1
+          s = s.replace(needle, needle + '  console.log(`[K2_SIGNAL recv] role=${this.role} type=${signal?.type || (signal?.candidate ? "candidate" : "unknown")} pc=${Boolean(this.peerConnection)} pending=${this.pendingCandidates.length}`)\n', 1)
+          needle = '  async flushPendingCandidates() {\n    if (!this.peerConnection) return\n'
+          assert s.count(needle) == 1
+          s = s.replace(needle, '  async flushPendingCandidates() {\n    console.log(`[K2_FLUSH start] role=${this.role} pc=${Boolean(this.peerConnection)} pending=${this.pendingCandidates.map(s => s?.type || (s?.candidate ? "candidate" : "unknown")).join(",")}`)\n    if (!this.peerConnection) return\n', 1)
+          needle = '          this.sendSignal(peerConnection.localDescription)\n'
+          assert s.count(needle) >= 1
+          s = s.replace(needle, '          console.log(`[K2_FLUSH answer] role=${this.role} type=${peerConnection.localDescription?.type}`)\n' + needle, 1)
+          needle = '    peerConnection = new RTCPC(config)\n    this.peerConnection = peerConnection\n'
+          assert s.count(needle) == 1
+          s = s.replace(needle, needle + '    console.log(`[K2_PC created] role=${this.role} iceServers=${config.iceServers.length}`)\n', 1)
+          needle = '    peerConnection.oniceconnectionstatechange = () => {\n      const state = peerConnection.iceConnectionState\n'
+          assert s.count(needle) == 1
+          s = s.replace(needle, needle + '      console.log(`[K2_ICE] role=${this.role} state=${state}`)\n', 1)
+          live.write_text(s)
 
-          app_path = Path("priv/static/assets/app.js")
-          app = app_path.read_text()
-          needle = "function renderLiveCallState(state) {\n"
-          assert app.count(needle) == 1, app.count(needle)
-          replacement = '''function renderLiveCallState(state) {
-            console.log(`[K2_CALL_STATE] ${JSON.stringify({
-              attempt: state?.callAttemptId || null,
-              status: state?.status || null,
-              selfVideo: Boolean(state?.selfVideo),
-              peerVideo: Boolean(state?.peerVideo),
-              mediaGeneration: Number.isInteger(state?.mediaGeneration) ? state.mediaGeneration : null
-            })}`)
-          '''
-          app_path.write_text(app.replace(needle, replacement, 1))
-
-          test_path = Path("test/js/browser_e2e_test.mjs")
-          test = test_path.read_text()
+          test = Path("test/js/browser_e2e_test.mjs")
+          x = test.read_text()
           old = '''  page.on("console", message => {
-              if (message.type() === "error") consoleErrors.push(message.text())
-            })
-          '''
+    if (message.type() === "error") consoleErrors.push(message.text())
+  })
+'''
           new = '''  page.on("console", message => {
-              const text = message.text()
-              if (text.startsWith("[K2_CALL_STATE]")) console.log(text)
-              if (message.type() === "error") consoleErrors.push(text)
-            })
-          '''
-          assert test.count(old) == 1, test.count(old)
-          test_path.write_text(test.replace(old, new, 1))
+    const text = message.text()
+    if (text.startsWith("[K2_")) console.log(text)
+    if (message.type() === "error") consoleErrors.push(text)
+  })
+'''
+          assert x.count(old) == 1
+          x = x.replace(old, new, 1)
+          old = '''      const message = phoenixMessage(payload)
+      if (message) journal.add({type: "frame_sent", ...message})
+'''
+          new = '''      const message = phoenixMessage(payload)
+      if (message) {
+        if (message.event?.startsWith("call:")) console.log(`[K2_FRAME sent] ${message.event} ${JSON.stringify(message.body)}`)
+        journal.add({type: "frame_sent", ...message})
+      }
+'''
+          assert x.count(old) == 1
+          x = x.replace(old, new, 1)
+          old = '''      const message = phoenixMessage(payload)
+      if (message) journal.add({type: "frame_received", ...message})
+'''
+          new = '''      const message = phoenixMessage(payload)
+      if (message) {
+        if (message.event?.startsWith("call:") || message.event === "phx_reply") console.log(`[K2_FRAME recv] ${message.event} ${JSON.stringify(message.body)}`)
+        journal.add({type: "frame_received", ...message})
+      }
+'''
+          assert x.count(old) == 1
+          test.write_text(x.replace(old, new, 1))
           PY
       - name: Prepare isolated browser database
         run: |
@@ -121,23 +146,19 @@ jobs:
           done
           cat /tmp/k2-call-proof-phoenix.log
           exit 1
-      - name: Run unmodified #85 #86 #87 assertions with state logging
+      - name: Run ring transport trace
         shell: bash
         run: |
           set -o pipefail
-          node --test --test-concurrency=1 --test-name-pattern='Feature 1Q E2E-(RTV|REACTION|RING)' test/js/browser_e2e_test.mjs 2>&1 | tee /tmp/k2-call-proof.tap
+          node --test --test-concurrency=1 --test-name-pattern='Feature 1Q E2E-RING' test/js/browser_e2e_test.mjs 2>&1 | tee /tmp/k2-call-proof.tap
       - name: Build proof report
         if: always()
         shell: bash
         run: |
           {
             echo "SOURCE_SHA=$SOURCE_SHA"
-            echo "--- CALL STATES ---"
-            grep -F '[K2_CALL_STATE]' /tmp/k2-call-proof.tap || true
-            echo "--- ACTIVE COUNT ---"
-            grep -F '[K2_CALL_STATE]' /tmp/k2-call-proof.tap | grep -c '"status":"ACTIVE"' || true
-            echo "--- VIDEO STATE COUNT ---"
-            grep -F '[K2_CALL_STATE]' /tmp/k2-call-proof.tap | grep -Ec '"selfVideo":true|"peerVideo":true' || true
+            echo "--- TRANSPORT TRACE ---"
+            grep -E '\[K2_(SIGNAL|FLUSH|ICE|PC|FRAME)' /tmp/k2-call-proof.tap || true
             echo "--- TOTALS ---"
             grep -E '^# (tests|pass|fail|cancelled|skipped|todo|duration_ms) ' /tmp/k2-call-proof.tap || true
             echo "--- FAILURES ---"
