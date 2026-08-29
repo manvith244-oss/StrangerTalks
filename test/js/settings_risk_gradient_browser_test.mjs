@@ -119,8 +119,22 @@ test("every visible Settings control is reachable by keyboard in DOM order", {ti
     await openSettings(app.page)
     const settings = app.page.locator('section[data-screen="settings"]')
     const controls = settings.locator('button:not([hidden]):visible, input:not([hidden]):visible')
-    const count = await controls.count()
-    assert.ok(count >= 8, "guest Settings exposes its routine controls")
+    assert.equal(await settings.locator("#account-disabled").isVisible(), true, "Google continuity is unavailable")
+    const identities = await controls.evaluateAll(nodes => nodes.map(node => ({
+      role: node.tagName === "BUTTON" ? "button" : node.type,
+      id: node.id || null,
+      destination: node.dataset.go || null
+    })))
+    assert.deepEqual(identities, [
+      {role: "button", id: null, destination: "memories"},
+      {role: "button", id: null, destination: "reflections"},
+      {role: "checkbox", id: "reduced-motion", destination: null},
+      {role: "button", id: "view-data", destination: null},
+      {role: "button", id: "export-data", destination: null},
+      {role: "file", id: "import-data", destination: null},
+      {role: "button", id: "delete-all", destination: null}
+    ], "Google-unavailable guest Settings exposes the expected controls in DOM order")
+    const count = identities.length
 
     await controls.first().focus()
     for (let index = 0; index < count; index += 1) {
