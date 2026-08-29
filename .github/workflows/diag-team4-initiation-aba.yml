@@ -1,0 +1,38 @@
+name: Diagnostic Team 4 Initiation ABA Proof
+
+on:
+  push:
+    branches:
+      - diag/team4-initiation-aba-proof-2026-08-29
+
+permissions:
+  contents: read
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_SHA: 408f28ac747276022aab955c7de9ef1fa04b6c2e
+    steps:
+      - name: Checkout exact target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+
+      - name: Prove exact target and clean checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "TARGET_SHA=$TARGET_SHA"
+          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run initiation ABA hostile test
+        run: node --test --test-concurrency=1 test/js/team4_initiation_aba_test.mjs
