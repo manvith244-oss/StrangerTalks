@@ -1,0 +1,134 @@
+name: K2 Presence Screen Caller Trace
+
+on:
+  push:
+    branches:
+      - diagnostics/presence-visibility-2026-08-29
+    paths:
+      - .github/workflows/k2-presence-screen-caller-trace.yml
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  PORT: "4000"
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+  SOURCE_SHA: 2c53f29dbde5d7848b42bfe3d3c44054d01f153f
+
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+      - run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Instrument screen activation caller
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('test/js/browser_e2e_test.mjs')
+          text = p.read_text()
+          old = '    await recoverablePair.a.disconnectSocket()\n    await recoverablePair.a.page.locator("#presence", {hasText: "Reconnecting…"}).waitFor({state: "visible"})\n'
+          new = '''    await recoverablePair.a.page.evaluate(() => {
+              const owners = new WeakMap()
+              document.querySelectorAll("[data-screen]").forEach((node) => owners.set(node.classList, node.dataset.screen))
+              window.__screenToggleTrace = []
+              const originalToggle = DOMTokenList.prototype.toggle
+              DOMTokenList.prototype.toggle = function(token, force) {
+                const screen = owners.get(this)
+                if (token !== "active" || !screen) return originalToggle.call(this, token, force)
+                const before = this.contains(token)
+                const stack = new Error("active-toggle").stack
+                const result = originalToggle.call(this, token, force)
+                window.__screenToggleTrace.push({screen, force, before, after: this.contains(token), stack, at: performance.now()})
+                return result
+              }
+            })
+            await recoverablePair.a.disconnectSocket()
+            await recoverablePair.a.page.waitForFunction(() => document.querySelector("#presence")?.textContent?.includes("Reconnecting"))
+            const screenCallerTrace = await recoverablePair.a.page.evaluate(() => ({
+              activeScreens: Array.from(document.querySelectorAll("[data-screen].active"), (node) => node.dataset.screen),
+              presence: document.querySelector("#presence")?.textContent,
+              status: document.querySelector("#status")?.textContent,
+              trace: window.__screenToggleTrace || []
+            }))
+            console.log(`[SCREEN_CALLER_TRACE] ${JSON.stringify(screenCallerTrace)}`)
+            await recoverablePair.a.page.locator("#presence", {hasText: "Reconnecting…"}).waitFor({state: "visible"})
+'''
+          if text.count(old) != 1:
+            raise SystemExit(f'expected one reconnect wait, found {text.count(old)}')
+          p.write_text(text.replace(old, new, 1))
+          PY
+      - name: Prepare database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start Phoenix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/k2-presence-caller-phoenix.log 2>&1 &
+          echo $! > /tmp/k2-presence-caller-phoenix.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/k2-presence-caller-phoenix.pid)" 2>/dev/null; then cat /tmp/k2-presence-caller-phoenix.log; exit 1; fi
+            sleep 1
+          done
+          cat /tmp/k2-presence-caller-phoenix.log
+          exit 1
+      - name: Run reconnect scenario
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test --test-concurrency=1 --test-name-pattern='Feature 1L E2E-2' test/js/browser_e2e_test.mjs 2>&1 | tee /tmp/k2-presence-caller.tap
+      - name: Report caller trace
+        if: always()
+        shell: bash
+        run: |
+          grep -F '[SCREEN_CALLER_TRACE]' /tmp/k2-presence-caller.tap || true
+          grep -E '^# (tests|pass|fail|duration_ms) |^not ok ' /tmp/k2-presence-caller.tap || true
+      - name: Stop Phoenix
+        if: always()
+        run: if [ -f /tmp/k2-presence-caller-phoenix.pid ]; then kill "$(cat /tmp/k2-presence-caller-phoenix.pid)" 2>/dev/null || true; fi
