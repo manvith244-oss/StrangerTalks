@@ -1,4 +1,5 @@
 const FIRST_MINUTE_FAILURE = "StrangerTalks could not start. Please reload."
+const FIRST_MINUTE_FOCUS_SCREENS = new Set(["doors", "queue", "match", "conversation"])
 
 function appendDescriptionId(element, id) {
   if (!element || !id) return
@@ -8,7 +9,7 @@ function appendDescriptionId(element, id) {
 }
 
 function focusScreenHeading(screen) {
-  if (!screen) return
+  if (!screen || !FIRST_MINUTE_FOCUS_SCREENS.has(screen.dataset.screen)) return
   const heading = screen.querySelector("h1")
   if (!heading) return
   if (!heading.hasAttribute("tabindex")) heading.setAttribute("tabindex", "-1")
