@@ -17,6 +17,7 @@ pg_dump \
   --format=custom \
   --no-owner \
   --no-acl \
+  --schema=public \
   --file="$output" \
   "$DATABASE_URL"
 
@@ -25,4 +26,5 @@ test -s "$output" || {
   exit 1
 }
 
+printf 'backup_schema=public\n'
 printf 'backup_created=%s\n' "$output"
