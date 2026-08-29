@@ -223,6 +223,60 @@ jobs:
           mix deps.get
           npm ci
           npx playwright install --with-deps chromium
+      - name: Start composed-E2E TURN relay
+        if: ${{ matrix.group == 'composed-e2e' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ss -lntu | grep -Eq ':3478[[:space:]]'; then
+            echo "Unexpected TURN listener before K2 setup"
+            sudo ss -lntup | grep ':3478' || true
+            exit 1
+          fi
+          sudo apt-get install -y coturn
+          sudo systemctl stop coturn 2>/dev/null || true
+          sudo pkill -x turnserver 2>/dev/null || true
+          for attempt in $(seq 1 10); do
+            if ! ss -lntu | grep -Eq ':3478[[:space:]]'; then break; fi
+            sleep 1
+          done
+          if ss -lntu | grep -Eq ':3478[[:space:]]'; then
+            echo "TURN port 3478 did not clear after package-service stop"
+            sudo ss -lntup | grep ':3478' || true
+            exit 1
+          fi
+          cat > /tmp/k2-turnserver.conf <<'EOF'
+          listening-ip=127.0.0.1
+          relay-ip=127.0.0.1
+          listening-port=3478
+          min-port=49160
+          max-port=49200
+          fingerprint
+          use-auth-secret
+          static-auth-secret=team6-test-only-coturn-secret
+          realm=strangertalks.test
+          allow-loopback-peers
+          no-multicast-peers
+          no-cli
+          no-tls
+          no-dtls
+          EOF
+          sudo turnserver -c /tmp/k2-turnserver.conf > /tmp/k2-coturn.log 2>&1 &
+          echo $! > /tmp/k2-coturn.pid
+          for attempt in $(seq 1 30); do
+            if sudo ss -lunp | grep ':3478' | grep -Fq 'turnserver'; then
+              echo "K2_TURN_LISTENER=ready"
+              sudo ss -lunp | grep ':3478'
+              exit 0
+            fi
+            if [ -f /tmp/k2-coturn.pid ] && ! sudo kill -0 "$(cat /tmp/k2-coturn.pid)" 2>/dev/null; then
+              cat /tmp/k2-coturn.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/k2-coturn.log
+          exit 1
       - name: Prepare isolated browser database
         run: |
           mix ecto.drop --quiet || true
@@ -321,10 +375,12 @@ jobs:
           path: /tmp/k2-${{ matrix.group }}-tap-summary.md
           if-no-files-found: ignore
           retention-days: 7
-      - name: Stop Phoenix
+      - name: Stop browser runtimes
         if: always()
         run: |
           if [ -f /tmp/k2-${{ matrix.group }}.pid ]; then kill "$(cat /tmp/k2-${{ matrix.group }}.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/k2-coturn.pid ]; then sudo kill "$(cat /tmp/k2-coturn.pid)" 2>/dev/null || true; fi
+          sudo pkill -x turnserver 2>/dev/null || true
       - name: Browser log on failure
         if: failure()
         run: cat /tmp/k2-${{ matrix.group }}.log || true

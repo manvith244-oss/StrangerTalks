@@ -1126,13 +1126,45 @@ sendSignal(signal) {
 }
 
   async flushPendingCandidates() {
-    if (!this.peerConnection || !this.peerConnection.remoteDescription) return
-    while (this.pendingCandidates.length > 0) {
-      const cand = this.pendingCandidates.shift()
+    if (!this.peerConnection) return
+
+    const peerConnection = this.peerConnection
+    const callAttemptId = this.callAttemptId
+    const mediaGeneration = this.mediaGeneration
+    const stillCurrent = () => this.mediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)
+    const queued = this.pendingCandidates.splice(0)
+    const queuedIceCandidates = []
+
+    for (const signal of queued) {
       try {
-        if (cand.candidate) {
-          await this.peerConnection.addIceCandidate(new RTCIceCandidate(cand))
+        if (signal.type === "offer") {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(signal))
+          if (!stillCurrent()) return
+          const answer = await peerConnection.createAnswer()
+          if (!stillCurrent()) return
+          await peerConnection.setLocalDescription(answer)
+          if (!stillCurrent()) return
+          this.sendSignal(peerConnection.localDescription)
+        } else if (signal.type === "answer") {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(signal))
+          if (!stillCurrent()) return
+        } else if (signal.candidate) {
+          queuedIceCandidates.push(signal)
         }
+      } catch (error) {
+        if (stillCurrent()) this.onError(error)
+      }
+    }
+
+    if (!stillCurrent()) return
+    if (!peerConnection.remoteDescription) {
+      this.pendingCandidates.unshift(...queuedIceCandidates)
+      return
+    }
+
+    for (const candidate of queuedIceCandidates) {
+      try {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate))
       } catch {
         // Ignore candidate addition errors
       }
