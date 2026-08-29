@@ -20,6 +20,7 @@ jobs:
           set -euo pipefail
           HOST=aws-0-ap-southeast-1.pooler.supabase.com
           PORT=5432
+          CA_URL=https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt
 
           echo "=== target ==="
           echo "${HOST}:${PORT}"
@@ -44,9 +45,16 @@ jobs:
           grep -E '^(depth=|verify error:|Verification error:|Verify return code:|subject=|issuer=|Server certificate|CONNECTED)' /tmp/probe.txt || true
 
           awk '
-            /-----BEGIN CERTIFICATE-----/ {n++; file=sprintf("/tmp/cert-%02d.pem", n)}
-            n > 0 {print > file}
-            /-----END CERTIFICATE-----/ {close(file)}
+            /-----BEGIN CERTIFICATE-----/ {
+              n++
+              file=sprintf("/tmp/cert-%02d.pem", n)
+              in_cert=1
+            }
+            in_cert {print > file}
+            /-----END CERTIFICATE-----/ {
+              close(file)
+              in_cert=0
+            }
           ' /tmp/probe.txt
 
           shopt -s nullglob
@@ -71,5 +79,24 @@ jobs:
               echo "self_signed_subject_issuer=false"
             fi
           done
+
+          test "${#certs[@]}" -eq 3
+          echo "=== verify extracted live chain against extracted live root ==="
+          openssl verify -CAfile /tmp/cert-03.pem -untrusted /tmp/cert-02.pem /tmp/cert-01.pem
+
+          echo "=== official download comparison only ==="
+          curl --fail --silent --show-error --location "$CA_URL" -o /tmp/official-prod-ca-2021.crt
+          openssl x509 -in /tmp/official-prod-ca-2021.crt -noout \
+            -subject -issuer -serial -startdate -enddate -fingerprint -sha256
+
+          live_root_fp=$(openssl x509 -in /tmp/cert-03.pem -noout -fingerprint -sha256 | cut -d= -f2)
+          official_fp=$(openssl x509 -in /tmp/official-prod-ca-2021.crt -noout -fingerprint -sha256 | cut -d= -f2)
+          echo "LIVE_ROOT_SHA256=$live_root_fp"
+          echo "OFFICIAL_DOWNLOAD_SHA256=$official_fp"
+          if [ "$live_root_fp" = "$official_fp" ]; then
+            echo "LIVE_ROOT_MATCHES_OFFICIAL_DOWNLOAD=true"
+          else
+            echo "LIVE_ROOT_MATCHES_OFFICIAL_DOWNLOAD=false"
+          fi
 
           echo "=== live probe complete ==="
