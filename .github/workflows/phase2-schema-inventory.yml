@@ -1,0 +1,120 @@
+name: Phase 2 Supabase Schema Inventory
+
+on:
+  push:
+    branches:
+      - ops/phase2-schema-scope-2026-08-29
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    env:
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || vars.SUPABASE_DATABASE_URL }}
+      SUPABASE_CA_URL: https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt
+    steps:
+      - name: Guard Supabase URL
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_DATABASE_URL:-}" ]; then
+            echo "schema_inventory_supabase_url_present=false"
+            exit 2
+          fi
+          echo "schema_inventory_supabase_url_present=true"
+          echo "schema_inventory_render_database_url_used=false"
+
+      - name: Download verified Supabase root CA
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location "$SUPABASE_CA_URL" -o /tmp/prod-ca-2021.crt
+          openssl x509 -in /tmp/prod-ca-2021.crt -noout -subject -issuer -fingerprint -sha256
+          echo "schema_inventory_supabase_ca_ready=true"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '28.0.2'
+
+      - name: Query every schema and table placement
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/schema_inventory.exs <<'EXS'
+          Mix.install([{:postgrex, "0.22.4"}])
+
+          uri = URI.parse(System.fetch_env!("SUPABASE_DATABASE_URL"))
+          [raw_user, raw_pass] = String.split(uri.userinfo || "", ":", parts: 2)
+
+          opts = [
+            hostname: uri.host,
+            port: uri.port || 5432,
+            username: URI.decode(raw_user),
+            password: URI.decode(raw_pass),
+            database: String.trim_leading(uri.path || "/postgres", "/"),
+            ssl: [cacertfile: "/tmp/prod-ca-2021.crt"],
+            timeout: 30_000,
+            connect_timeout: 15_000,
+            handshake_timeout: 15_000,
+            show_sensitive_data_on_connection_error: false
+          ]
+
+          {:ok, pid} = Postgrex.start_link(opts)
+
+          schemas = Postgrex.query!(pid, "SELECT nspname FROM pg_catalog.pg_namespace ORDER BY nspname", []).rows
+          IO.puts("SCHEMA_INVENTORY_SCHEMAS_BEGIN")
+          Enum.each(schemas, fn [schema] -> IO.puts(schema) end)
+          IO.puts("SCHEMA_INVENTORY_SCHEMAS_END")
+
+          tables = Postgrex.query!(pid, """
+          SELECT n.nspname, c.relname
+          FROM pg_catalog.pg_class c
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relkind IN ('r','p')
+          ORDER BY n.nspname, c.relname
+          """, []).rows
+
+          IO.puts("SCHEMA_INVENTORY_TABLES_BEGIN")
+          Enum.each(tables, fn [schema, table] -> IO.puts("#{schema}\t#{table}") end)
+          IO.puts("SCHEMA_INVENTORY_TABLES_END")
+
+          app_tables = ~w(
+            account_sessions account_sync_states analytics_records boundary_blocks composer_grants
+            conversations google_account_links google_oauth_attempts learning_records matches memories
+            message_reactions messages participants private_accounts queue_states reflections
+            relationship_consents relationship_reconnection_intents relationships report_safety_media
+            reports safety_events safety_reviews schema_migrations
+          )
+
+          app_rows = Postgrex.query!(pid, """
+          SELECT n.nspname, c.relname
+          FROM pg_catalog.pg_class c
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+          WHERE c.relkind IN ('r','p') AND c.relname = ANY($1::text[])
+          ORDER BY n.nspname, c.relname
+          """, [app_tables]).rows
+
+          IO.puts("APP_TABLE_PLACEMENT_BEGIN")
+          Enum.each(app_rows, fn [schema, table] -> IO.puts("#{schema}\t#{table}") end)
+          IO.puts("APP_TABLE_PLACEMENT_END")
+
+          outside = Enum.reject(app_rows, fn [schema, _table] -> schema == "public" end)
+          if outside == [] do
+            IO.puts("APP_TABLES_OUTSIDE_PUBLIC=false")
+          else
+            IO.puts("APP_TABLES_OUTSIDE_PUBLIC=true")
+            IO.puts("APP_TABLES_OUTSIDE_PUBLIC_BEGIN")
+            Enum.each(outside, fn [schema, table] -> IO.puts("#{schema}\t#{table}") end)
+            IO.puts("APP_TABLES_OUTSIDE_PUBLIC_END")
+            System.halt(3)
+          end
+
+          GenServer.stop(pid)
+          IO.puts("SCHEMA_INVENTORY_RESULT=PASS")
+          EXS
+          elixir /tmp/schema_inventory.exs
