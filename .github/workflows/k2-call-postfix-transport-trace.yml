@@ -1,0 +1,178 @@
+name: K2 Call Post-Fix Transport Trace
+
+on:
+  push:
+    branches:
+      - verify/composed-call-signal-fix-2026-08-29
+    paths:
+      - .github/workflows/k2-call-postfix-transport-trace.yml
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  PORT: "4000"
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+  SOURCE_SHA: 2c53f29dbde5d7848b42bfe3d3c44054d01f153f
+
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+      - run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Add runtime-only transport logging
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("priv/static/assets/live_call.mjs")
+          s = p.read_text()
+          s = s.replace(
+            'async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {\n',
+            'async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {\n  console.log(`[K2_SIGNAL recv] role=${this.role} type=${signal?.type || (signal?.candidate ? "candidate" : "unknown")} pc=${Boolean(this.peerConnection)} pending=${this.pendingCandidates.length}`)\n',
+            1
+          )
+          s = s.replace(
+            '  async flushPendingCandidates() {\n    if (!this.peerConnection) return\n',
+            '  async flushPendingCandidates() {\n    console.log(`[K2_FLUSH start] role=${this.role} pc=${Boolean(this.peerConnection)} pending=${this.pendingCandidates.map(s => s?.type || (s?.candidate ? "candidate" : "unknown")).join(",")}`)\n    if (!this.peerConnection) return\n',
+            1
+          )
+          s = s.replace(
+            '          this.sendSignal(peerConnection.localDescription)\n',
+            '          console.log(`[K2_FLUSH answer] role=${this.role} type=${peerConnection.localDescription?.type}`)\n          this.sendSignal(peerConnection.localDescription)\n',
+            1
+          )
+          s = s.replace(
+            '    peerConnection.oniceconnectionstatechange = () => {\n      const state = peerConnection.iceConnectionState\n',
+            '    peerConnection.oniceconnectionstatechange = () => {\n      const state = peerConnection.iceConnectionState\n      console.log(`[K2_ICE] role=${this.role} state=${state}`)\n',
+            1
+          )
+          s = s.replace(
+            '    peerConnection = new RTCPC(config)\n    this.peerConnection = peerConnection\n',
+            '    peerConnection = new RTCPC(config)\n    this.peerConnection = peerConnection\n    console.log(`[K2_PC created] role=${this.role} iceServers=${config.iceServers.length}`)\n',
+            1
+          )
+          p.write_text(s)
+
+          t = Path("test/js/browser_e2e_test.mjs")
+          x = t.read_text()
+          old = '''  page.on("console", message => {
+    if (message.type() === "error") consoleErrors.push(message.text())
+  })
+'''
+          new = '''  page.on("console", message => {
+    const text = message.text()
+    if (text.startsWith("[K2_")) console.log(text)
+    if (message.type() === "error") consoleErrors.push(text)
+  })
+'''
+          assert x.count(old) == 1, x.count(old)
+          x = x.replace(old, new, 1)
+          # Also echo Phoenix call frames without altering journal behavior.
+          old2 = '''      const message = phoenixMessage(payload)
+      if (message) journal.add({type: "frame_sent", ...message})
+'''
+          new2 = '''      const message = phoenixMessage(payload)
+      if (message) {
+        if (message.event?.startsWith("call:")) console.log(`[K2_FRAME sent] ${message.event} ${JSON.stringify(message.body)}`)
+        journal.add({type: "frame_sent", ...message})
+      }
+'''
+          assert x.count(old2) == 1, x.count(old2)
+          x = x.replace(old2, new2, 1)
+          old3 = '''      const message = phoenixMessage(payload)
+      if (message) journal.add({type: "frame_received", ...message})
+'''
+          new3 = '''      const message = phoenixMessage(payload)
+      if (message) {
+        if (message.event?.startsWith("call:") || (message.event === "phx_reply" && message.body?.response?.status)) console.log(`[K2_FRAME recv] ${message.event} ${JSON.stringify(message.body)}`)
+        journal.add({type: "frame_received", ...message})
+      }
+'''
+          assert x.count(old3) == 1, x.count(old3)
+          t.write_text(x.replace(old3, new3, 1))
+          PY
+      - name: Prepare DB
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start Phoenix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/k2-postfix-phoenix.log 2>&1 &
+          echo $! > /tmp/k2-postfix-phoenix.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/k2-postfix-phoenix.pid)" 2>/dev/null; then cat /tmp/k2-postfix-phoenix.log; exit 1; fi
+            sleep 1
+          done
+          exit 1
+      - name: Run ring scenario transport trace
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test --test-concurrency=1 --test-name-pattern='Feature 1Q E2E-RING' test/js/browser_e2e_test.mjs 2>&1 | tee /tmp/k2-postfix.tap
+      - name: Build report
+        if: always()
+        run: |
+          grep -E '\[K2_(SIGNAL|FLUSH|ICE|PC|FRAME)' /tmp/k2-postfix.tap > /tmp/k2-postfix-report.txt || true
+          echo '--- TAP ---' >> /tmp/k2-postfix-report.txt
+          grep -E '^# (tests|pass|fail|duration_ms)|^not ok ' /tmp/k2-postfix.tap >> /tmp/k2-postfix-report.txt || true
+          cat /tmp/k2-postfix-report.txt
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: k2-call-postfix-transport-trace
+          path: |
+            /tmp/k2-postfix-report.txt
+            /tmp/k2-postfix.tap
+            /tmp/k2-postfix-phoenix.log
+          retention-days: 7
+      - name: Stop Phoenix
+        if: always()
+        run: if [ -f /tmp/k2-postfix-phoenix.pid ]; then kill "$(cat /tmp/k2-postfix-phoenix.pid)" 2>/dev/null || true; fi
