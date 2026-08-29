@@ -45,6 +45,7 @@ jobs:
           echo "phase2_run_id=${GITHUB_RUN_ID}"
           echo "phase2_source=supabase"
           echo "phase2_source_operation=read_only_dump"
+          echo "phase2_backup_schema=public"
           echo "phase2_render_database_url_used=false"
           missing=0
           for name in SUPABASE_DATABASE_URL R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
@@ -139,7 +140,7 @@ jobs:
           done < "$tables"
           sort -o "$counts" "$counts"
 
-          pg_dump --schema-only --no-owner --no-acl "$SUPABASE_DATABASE_URL" > "$schema"
+          pg_dump --schema-only --no-owner --no-acl --schema=public "$SUPABASE_DATABASE_URL" > "$schema"
           grep -Ev '^(--|\\restrict |\\unrestrict |$)' "$schema" > "$schema_norm"
 
           echo "PHASE2_SOURCE_ROW_COUNTS_BEGIN"
@@ -230,7 +231,7 @@ jobs:
           diff -u "$SOURCE_COUNTS" "$scratch_counts"
           echo "phase2_row_counts_match=true"
 
-          pg_dump --schema-only --no-owner --no-acl "$SCRATCH_DATABASE_URL" > "$scratch_schema"
+          pg_dump --schema-only --no-owner --no-acl --schema=public "$SCRATCH_DATABASE_URL" > "$scratch_schema"
           grep -Ev '^(--|\\restrict |\\unrestrict |$)' "$scratch_schema" > "$scratch_schema_norm"
           source_schema_sha=$(sha256sum "$SOURCE_SCHEMA_NORM" | awk '{print $1}')
           scratch_schema_sha=$(sha256sum "$scratch_schema_norm" | awk '{print $1}')
