@@ -11,16 +11,24 @@ import {
 } from "../../priv/static/assets/expression_surface_core.mjs"
 
 const indexHtml = await readFile(new URL("../../priv/static/index.html", import.meta.url), "utf8")
+const loadingRuntimeSource = await readFile(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
 const runtimeSource = await readFile(new URL("../../priv/static/assets/expression_runtime.mjs", import.meta.url), "utf8")
 const pageController = await readFile(new URL("../../lib/strangertalks_new_web/controllers/page_controller.ex", import.meta.url), "utf8")
 
-test("Team 10 has one formatting-independent canonical loader and no PageController surgery", () => {
-  assert.equal((indexHtml.match(/expression_runtime\.mjs/g) || []).length, 1)
+test("Team 10 follows the canonical browser boot chain without direct expression or app injection", () => {
+  assert.equal((indexHtml.match(/flow_loading_runtime\.mjs/g) || []).length, 1)
+  assert.equal((indexHtml.match(/expression_runtime\.mjs/g) || []).length, 0)
   assert.equal((indexHtml.match(/<script[^>]+\/assets\/app\.js/g) || []).length, 0)
+  assert.match(loadingRuntimeSource, /const APP_ENTRY = "\/assets\/expression_runtime\.mjs\?v=[^"]+"/)
+  assert.equal((loadingRuntimeSource.match(/await import\(APP_ENTRY\)/g) || []).length, 1)
+  assert.match(runtimeSource, /const APP_ENTRY = "\/assets\/app\.js\?v=[^"]+"/)
   assert.equal((runtimeSource.match(/await import\(APP_ENTRY\)/g) || []).length, 1)
-  assert.match(runtimeSource, /const APP_ENTRY = "\/assets\/app\.js\?v=20260807_v2"/)
-  assert.doesNotMatch(pageController, /String\.replace|@app_script|@expression_script/)
-  assert.match(pageController, /send_file/)
+
+  assert.match(pageController, /Application\.app_dir\(:strangertalks_new, "priv\/static\/index\.html"\)/)
+  assert.match(pageController, /\|> File\.read!\(\)/)
+  assert.match(pageController, /@route_runtime_tag <> "\\n    " <> @mobile_runtime_tag <> "\\n    " <> @app_bootstrap_tag/)
+  assert.match(pageController, /send_resp\(200, body\)/)
+  assert.doesNotMatch(pageController, /expression_runtime|\/assets\/app\.js/)
 })
 
 test("emoji insertion behaves like text editing at start, middle, end and selection", () => {
