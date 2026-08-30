@@ -195,6 +195,7 @@ test("unselected Doors are neutral, hover/focus preview is restrained, and selec
     assert.notEqual(focused.backgroundColor, resting.backgroundColor, "keyboard focus reveals a subtle Door tint")
 
     await firstDoor.evaluate(element => element.setAttribute("aria-pressed", "true"))
+    await firstDoor.page().waitForTimeout(200)
     const selected = await doorVisualState(firstDoor)
     assert.notEqual(selected.borderColor, resting.borderColor, "selected Door keeps a distinct border signal")
     assert.notEqual(selected.boxShadow, resting.boxShadow, "selected Door keeps the existing selected-state emphasis")
