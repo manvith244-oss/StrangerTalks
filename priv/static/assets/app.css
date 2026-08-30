@@ -118,6 +118,7 @@ h2 { margin-top: var(--st-space-12); font-size: var(--st-heading); }
 .door-grid {
   display: grid;
   grid-template-columns: 1fr;
+  grid-auto-rows: 1fr;
   gap: clamp(0.75rem, 2vw, 1.25rem);
   margin: var(--st-space-8) 0;
 }
@@ -128,22 +129,21 @@ h2 { margin-top: var(--st-space-12); font-size: var(--st-heading); }
   }
 }
 
-@media (min-width: 62rem) {
-  .door-grid {
-    grid-template-columns: repeat(4, 1fr);
-  }
-}
-
 .door { --door-accent: var(--st-text-soft); position: relative; min-height: 9.5rem; overflow: hidden; padding: clamp(1.25rem, 2.5vw, 1.75rem); text-align: left; background: var(--st-surface); border-radius: var(--st-radius-medium); }
 .door[data-door="SOMETHING_REAL"] { --door-accent: var(--st-deep-talk); }
 .door[data-door="JUST_TALK"] { --door-accent: var(--st-vent); }
 .door[data-door="KEEP_IT_LIGHT"] { --door-accent: var(--st-distract); }
 .door[data-door="EXPLORE"] { --door-accent: var(--st-advice); }
-.door::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--door-accent); opacity: 0.82; }
+.door::after { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--door-accent); opacity: 0; }
+.door:not([aria-pressed="true"]):is(:hover, :focus-visible) { background: color-mix(in srgb, var(--door-accent) 4%, var(--st-surface)); }
+.door:not([aria-pressed="true"]):is(:hover, :focus-visible)::after { opacity: 0.04; }
+.door[aria-pressed="true"]::after { opacity: 0.82; }
+.door:focus-visible, #conversation-language:focus-visible { outline: 3px solid var(--st-advice); outline-offset: 4px; }
 .door[aria-pressed="true"] { border-color: var(--door-accent); background: var(--st-surface-raised); box-shadow: 0 0 0 1px var(--door-accent); }
 .door strong { display: block; margin: var(--st-space-4) 0 var(--st-space-1); font-size: var(--st-heading); }
 .door span { color: var(--st-text-muted); font-size: var(--st-small); line-height: 1.45; display: block; }
-.door-mark { display: block; width: 2.5rem; height: 1.15rem; border-radius: 55% 22% 62% 32%; background: var(--door-accent); clip-path: polygon(0 48%, 18% 8%, 73% 0, 100% 38%, 76% 82%, 24% 100%); opacity: 0.82; transform: rotate(-5deg); }
+.door-mark { display: block; width: 2.5rem; height: 1.15rem; border-radius: 55% 22% 62% 32%; background: var(--st-text-soft); clip-path: polygon(0 48%, 18% 8%, 73% 0, 100% 38%, 76% 82%, 24% 100%); opacity: 0.82; transform: rotate(-5deg); }
+.door[aria-pressed="true"] .door-mark { background: var(--door-accent); }
 
 .pulse { width: 6rem; height: 3.5rem; margin: var(--st-space-8) auto; border: 1px solid rgba(255, 252, 235, 0.3); border-radius: 58% 31% 62% 37%; background: radial-gradient(circle at 35% 35%, rgba(143, 131, 255, 0.58), rgba(85, 217, 199, 0.09) 65%); animation: breathe var(--st-motion-matching) ease-in-out infinite alternate; }
 

@@ -26,9 +26,10 @@
 
       <section data-screen="doors" class="screen active top-level">
         <p class="eyebrow">Talk</p><h1>What do you need right now?</h1><p class="lede">Pick what feels closest.</p>
-        <aside class="temporary-entry" aria-labelledby="temporary-entry-title"><h2 id="temporary-entry-title">Temporary Conversation</h2><p>This Conversation isn't kept as a permanent chat history. StrangerTalks temporarily keeps enough recent Conversation information to keep the chat working and help it recover from a short connection interruption.</p><button class="text-action" type="button" data-lifetime-details aria-haspopup="dialog" aria-controls="lifetime-details-dialog" aria-expanded="false">How this works</button></aside>
-        <label for="conversation-language">Conversation Language</label><select id="conversation-language"><option value="">Choose a language</option></select>
         <div id="doors" class="door-grid"></div>
+        <label for="conversation-language">Conversation Language</label><select id="conversation-language"><option value="">Choose a language</option></select>
+        <p id="arrival-trust-cue">Anonymous, one-to-one conversation with another person. No profile required.</p>
+        <aside class="temporary-entry" aria-labelledby="temporary-entry-title"><h2 id="temporary-entry-title">Temporary Conversation</h2><p>This Conversation isn't kept as a permanent chat history. StrangerTalks temporarily keeps enough recent Conversation information to keep the chat working and help it recover from a short connection interruption.</p><button class="text-action" type="button" data-lifetime-details aria-haspopup="dialog" aria-controls="lifetime-details-dialog" aria-expanded="false">How this works</button></aside>
       </section>
       <section data-screen="queue" class="screen focused-screen" aria-busy="true"><p class="eyebrow" id="queue-door">Deep Talk</p><h1 id="queue-title">Starting matchmaking…</h1><p class="lede" id="queue-lede">Confirming your place in the queue.</p><p id="queue-phase-status" class="sr-status" role="status" aria-live="polite"></p><div class="pulse" aria-hidden="true"></div><button id="leave-queue" disabled>Leave Queue</button></section>
       <section data-screen="match" class="screen"><h1>Found someone.</h1><p>Opening your temporary conversation…</p></section>
