@@ -1,4 +1,4 @@
-TESTED_SHA=01808e099b08be4f6d0fc26fcd5c5a022434991d
+TESTED_SHA=e3c7be6db023705b9ac4fe1eaa78fd107fc37746
 POSTGRES_VERSION=16.15 (Debian 16.15-1.pgdg13+2)
 MIGRATION-UP BEGIN
 ==> decimal
@@ -105,684 +105,678 @@ Generated phoenix_ecto app
 Compiling 128 files (.ex)
 Generated strangertalks_new app
 
-05:01:26.854 [info] == Running 20260701111335 StrangertalksNew.Repo.Migrations.CreateParticipants.change/0 forward
+05:19:27.274 [info] == Running 20260701111335 StrangertalksNew.Repo.Migrations.CreateParticipants.change/0 forward
 
-05:01:26.857 [info] execute "CREATE TYPE presence_state AS ENUM ('OFFLINE', 'ONLINE', 'MATCHING', 'IN_CONVERSATION', 'VIEWING_MEMORIES', 'VIEWING_RELATIONSHIPS')"
+05:19:27.277 [info] execute "CREATE TYPE presence_state AS ENUM ('OFFLINE', 'ONLINE', 'MATCHING', 'IN_CONVERSATION', 'VIEWING_MEMORIES', 'VIEWING_RELATIONSHIPS')"
 
-05:01:26.858 [info] create table participants
+05:19:27.278 [info] create table participants
 
-05:01:26.861 [info] == Migrated 20260701111335 in 0.0s
+05:19:27.281 [info] == Migrated 20260701111335 in 0.0s
 
-05:01:26.887 [info] == Running 20260701113000 StrangertalksNew.Repo.Migrations.CreateMatches.change/0 forward
+05:19:27.308 [info] == Running 20260701113000 StrangertalksNew.Repo.Migrations.CreateMatches.change/0 forward
 
-05:01:26.887 [info] create table matches
+05:19:27.308 [info] create table matches
 
-05:01:26.891 [info] create check constraint door_type_check on table matches
+05:19:27.312 [info] create check constraint door_type_check on table matches
 
-05:01:26.892 [info] create check constraint match_status_check on table matches
+05:19:27.313 [info] create check constraint match_status_check on table matches
 
-05:01:26.892 [info] create check constraint match_strategy_check on table matches
+05:19:27.313 [info] create check constraint match_strategy_check on table matches
 
-05:01:26.893 [info] create check constraint failure_reason_check on table matches
+05:19:27.314 [info] create check constraint failure_reason_check on table matches
 
-05:01:26.894 [info] create index matches_participant_a_id_index
+05:19:27.315 [info] create index matches_participant_a_id_index
 
-05:01:26.895 [info] create index matches_participant_b_id_index
+05:19:27.316 [info] create index matches_participant_b_id_index
 
-05:01:26.896 [info] create index matches_door_type_index
+05:19:27.317 [info] create index matches_door_type_index
 
-05:01:26.897 [info] create index matches_match_status_index
+05:19:27.318 [info] create index matches_match_status_index
 
-05:01:26.898 [info] create index matches_created_at_index
+05:19:27.319 [info] create index matches_created_at_index
 
-05:01:26.900 [info] == Migrated 20260701113000 in 0.0s
+05:19:27.320 [info] == Migrated 20260701113000 in 0.0s
 
-05:01:26.901 [info] == Running 20260702163000 StrangertalksNew.Repo.Migrations.CreateConversations.change/0 forward
+05:19:27.322 [info] == Running 20260702163000 StrangertalksNew.Repo.Migrations.CreateConversations.change/0 forward
 
-05:01:26.902 [info] create table conversations
+05:19:27.323 [info] create table conversations
 
-05:01:26.906 [info] create check constraint conversation_status_check on table conversations
+05:19:27.326 [info] create check constraint conversation_status_check on table conversations
 
-05:01:26.906 [info] create check constraint door_type_check on table conversations
+05:19:27.327 [info] create check constraint door_type_check on table conversations
 
-05:01:26.907 [info] create check constraint ending_type_check on table conversations
+05:19:27.327 [info] create check constraint ending_type_check on table conversations
 
-05:01:26.907 [info] create index conversations_match_id_index
+05:19:27.328 [info] create index conversations_match_id_index
 
-05:01:26.909 [info] create index conversations_participant_a_id_index
+05:19:27.329 [info] create index conversations_participant_a_id_index
 
-05:01:26.910 [info] create index conversations_participant_b_id_index
+05:19:27.330 [info] create index conversations_participant_b_id_index
 
-05:01:26.911 [info] create index conversations_conversation_status_index
+05:19:27.331 [info] create index conversations_conversation_status_index
 
-05:01:26.912 [info] create index conversations_created_at_index
+05:19:27.332 [info] create index conversations_created_at_index
 
-05:01:26.913 [info] create index conversations_conversation_temperature_index
+05:19:27.334 [info] create index conversations_conversation_temperature_index
 
-05:01:26.914 [info] == Migrated 20260702163000 in 0.0s
+05:19:27.335 [info] == Migrated 20260702163000 in 0.0s
 
-05:01:26.916 [info] == Running 20260702164300 StrangertalksNew.Repo.Migrations.CreateMessages.change/0 forward
+05:19:27.337 [info] == Running 20260702164300 StrangertalksNew.Repo.Migrations.CreateMessages.change/0 forward
 
-05:01:26.916 [info] create table messages
+05:19:27.337 [info] create table messages
 
-05:01:26.919 [info] create index messages_conversation_id_created_at_index
+05:19:27.340 [info] create index messages_conversation_id_created_at_index
 
-05:01:26.920 [info] create index messages_conversation_id_expected_sequence_id_index
+05:19:27.341 [info] create index messages_conversation_id_expected_sequence_id_index
 
-05:01:26.922 [info] == Migrated 20260702164300 in 0.0s
+05:19:27.342 [info] == Migrated 20260702164300 in 0.0s
 
-05:01:26.923 [info] == Running 20260702172100 StrangertalksNew.Repo.Migrations.CreateMemories.change/0 forward
+05:19:27.344 [info] == Running 20260702172100 StrangertalksNew.Repo.Migrations.CreateMemories.change/0 forward
 
-05:01:26.924 [info] create table memories
+05:19:27.344 [info] create table memories
 
-05:01:26.927 [info] create check constraint memory_status_check on table memories
+05:19:27.347 [info] create check constraint memory_status_check on table memories
 
-05:01:26.928 [info] create check constraint memory_type_check on table memories
+05:19:27.348 [info] create check constraint memory_type_check on table memories
 
-05:01:26.929 [info] create check constraint door_type_check on table memories
+05:19:27.349 [info] create check constraint door_type_check on table memories
 
-05:01:26.929 [info] create check constraint visibility_type_check on table memories
+05:19:27.349 [info] create check constraint visibility_type_check on table memories
 
-05:01:26.930 [info] create check constraint memory_category_check on table memories
+05:19:27.350 [info] create check constraint memory_category_check on table memories
 
-05:01:26.930 [info] create check constraint deletion_reason_check on table memories
+05:19:27.350 [info] create check constraint deletion_reason_check on table memories
 
-05:01:26.931 [info] create check constraint memory_significance_score_range_check on table memories
+05:19:27.351 [info] create check constraint memory_significance_score_range_check on table memories
 
-05:01:26.932 [info] create index memories_memory_id_index
+05:19:27.351 [info] create index memories_memory_id_index
 
-05:01:26.933 [info] create index memories_owner_participant_id_index
+05:19:27.352 [info] create index memories_owner_participant_id_index
 
-05:01:26.934 [info] create index memories_conversation_id_index
+05:19:27.354 [info] create index memories_conversation_id_index
 
-05:01:26.935 [info] create index memories_memory_type_index
+05:19:27.355 [info] create index memories_memory_type_index
 
-05:01:26.936 [info] create index memories_created_at_index
+05:19:27.356 [info] create index memories_created_at_index
 
-05:01:26.937 [info] create index memories_collection_id_index
+05:19:27.357 [info] create index memories_collection_id_index
 
-05:01:26.938 [info] create index memories_memory_category_index
+05:19:27.358 [info] create index memories_memory_category_index
 
-05:01:26.939 [info] create index memories_atmosphere_name_index
+05:19:27.359 [info] create index memories_atmosphere_name_index
 
-05:01:26.940 [info] create index memories_door_type_index
+05:19:27.360 [info] create index memories_door_type_index
 
-05:01:26.941 [info] == Migrated 20260702172100 in 0.0s
+05:19:27.362 [info] == Migrated 20260702172100 in 0.0s
 
-05:01:26.943 [info] == Running 20260703000000 StrangertalksNew.Repo.Migrations.CreateRelationships.change/0 forward
+05:19:27.363 [info] == Running 20260703000000 StrangertalksNew.Repo.Migrations.CreateRelationships.change/0 forward
 
-05:01:26.944 [info] create table relationships
+05:19:27.364 [info] create table relationships
 
-05:01:26.948 [info] create check constraint relationship_status_check on table relationships
+05:19:27.368 [info] create check constraint relationship_status_check on table relationships
 
-05:01:26.948 [info] create check constraint origin_door_type_check on table relationships
+05:19:27.368 [info] create check constraint origin_door_type_check on table relationships
 
-05:01:26.949 [info] create check constraint closure_reason_check on table relationships
+05:19:27.369 [info] create check constraint closure_reason_check on table relationships
 
-05:01:26.950 [info] create check constraint relationship_strength_score_range on table relationships
+05:19:27.370 [info] create check constraint relationship_strength_score_range on table relationships
 
-05:01:26.950 [info] create index relationships_participant_a_id_index
+05:19:27.370 [info] create index relationships_participant_a_id_index
 
-05:01:26.951 [info] create index relationships_participant_b_id_index
+05:19:27.371 [info] create index relationships_participant_b_id_index
 
-05:01:26.952 [info] create index relationships_relationship_status_index
+05:19:27.373 [info] create index relationships_relationship_status_index
 
-05:01:26.954 [info] create index relationships_created_at_index
+05:19:27.374 [info] create index relationships_created_at_index
 
-05:01:26.955 [info] create index relationships_last_activity_at_index
+05:19:27.375 [info] create index relationships_last_activity_at_index
 
-05:01:26.956 [info] create index relationships_relationship_strength_score_index
+05:19:27.376 [info] create index relationships_relationship_strength_score_index
 
-05:01:26.957 [info] create index relationships_reconnection_eligible_index
+05:19:27.377 [info] create index relationships_reconnection_eligible_index
 
-05:01:26.958 [info] == Migrated 20260703000000 in 0.0s
+05:19:27.378 [info] == Migrated 20260703000000 in 0.0s
 
-05:01:26.960 [info] == Running 20260703014500 StrangertalksNew.Repo.Migrations.CreateMessageReactions.change/0 forward
+05:19:27.380 [info] == Running 20260703014500 StrangertalksNew.Repo.Migrations.CreateMessageReactions.change/0 forward
 
-05:01:26.960 [info] create table message_reactions
+05:19:27.380 [info] create table message_reactions
 
-05:01:26.963 [info] create check constraint lifecycle_action_check on table message_reactions
+05:19:27.383 [info] create check constraint lifecycle_action_check on table message_reactions
 
-05:01:26.963 [info] create index message_reactions_message_id_participant_id_index
+05:19:27.383 [info] create index message_reactions_message_id_participant_id_index
 
-05:01:26.964 [info] create index message_reactions_message_id_index
+05:19:27.385 [info] create index message_reactions_message_id_index
 
-05:01:26.965 [info] create index message_reactions_participant_id_index
+05:19:27.386 [info] create index message_reactions_participant_id_index
 
-05:01:26.967 [info] create index message_reactions_created_at_index
+05:19:27.387 [info] create index message_reactions_created_at_index
 
-05:01:26.968 [info] == Migrated 20260703014500 in 0.0s
+05:19:27.388 [info] == Migrated 20260703014500 in 0.0s
 
-05:01:26.970 [info] == Running 20260703144144 StrangertalksNew.Repo.Migrations.CreateReports.change/0 forward
+05:19:27.390 [info] == Running 20260703144144 StrangertalksNew.Repo.Migrations.CreateReports.change/0 forward
 
-05:01:26.970 [info] create table reports
+05:19:27.390 [info] create table reports
 
-05:01:26.973 [info] create check constraint self_reporting_prohibited on table reports
+05:19:27.393 [info] create check constraint self_reporting_prohibited on table reports
 
-05:01:26.973 [info] create check constraint report_category_check on table reports
+05:19:27.393 [info] create check constraint report_category_check on table reports
 
-05:01:26.974 [info] create check constraint report_status_check on table reports
+05:19:27.394 [info] create check constraint report_status_check on table reports
 
-05:01:26.974 [info] create check constraint resolution_outcome_check on table reports
+05:19:27.395 [info] create check constraint resolution_outcome_check on table reports
 
-05:01:26.975 [info] create index reports_reporting_participant_id_index
+05:19:27.395 [info] create index reports_reporting_participant_id_index
 
-05:01:26.976 [info] create index reports_reported_participant_id_index
+05:19:27.396 [info] create index reports_reported_participant_id_index
 
-05:01:26.977 [info] create index reports_conversation_id_index
+05:19:27.397 [info] create index reports_conversation_id_index
 
-05:01:26.978 [info] create index reports_report_status_created_at_index
+05:19:27.398 [info] create index reports_report_status_created_at_index
 
-05:01:26.979 [info] == Migrated 20260703144144 in 0.0s
+05:19:27.399 [info] == Migrated 20260703144144 in 0.0s
 
-05:01:26.981 [info] == Running 20260703192500 StrangertalksNew.Repo.Migrations.CreateSafetyEvents.change/0 forward
+05:19:27.401 [info] == Running 20260703192500 StrangertalksNew.Repo.Migrations.CreateSafetyEvents.change/0 forward
 
-05:01:26.982 [info] create table safety_events
+05:19:27.402 [info] create table safety_events
 
-05:01:26.986 [info] create index safety_events_event_type_index
+05:19:27.405 [info] create index safety_events_event_type_index
 
-05:01:26.987 [info] create index safety_events_event_status_index
+05:19:27.407 [info] create index safety_events_event_status_index
 
-05:01:26.988 [info] create index safety_events_created_at_index
+05:19:27.408 [info] create index safety_events_created_at_index
 
-05:01:26.989 [info] create index safety_events_target_participant_id_index
+05:19:27.409 [info] create index safety_events_target_participant_id_index
 
-05:01:26.990 [info] create index safety_events_severity_level_index
+05:19:27.410 [info] create index safety_events_severity_level_index
 
-05:01:26.991 [info] create index safety_events_review_required_index
+05:19:27.411 [info] create index safety_events_review_required_index
 
-05:01:26.992 [info] create index safety_events_automated_flag_index
+05:19:27.412 [info] create index safety_events_automated_flag_index
 
-05:01:26.993 [info] create index safety_events_confidence_score_index
+05:19:27.413 [info] create index safety_events_confidence_score_index
 
-05:01:26.994 [info] create check constraint event_status_check on table safety_events
+05:19:27.414 [info] create check constraint event_status_check on table safety_events
 
-05:01:26.995 [info] create check constraint event_type_check on table safety_events
+05:19:27.415 [info] create check constraint event_type_check on table safety_events
 
-05:01:26.995 [info] create check constraint severity_level_check on table safety_events
+05:19:27.416 [info] create check constraint severity_level_check on table safety_events
 
-05:01:26.996 [info] create check constraint report_category_check on table safety_events
+05:19:27.416 [info] create check constraint report_category_check on table safety_events
 
-05:01:26.997 [info] create check constraint block_reason_check on table safety_events
+05:19:27.417 [info] create check constraint block_reason_check on table safety_events
 
-05:01:26.997 [info] create check constraint exit_context_check on table safety_events
+05:19:27.418 [info] create check constraint exit_context_check on table safety_events
 
-05:01:26.998 [info] create check constraint flag_reason_check on table safety_events
+05:19:27.418 [info] create check constraint flag_reason_check on table safety_events
 
-05:01:26.998 [info] create check constraint review_outcome_check on table safety_events
+05:19:27.419 [info] create check constraint review_outcome_check on table safety_events
 
-05:01:26.999 [info] create check constraint action_type_check on table safety_events
+05:19:27.420 [info] create check constraint action_type_check on table safety_events
 
-05:01:27.000 [info] create check constraint visibility_level_check on table safety_events
+05:19:27.420 [info] create check constraint visibility_level_check on table safety_events
 
-05:01:27.000 [info] create check constraint confidence_score_range on table safety_events
+05:19:27.421 [info] create check constraint confidence_score_range on table safety_events
 
-05:01:27.001 [info] == Migrated 20260703192500 in 0.0s
+05:19:27.422 [info] == Migrated 20260703192500 in 0.0s
 
-05:01:27.003 [info] == Running 20260703234500 StrangertalksNew.Repo.Migrations.CreateAnalyticsRecords.change/0 forward
+05:19:27.424 [info] == Running 20260703234500 StrangertalksNew.Repo.Migrations.CreateAnalyticsRecords.change/0 forward
 
-05:01:27.003 [info] create table analytics_records
+05:19:27.424 [info] create table analytics_records
 
-05:01:27.010 [info] create check constraint analytics_period_check on table analytics_records
+05:19:27.430 [info] create check constraint analytics_period_check on table analytics_records
 
-05:01:27.010 [info] create check constraint source_type_check on table analytics_records
+05:19:27.431 [info] create check constraint source_type_check on table analytics_records
 
-05:01:27.011 [info] create check constraint most_common_memory_type_check on table analytics_records
+05:19:27.432 [info] create check constraint most_common_memory_type_check on table analytics_records
 
-05:01:27.012 [info] create check constraint trend_category_check on table analytics_records
+05:19:27.433 [info] create check constraint trend_category_check on table analytics_records
 
-05:01:27.012 [info] create check constraint trend_direction_check on table analytics_records
+05:19:27.433 [info] create check constraint trend_direction_check on table analytics_records
 
-05:01:27.013 [info] create check constraint aggregation_level_check on table analytics_records
+05:19:27.434 [info] create check constraint aggregation_level_check on table analytics_records
 
-05:01:27.014 [info] create check constraint chk_privacy_no_personal_data on table analytics_records
+05:19:27.434 [info] create check constraint chk_privacy_no_personal_data on table analytics_records
 
-05:01:27.015 [info] create check constraint chk_queue_success_rate on table analytics_records
+05:19:27.435 [info] create check constraint chk_queue_success_rate on table analytics_records
 
-05:01:27.015 [info] create check constraint chk_match_failure_rate on table analytics_records
+05:19:27.436 [info] create check constraint chk_match_failure_rate on table analytics_records
 
-05:01:27.016 [info] create check constraint chk_avg_conv_temperature on table analytics_records
+05:19:27.436 [info] create check constraint chk_avg_conv_temperature on table analytics_records
 
-05:01:27.016 [info] create check constraint chk_conv_success_rate on table analytics_records
+05:19:27.437 [info] create check constraint chk_conv_success_rate on table analytics_records
 
-05:01:27.017 [info] create check constraint chk_icebreaker_usage_rate on table analytics_records
+05:19:27.438 [info] create check constraint chk_icebreaker_usage_rate on table analytics_records
 
-05:01:27.018 [info] create check constraint chk_avg_bridge_effectiveness on table analytics_records
+05:19:27.438 [info] create check constraint chk_avg_bridge_effectiveness on table analytics_records
 
-05:01:27.018 [info] create check constraint chk_atmo_success_rate on table analytics_records
+05:19:27.439 [info] create check constraint chk_atmo_success_rate on table analytics_records
 
-05:01:27.019 [info] create check constraint chk_atmo_memory_rate on table analytics_records
+05:19:27.440 [info] create check constraint chk_atmo_memory_rate on table analytics_records
 
-05:01:27.020 [info] create check constraint chk_atmo_relationship_rate on table analytics_records
+05:19:27.440 [info] create check constraint chk_atmo_relationship_rate on table analytics_records
 
-05:01:27.020 [info] create check constraint chk_memory_creation_rate on table analytics_records
+05:19:27.441 [info] create check constraint chk_memory_creation_rate on table analytics_records
 
-05:01:27.021 [info] create check constraint chk_memory_revisit_rate on table analytics_records
+05:19:27.442 [info] create check constraint chk_memory_revisit_rate on table analytics_records
 
-05:01:27.022 [info] create check constraint chk_relationship_creation_rate on table analytics_records
+05:19:27.442 [info] create check constraint chk_relationship_creation_rate on table analytics_records
 
-05:01:27.022 [info] create check constraint chk_relationship_reconnection_rate on table analytics_records
+05:19:27.443 [info] create check constraint chk_relationship_reconnection_rate on table analytics_records
 
-05:01:27.023 [info] create check constraint chk_safety_review_rate on table analytics_records
+05:19:27.444 [info] create check constraint chk_safety_review_rate on table analytics_records
 
-05:01:27.024 [info] create check constraint chk_landing_to_door_rate on table analytics_records
+05:19:27.444 [info] create check constraint chk_landing_to_door_rate on table analytics_records
 
-05:01:27.025 [info] create check constraint chk_door_to_match_rate on table analytics_records
+05:19:27.445 [info] create check constraint chk_door_to_match_rate on table analytics_records
 
-05:01:27.025 [info] create check constraint chk_match_to_conv_rate on table analytics_records
+05:19:27.446 [info] create check constraint chk_match_to_conv_rate on table analytics_records
 
-05:01:27.026 [info] create check constraint chk_conv_to_memory_rate on table analytics_records
+05:19:27.446 [info] create check constraint chk_conv_to_memory_rate on table analytics_records
 
-05:01:27.027 [info] create check constraint chk_conv_to_relationship_rate on table analytics_records
+05:19:27.447 [info] create check constraint chk_conv_to_relationship_rate on table analytics_records
 
-05:01:27.028 [info] create check constraint chk_platform_health_score on table analytics_records
+05:19:27.448 [info] create check constraint chk_platform_health_score on table analytics_records
 
-05:01:27.028 [info] create check constraint chk_connection_success_score on table analytics_records
+05:19:27.448 [info] create check constraint chk_connection_success_score on table analytics_records
 
-05:01:27.029 [info] create check constraint chk_participant_satisfaction_score on table analytics_records
+05:19:27.449 [info] create check constraint chk_participant_satisfaction_score on table analytics_records
 
-05:01:27.030 [info] create check constraint chk_trust_score on table analytics_records
+05:19:27.450 [info] create check constraint chk_trust_score on table analytics_records
 
-05:01:27.030 [info] create check constraint chk_quality_weighted_conv_rate on table analytics_records
+05:19:27.450 [info] create check constraint chk_quality_weighted_conv_rate on table analytics_records
 
-05:01:27.031 [info] create check constraint chk_n_day_active_ret_rate on table analytics_records
+05:19:27.451 [info] create check constraint chk_n_day_active_ret_rate on table analytics_records
 
-05:01:27.032 [info] create check constraint chk_rolling_ret_rate on table analytics_records
+05:19:27.452 [info] create check constraint chk_rolling_ret_rate on table analytics_records
 
-05:01:27.033 [info] create check constraint chk_bracket_cohort_ret_rate on table analytics_records
+05:19:27.453 [info] create check constraint chk_bracket_cohort_ret_rate on table analytics_records
 
-05:01:27.033 [info] create check constraint chk_queue_agent_accuracy on table analytics_records
+05:19:27.453 [info] create check constraint chk_queue_agent_accuracy on table analytics_records
 
-05:01:27.034 [info] create check constraint chk_compatibility_agent_accuracy on table analytics_records
+05:19:27.454 [info] create check constraint chk_compatibility_agent_accuracy on table analytics_records
 
-05:01:27.035 [info] create check constraint chk_icebreaker_agent_accuracy on table analytics_records
+05:19:27.455 [info] create check constraint chk_icebreaker_agent_accuracy on table analytics_records
 
-05:01:27.035 [info] create check constraint chk_relationship_agent_accuracy on table analytics_records
+05:19:27.455 [info] create check constraint chk_relationship_agent_accuracy on table analytics_records
 
-05:01:27.036 [info] create check constraint chk_safety_agent_accuracy on table analytics_records
+05:19:27.456 [info] create check constraint chk_safety_agent_accuracy on table analytics_records
 
-05:01:27.037 [info] create check constraint chk_trend_strength on table analytics_records
+05:19:27.457 [info] create check constraint chk_trend_strength on table analytics_records
 
-05:01:27.038 [info] create index analytics_records_analytics_record_id_index
+05:19:27.457 [info] create index analytics_records_analytics_record_id_index
 
-05:01:27.039 [info] create index analytics_records_analytics_date_analytics_period_index
+05:19:27.459 [info] create index analytics_records_analytics_date_analytics_period_index
 
-05:01:27.041 [info] create index analytics_records_source_type_index
+05:19:27.460 [info] create index analytics_records_source_type_index
 
-05:01:27.042 [info] create index analytics_records_created_at_index
+05:19:27.461 [info] create index analytics_records_created_at_index
 
-05:01:27.043 [info] create index analytics_records_trend_category_trend_direction_index
+05:19:27.463 [info] create index analytics_records_trend_category_trend_direction_index
 
-05:01:27.044 [info] == Migrated 20260703234500 in 0.0s
+05:19:27.464 [info] == Migrated 20260703234500 in 0.0s
 
-05:01:27.047 [info] == Running 20260704000001 StrangertalksNew.Repo.Migrations.CreateMatchingRulesSchema.change/0 forward
+05:19:27.466 [info] == Running 20260704000001 StrangertalksNew.Repo.Migrations.CreateMatchingRulesSchema.change/0 forward
 
-05:01:27.047 [info] alter table participants
+05:19:27.466 [info] alter table participants
 
-05:01:27.048 [info] create check constraint chk_door_type on table participants
+05:19:27.467 [info] create check constraint chk_door_type on table participants
 
-05:01:27.048 [info] create check constraint chk_presence_state on table participants
+05:19:27.468 [info] create check constraint chk_presence_state on table participants
 
-05:01:27.049 [info] create table queue_states
+05:19:27.469 [info] create table queue_states
 
-05:01:27.052 [info] create check constraint chk_match_strategy on table queue_states
+05:19:27.471 [info] create check constraint chk_match_strategy on table queue_states
 
-05:01:27.052 [info] create table boundary_blocks
+05:19:27.472 [info] create table boundary_blocks
 
-05:01:27.054 [info] create index idx_participants_presence
+05:19:27.473 [info] create index idx_participants_presence
 
-05:01:27.055 [info] create index idx_queue_state_telemetry
+05:19:27.475 [info] create index idx_queue_state_telemetry
 
-05:01:27.056 [info] create index idx_boundary_blocks_lookup
+05:19:27.476 [info] create index idx_boundary_blocks_lookup
 
-05:01:27.058 [info] == Migrated 20260704000001 in 0.0s
+05:19:27.477 [info] == Migrated 20260704000001 in 0.0s
 
-05:01:27.059 [info] == Running 20260704000100 StrangertalksNew.Repo.Migrations.CreateLearningRecords.change/0 forward
+05:19:27.479 [info] == Running 20260704000100 StrangertalksNew.Repo.Migrations.CreateLearningRecords.change/0 forward
 
-05:01:27.060 [info] create table learning_records
+05:19:27.479 [info] create table learning_records
 
-05:01:27.063 [info] create check constraint chk_learning_records_record_type on table learning_records
+05:19:27.482 [info] create check constraint chk_learning_records_record_type on table learning_records
 
-05:01:27.063 [info] create check constraint chk_learning_records_bridge_category on table learning_records
+05:19:27.482 [info] create check constraint chk_learning_records_bridge_category on table learning_records
 
-05:01:27.064 [info] create check constraint chk_learning_records_complexity_level on table learning_records
+05:19:27.483 [info] create check constraint chk_learning_records_complexity_level on table learning_records
 
-05:01:27.065 [info] create check constraint chk_learning_records_atmosphere on table learning_records
+05:19:27.483 [info] create check constraint chk_learning_records_atmosphere on table learning_records
 
-05:01:27.065 [info] create check constraint chk_learning_records_outcome on table learning_records
+05:19:27.484 [info] create check constraint chk_learning_records_outcome on table learning_records
 
-05:01:27.066 [info] create check constraint chk_learning_records_effectiveness_range on table learning_records
+05:19:27.484 [info] create check constraint chk_learning_records_effectiveness_range on table learning_records
 
-05:01:27.066 [info] create check constraint chk_learning_records_readiness_range on table learning_records
+05:19:27.485 [info] create check constraint chk_learning_records_readiness_range on table learning_records
 
-05:01:27.067 [info] create check constraint chk_learning_records_keystroke_range on table learning_records
+05:19:27.486 [info] create check constraint chk_learning_records_keystroke_range on table learning_records
 
-05:01:27.067 [info] create index idx_learning_records_participant_id
+05:19:27.486 [info] create index idx_learning_records_participant_id
 
-05:01:27.069 [info] create index idx_learning_records_match_id
+05:19:27.487 [info] create index idx_learning_records_match_id
 
-05:01:27.070 [info] create index idx_learning_records_conversation_id
+05:19:27.488 [info] create index idx_learning_records_conversation_id
 
-05:01:27.071 [info] create index idx_learning_records_chronological
+05:19:27.489 [info] create index idx_learning_records_chronological
 
-05:01:27.072 [info] create index idx_learning_records_type_outcome
+05:19:27.491 [info] create index idx_learning_records_type_outcome
 
-05:01:27.073 [info] create index idx_learning_records_effective_bridges
+05:19:27.492 [info] create index idx_learning_records_effective_bridges
 
-05:01:27.074 [info] == Migrated 20260704000100 in 0.0s
+05:19:27.493 [info] == Migrated 20260704000100 in 0.0s
 
-05:01:27.076 [info] == Running 20260805060655 StrangertalksNew.Repo.Migrations.AllowPendingMatchmakingPersistence.up/0
+05:19:27.495 [info] == Running 20260805060655 StrangertalksNew.Repo.Migrations.AllowPendingMatchmakingPersistence.up/0
 
-05:01:27.077 [info] alter table matches
+05:19:27.495 [info] alter table matches
 
-05:01:27.078 [info] drop constraint conversation_status_check from table conversations
+05:19:27.496 [info] drop constraint conversation_status_check from table conversations
 
-05:01:27.079 [info] create check constraint conversation_status_check on table conversations
+05:19:27.497 [info] create check constraint conversation_status_check on table conversations
 
-05:01:27.080 [info] alter table conversations
+05:19:27.497 [info] alter table conversations
 
-05:01:27.082 [info] alter table relationships
+05:19:27.499 [info] alter table relationships
 
-05:01:27.083 [info] == Migrated 20260805060655 in 0.0s
+05:19:27.500 [info] == Migrated 20260805060655 in 0.0s
 
-05:01:27.084 [info] == Running 20260805091809 StrangertalksNew.Repo.Migrations.AddRelationshipConsentsAndSafetyReviews.change/0 forward
+05:19:27.502 [info] == Running 20260805091809 StrangertalksNew.Repo.Migrations.AddRelationshipConsentsAndSafetyReviews.change/0 forward
 
-05:01:27.085 [info] create table relationship_consents
+05:19:27.502 [info] create table relationship_consents
 
-05:01:27.087 [info] create index relationship_consents_conversation_id_participant_id_index
+05:19:27.504 [info] create index relationship_consents_conversation_id_participant_id_index
 
-05:01:27.088 [info] alter table relationships
+05:19:27.505 [info] alter table relationships
 
-05:01:27.090 [info] create index relationships_canonical_pair_index
+05:19:27.507 [info] create index relationships_canonical_pair_index
 
-05:01:27.091 [info] alter table reports
+05:19:27.508 [info] alter table reports
 
-05:01:27.091 [info] create index reports_deduplication_key_index
+05:19:27.509 [info] create index reports_deduplication_key_index
 
-05:01:27.092 [info] create table safety_reviews
+05:19:27.510 [info] create table safety_reviews
 
-05:01:27.095 [info] create index safety_reviews_report_id_index
+05:19:27.512 [info] create index safety_reviews_report_id_index
 
-05:01:27.096 [info] create check constraint safety_reviews_status_check on table safety_reviews
+05:19:27.513 [info] create check constraint safety_reviews_status_check on table safety_reviews
 
-05:01:27.096 [info] create check constraint safety_reviews_severity_check on table safety_reviews
+05:19:27.514 [info] create check constraint safety_reviews_severity_check on table safety_reviews
 
-05:01:27.097 [info] == Migrated 20260805091809 in 0.0s
+05:19:27.514 [info] == Migrated 20260805091809 in 0.0s
 
-05:01:27.099 [info] == Running 20260806021959 StrangertalksNew.Repo.Migrations.AddRelationshipReconnectionIntents.up/0
+05:19:27.516 [info] == Running 20260806021959 StrangertalksNew.Repo.Migrations.AddRelationshipReconnectionIntents.up/0
 
-05:01:27.099 [info] create table relationship_reconnection_intents
+05:19:27.516 [info] create table relationship_reconnection_intents
 
-05:01:27.102 [info] create check constraint relationship_reconnection_intents_door_check on table relationship_reconnection_intents
+05:19:27.519 [info] create check constraint relationship_reconnection_intents_door_check on table relationship_reconnection_intents
 
-05:01:27.103 [info] create check constraint relationship_reconnection_intents_status_check on table relationship_reconnection_intents
+05:19:27.520 [info] create check constraint relationship_reconnection_intents_status_check on table relationship_reconnection_intents
 
-05:01:27.103 [info] create index relationship_reconnection_intents_one_active_index
+05:19:27.520 [info] create index relationship_reconnection_intents_one_active_index
 
-05:01:27.105 [info] create index relationship_reconnection_intents_matching_index
+05:19:27.522 [info] create index relationship_reconnection_intents_matching_index
 
-05:01:27.106 [info] drop constraint match_strategy_check from table matches
+05:19:27.523 [info] drop constraint match_strategy_check from table matches
 
-05:01:27.106 [info] alter table matches
+05:19:27.524 [info] alter table matches
 
-05:01:27.107 [info] create check constraint match_strategy_check on table matches
+05:19:27.524 [info] create check constraint match_strategy_check on table matches
 
-05:01:27.107 [info] create check constraint matches_compatibility_by_strategy_check on table matches
+05:19:27.525 [info] create check constraint matches_compatibility_by_strategy_check on table matches
 
-05:01:27.108 [info] == Migrated 20260806021959 in 0.0s
+05:19:27.525 [info] == Migrated 20260806021959 in 0.0s
 
-05:01:27.110 [info] == Running 20260806034042 StrangertalksNew.Repo.Migrations.AddPrivateGoogleAccountContinuity.up/0
+05:19:27.527 [info] == Running 20260806034042 StrangertalksNew.Repo.Migrations.AddPrivateGoogleAccountContinuity.up/0
 
-05:01:27.110 [info] create table private_accounts
+05:19:27.528 [info] create table private_accounts
 
-05:01:27.112 [info] create index private_accounts_participant_id_index
+05:19:27.529 [info] create index private_accounts_participant_id_index
 
-05:01:27.113 [info] create table google_account_links
+05:19:27.531 [info] create table google_account_links
 
-05:01:27.116 [info] create index google_account_links_account_id_index
+05:19:27.533 [info] create index google_account_links_account_id_index
 
-05:01:27.117 [info] create index google_account_links_provider_subject_hash_index
+05:19:27.534 [info] create index google_account_links_provider_subject_hash_index
 
-05:01:27.118 [info] create check constraint google_refresh_token_material_consistency on table google_account_links
+05:19:27.535 [info] create check constraint google_refresh_token_material_consistency on table google_account_links
 
-05:01:27.119 [info] create table account_sessions
+05:19:27.536 [info] create table account_sessions
 
-05:01:27.121 [info] create index account_sessions_session_token_hash_index
+05:19:27.538 [info] create index account_sessions_session_token_hash_index
 
-05:01:27.123 [info] create index account_sessions_account_id_index
+05:19:27.539 [info] create index account_sessions_account_id_index
 
-05:01:27.124 [info] create table google_oauth_attempts
+05:19:27.540 [info] create table google_oauth_attempts
 
-05:01:27.126 [info] create index google_oauth_attempts_state_hash_index
+05:19:27.543 [info] create index google_oauth_attempts_state_hash_index
 
-05:01:27.128 [info] create check constraint google_oauth_attempt_mode_check on table google_oauth_attempts
+05:19:27.544 [info] create check constraint google_oauth_attempt_mode_check on table google_oauth_attempts
 
-05:01:27.128 [info] == Migrated 20260806034042 in 0.0s
+05:19:27.544 [info] == Migrated 20260806034042 in 0.0s
 
-05:01:27.130 [info] == Running 20260806034848 StrangertalksNew.Repo.Migrations.AddAccountSyncStates.up/0
+05:19:27.546 [info] == Running 20260806034848 StrangertalksNew.Repo.Migrations.AddAccountSyncStates.up/0
 
-05:01:27.130 [info] create table account_sync_states
+05:19:27.547 [info] create table account_sync_states
 
-05:01:27.133 [info] create check constraint account_sync_revision_nonnegative on table account_sync_states
+05:19:27.549 [info] create check constraint account_sync_revision_nonnegative on table account_sync_states
 
-05:01:27.133 [info] create check constraint account_sync_byte_size_nonnegative on table account_sync_states
+05:19:27.550 [info] create check constraint account_sync_byte_size_nonnegative on table account_sync_states
 
-05:01:27.134 [info] == Migrated 20260806034848 in 0.0s
+05:19:27.550 [info] == Migrated 20260806034848 in 0.0s
 
-05:01:27.136 [info] == Running 20260809131216 StrangertalksNew.Repo.Migrations.AlterReportsReporterContextToText.change/0 forward
+05:19:27.552 [info] == Running 20260809131216 StrangertalksNew.Repo.Migrations.AlterReportsReporterContextToText.change/0 forward
 
-05:01:27.136 [info] alter table reports
+05:19:27.552 [info] alter table reports
 
-05:01:27.136 [info] == Migrated 20260809131216 in 0.0s
+05:19:27.553 [info] == Migrated 20260809131216 in 0.0s
 
-05:01:27.138 [info] == Running 20260814075417 StrangertalksNew.Repo.Migrations.CreateReportSafetyMedia.change/0 forward
+05:19:27.555 [info] == Running 20260814075417 StrangertalksNew.Repo.Migrations.CreateReportSafetyMedia.change/0 forward
 
-05:01:27.138 [info] create table report_safety_media
+05:19:27.555 [info] create table report_safety_media
 
-05:01:27.141 [info] create index report_safety_media_report_id_index
+05:19:27.557 [info] create index report_safety_media_report_id_index
 
-05:01:27.142 [info] create check constraint byte_size_limit on table report_safety_media
+05:19:27.558 [info] create check constraint byte_size_limit on table report_safety_media
 
-05:01:27.142 [info] create check constraint media_type_check on table report_safety_media
+05:19:27.559 [info] create check constraint media_type_check on table report_safety_media
 
-05:01:27.143 [info] == Migrated 20260814075417 in 0.0s
+05:19:27.559 [info] == Migrated 20260814075417 in 0.0s
 
-05:01:27.145 [info] == Running 20260815093000 StrangertalksNew.Repo.Migrations.AlterReportSafetyMediaForVideo.up/0
+05:19:27.561 [info] == Running 20260815093000 StrangertalksNew.Repo.Migrations.AlterReportSafetyMediaForVideo.up/0
 
-05:01:27.145 [info] drop constraint byte_size_limit from table report_safety_media
+05:19:27.561 [info] drop constraint byte_size_limit from table report_safety_media
 
-05:01:27.145 [info] drop constraint media_type_check from table report_safety_media
+05:19:27.562 [info] drop constraint media_type_check from table report_safety_media
 
-05:01:27.146 [info] create check constraint media_type_check on table report_safety_media
+05:19:27.562 [info] create check constraint media_type_check on table report_safety_media
 
-05:01:27.146 [info] create check constraint byte_size_equality on table report_safety_media
+05:19:27.563 [info] create check constraint byte_size_equality on table report_safety_media
 
-05:01:27.147 [info] create check constraint byte_size_limit on table report_safety_media
+05:19:27.564 [info] create check constraint byte_size_limit on table report_safety_media
 
-05:01:27.148 [info] == Migrated 20260815093000 in 0.0s
+05:19:27.564 [info] == Migrated 20260815093000 in 0.0s
 
-05:01:27.149 [info] == Running 20260820145713 StrangertalksNew.Repo.Migrations.CreateReflectionsAndComposerGrants.change/0 forward
+05:19:27.566 [info] == Running 20260820145713 StrangertalksNew.Repo.Migrations.CreateReflectionsAndComposerGrants.change/0 forward
 
-05:01:27.150 [info] create table reflections
+05:19:27.567 [info] create table reflections
 
-05:01:27.152 [info] create index reflections_owner_participant_id_create_operation_id_index
+05:19:27.569 [info] create index reflections_owner_participant_id_create_operation_id_index
 
-05:01:27.153 [info] create index reflections_owner_participant_id_saved_at_index
+05:19:27.570 [info] create index reflections_owner_participant_id_saved_at_index
 
-05:01:27.154 [info] create index reflections_source_conversation_id_source_client_message_id_index
+05:19:27.571 [info] create index reflections_source_conversation_id_source_client_message_id_index
 
-05:01:27.156 [info] identifier "reflections_source_conversation_id_source_client_message_id_index" will be truncated to "reflections_source_conversation_id_source_client_message_id_ind"
+05:19:27.573 [info] identifier "reflections_source_conversation_id_source_client_message_id_index" will be truncated to "reflections_source_conversation_id_source_client_message_id_ind"
 
-05:01:27.156 [info] create table composer_grants
+05:19:27.573 [info] create table composer_grants
 
-05:01:27.158 [info] create index composer_grants_owner_participant_id_state_index
+05:19:27.575 [info] create index composer_grants_owner_participant_id_state_index
 
-05:01:27.159 [info] create index composer_grants_source_conversation_id_source_client_message_id_index
+05:19:27.576 [info] create index composer_grants_source_conversation_id_source_client_message_id_index
 
-05:01:27.161 [info] identifier "composer_grants_source_conversation_id_source_client_message_id_index" will be truncated to "composer_grants_source_conversation_id_source_client_message_id"
+05:19:27.577 [info] identifier "composer_grants_source_conversation_id_source_client_message_id_index" will be truncated to "composer_grants_source_conversation_id_source_client_message_id"
 
-05:01:27.161 [info] == Migrated 20260820145713 in 0.0s
+05:19:27.577 [info] == Migrated 20260820145713 in 0.0s
 
-05:01:27.163 [info] == Running 20260821181500 StrangertalksNew.Repo.Migrations.AddCrossDoorIntentRepresentation.up/0
+05:19:27.579 [info] == Running 20260821181500 StrangertalksNew.Repo.Migrations.AddCrossDoorIntentRepresentation.up/0
 
-05:01:27.163 [info] alter table matches
+05:19:27.580 [info] alter table matches
 
-05:01:27.164 [info] alter table conversations
+05:19:27.581 [info] alter table conversations
 
-05:01:27.165 [info] alter table relationships
+05:19:27.582 [info] alter table relationships
 
-05:01:27.166 [info] execute "UPDATE matches SET participant_a_door_type = door_type, participant_b_door_type = door_type"
+05:19:27.583 [info] execute "UPDATE matches SET participant_a_door_type = door_type, participant_b_door_type = door_type"
 
-05:01:27.167 [info] execute "UPDATE relationships SET origin_participant_a_door_type = origin_door_type, origin_participant_b_door_type = origin_door_type"
+05:19:27.584 [info] execute "UPDATE relationships SET origin_participant_a_door_type = origin_door_type, origin_participant_b_door_type = origin_door_type"
 
-05:01:27.168 [info] alter table matches
+05:19:27.585 [info] alter table matches
 
-05:01:27.169 [info] alter table relationships
+05:19:27.585 [info] alter table relationships
 
-05:01:27.170 [info] create check constraint participant_a_door_type_check on table matches
+05:19:27.586 [info] create check constraint participant_a_door_type_check on table matches
 
-05:01:27.170 [info] create check constraint participant_b_door_type_check on table matches
+05:19:27.587 [info] create check constraint participant_b_door_type_check on table matches
 
-05:01:27.171 [info] create check constraint origin_participant_a_door_type_check on table relationships
+05:19:27.587 [info] create check constraint origin_participant_a_door_type_check on table relationships
 
-05:01:27.171 [info] create check constraint origin_participant_b_door_type_check on table relationships
+05:19:27.588 [info] create check constraint origin_participant_b_door_type_check on table relationships
 
-05:01:27.172 [info] == Migrated 20260821181500 in 0.0s
+05:19:27.589 [info] == Migrated 20260821181500 in 0.0s
 
-05:01:27.174 [info] == Running 20260821191324 StrangertalksNew.Repo.Migrations.AddMatchConversationLanguage.change/0 forward
+05:19:27.590 [info] == Running 20260821191324 StrangertalksNew.Repo.Migrations.AddMatchConversationLanguage.change/0 forward
 
-05:01:27.174 [info] alter table matches
+05:19:27.590 [info] alter table matches
 
-05:01:27.174 [info] create check constraint conversation_language_check on table matches
+05:19:27.591 [info] create check constraint conversation_language_check on table matches
 
-05:01:27.175 [info] == Migrated 20260821191324 in 0.0s
+05:19:27.592 [info] == Migrated 20260821191324 in 0.0s
 
-05:01:27.177 [info] == Running 20260830044500 StrangertalksNew.Repo.Migrations.CreateParticipantPairingReservations.change/0 forward
+05:19:27.593 [info] == Running 20260830044500 StrangertalksNew.Repo.Migrations.CreateParticipantPairingReservations.change/0 forward
 
-05:01:27.177 [info] create table participant_pairing_reservations
+05:19:27.593 [info] create table participant_pairing_reservations
 
-05:01:27.179 [info] create check constraint participant_pairing_reservations_released_after_acquired_check on table participant_pairing_reservations
+05:19:27.595 [info] create check constraint participant_pairing_reservations_released_after_acquired_check on table participant_pairing_reservations
 
-05:01:27.179 [info] create index participant_pairing_reservations_active_participant_index
+05:19:27.596 [info] create index participant_pairing_reservations_active_participant_index
 
-05:01:27.181 [info] == Migrated 20260830044500 in 0.0s
+05:19:27.597 [info] == Migrated 20260830044500 in 0.0s
 MIGRATION-UP table=participant_pairing_reservations exit=0
 MIGRATION-DOWN BEGIN
 
-05:01:27.973 [info] == Running 20260830044500 StrangertalksNew.Repo.Migrations.CreateParticipantPairingReservations.change/0 backward
+05:19:28.366 [info] == Running 20260830044500 StrangertalksNew.Repo.Migrations.CreateParticipantPairingReservations.change/0 backward
 
-05:01:27.975 [info] drop index participant_pairing_reservations_active_participant_index
+05:19:28.367 [info] drop index participant_pairing_reservations_active_participant_index
 
-05:01:27.976 [info] drop constraint participant_pairing_reservations_released_after_acquired_check from table participant_pairing_reservations
+05:19:28.369 [info] drop constraint participant_pairing_reservations_released_after_acquired_check from table participant_pairing_reservations
 
-05:01:27.977 [info] drop table participant_pairing_reservations
+05:19:28.369 [info] drop table participant_pairing_reservations
 
-05:01:27.979 [info] == Migrated 20260830044500 in 0.0s
+05:19:28.372 [info] == Migrated 20260830044500 in 0.0s
 MIGRATION-DOWN table=NULL exit=0 absence_check=0
 MIGRATION-REMIGRATE BEGIN
 
-05:01:28.762 [info] == Running 20260830044500 StrangertalksNew.Repo.Migrations.CreateParticipantPairingReservations.change/0 forward
+05:19:29.141 [info] == Running 20260830044500 StrangertalksNew.Repo.Migrations.CreateParticipantPairingReservations.change/0 forward
 
-05:01:28.764 [info] create table participant_pairing_reservations
+05:19:29.143 [info] create table participant_pairing_reservations
 
-05:01:28.768 [info] create check constraint participant_pairing_reservations_released_after_acquired_check on table participant_pairing_reservations
+05:19:29.146 [info] create check constraint participant_pairing_reservations_released_after_acquired_check on table participant_pairing_reservations
 
-05:01:28.768 [info] create index participant_pairing_reservations_active_participant_index
+05:19:29.147 [info] create index participant_pairing_reservations_active_participant_index
 
-05:01:28.770 [info] == Migrated 20260830044500 in 0.0s
+05:19:29.149 [info] == Migrated 20260830044500 in 0.0s
 MIGRATION-REMIGRATE table=participant_pairing_reservations exit=0
 SCHEMA-CONSTRAINTS BEGIN
-Running ExUnit with seed: 751231, max_cases: 1
+Running ExUnit with seed: 129526, max_cases: 1
 
 
 StrangertalksNew.ParticipantPairingReservationSchemaTest [test/strangertalks_new/participant_pairing_reservation_schema_test.exs]
-  * test duplicate active participant is rejected [L#6]  * test duplicate active participant is rejected (34.0ms) [L#6]
+  * test released history coexists with one active row for a participant [L#63]  * test released history coexists with one active row for a participant (30.3ms) [L#63]
 
-  1) test duplicate active participant is rejected (StrangertalksNew.ParticipantPairingReservationSchemaTest)
-     test/strangertalks_new/participant_pairing_reservation_schema_test.exs:6
-     ** (DBConnection.EncodeError) Postgrex expected a binary of 16 bytes, got "0e7aac05-4136-414d-a1b6-79a141614109". Please make sure the value you are passing matches the definition in your table or in your query or convert the value accordingly.
-     code: insert_reservation!(match_1.match_id, participant_a.participant_id, acquired_at)
-     stacktrace:
-       (postgrex 0.22.4) lib/postgrex/type_module.ex:1045: Postgrex.DefaultTypes.encode_params/3
-       (postgrex 0.22.4) lib/postgrex/query.ex:73: DBConnection.Query.Postgrex.Query.encode/3
-       (db_connection 2.10.2) lib/db_connection.ex:1459: DBConnection.encode/5
-       (db_connection 2.10.2) lib/db_connection.ex:1549: DBConnection.run_prepare_execute/5
-       (db_connection 2.10.2) lib/db_connection.ex:1606: DBConnection.run_with_retries/5
-       (db_connection 2.10.2) lib/db_connection.ex:810: DBConnection.parsed_prepare_execute/5
-       (db_connection 2.10.2) lib/db_connection.ex:802: DBConnection.prepare_execute/4
-       (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
-       (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
-       test/strangertalks_new/participant_pairing_reservation_schema_test.exs:10: (test)
-
-  * test both reservation foreign keys reject nonexistent parents [L#80]  * test both reservation foreign keys reject nonexistent parents (10.3ms) [L#80]
-
-  2) test both reservation foreign keys reject nonexistent parents (StrangertalksNew.ParticipantPairingReservationSchemaTest)
-     test/strangertalks_new/participant_pairing_reservation_schema_test.exs:80
-     ** (DBConnection.EncodeError) Postgrex expected a binary of 16 bytes, got "c2f1e83e-2303-48d3-8a43-d40d6fcdfb97". Please make sure the value you are passing matches the definition in your table or in your query or convert the value accordingly.
-     code: Repo.query(
-     stacktrace:
-       (postgrex 0.22.4) lib/postgrex/type_module.ex:1045: Postgrex.DefaultTypes.encode_params/3
-       (postgrex 0.22.4) lib/postgrex/query.ex:73: DBConnection.Query.Postgrex.Query.encode/3
-       (db_connection 2.10.2) lib/db_connection.ex:1459: DBConnection.encode/5
-       (db_connection 2.10.2) lib/db_connection.ex:1549: DBConnection.run_prepare_execute/5
-       (db_connection 2.10.2) lib/db_connection.ex:1606: DBConnection.run_with_retries/5
-       (db_connection 2.10.2) lib/db_connection.ex:810: DBConnection.parsed_prepare_execute/5
-       (db_connection 2.10.2) lib/db_connection.ex:802: DBConnection.prepare_execute/4
-       (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
-       test/strangertalks_new/participant_pairing_reservation_schema_test.exs:89: (test)
-
-  * test released history coexists with one active row for a participant [L#44]  * test released history coexists with one active row for a participant (6.7ms) [L#44]
-
-  3) test released history coexists with one active row for a participant (StrangertalksNew.ParticipantPairingReservationSchemaTest)
-     test/strangertalks_new/participant_pairing_reservation_schema_test.exs:44
-     ** (DBConnection.EncodeError) Postgrex expected a binary of 16 bytes, got "75f08966-3315-435d-9441-cd5413d5fd5f". Please make sure the value you are passing matches the definition in your table or in your query or convert the value accordingly.
+  1) test released history coexists with one active row for a participant (StrangertalksNew.ParticipantPairingReservationSchemaTest)
+     test/strangertalks_new/participant_pairing_reservation_schema_test.exs:63
+     ** (Ecto.ChangeError) value `~N[2026-08-30 05:19:30.364316]` for `StrangertalksNew.ParticipantPairingReservationSchemaTest.Reservation.acquired_at` in `insert_all` does not match type :utc_datetime_usec
      code: insert_reservation!(match_1.match_id, participant_a.participant_id, acquired_at, released_at)
      stacktrace:
-       (postgrex 0.22.4) lib/postgrex/type_module.ex:1045: Postgrex.DefaultTypes.encode_params/3
-       (postgrex 0.22.4) lib/postgrex/query.ex:73: DBConnection.Query.Postgrex.Query.encode/3
-       (db_connection 2.10.2) lib/db_connection.ex:1459: DBConnection.encode/5
-       (db_connection 2.10.2) lib/db_connection.ex:1549: DBConnection.run_prepare_execute/5
-       (db_connection 2.10.2) lib/db_connection.ex:1606: DBConnection.run_with_retries/5
-       (db_connection 2.10.2) lib/db_connection.ex:810: DBConnection.parsed_prepare_execute/5
-       (db_connection 2.10.2) lib/db_connection.ex:802: DBConnection.prepare_execute/4
-       (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
-       (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
-       test/strangertalks_new/participant_pairing_reservation_schema_test.exs:49: (test)
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:1310: Ecto.Repo.Schema.dump_field!/6
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:277: Ecto.Repo.Schema.extract_value/6
+       (elixir 1.18.4) lib/enum.ex:1846: anonymous fn/3 in Enum.map_reduce/3
+       (stdlib 6.2.2.4) maps.erl:860: :maps.fold_1/4
+       (elixir 1.18.4) lib/enum.ex:2558: Enum.map_reduce/3
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:131: anonymous fn/5 in Ecto.Repo.Schema.extract_header_and_fields/8
+       (elixir 1.18.4) lib/enum.ex:1840: Enum."-map_reduce/3-lists^mapfoldl/2-0-"/3
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:130: Ecto.Repo.Schema.extract_header_and_fields/8
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:56: Ecto.Repo.Schema.do_insert_all/7
+       test/strangertalks_new/participant_pairing_reservation_schema_test.exs:68: (test)
 
-  * test temporal check rejects release before acquisition [L#63]  * test temporal check rejects release before acquisition (6.3ms) [L#63]
+  * test primary key rejects duplicate match and participant pair [L#38]  * test primary key rejects duplicate match and participant pair (5.6ms) [L#38]
 
-  4) test temporal check rejects release before acquisition (StrangertalksNew.ParticipantPairingReservationSchemaTest)
-     test/strangertalks_new/participant_pairing_reservation_schema_test.exs:63
-     ** (DBConnection.EncodeError) Postgrex expected a binary of 16 bytes, got "36760fe5-f039-4d93-b905-2e066a47666b". Please make sure the value you are passing matches the definition in your table or in your query or convert the value accordingly.
-     code: Repo.query(
-     stacktrace:
-       (postgrex 0.22.4) lib/postgrex/type_module.ex:1045: Postgrex.DefaultTypes.encode_params/3
-       (postgrex 0.22.4) lib/postgrex/query.ex:73: DBConnection.Query.Postgrex.Query.encode/3
-       (db_connection 2.10.2) lib/db_connection.ex:1459: DBConnection.encode/5
-       (db_connection 2.10.2) lib/db_connection.ex:1549: DBConnection.run_prepare_execute/5
-       (db_connection 2.10.2) lib/db_connection.ex:1606: DBConnection.run_with_retries/5
-       (db_connection 2.10.2) lib/db_connection.ex:810: DBConnection.parsed_prepare_execute/5
-       (db_connection 2.10.2) lib/db_connection.ex:802: DBConnection.prepare_execute/4
-       (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
-       test/strangertalks_new/participant_pairing_reservation_schema_test.exs:69: (test)
-
-  * test primary key rejects duplicate match and participant pair [L#26]  * test primary key rejects duplicate match and participant pair (6.0ms) [L#26]
-
-  5) test primary key rejects duplicate match and participant pair (StrangertalksNew.ParticipantPairingReservationSchemaTest)
-     test/strangertalks_new/participant_pairing_reservation_schema_test.exs:26
-     ** (DBConnection.EncodeError) Postgrex expected a binary of 16 bytes, got "4531034f-53e0-4fe6-9cbd-668679dadc8d". Please make sure the value you are passing matches the definition in your table or in your query or convert the value accordingly.
+  2) test primary key rejects duplicate match and participant pair (StrangertalksNew.ParticipantPairingReservationSchemaTest)
+     test/strangertalks_new/participant_pairing_reservation_schema_test.exs:38
+     ** (Ecto.ChangeError) value `~N[2026-08-30 05:19:30.372087]` for `StrangertalksNew.ParticipantPairingReservationSchemaTest.Reservation.acquired_at` in `insert_all` does not match type :utc_datetime_usec
      code: insert_reservation!(match_1.match_id, participant_a.participant_id, acquired_at)
      stacktrace:
-       (postgrex 0.22.4) lib/postgrex/type_module.ex:1045: Postgrex.DefaultTypes.encode_params/3
-       (postgrex 0.22.4) lib/postgrex/query.ex:73: DBConnection.Query.Postgrex.Query.encode/3
-       (db_connection 2.10.2) lib/db_connection.ex:1459: DBConnection.encode/5
-       (db_connection 2.10.2) lib/db_connection.ex:1549: DBConnection.run_prepare_execute/5
-       (db_connection 2.10.2) lib/db_connection.ex:1606: DBConnection.run_with_retries/5
-       (db_connection 2.10.2) lib/db_connection.ex:810: DBConnection.parsed_prepare_execute/5
-       (db_connection 2.10.2) lib/db_connection.ex:802: DBConnection.prepare_execute/4
-       (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
-       (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
-       test/strangertalks_new/participant_pairing_reservation_schema_test.exs:30: (test)
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:1310: Ecto.Repo.Schema.dump_field!/6
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:277: Ecto.Repo.Schema.extract_value/6
+       (elixir 1.18.4) lib/enum.ex:1846: anonymous fn/3 in Enum.map_reduce/3
+       (stdlib 6.2.2.4) maps.erl:860: :maps.fold_1/4
+       (elixir 1.18.4) lib/enum.ex:2558: Enum.map_reduce/3
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:131: anonymous fn/5 in Ecto.Repo.Schema.extract_header_and_fields/8
+       (elixir 1.18.4) lib/enum.ex:1840: Enum."-map_reduce/3-lists^mapfoldl/2-0-"/3
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:130: Ecto.Repo.Schema.extract_header_and_fields/8
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:56: Ecto.Repo.Schema.do_insert_all/7
+       test/strangertalks_new/participant_pairing_reservation_schema_test.exs:42: (test)
+
+  * test both reservation foreign keys reject nonexistent parents [L#113]  * test both reservation foreign keys reject nonexistent parents (11.2ms) [L#113]
+
+  3) test both reservation foreign keys reject nonexistent parents (StrangertalksNew.ParticipantPairingReservationSchemaTest)
+     test/strangertalks_new/participant_pairing_reservation_schema_test.exs:113
+     ** (Postgrex.Error) ERROR 3B001 (invalid_savepoint_specification) savepoint "reservation_fk_match" does not exist
+     code: Repo.query!("ROLLBACK TO SAVEPOINT reservation_fk_match")
+     stacktrace:
+       (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:1121: Ecto.Adapters.SQL.raise_sql_call_error/1
+       test/strangertalks_new/participant_pairing_reservation_schema_test.exs:130: (test)
+
+  * test duplicate active participant is rejected [L#18]  * test duplicate active participant is rejected (6.3ms) [L#18]
+
+  4) test duplicate active participant is rejected (StrangertalksNew.ParticipantPairingReservationSchemaTest)
+     test/strangertalks_new/participant_pairing_reservation_schema_test.exs:18
+     ** (Ecto.ChangeError) value `~N[2026-08-30 05:19:30.389966]` for `StrangertalksNew.ParticipantPairingReservationSchemaTest.Reservation.acquired_at` in `insert_all` does not match type :utc_datetime_usec
+     code: insert_reservation!(match_1.match_id, participant_a.participant_id, acquired_at)
+     stacktrace:
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:1310: Ecto.Repo.Schema.dump_field!/6
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:277: Ecto.Repo.Schema.extract_value/6
+       (elixir 1.18.4) lib/enum.ex:1846: anonymous fn/3 in Enum.map_reduce/3
+       (stdlib 6.2.2.4) maps.erl:860: :maps.fold_1/4
+       (elixir 1.18.4) lib/enum.ex:2558: Enum.map_reduce/3
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:131: anonymous fn/5 in Ecto.Repo.Schema.extract_header_and_fields/8
+       (elixir 1.18.4) lib/enum.ex:1840: Enum."-map_reduce/3-lists^mapfoldl/2-0-"/3
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:130: Ecto.Repo.Schema.extract_header_and_fields/8
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:56: Ecto.Repo.Schema.do_insert_all/7
+       test/strangertalks_new/participant_pairing_reservation_schema_test.exs:22: (test)
+
+  * test temporal check rejects release before acquisition [L#87]  * test temporal check rejects release before acquisition (7.0ms) [L#87]
+
+  5) test temporal check rejects release before acquisition (StrangertalksNew.ParticipantPairingReservationSchemaTest)
+     test/strangertalks_new/participant_pairing_reservation_schema_test.exs:87
+     Expected exception Postgrex.Error but got Ecto.ChangeError (value `~N[2026-08-30 05:19:30.396056]` for `StrangertalksNew.ParticipantPairingReservationSchemaTest.Reservation.acquired_at` in `insert_all` does not match type :utc_datetime_usec)
+     code: assert_raise Postgrex.Error, fn ->
+     stacktrace:
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:1310: Ecto.Repo.Schema.dump_field!/6
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:277: Ecto.Repo.Schema.extract_value/6
+       (elixir 1.18.4) lib/enum.ex:1846: anonymous fn/3 in Enum.map_reduce/3
+       (stdlib 6.2.2.4) maps.erl:860: :maps.fold_1/4
+       (elixir 1.18.4) lib/enum.ex:2558: Enum.map_reduce/3
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:131: anonymous fn/5 in Ecto.Repo.Schema.extract_header_and_fields/8
+       (elixir 1.18.4) lib/enum.ex:1840: Enum."-map_reduce/3-lists^mapfoldl/2-0-"/3
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:130: Ecto.Repo.Schema.extract_header_and_fields/8
+       (ecto 3.14.0) lib/ecto/repo/schema.ex:56: Ecto.Repo.Schema.do_insert_all/7
+       test/strangertalks_new/participant_pairing_reservation_schema_test.exs:93: (test)
 
 
 Finished in 0.2 seconds (0.00s async, 0.2s sync)
