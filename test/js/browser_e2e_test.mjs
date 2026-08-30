@@ -4133,6 +4133,9 @@ test("Feature 1Q E2E-RTV: Video to Return to Voice closes camera and render whil
     await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
     await pair.b.page.locator("#live-call-active").waitFor({state: "visible"})
 
+    await pair.a.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+    await pair.b.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+
     // Video active: Return to Voice button is visible
     await pair.a.page.locator("#btn-call-return-to-voice").waitFor({state: "visible"})
 
@@ -4178,6 +4181,9 @@ test("Feature 1Q E2E-REACTION: Ephemeral reaction is fanned out, deduplicated, a
     await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
     await pair.b.page.locator("#live-call-active").waitFor({state: "visible"})
 
+    await pair.a.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+    await pair.b.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+
     // A sends Heart reaction
     await pair.a.page.locator("#btn-react-heart").click()
 
@@ -4220,6 +4226,9 @@ test("Feature 1Q E2E-RING: StrangerTalks Ring live presence updates with call st
     await pair.b.page.locator("#live-call-incoming").waitFor({state: "visible"})
     await pair.b.page.locator("#btn-call-accept").click()
     await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
+
+    await pair.a.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+    await pair.b.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
 
     // In active call, Ring has active class
     const aRingClass = await pair.a.page.locator("#stranger-call-ring").getAttribute("class")
