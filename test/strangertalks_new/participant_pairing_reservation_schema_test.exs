@@ -1,6 +1,9 @@
 defmodule StrangertalksNew.ParticipantPairingReservationSchemaTest do
-  use StrangertalksNew.DataCase, async: false
+  use ExUnit.Case, async: false
 
+  import Ecto.Query
+
+  alias Ecto.Adapters.SQL.Sandbox
   alias StrangertalksNew.{Matches, Participant, Repo}
 
   defmodule Reservation do
@@ -16,129 +19,145 @@ defmodule StrangertalksNew.ParticipantPairingReservationSchemaTest do
   end
 
   test "duplicate active participant is rejected" do
-    {participant_a, _participant_b, _participant_c, match_1, match_2} = two_matches()
-    acquired_at = DateTime.utc_now()
+    unboxed(fn ->
+      {participant_a, _participant_b, _participant_c, match_1, match_2} = two_matches()
+      acquired_at = DateTime.utc_now()
 
-    insert_reservation!(match_1.match_id, participant_a.participant_id, acquired_at)
+      insert_reservation!(match_1.match_id, participant_a.participant_id, acquired_at)
 
-    error =
-      assert_raise Postgrex.Error, fn ->
-        insert_reservation!(match_2.match_id, participant_a.participant_id, acquired_at)
-      end
+      assert {:error, %Postgrex.Error{postgres: postgres}} =
+               raw_insert_reservation(
+                 match_2.match_id,
+                 participant_a.participant_id,
+                 acquired_at
+               )
 
-    assert error.postgres.code == :unique_violation
-    assert error.postgres.pg_code == "23505"
-    assert error.postgres.constraint == "participant_pairing_reservations_active_participant_index"
+      assert postgres.code == :unique_violation
+      assert postgres.pg_code == "23505"
+      assert postgres.constraint == "participant_pairing_reservations_active_participant_index"
 
-    IO.puts(
-      "SCHEMA-01 PASS duplicate-active sqlstate=#{error.postgres.pg_code} constraint=#{error.postgres.constraint}"
-    )
+      IO.puts(
+        "SCHEMA-01 PASS duplicate-active sqlstate=#{postgres.pg_code} constraint=#{postgres.constraint}"
+      )
+    end)
   end
 
   test "primary key rejects duplicate match and participant pair" do
-    {participant_a, _participant_b, _participant_c, match_1, _match_2} = two_matches()
-    acquired_at = DateTime.utc_now()
+    unboxed(fn ->
+      {participant_a, _participant_b, _participant_c, match_1, _match_2} = two_matches()
+      acquired_at = DateTime.utc_now()
 
-    insert_reservation!(match_1.match_id, participant_a.participant_id, acquired_at)
+      insert_reservation!(match_1.match_id, participant_a.participant_id, acquired_at)
 
-    error =
-      assert_raise Postgrex.Error, fn ->
-        insert_reservation!(
-          match_1.match_id,
-          participant_a.participant_id,
-          acquired_at,
-          acquired_at
-        )
-      end
+      assert {:error, %Postgrex.Error{postgres: postgres}} =
+               raw_insert_reservation(
+                 match_1.match_id,
+                 participant_a.participant_id,
+                 acquired_at,
+                 acquired_at
+               )
 
-    assert error.postgres.code == :unique_violation
-    assert error.postgres.pg_code == "23505"
-    assert error.postgres.constraint == "participant_pairing_reservations_pkey"
+      assert postgres.code == :unique_violation
+      assert postgres.pg_code == "23505"
+      assert postgres.constraint == "participant_pairing_reservations_pkey"
 
-    IO.puts(
-      "SCHEMA-02 PASS duplicate-pk sqlstate=#{error.postgres.pg_code} constraint=#{error.postgres.constraint}"
-    )
+      IO.puts(
+        "SCHEMA-02 PASS duplicate-pk sqlstate=#{postgres.pg_code} constraint=#{postgres.constraint}"
+      )
+    end)
   end
 
   test "released history coexists with one active row for a participant" do
-    {participant_a, _participant_b, _participant_c, match_1, match_2} = two_matches()
-    acquired_at = DateTime.utc_now()
-    released_at = DateTime.add(acquired_at, 1, :second)
+    unboxed(fn ->
+      {participant_a, _participant_b, _participant_c, match_1, match_2} = two_matches()
+      acquired_at = DateTime.utc_now()
+      released_at = DateTime.add(acquired_at, 1, :second)
 
-    insert_reservation!(match_1.match_id, participant_a.participant_id, acquired_at, released_at)
-    insert_reservation!(match_2.match_id, participant_a.participant_id, released_at)
+      insert_reservation!(match_1.match_id, participant_a.participant_id, acquired_at, released_at)
+      insert_reservation!(match_2.match_id, participant_a.participant_id, released_at)
 
-    rows =
-      Reservation
-      |> where([reservation], reservation.participant_id == ^participant_a.participant_id)
-      |> Repo.all()
+      rows =
+        Reservation
+        |> where([reservation], reservation.participant_id == ^participant_a.participant_id)
+        |> Repo.all()
 
-    history_count = Enum.count(rows, & &1.released_at)
-    active_count = Enum.count(rows, &is_nil(&1.released_at))
+      history_count = Enum.count(rows, & &1.released_at)
+      active_count = Enum.count(rows, &is_nil(&1.released_at))
 
-    assert history_count == 1
-    assert active_count == 1
+      assert history_count == 1
+      assert active_count == 1
 
-    IO.puts(
-      "SCHEMA-03 PASS released-history history_rows=#{history_count} active_rows=#{active_count}"
-    )
+      IO.puts(
+        "SCHEMA-03 PASS released-history history_rows=#{history_count} active_rows=#{active_count}"
+      )
+    end)
   end
 
   test "temporal check rejects release before acquisition" do
-    {participant_a, _participant_b, _participant_c, match_1, _match_2} = two_matches()
-    acquired_at = DateTime.utc_now()
-    released_at = DateTime.add(acquired_at, -1, :second)
+    unboxed(fn ->
+      {participant_a, _participant_b, _participant_c, match_1, _match_2} = two_matches()
+      acquired_at = DateTime.utc_now()
+      released_at = DateTime.add(acquired_at, -1, :second)
 
-    error =
-      assert_raise Postgrex.Error, fn ->
-        insert_reservation!(
-          match_1.match_id,
-          participant_a.participant_id,
-          acquired_at,
-          released_at
-        )
-      end
+      assert {:error, %Postgrex.Error{postgres: postgres}} =
+               raw_insert_reservation(
+                 match_1.match_id,
+                 participant_a.participant_id,
+                 acquired_at,
+                 released_at
+               )
 
-    assert error.postgres.code == :check_violation
-    assert error.postgres.pg_code == "23514"
+      assert postgres.code == :check_violation
+      assert postgres.pg_code == "23514"
 
-    assert error.postgres.constraint ==
-             "participant_pairing_reservations_released_after_acquired_check"
+      assert postgres.constraint ==
+               "participant_pairing_reservations_released_after_acquired_check"
 
-    IO.puts(
-      "SCHEMA-04 PASS temporal-check sqlstate=#{error.postgres.pg_code} constraint=#{error.postgres.constraint}"
-    )
+      IO.puts(
+        "SCHEMA-04 PASS temporal-check sqlstate=#{postgres.pg_code} constraint=#{postgres.constraint}"
+      )
+    end)
   end
 
   test "both reservation foreign keys reject nonexistent parents" do
-    {participant_a, _participant_b, _participant_c, match_1, _match_2} = two_matches()
-    acquired_at = DateTime.utc_now()
-    missing_match_id = Ecto.UUID.generate()
-    missing_participant_id = Ecto.UUID.generate()
+    unboxed(fn ->
+      {participant_a, _participant_b, _participant_c, match_1, _match_2} = two_matches()
+      acquired_at = DateTime.utc_now()
+      missing_match_id = Ecto.UUID.generate()
+      missing_participant_id = Ecto.UUID.generate()
 
-    match_error =
-      assert_raise Postgrex.Error, fn ->
-        insert_reservation!(missing_match_id, participant_a.participant_id, acquired_at)
-      end
+      assert {:error, %Postgrex.Error{postgres: match_fk}} =
+               raw_insert_reservation(
+                 missing_match_id,
+                 participant_a.participant_id,
+                 acquired_at
+               )
 
-    assert match_error.postgres.code == :foreign_key_violation
-    assert match_error.postgres.pg_code == "23503"
-    assert match_error.postgres.constraint == "participant_pairing_reservations_match_id_fkey"
+      assert match_fk.code == :foreign_key_violation
+      assert match_fk.pg_code == "23503"
+      assert match_fk.constraint == "participant_pairing_reservations_match_id_fkey"
 
-    participant_error =
-      assert_raise Postgrex.Error, fn ->
-        insert_reservation!(match_1.match_id, missing_participant_id, acquired_at)
-      end
+      assert {:error, %Postgrex.Error{postgres: participant_fk}} =
+               raw_insert_reservation(
+                 match_1.match_id,
+                 missing_participant_id,
+                 acquired_at
+               )
 
-    assert participant_error.postgres.code == :foreign_key_violation
-    assert participant_error.postgres.pg_code == "23503"
+      assert participant_fk.code == :foreign_key_violation
+      assert participant_fk.pg_code == "23503"
 
-    assert participant_error.postgres.constraint ==
-             "participant_pairing_reservations_participant_id_fkey"
+      assert participant_fk.constraint ==
+               "participant_pairing_reservations_participant_id_fkey"
 
-    IO.puts(
-      "SCHEMA-05 PASS foreign-keys match_sqlstate=#{match_error.postgres.pg_code} match_constraint=#{match_error.postgres.constraint} participant_sqlstate=#{participant_error.postgres.pg_code} participant_constraint=#{participant_error.postgres.constraint}"
-    )
+      IO.puts(
+        "SCHEMA-05 PASS foreign-keys match_sqlstate=#{match_fk.pg_code} match_constraint=#{match_fk.constraint} participant_sqlstate=#{participant_fk.pg_code} participant_constraint=#{participant_fk.constraint}"
+      )
+    end)
+  end
+
+  defp unboxed(fun) do
+    Sandbox.unboxed_run(Repo, fun)
   end
 
   defp two_matches do
@@ -192,14 +211,28 @@ defmodule StrangertalksNew.ParticipantPairingReservationSchemaTest do
   end
 
   defp insert_reservation!(match_id, participant_id, acquired_at, released_at \\ nil) do
-    Repo.insert!(
-      %Reservation{
-        match_id: match_id,
-        participant_id: participant_id,
-        acquired_at: acquired_at,
-        released_at: released_at
-      },
-      mode: :savepoint
+    Repo.insert!(%Reservation{
+      match_id: match_id,
+      participant_id: participant_id,
+      acquired_at: acquired_at,
+      released_at: released_at
+    })
+  end
+
+  defp raw_insert_reservation(match_id, participant_id, acquired_at, released_at \\ nil) do
+    Repo.query(
+      "INSERT INTO participant_pairing_reservations (match_id, participant_id, acquired_at, released_at) VALUES ($1, $2, $3, $4)",
+      [
+        dump_uuid!(match_id),
+        dump_uuid!(participant_id),
+        DateTime.to_naive(acquired_at),
+        released_at && DateTime.to_naive(released_at)
+      ]
     )
+  end
+
+  defp dump_uuid!(uuid) do
+    {:ok, dumped} = Ecto.UUID.dump(uuid)
+    dumped
   end
 end
