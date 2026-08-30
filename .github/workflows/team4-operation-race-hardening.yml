@@ -1,4 +1,4 @@
-name: Validation - PR B exact GREEN
+name: Validation - PR B exact GREEN canonical media harness
 
 on:
   push:
@@ -11,6 +11,7 @@ permissions:
 jobs:
   pr-b-green:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     services:
       postgres:
         image: postgres:16
@@ -57,16 +58,15 @@ jobs:
           node-version: "22"
           cache: npm
 
-      - name: Install Hex and Rebar
+      - name: Install canonical Team 9 dependencies
         run: |
           mix local.hex --force
           mix local.rebar --force
-
-      - name: Install dependencies
-        run: |
           mix deps.get
           npm ci
           npx playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
 
       - name: Exact targeted Node GREEN
         run: |
@@ -75,44 +75,58 @@ jobs:
             test/js/team11_media_expression_break_test.mjs \
             test/js/view_once_test.mjs
 
-      - name: Prepare browser database
+      - name: Prepare database
         run: |
           mix ecto.create --quiet
           mix ecto.migrate --quiet
 
-      - name: Start Phoenix for normal-media proof
+      - name: Start canonical Team 9 Phoenix real stack
         run: |
           mix run --no-start -e '
-            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
-            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNew.Repo,
+              repo_config
+              |> Keyword.put(:pool, DBConnection.ConnectionPool)
+              |> Keyword.put(:pool_size, 20)
+            )
+            endpoint_config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNewWeb.Endpoint,
+              endpoint_config
+              |> Keyword.put(:server, true)
+              |> Keyword.put(:http, [ip: {127, 0, 0, 1}, port: 4000])
+            )
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
             Process.sleep(:infinity)
-          ' > /tmp/pr-b-phoenix.log 2>&1 &
-          echo $! > /tmp/pr-b-phoenix.pid
+          ' > /tmp/pr-b-team9-phoenix.log 2>&1 &
+          echo $! > /tmp/pr-b-team9-phoenix.pid
           for attempt in $(seq 1 45); do
-            if ! kill -0 "$(cat /tmp/pr-b-phoenix.pid)" 2>/dev/null; then
+            if ! kill -0 "$(cat /tmp/pr-b-team9-phoenix.pid)" 2>/dev/null; then
               echo "Phoenix exited before becoming ready."
-              cat /tmp/pr-b-phoenix.log
+              cat /tmp/pr-b-team9-phoenix.log
               exit 1
             fi
             if curl -fsS http://localhost:4000/ >/dev/null; then
-              echo "Phoenix PR B browser endpoint is ready."
+              echo "Canonical Team 9 browser endpoint is ready."
               exit 0
             fi
             sleep 1
           done
           echo "Phoenix did not become ready."
-          cat /tmp/pr-b-phoenix.log
+          cat /tmp/pr-b-team9-phoenix.log
           exit 1
 
       - name: Exact normal-media browser GREEN
-        run: node --test --test-concurrency=1 test/js/normal_media_browser_test.mjs
+        run: node --test test/js/normal_media_browser_test.mjs
 
-      - name: Stop Phoenix browser server
+      - name: Stop Phoenix real stack
         if: always()
         run: |
-          if [ -f /tmp/pr-b-phoenix.pid ]; then
-            pid="$(cat /tmp/pr-b-phoenix.pid)"
+          if [ -f /tmp/pr-b-team9-phoenix.pid ]; then
+            pid="$(cat /tmp/pr-b-team9-phoenix.pid)"
             kill "$pid" 2>/dev/null || true
             for attempt in $(seq 1 20); do
               if ! kill -0 "$pid" 2>/dev/null; then
@@ -125,7 +139,7 @@ jobs:
             fi
           fi
 
-      - name: Reset database before precommit
+      - name: Reset database before full precommit
         if: always()
         run: |
           mix ecto.drop --quiet
@@ -136,7 +150,7 @@ jobs:
         if: always()
         run: mix precommit
 
-      - name: Diff integrity and clean tree
+      - name: Diff integrity, clean tree, exact SHA
         if: always()
         run: |
           git diff --check
@@ -145,6 +159,6 @@ jobs:
           test ! -s /tmp/pr-b-status
           test "$(git rev-parse HEAD)" = "592c22b0486649be242c78441d8a784c2e0de0b2"
 
-      - name: Browser server log on failure
+      - name: Phoenix log on failure
         if: failure()
-        run: cat /tmp/pr-b-phoenix.log || true
+        run: cat /tmp/pr-b-team9-phoenix.log || true
