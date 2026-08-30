@@ -11,7 +11,7 @@ permissions:
 jobs:
   trace-f10-settings:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:16
@@ -82,7 +82,7 @@ jobs:
           cat /tmp/f10-diag-server.log
           exit 1
 
-      - name: Instrument only the disposable test copy
+      - name: Add failure-only capture without adding readiness waits
         shell: bash
         run: |
           set -euo pipefail
@@ -91,53 +91,44 @@ jobs:
           p = Path('test/js/f10_desktop_flow_browser_test.mjs')
           s = p.read_text()
           old = '''    const settingsNav = user.page.locator('#bottom-nav [data-go="settings"]')
-              await settingsNav.focus()
-              await user.page.keyboard.press("Enter")
-              await user.page.locator('[data-screen="settings"].active').waitFor({state: "visible", timeout: WAIT_MS})'''.replace('              ', '    ')
-          new = '''    const traceSnapshot = async label => {
-              const state = await user.page.evaluate(label => ({
-                label,
+            await settingsNav.focus()
+            await user.page.keyboard.press("Enter")
+            await user.page.locator('[data-screen="settings"].active').waitFor({state: "visible", timeout: WAIT_MS})'''.replace('            ', '    ')
+          new = '''    await user.page.evaluate(() => {
+              globalThis.__f10FailureEvents = []
+              const record = (type, event) => {
+                const target = event?.target?.closest?.('[data-go]')
+                if (target?.dataset?.go === 'settings') {
+                  globalThis.__f10FailureEvents.push({
+                    type,
+                    key: event.key || null,
+                    path: location.pathname,
+                    active: document.querySelector('[data-screen].active')?.dataset?.screen || null,
+                    activeElement: document.activeElement?.id || document.activeElement?.getAttribute?.('data-go') || document.activeElement?.tagName || null
+                  })
+                }
+              }
+              for (const type of ['focusin', 'keydown', 'keyup', 'click']) document.addEventListener(type, event => record(type, event), true)
+              const push = history.pushState.bind(history)
+              history.pushState = (...args) => { globalThis.__f10FailureEvents.push({type: 'pushState', to: args[2], from: location.pathname}); return push(...args) }
+              const replace = history.replaceState.bind(history)
+              history.replaceState = (...args) => { globalThis.__f10FailureEvents.push({type: 'replaceState', to: args[2], from: location.pathname}); return replace(...args) }
+            })
+            const settingsNav = user.page.locator('#bottom-nav [data-go="settings"]')
+            await settingsNav.focus()
+            await user.page.keyboard.press("Enter")
+            try {
+              await user.page.locator('[data-screen="settings"].active').waitFor({state: "visible", timeout: WAIT_MS})
+            } catch (error) {
+              const state = await user.page.evaluate(() => ({
                 path: location.pathname,
                 activeScreens: Array.from(document.querySelectorAll('[data-screen].active')).map(node => node.dataset.screen),
                 status: document.querySelector('[role="status"]')?.textContent || document.querySelector('#status')?.textContent || null,
                 activeElement: document.activeElement?.id || document.activeElement?.getAttribute?.('data-go') || document.activeElement?.tagName || null,
                 bottomNavHidden: document.querySelector('#bottom-nav')?.hidden ?? null,
-                settingsVisible: (() => { const n = document.querySelector('#bottom-nav [data-go="settings"]'); if (!n) return null; const r = n.getBoundingClientRect(); const cs = getComputedStyle(n); return {disabled: n.disabled, hidden: n.hidden, display: cs.display, visibility: cs.visibility, width: r.width, height: r.height}; })(),
-                diagEvents: globalThis.__f10SettingsDiag || []
-              }), label)
-              console.log('F10TRACE ' + JSON.stringify(state))
-            }
-
-            await user.page.evaluate(() => {
-              globalThis.__f10SettingsDiag = []
-              const record = (type, event) => {
-                const target = event?.target?.closest?.('[data-go]')
-                if (target?.dataset?.go === 'settings') {
-                  globalThis.__f10SettingsDiag.push({type, key: event.key || null, path: location.pathname, active: document.querySelector('[data-screen].active')?.dataset?.screen || null, activeElement: document.activeElement?.id || document.activeElement?.getAttribute?.('data-go') || document.activeElement?.tagName || null})
-                }
-              }
-              for (const type of ['focusin', 'keydown', 'keyup', 'click']) document.addEventListener(type, event => record(type, event), true)
-              const push = history.pushState.bind(history)
-              history.pushState = (...args) => { globalThis.__f10SettingsDiag.push({type: 'pushState', to: args[2], from: location.pathname}); return push(...args) }
-              const replace = history.replaceState.bind(history)
-              history.replaceState = (...args) => { globalThis.__f10SettingsDiag.push({type: 'replaceState', to: args[2], from: location.pathname}); return replace(...args) }
-            })
-
-            await traceSnapshot('doors-visible-before-settings-focus')
-            const settingsNav = user.page.locator('#bottom-nav [data-go="settings"]')
-            await settingsNav.focus()
-            await traceSnapshot('after-settings-focus')
-            await user.page.keyboard.press("Enter")
-            await traceSnapshot('immediately-after-enter')
-            await user.page.waitForTimeout(250)
-            await traceSnapshot('250ms-after-enter')
-            await user.page.waitForTimeout(1000)
-            await traceSnapshot('1250ms-after-enter')
-            try {
-              await user.page.locator('[data-screen="settings"].active').waitFor({state: "visible", timeout: WAIT_MS})
-            } catch (error) {
-              await traceSnapshot('settings-timeout')
-              console.log('F10JOURNAL ' + JSON.stringify(user.journal.events.slice(-30)))
+                events: globalThis.__f10FailureEvents || []
+              }))
+              console.log('F10_FAILURE_CAPTURE ' + JSON.stringify(state))
               throw error
             }'''.replace('            ', '    ')
           if s.count(old) != 1:
@@ -145,22 +136,23 @@ jobs:
           p.write_text(s.replace(old, new, 1))
           PY
           git diff --check
-          git diff -- test/js/f10_desktop_flow_browser_test.mjs
           test "$(git diff --name-only)" = "test/js/f10_desktop_flow_browser_test.mjs"
 
-      - name: Run targeted test three times
+      - name: Run targeted test twenty times
         shell: bash
         run: |
           set +e
-          overall=0
-          for i in 1 2 3; do
-            echo "===== F10 DIAGNOSTIC ITERATION $i ====="
+          passes=0
+          failures=0
+          for i in $(seq 1 20); do
+            echo "===== F10 MINIMAL ITERATION $i ====="
             node --test --test-concurrency=1 --test-name-pattern="F-10 standard keyboard controls operate Matchmaking and Settings" test/js/f10_desktop_flow_browser_test.mjs
             rc=$?
-            echo "F10_DIAG_ITERATION_${i}_RC=$rc"
-            if [ "$rc" -ne 0 ]; then overall=$rc; fi
+            if [ "$rc" -eq 0 ]; then passes=$((passes+1)); else failures=$((failures+1)); fi
+            echo "F10_RUNNING_TOTAL passes=$passes failures=$failures"
           done
-          exit "$overall"
+          echo "F10_MINIMAL_TOTAL passes=$passes failures=$failures"
+          test "$failures" -eq 0
 
       - name: Server log
         if: always()
@@ -169,5 +161,4 @@ jobs:
       - name: Verify target unchanged
         if: always()
         shell: bash
-        run: |
-          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
