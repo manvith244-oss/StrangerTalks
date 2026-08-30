@@ -95,19 +95,27 @@ test("all four Doors have identical computed geometry regardless of data-door", 
       const doors = await app.page.locator("button.door").all()
       const states = await Promise.all(doors.map(door => doorVisualState(door)))
       const geometry = states.map(({width, height, minHeight, paddingTop, paddingRight, paddingBottom, paddingLeft, borderRadius, headingFontSize, copyFontSize}) => ({
-        width,
-        height,
-        minHeight,
-        paddingTop,
-        paddingRight,
-        paddingBottom,
-        paddingLeft,
-        borderRadius,
-        headingFontSize,
-        copyFontSize
+        width: Number.parseFloat(width),
+        exact: {
+          height,
+          minHeight,
+          paddingTop,
+          paddingRight,
+          paddingBottom,
+          paddingLeft,
+          borderRadius,
+          headingFontSize,
+          copyFontSize
+        }
       }))
-      for (const current of geometry.slice(1)) assert.deepEqual(current, geometry[0])
-      assert.ok(Number.parseFloat(geometry[0].height) >= 44, "Door touch targets remain at least 44px")
+      const baseline = geometry[0]
+      for (const current of geometry.slice(1)) {
+        // At 992px Chromium distributes a CSS Grid remainder by one 1/64px layout unit between the two 1fr columns.
+        assert.ok(Math.abs(current.width - baseline.width) <= 0.02,
+          `Door widths differ by more than 0.02px: ${current.width}px vs ${baseline.width}px`)
+        assert.deepEqual(current.exact, baseline.exact)
+      }
+      assert.ok(Number.parseFloat(baseline.exact.height) >= 44, "Door touch targets remain at least 44px")
       assert.deepEqual(await app.page.locator("button.door").evaluateAll(elements => elements.map(element => element.dataset.door)),
         ["SOMETHING_REAL", "JUST_TALK", "KEEP_IT_LIGHT", "EXPLORE"], "canonical Door order is unchanged")
       await app.context.close()
