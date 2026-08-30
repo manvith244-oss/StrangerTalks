@@ -106,7 +106,12 @@ defmodule StrangertalksNewWeb.PageControllerTest do
 
     refute body =~ "<img"
     refute body =~ "avatar"
-    refute body =~ "profile"
+    # "No profile required" is intentional reassurance copy, not a profile feature.
+    reassurance = "Anonymous, one-to-one conversation with another person. No profile required."
+    assert body =~ reassurance
+
+    refute String.replace(body, reassurance, "") =~
+             ~r/profile|avatar|user[\s_-]*name|(?:^|[^a-z])bio(?:$|[^a-z])|public[\s_-]*presence/i
   end
 
   test "message timeline is bottom anchored without reversing chronological DOM order" do
