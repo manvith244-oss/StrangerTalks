@@ -24,6 +24,7 @@ import {
   applyIcebreakerSnapshot, dismissIcebreaker, initialIcebreakerState, resetIcebreakerState, visibleIcebreaker
 } from "./icebreakers.mjs"
 import {AmbientAudioController} from "./ambient_audio.mjs"
+import "./normal_media_runtime.mjs"
 import {
   MAX_PHOTO_BYTES, MAX_PHOTO_DIMENSION, isApprovedPhotoType, validPhotoBlob, viewOnceDraftMatchesRuntime
 } from "./view_once.mjs"
