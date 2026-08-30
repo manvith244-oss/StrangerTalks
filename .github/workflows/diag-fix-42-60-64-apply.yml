@@ -25,6 +25,9 @@ jobs:
           --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
           --health-interval 10s --health-timeout 5s --health-retries 5
     env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
       PORT: "4000"
       STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
     steps:
