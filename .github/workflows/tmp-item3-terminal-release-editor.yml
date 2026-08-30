@@ -1,0 +1,155 @@
+name: Temporary Item 3 Source Editor
+
+on:
+  push:
+    branches:
+      - tmp/item3-terminal-release-editor
+
+permissions:
+  contents: write
+
+jobs:
+  edit-target:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact target branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/participant-pairing-reservation-2026-08-30
+          fetch-depth: 0
+
+      - name: Verify target SHA and apply narrow source edit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "7cc0e437f2688950e34da9a4e7630c01ee9c9352"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("lib/strangertalks_new/conversation_lifecycle/conversation_server.ex")
+          text = path.read_text()
+
+          attrs_old = """  @typing_expiry_ms 5_000
+          @mailbox_soft_limit 100
+          @mailbox_hard_limit 500
+
+          def max_message_bytes, do: @max_message_bytes
+"""
+          attrs_new = """  @typing_expiry_ms 5_000
+          @mailbox_soft_limit 100
+          @mailbox_hard_limit 500
+          @release_terminal_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]
+
+          def max_message_bytes, do: @max_message_bytes
+
+          @doc false
+          def release_terminal_status?(status), do: status in @release_terminal_statuses
+"""
+
+          persist_old = """  defp persist_conversation_status(conversation, status, ended_at, extra_attrs) do
+            event =
+              case {status, extra_attrs[:ending_type]} do
+                {:ACTIVE, _} -> :participants_connected
+                {:PAUSED, _} -> :participant_disconnected
+                {:ENDED, :SAFETY_ACTION} -> :safety_terminated
+                {:ENDED, _} -> :participant_completed
+                {:ABANDONED, _} -> :recovery_timeout
+                {:FAILED, _} -> :initialization_failed
+                _ -> :abandon
+              end
+
+            attrs = if ended_at, do: Map.put(extra_attrs, :ended_at, ended_at), else: extra_attrs
+            StrangertalksNew.ConversationLifecycle.Transitions.transition(conversation, event, attrs)
+          end
+"""
+
+          persist_new = """  defp persist_conversation_status(conversation, status, ended_at, extra_attrs) do
+            event =
+              case {status, extra_attrs[:ending_type]} do
+                {:ACTIVE, _} -> :participants_connected
+                {:PAUSED, _} -> :participant_disconnected
+                {:ENDED, :SAFETY_ACTION} -> :safety_terminated
+                {:ENDED, _} -> :participant_completed
+                {:ABANDONED, _} -> :recovery_timeout
+                {:FAILED, _} -> :initialization_failed
+                _ -> :abandon
+              end
+
+            attrs = if ended_at, do: Map.put(extra_attrs, :ended_at, ended_at), else: extra_attrs
+
+            Repo.transaction(fn ->
+              case StrangertalksNew.ConversationLifecycle.Transitions.transition(
+                     conversation,
+                     event,
+                     attrs
+                   ) do
+                {:ok, persisted_conversation} ->
+                  case maybe_release_pairing_reservations(persisted_conversation, ended_at) do
+                    :ok -> persisted_conversation
+                    {:error, reason} -> Repo.rollback(reason)
+                  end
+
+                {:error, reason} ->
+                  Repo.rollback(reason)
+              end
+            end)
+            |> case do
+              {:ok, persisted_conversation} -> {:ok, persisted_conversation}
+              {:error, reason} -> {:error, reason}
+            end
+          end
+
+          defp maybe_release_pairing_reservations(
+                 %Conversation{conversation_status: status} = conversation,
+                 ended_at
+               ) do
+            if release_terminal_status?(status) do
+              release_pairing_reservations(
+                conversation.match_id,
+                ended_at || conversation.ended_at || DateTime.utc_now()
+              )
+            else
+              :ok
+            end
+          end
+
+          defp release_pairing_reservations(match_id, released_at) do
+            with {:ok, dumped_match_id} <- Ecto.UUID.dump(match_id),
+                 {:ok, _result} <-
+                   Repo.query(
+                     """
+                     UPDATE participant_pairing_reservations
+                     SET released_at = $2
+                     WHERE match_id = $1
+                       AND released_at IS NULL
+                     """,
+                     [dumped_match_id, DateTime.to_naive(released_at)]
+                   ) do
+              :ok
+            else
+              :error -> {:error, :invalid_match_id}
+              {:error, reason} -> {:error, reason}
+            end
+          end
+"""
+
+          assert text.count(attrs_old) == 1, "top-level insertion seam drifted"
+          assert text.count(persist_old) == 1, "terminal persistence seam drifted"
+          text = text.replace(attrs_old, attrs_new, 1).replace(persist_old, persist_new, 1)
+          path.write_text(text)
+          PY
+
+          git diff --check
+          git diff -- lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
+          test -z "$(git diff --name-only -- lib/strangertalks_new/conversation_lifecycle/transitions.ex)"
+
+      - name: Commit and push production change only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
+          test "$(git diff --cached --name-only)" = "lib/strangertalks_new/conversation_lifecycle/conversation_server.ex"
+          git commit -m "feat: release pairing reservations at terminal commit"
+          git push origin HEAD:feat/participant-pairing-reservation-2026-08-30
