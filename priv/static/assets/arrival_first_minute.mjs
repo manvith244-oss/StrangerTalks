@@ -23,6 +23,12 @@ function activeScreen(documentRef) {
   return documentRef.querySelector("[data-screen].active")
 }
 
+function focusIsInsideScreen(documentRef, screen) {
+  const activeElement = documentRef.activeElement
+  if (!activeElement || activeElement === documentRef.body) return false
+  return screen.contains(activeElement)
+}
+
 export function installArrivalFirstMinute(documentRef = globalThis.document, windowRef = globalThis.window) {
   if (!documentRef || !windowRef || documentRef.documentElement?.dataset.arrivalFirstMinuteInstalled === "true") return
   documentRef.documentElement.dataset.arrivalFirstMinuteInstalled = "true"
@@ -169,6 +175,7 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
         resetLeaveQueue()
       }
       if (screen.dataset.screen !== "queue") resetLeaveQueue()
+      if (focusIsInsideScreen(documentRef, screen)) return
       focusScreenHeading(screen)
     })
   }
