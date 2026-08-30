@@ -106,7 +106,7 @@ jobs:
           exit 1
 
       - name: F-06 real-browser secondary-flow attacks
-        run: node --test test/js/f06_secondary_flow_browser_test.mjs test/js/settings_risk_gradient_browser_test.mjs
+        run: node --test test/js/f06_secondary_flow_browser_test.mjs test/js/settings_risk_gradient_browser_test.mjs test/js/doors_visual_structure_browser_test.mjs
 
       - name: Stop Phoenix browser server
         if: always()
