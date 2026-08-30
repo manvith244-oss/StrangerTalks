@@ -1,0 +1,161 @@
+name: Diagnostic apply #42 #60 #64 fixes
+
+on:
+  push:
+    branches:
+      - diag/fix-42-60-64-apply-2026-08-30
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-commit:
+    if: ${{ !contains(github.event.head_commit.message, '[diag-applied]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      PORT: "4000"
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: diag/fix-42-60-64-apply-2026-08-30
+          fetch-depth: 0
+
+      - name: Apply exact scoped hunks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          test_path = Path("test/js/browser_e2e_test.mjs")
+          test_text = test_path.read_text()
+          old_helper = '''async function openConversationInfo(page) {
+            const info = page.locator(".conversation-head-actions .overflow")
+            if ((await info.getAttribute("open")) === null) await info.locator("summary").click()
+            await page.waitForFunction(() => document.querySelector(".conversation-head-actions .overflow")?.open === true)
+            await info.locator(".overflow-menu").waitFor({state: "visible"})
+          }'''
+          new_helper = '''async function openConversationInfo(page) {
+            const info = page.locator(".conversation-head-actions .overflow")
+            await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)))
+            if ((await info.getAttribute("open")) === null) await info.locator("summary").click()
+            await page.waitForFunction(() => document.querySelector(".conversation-head-actions .overflow")?.open === true)
+            await info.locator(".overflow-menu").waitFor({state: "visible"})
+          }'''
+          if test_text.count(old_helper) != 1:
+              raise SystemExit("openConversationInfo exact source did not match once")
+          test_path.write_text(test_text.replace(old_helper, new_helper, 1))
+
+          css_path = Path("priv/static/assets/app.css")
+          css_text = css_path.read_text()
+          marker = '''.message:focus-visible .message-actions-bar {
+            display: inline-flex;
+          }'''
+          focus_rule = '''.message:focus-within .message-action-btn,
+          .message:focus-within .message-actions-bar {
+            display: inline-flex;
+          }'''
+          if focus_rule in css_text:
+              raise SystemExit("focus-within override already present")
+          if css_text.count(marker) != 1:
+              raise SystemExit("message action marker did not match once")
+          css_path.write_text(css_text.replace(marker, marker + "\n\n" + focus_rule, 1))
+          PY
+
+          git diff --check
+          actual="$(git diff --name-only | sort)"
+          expected=$'priv/static/assets/app.css\ntest/js/browser_e2e_test.mjs'
+          test "$actual" = "$expected"
+          git diff -- test/js/browser_e2e_test.mjs priv/static/assets/app.css
+          node --check test/js/browser_e2e_test.mjs
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install browser dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare isolated browser database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start isolated Phoenix runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/diag-42-60-64.log 2>&1 &
+          echo $! > /tmp/diag-42-60-64.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/diag-42-60-64.pid)" 2>/dev/null; then cat /tmp/diag-42-60-64.log; exit 1; fi
+            sleep 1
+          done
+          cat /tmp/diag-42-60-64.log
+          exit 1
+
+      - name: Isolated #42 #60 #64 proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 --test-name-pattern='Feature 1G E2E-1|Feature 1M E2E-1|Feature 1N E2E-2' test/js/browser_e2e_test.mjs 2>&1 | tee /tmp/diag-42-60-64.tap
+          grep -E '^# (tests|pass|fail|cancelled|skipped|todo) ' /tmp/diag-42-60-64.tap
+          test "$(grep -c '^ok 42 - Feature 1G E2E-1:' /tmp/diag-42-60-64.tap)" -eq 1
+          test "$(grep -c '^ok 60 - Feature 1M E2E-1:' /tmp/diag-42-60-64.tap)" -eq 1
+          test "$(grep -c '^ok 64 - Feature 1N E2E-2:' /tmp/diag-42-60-64.tap)" -eq 1
+
+      - name: Commit only the two scoped source files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          actual="$(git diff --name-only | sort)"
+          expected=$'priv/static/assets/app.css\ntest/js/browser_e2e_test.mjs'
+          test "$actual" = "$expected"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add priv/static/assets/app.css test/js/browser_e2e_test.mjs
+          git commit -m 'fix(browser): stabilize menu and focused message actions [diag-applied]'
+          git push origin HEAD:refs/heads/diag/fix-42-60-64-apply-2026-08-30
+
+      - name: Stop runtime
+        if: always()
+        run: |
+          if [ -f /tmp/diag-42-60-64.pid ]; then kill "$(cat /tmp/diag-42-60-64.pid)" 2>/dev/null || true; fi
+
+      - name: Runtime log on failure
+        if: failure()
+        run: cat /tmp/diag-42-60-64.log || true
