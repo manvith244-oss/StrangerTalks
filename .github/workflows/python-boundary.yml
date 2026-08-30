@@ -9,12 +9,39 @@ on:
       - release/integration-2026-08-28
   workflow_dispatch:
 
+concurrency:
+  group: python-boundary-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   boundary:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      AGENT_SYSTEMS_PROVIDER_PROBE: "false"
+      COMPANION_ENABLED: "false"
+      AGENT_SYSTEMS_ENABLED: "false"
+
     steps:
       - name: Checkout exact candidate SHA
         uses: actions/checkout@v4
@@ -22,11 +49,13 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Prove checkout identity
+        shell: bash
         run: |
+          set -euo pipefail
+          mkdir -p proof
           expected='${{ github.event.pull_request.head.sha || github.sha }}'
           actual="$(git rev-parse HEAD)"
-          echo "EXPECTED_PYTHON_BOUNDARY_SHA=$expected"
-          echo "ACTUAL_PYTHON_BOUNDARY_SHA=$actual"
+          printf 'EXPECTED_SHA=%s\nCHECKED_OUT_SHA=%s\nTESTED_SHA=%s\n' "$expected" "$actual" "$actual" | tee proof/sha.txt
           test "$actual" = "$expected"
 
       - name: Set up exact Python
@@ -34,10 +63,228 @@ jobs:
         with:
           python-version: '3.13.15'
 
-      - name: Install pinned test dependencies for RED contract proof
-        run: python -m pip install pydantic==2.13.5 pytest==9.1.1
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
 
-      - name: RED — production boundary does not exist yet
-        env:
-          PYTHONPATH: services/ai/src
-        run: python -m pytest services/ai/tests/test_foundation.py -q
+      - name: Install exact Python packet dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -e './services/ai[test]' 2>&1 | tee proof/python-install.log
+          python -m pip check 2>&1 | tee proof/pip-check.log
+          python - <<'PY' | tee proof/python-versions.txt
+          import sys
+          from importlib.metadata import version
+          expected = {
+              "strangertalks-ai": "0.1.0",
+              "fastapi": "0.141.1",
+              "pydantic": "2.13.5",
+              "uvicorn": "0.35.0",
+              "openai": "3.6.0",
+              "httpx": "0.28.1",
+              "httpx2": "2.12.0",
+              "anyio": "4.14.2",
+              "pytest": "9.1.1",
+              "hypothesis": "6.165.10",
+              "respx": "0.23.1",
+          }
+          assert sys.version.split()[0] == "3.13.15", sys.version
+          for package, wanted in expected.items():
+              got = version(package)
+              print(f"{package}=={got}")
+              assert got == wanted, (package, got, wanted)
+          PY
+          python -m pip show openai httpx2 httpx | tee proof/http-transports.txt
+
+      - name: Install Elixir dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get 2>&1 | tee proof/mix-deps.log
+
+      - name: Python route contract, privacy, auth, health, and fuzz proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest services/ai/tests -q -ra 2>&1 | tee proof/python-tests.log
+
+      - name: Focused Elixir boundary contract proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/ai_service/boundary_contract_test.exs --trace 2>&1 | tee proof/elixir-boundary.log
+
+      - name: Real BEAM to TCP to Uvicorn proof matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p proof/real
+          base_port=18760
+
+          stop_python() {
+            if [ -n "${PY_PID:-}" ] && kill -0 "$PY_PID" 2>/dev/null; then
+              kill -TERM "$PY_PID" || true
+              wait "$PY_PID" || true
+            fi
+            unset PY_PID
+          }
+          trap stop_python EXIT
+
+          run_server_case() {
+            case_name="$1"
+            expected_http="$2"
+            expected_provider="$3"
+            port="$4"
+            case_dir="proof/real/$case_name"
+            mkdir -p "$case_dir"
+            : > "$case_dir/http-attempts.txt"
+            : > "$case_dir/provider-attempts.txt"
+
+            ST_AI_TEST_FAULT="$case_name" \
+            ST_AI_HTTP_ATTEMPT_FILE="$PWD/$case_dir/http-attempts.txt" \
+            ST_AI_PROVIDER_ATTEMPT_FILE="$PWD/$case_dir/provider-attempts.txt" \
+            STRANGERTALKS_AI_SERVICE_CREDENTIAL="boundary-service-secret" \
+            env -u DATABASE_URL -u STRANGERTALKS_LOCAL_DB_USER -u STRANGERTALKS_LOCAL_DB_PASSWORD \
+              python -m uvicorn real_process_app:app \
+                --app-dir services/ai/tests \
+                --host 127.0.0.1 --port "$port" --log-level info --no-access-log \
+                >"$case_dir/python.log" 2>&1 &
+            PY_PID=$!
+
+            ready=0
+            for _ in $(seq 1 100); do
+              if curl -fsS "http://127.0.0.1:$port/health/live" >/dev/null 2>&1; then
+                ready=1
+                break
+              fi
+              sleep 0.1
+            done
+            test "$ready" = 1
+
+            ST_AI_REAL_BASE_URL="http://127.0.0.1:$port" \
+            ST_AI_REAL_CASE="$case_name" \
+              mix test test/strangertalks_new/ai_service/boundary_real_process_test.exs --trace \
+              2>&1 | tee "$case_dir/beam.log"
+
+            http_count="$(wc -l < "$case_dir/http-attempts.txt" | tr -d ' ')"
+            provider_count="$(wc -l < "$case_dir/provider-attempts.txt" | tr -d ' ')"
+            printf 'case=%s http_attempts=%s provider_attempts=%s\n' "$case_name" "$http_count" "$provider_count" \
+              | tee "$case_dir/counts.txt"
+            test "$http_count" = "$expected_http"
+            test "$provider_count" = "$expected_provider"
+
+            if [ "$case_name" = success ]; then
+              request_id="$(sed -n 's/.*PROOF_REQUEST_ID=\([0-9a-f-]*\).*/\1/p' "$case_dir/beam.log" | tail -1)"
+              test -n "$request_id"
+              grep -F "$request_id" "$case_dir/python.log"
+              grep -F "$request_id" "$case_dir/beam.log"
+              printf 'correlated_request_id=%s\n' "$request_id" | tee "$case_dir/correlation.txt"
+            fi
+
+            stop_python
+          }
+
+          run_server_case success 1 1 $((base_port + 1))
+          run_server_case rate_limited 1 1 $((base_port + 2))
+          run_server_case internal_error 1 1 $((base_port + 3))
+          run_server_case provider_timeout 1 1 $((base_port + 4))
+          run_server_case invalid_json 1 0 $((base_port + 5))
+          run_server_case wrong_types 1 0 $((base_port + 6))
+          run_server_case missing_field 1 0 $((base_port + 7))
+          run_server_case extra_field 1 0 $((base_port + 8))
+          run_server_case oversized_body 1 0 $((base_port + 9))
+          run_server_case slow_trickle 1 0 $((base_port + 10))
+
+          # Auth rejection is before provider logic; the route-level Python suite proves all
+          # missing/wrong/participant/OpenAI substitute variants. This real-TCP case proves
+          # the BEAM-facing wrong credential is also rejected with zero provider attempts.
+          run_server_case wrong_credential 0 0 $((base_port + 11)) || {
+            # Fixture fault remains success; select wrong credential only on the BEAM side.
+            case_dir="proof/real/wrong_credential"
+            stop_python
+            : > "$case_dir/http-attempts.txt"
+            : > "$case_dir/provider-attempts.txt"
+            ST_AI_TEST_FAULT=success \
+            ST_AI_HTTP_ATTEMPT_FILE="$PWD/$case_dir/http-attempts.txt" \
+            ST_AI_PROVIDER_ATTEMPT_FILE="$PWD/$case_dir/provider-attempts.txt" \
+            STRANGERTALKS_AI_SERVICE_CREDENTIAL="boundary-service-secret" \
+            env -u DATABASE_URL -u STRANGERTALKS_LOCAL_DB_USER -u STRANGERTALKS_LOCAL_DB_PASSWORD \
+              python -m uvicorn real_process_app:app --app-dir services/ai/tests \
+                --host 127.0.0.1 --port $((base_port + 11)) --log-level info --no-access-log \
+                >"$case_dir/python.log" 2>&1 &
+            PY_PID=$!
+            for _ in $(seq 1 100); do
+              curl -fsS "http://127.0.0.1:$((base_port + 11))/health/live" >/dev/null 2>&1 && break
+              sleep 0.1
+            done
+            ST_AI_REAL_BASE_URL="http://127.0.0.1:$((base_port + 11))" ST_AI_REAL_CASE=wrong_credential \
+              mix test test/strangertalks_new/ai_service/boundary_real_process_test.exs --trace \
+              2>&1 | tee "$case_dir/beam.log"
+            test "$(wc -l < "$case_dir/provider-attempts.txt" | tr -d ' ')" = 0
+            stop_python
+          }
+
+          ST_AI_REAL_BASE_URL="http://127.0.0.1:1" ST_AI_REAL_CASE=connection_refused \
+            mix test test/strangertalks_new/ai_service/boundary_real_process_test.exs --trace \
+            2>&1 | tee proof/real/connection-refused.log
+
+          ST_AI_REAL_BASE_URL="http://127.0.0.1:1" ST_AI_REAL_CASE=circuit_open \
+            mix test test/strangertalks_new/ai_service/boundary_real_process_test.exs --trace \
+            2>&1 | tee proof/real/circuit-open.log
+
+      - name: Prove production route isolation and no Python mutation authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' | tee proof/isolation.txt
+          from strangertalks_ai.app import create_app
+          from strangertalks_ai.config import Settings
+          app = create_app(Settings())
+          paths = app.openapi()["paths"]
+          assert "/v1/boundary/probe" not in paths
+          print("production_probe_route=absent")
+          PY
+          ! grep -R -nE 'psycopg|asyncpg|sqlalchemy|DATABASE_URL|participant_token|mutation_callback' \
+            services/ai/src/strangertalks_ai services/ai/pyproject.toml \
+            | tee proof/mutation-authority-scan.txt
+          echo 'python_mutation_authority=absent' | tee -a proof/isolation.txt
+
+      - name: Verify committed formatting before full precommit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix format --check-formatted 2>&1 | tee proof/format-check.log
+          git diff --check 2>&1 | tee proof/diff-check.log
+
+      - name: Full repository precommit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix precommit 2>&1 | tee proof/mix-precommit.log
+
+      - name: Final exact-SHA and clean-tree proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='${{ github.event.pull_request.head.sha || github.sha }}'
+          tested="$(git rev-parse HEAD)"
+          test "$tested" = "$expected"
+          git diff --check
+          status="$(git status --porcelain)"
+          printf 'EXPECTED_SHA=%s\nCHECKED_OUT_SHA=%s\nTESTED_SHA=%s\nWORKTREE=%s\n' \
+            "$expected" "$tested" "$tested" "${status:-CLEAN}" | tee proof/final.txt
+          test -z "$status"
+
+      - name: Upload proof evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-boundary-proof-${{ github.run_id }}
+          path: proof/
+          if-no-files-found: warn
