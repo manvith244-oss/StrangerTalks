@@ -85,5 +85,3 @@ defmodule StrangertalksNewWeb.RouteArchitectureTest do
     assert redirected_to(conn, 302) == "/you?account=google_connection_failed"
   end
 end
-
-# Doors presentation packet baseline trigger only; no route behavior change.

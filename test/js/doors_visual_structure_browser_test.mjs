@@ -34,6 +34,7 @@ async function doorVisualState(door) {
     const strong = element.querySelector("strong")
     const copy = element.querySelector("span")
     return {
+      width: style.width,
       height: style.height,
       minHeight: style.minHeight,
       paddingTop: style.paddingTop,
@@ -89,21 +90,29 @@ test("all four Doors have identical computed geometry regardless of data-door", 
   const browser = await chromium.launch({headless: true})
   let app
   try {
-    app = await openDoors(browser, {width: 1440, height: 900})
-    const doors = await app.page.locator("button.door").all()
-    const states = await Promise.all(doors.map(door => doorVisualState(door)))
-    const geometry = states.map(({height, minHeight, paddingTop, paddingRight, paddingBottom, paddingLeft, borderRadius, headingFontSize, copyFontSize}) => ({
-      height,
-      minHeight,
-      paddingTop,
-      paddingRight,
-      paddingBottom,
-      paddingLeft,
-      borderRadius,
-      headingFontSize,
-      copyFontSize
-    }))
-    for (const current of geometry.slice(1)) assert.deepEqual(current, geometry[0])
+    for (const viewport of VIEWPORTS) {
+      app = await openDoors(browser, viewport)
+      const doors = await app.page.locator("button.door").all()
+      const states = await Promise.all(doors.map(door => doorVisualState(door)))
+      const geometry = states.map(({width, height, minHeight, paddingTop, paddingRight, paddingBottom, paddingLeft, borderRadius, headingFontSize, copyFontSize}) => ({
+        width,
+        height,
+        minHeight,
+        paddingTop,
+        paddingRight,
+        paddingBottom,
+        paddingLeft,
+        borderRadius,
+        headingFontSize,
+        copyFontSize
+      }))
+      for (const current of geometry.slice(1)) assert.deepEqual(current, geometry[0])
+      assert.ok(Number.parseFloat(geometry[0].height) >= 44, "Door touch targets remain at least 44px")
+      assert.deepEqual(await app.page.locator("button.door").evaluateAll(elements => elements.map(element => element.dataset.door)),
+        ["SOMETHING_REAL", "JUST_TALK", "KEEP_IT_LIGHT", "EXPLORE"], "canonical Door order is unchanged")
+      await app.context.close()
+      app = null
+    }
   } finally {
     await app?.context.close().catch(() => {})
     await browser.close().catch(() => {})
@@ -125,17 +134,23 @@ test("Doors follow intent-first DOM order and Temporary Conversation is secondar
       const temporary = section.querySelector(".temporary-entry")
       return {
         lede: index(lede),
+        afterLede: index(lede.nextElementSibling),
         doors: index(doors),
         languageLabel: index(languageLabel),
         language: index(language),
-        temporary: index(temporary)
+        temporary: index(temporary),
+        trustCue: index(section.querySelector("#arrival-trust-cue")),
+        trustCueCount: section.querySelectorAll("#arrival-trust-cue").length
       }
     })
 
     assert.ok(order.lede < order.doors, "subcopy precedes Doors")
+    assert.equal(order.afterLede, order.doors, "no explainer interrupts subcopy and Doors")
     assert.ok(order.doors < order.languageLabel, "Doors precede language label")
     assert.ok(order.languageLabel < order.language, "language label remains paired before select")
     assert.ok(order.language < order.temporary, "Temporary Conversation disclosure sits below the language control")
+    assert.equal(order.trustCueCount, 1, "existing trust cue is preserved once")
+    assert.ok(order.language < order.trustCue, "existing trust cue is secondary to Doors and language")
   } finally {
     await app?.context.close().catch(() => {})
     await browser.close().catch(() => {})
@@ -149,6 +164,8 @@ test("unselected Doors are neutral, hover/focus preview is restrained, and selec
     app = await openDoors(browser)
     const doors = await app.page.locator("button.door").all()
     const defaults = []
+    assert.deepEqual(await app.page.locator("button.door").evaluateAll(elements => elements.map(element => element.getAttribute("aria-pressed"))),
+      ["false", "false", "false", "false"], "no Door is preselected")
     for (const door of doors) defaults.push(await doorVisualState(door))
 
     for (const state of defaults) {
