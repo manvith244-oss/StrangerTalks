@@ -224,6 +224,7 @@ async function openMessageTools(page) {
 
 async function openConversationInfo(page) {
   const info = page.locator(".conversation-head-actions .overflow")
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)))
   if ((await info.getAttribute("open")) === null) await info.locator("summary").click()
   await page.waitForFunction(() => document.querySelector(".conversation-head-actions .overflow")?.open === true)
   await info.locator(".overflow-menu").waitFor({state: "visible"})

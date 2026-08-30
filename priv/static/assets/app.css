@@ -1197,6 +1197,11 @@ emoji-picker {
   display: inline-flex;
 }
 
+.message:focus-within .message-action-btn,
+.message:focus-within .message-actions-bar {
+  display: inline-flex;
+}
+
 /* ==========================================================================
    Pinned Messages UI & Panel
    ========================================================================== */
