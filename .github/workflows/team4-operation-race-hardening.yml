@@ -38,13 +38,13 @@ jobs:
       - name: Checkout exact PR B head
         uses: actions/checkout@v4
         with:
-          ref: 592c22b0486649be242c78441d8a784c2e0de0b2
+          ref: 7d5058ee0c0022f9682262b1bb5ca240fcf3a01a
 
       - name: Prove exact tested SHA
         run: |
-          echo "EXPECTED_PR_B_SHA=592c22b0486649be242c78441d8a784c2e0de0b2"
+          echo "EXPECTED_PR_B_SHA=7d5058ee0c0022f9682262b1bb5ca240fcf3a01a"
           echo "ACTUAL_PR_B_SHA=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "592c22b0486649be242c78441d8a784c2e0de0b2"
+          test "$(git rev-parse HEAD)" = "7d5058ee0c0022f9682262b1bb5ca240fcf3a01a"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -157,7 +157,7 @@ jobs:
           git status --short --branch
           git status --porcelain | tee /tmp/pr-b-status
           test ! -s /tmp/pr-b-status
-          test "$(git rev-parse HEAD)" = "592c22b0486649be242c78441d8a784c2e0de0b2"
+          test "$(git rev-parse HEAD)" = "7d5058ee0c0022f9682262b1bb5ca240fcf3a01a"
 
       - name: Phoenix log on failure
         if: failure()
