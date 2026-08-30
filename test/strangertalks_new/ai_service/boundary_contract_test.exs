@@ -152,7 +152,7 @@ defmodule StrangertalksNew.AIService.BoundaryContractTest do
     parent = self()
 
     log =
-      capture_log(fn ->
+      capture_log([level: :info], fn ->
         send(parent, {:client_result, request(breaker, transport)})
       end)
 
