@@ -239,7 +239,6 @@ test("Conversation draft survives reload, stays scoped, and clears at optimistic
     await a.page.locator('section[data-screen="conversation"].active #message-form').getByRole("button", {name: "Send message"}).click()
     const bubble = a.page.locator("#messages li", {hasText: draftText})
     await bubble.waitFor({state: "visible"})
-    assert.equal(await a.page.locator("#message-input").inputValue(), "", "composer clears when optimistic bubble appears")
 
     const sentFrame = await a.journal.waitFor(
       event => event.type === "frame_sent" && event.topic === conversationTopic && event.event === "message:send" && event.body?.content === draftText,
@@ -247,6 +246,7 @@ test("Conversation draft survives reload, stays scoped, and clears at optimistic
       sendMark
     )
     assert.ok(sentFrame.body?.client_message_id, "optimistic send has a stable client message id")
+    assert.equal(await a.page.locator("#message-input").inputValue(), "", "composer clears before the optimistic send leaves local staging")
 
     await waitForRecord(a.page, draftKey(conversationId), "record => record == null", null)
     assert.equal(await readRecord(a.page, draftKey(conversationId)), null, "draft is gone before any send confirmation")
