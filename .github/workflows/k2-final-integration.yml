@@ -43,7 +43,7 @@ env:
 
 jobs:
   contracts-and-precommit:
-    if: ${{ github.event_name == 'push' && !contains(github.event.head_commit.message, '[composed-diagnostic]') || github.event_name == 'workflow_dispatch' && inputs.browser_group == 'all' }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' && inputs.browser_group == 'all' }}
     name: Contracts + backend + precommit
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -63,6 +63,19 @@ jobs:
         with:
           ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
+      - name: Verify immutable target SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "K2_WORKFLOW_SHA=$GITHUB_SHA"
+          echo "K2_REQUESTED_TARGET_SHA=$TARGET_SHA"
+          if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Target must be a full lowercase 40-character commit SHA"
+            exit 1
+          fi
+          actual="$(git rev-parse HEAD)"
+          echo "K2_ACTUAL_CHECKOUT_SHA=$actual"
+          test "$actual" = "$TARGET_SHA"
       - name: Exact SHA, merged authorities, excluded lineage
         shell: bash
         run: |
@@ -171,7 +184,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        group: ${{ fromJSON((github.event_name == 'push' && contains(github.event.head_commit.message, '[composed-diagnostic]') || github.event_name == 'workflow_dispatch' && inputs.browser_group == 'composed-e2e') && '["composed-e2e"]' || '["f01-shell","f03-history","f06-settings","f07-loading","f09-mobile","f10-desktop","f04-cleanup","f04-hostile","fx05-expression","f11-hostile","f11-corrupt-identity","fx07-terminal","conversation-reliability","composed-e2e"]') }}
+        group: ${{ fromJSON((github.event_name == 'workflow_dispatch' && inputs.browser_group == 'composed-e2e') && '["composed-e2e"]' || '["f01-shell","f03-history","f06-settings","f07-loading","f09-mobile","f10-desktop","f04-cleanup","f04-hostile","fx05-expression","f11-hostile","f11-corrupt-identity","fx07-terminal","conversation-reliability","composed-e2e"]') }}
     services:
       postgres:
         image: postgres:16
@@ -189,25 +202,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
-      - name: Resolve exact browser target
-        if: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[composed-diagnostic]') || github.event_name == 'workflow_dispatch' }}
+      - name: Verify immutable target SHA
         shell: bash
         run: |
           set -euo pipefail
-          target="$TARGET_SHA"
-          if [ "${{ github.event_name }}" = "push" ]; then
-            target="$GITHUB_SHA"
-            while git log -1 --format=%B "$target" | grep -Fq '[composed-diagnostic]'; do
-              target="$(git rev-parse "$target^")"
-            done
+          echo "K2_WORKFLOW_SHA=$GITHUB_SHA"
+          echo "K2_REQUESTED_TARGET_SHA=$TARGET_SHA"
+          if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Target must be a full lowercase 40-character commit SHA"
+            exit 1
           fi
-          git checkout --detach "$target"
-          echo "TARGET_SHA=$target" >> "$GITHUB_ENV"
-          echo "RESOLVED_BROWSER_TARGET_SHA=$target"
-      - name: Exact checkout
-        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          actual="$(git rev-parse HEAD)"
+          echo "K2_ACTUAL_CHECKOUT_SHA=$actual"
+          test "$actual" = "$TARGET_SHA"
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.18.4"
@@ -395,7 +404,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
 
   final-same-sha-proof:
-    if: ${{ github.event_name == 'push' && !contains(github.event.head_commit.message, '[composed-diagnostic]') || github.event_name == 'workflow_dispatch' && inputs.browser_group == 'all' }}
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' && inputs.browser_group == 'all' }}
     name: Final same-SHA diff clean live-head proof
     needs: [contracts-and-precommit, browser-authorities]
     runs-on: ubuntu-latest
@@ -416,6 +425,19 @@ jobs:
         with:
           ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
+      - name: Verify immutable target SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "K2_WORKFLOW_SHA=$GITHUB_SHA"
+          echo "K2_REQUESTED_TARGET_SHA=$TARGET_SHA"
+          if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Target must be a full lowercase 40-character commit SHA"
+            exit 1
+          fi
+          actual="$(git rev-parse HEAD)"
+          echo "K2_ACTUAL_CHECKOUT_SHA=$actual"
+          test "$actual" = "$TARGET_SHA"
       - name: Exact final checkout and authority proof
         shell: bash
         run: |
