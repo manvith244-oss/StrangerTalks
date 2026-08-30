@@ -1,0 +1,119 @@
+name: Participant Pairing Schema Proof
+
+on:
+  push:
+    branches:
+      - feat/participant-pairing-reservation-2026-08-30
+    paths-ignore:
+      - docs/proofs/participant_pairing_schema_proof.txt
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  schema-proof:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      PGPASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact branch SHA
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Run migration and constraint proof
+        id: proof
+        shell: bash
+        run: |
+          set -u
+          proof="docs/proofs/participant_pairing_schema_proof.txt"
+          mkdir -p docs/proofs
+          : > "$proof"
+          up=0
+          rollback=0
+          rollback_absent=0
+          remigrate=0
+          schema=0
+
+          {
+            echo "TESTED_SHA=$(git rev-parse HEAD)"
+            echo "POSTGRES_VERSION=$(psql -h localhost -U strangertalks_local -d strangertalks_new_test -Atc 'SHOW server_version')"
+            echo "MIGRATION-UP BEGIN"
+            mix ecto.drop --quiet || true
+            mix ecto.create --quiet
+            mix ecto.migrate || up=$?
+            up_table=$(psql -h localhost -U strangertalks_local -d strangertalks_new_test -Atc "SELECT COALESCE(to_regclass('public.participant_pairing_reservations')::text, 'NULL')")
+            echo "MIGRATION-UP table=$up_table exit=$up"
+
+            echo "MIGRATION-DOWN BEGIN"
+            mix ecto.rollback --step 1 || rollback=$?
+            down_table=$(psql -h localhost -U strangertalks_local -d strangertalks_new_test -Atc "SELECT COALESCE(to_regclass('public.participant_pairing_reservations')::text, 'NULL')")
+            if [ "$down_table" = "NULL" ]; then rollback_absent=0; else rollback_absent=1; fi
+            echo "MIGRATION-DOWN table=$down_table exit=$rollback absence_check=$rollback_absent"
+
+            echo "MIGRATION-REMIGRATE BEGIN"
+            mix ecto.migrate || remigrate=$?
+            remigrate_table=$(psql -h localhost -U strangertalks_local -d strangertalks_new_test -Atc "SELECT COALESCE(to_regclass('public.participant_pairing_reservations')::text, 'NULL')")
+            echo "MIGRATION-REMIGRATE table=$remigrate_table exit=$remigrate"
+
+            echo "SCHEMA-CONSTRAINTS BEGIN"
+            mix test test/strangertalks_new/participant_pairing_reservation_schema_test.exs --trace || schema=$?
+            echo "SCHEMA-CONSTRAINTS exit=$schema"
+
+            if [ "$up" -eq 0 ] && [ "$up_table" = "participant_pairing_reservations" ] && \
+               [ "$rollback" -eq 0 ] && [ "$rollback_absent" -eq 0 ] && \
+               [ "$remigrate" -eq 0 ] && [ "$remigrate_table" = "participant_pairing_reservations" ] && \
+               [ "$schema" -eq 0 ]; then
+              echo "OVERALL PASS"
+            else
+              echo "OVERALL FAIL up=$up up_table=$up_table rollback=$rollback rollback_absent=$rollback_absent remigrate=$remigrate remigrate_table=$remigrate_table schema=$schema"
+            fi
+          } 2>&1 | tee "$proof"
+
+      - name: Persist raw schema proof transcript
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/proofs/participant_pairing_schema_proof.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "test: record participant pairing schema proof"
+            git push origin HEAD:feat/participant-pairing-reservation-2026-08-30
+          fi
+
+      - name: Enforce proof result
+        if: always()
+        run: grep -Fx "OVERALL PASS" docs/proofs/participant_pairing_schema_proof.txt
