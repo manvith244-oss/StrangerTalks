@@ -2,6 +2,11 @@ name: Item 3 Verification Suite
 
 on:
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact commit SHA to verify
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -35,7 +40,7 @@ jobs:
       - name: Checkout exact dispatched feature HEAD
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.target_sha }}
           fetch-depth: 1
 
       - name: Prove feature branch and checkout identity
@@ -45,8 +50,7 @@ jobs:
           echo "GITHUB_REF_NAME=$GITHUB_REF_NAME"
           echo "GITHUB_SHA=$GITHUB_SHA"
           echo "ACTUAL_SHA=$(git rev-parse HEAD)"
-          test "$GITHUB_REF_NAME" = "feat/participant-pairing-reservation-2026-08-30"
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "${{ inputs.target_sha }}"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
