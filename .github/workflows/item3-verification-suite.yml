@@ -1,0 +1,83 @@
+name: Item 3 Verification Suite
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  item3-verification-suite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact dispatched feature HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Prove feature branch and checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "GITHUB_REF_NAME=$GITHUB_REF_NAME"
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$GITHUB_REF_NAME" = "feat/participant-pairing-reservation-2026-08-30"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex and Rebar
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install Elixir dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix deps.get
+
+      - name: Prove PostgreSQL service
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter ancestor=postgres:17 --format '{{.ID}}' | head -n1)
+          test -n "$cid"
+          docker ps --filter id="$cid" --format 'container={{.ID}} image={{.Image}} status={{.Status}} ports={{.Ports}}'
+          docker exec "$cid" psql -U strangertalks_local -d strangertalks_new_test -X -At -c "SELECT 'postgres_version=' || version();"
+
+      - name: Run repository precommit verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix precommit
