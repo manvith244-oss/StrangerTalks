@@ -3083,8 +3083,128 @@ test("Feature 1N E2E-2: same-participant Edit and Unsend races preserve CAS and 
     const secondId = await pair.a.page.locator("#messages li", {hasText: "1N unsend wins base"}).getAttribute("data-message-id")
     const secondA1 = pair.a.page.locator(`[data-message-id="${secondId}"]`)
     const secondA2 = a2.page.locator(`[data-message-id="${secondId}"]`)
-    await secondA2.focus()
-    await secondA2.getByRole("button", {name: "Edit message"}).click()
+    // Diagnostic only: observe the original focus/click sequence without retrying it.
+    await a2.page.evaluate((messageId) => {
+      const nodes = new WeakMap()
+      let nextNodeId = 0
+      const describe = (element) => {
+        if (!(element instanceof Element)) return null
+        if (!nodes.has(element)) nodes.set(element, ++nextNodeId)
+        const style = getComputedStyle(element)
+        const rect = element.getBoundingClientRect()
+        return {
+          nodeId: nodes.get(element), tag: element.tagName, id: element.id,
+          class: element.getAttribute("class"), connected: element.isConnected,
+          tabIndex: element.tabIndex, hidden: element.hasAttribute("hidden"),
+          inert: element.hasAttribute("inert"), ariaHidden: element.getAttribute("aria-hidden"),
+          ariaLabel: element.getAttribute("aria-label"), disabled: element.disabled,
+          focus: element.matches(":focus"), focusWithin: element.matches(":focus-within"),
+          focusVisible: element.matches(":focus-visible"), hover: element.matches(":hover"),
+          display: style.display, visibility: style.visibility, opacity: style.opacity,
+          pointerEvents: style.pointerEvents, contentVisibility: style.contentVisibility,
+          overflow: style.overflow, position: style.position, zIndex: style.zIndex,
+          rect: {x: rect.x, y: rect.y, width: rect.width, height: rect.height}
+        }
+      }
+      const initial = document.querySelector(`[data-message-id="${messageId}"]`)
+      const snapshot = () => {
+        const message = document.querySelector(`[data-message-id="${messageId}"]`)
+        const button = message?.querySelector(".edit-action-btn")
+        const ancestors = []
+        for (let node = button || message; node; node = node.parentElement) ancestors.push(describe(node))
+        return {
+          documentHasFocus: document.hasFocus(), visibilityState: document.visibilityState,
+          activeElement: describe(document.activeElement), initialMessage: describe(initial),
+          currentMessage: describe(message), sameMessageNode: message === initial,
+          matchingMessages: document.querySelectorAll(`[data-message-id="${messageId}"]`).length,
+          ancestors, viewport: {width: innerWidth, height: innerHeight},
+          anyHover: matchMedia("(any-hover: hover)").matches,
+          reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches
+        }
+      }
+      const events = []
+      let droppedEvents = 0
+      const record = (reason, detail = null) => {
+        events.push({time: performance.now(), reason, detail, snapshot: snapshot()})
+        if (events.length > 100) { events.shift(); droppedEvents++ }
+      }
+      const onFocus = (event) => record(event.type, {
+        target: describe(event.target), relatedTarget: describe(event.relatedTarget)
+      })
+      for (const name of ["focus", "blur", "focusin", "focusout"]) document.addEventListener(name, onFocus, true)
+      const observer = new MutationObserver((records) => {
+        const relevant = records.filter((entry) => {
+          const current = document.querySelector(`[data-message-id="${messageId}"]`)
+          return [initial, current].some((message) => message && (
+            entry.target === message || message.contains(entry.target) || entry.target.contains(message) ||
+            [...entry.removedNodes].some((node) => node === message || node.contains(message))
+          ))
+        })
+        if (relevant.length) record("mutation", relevant.map((entry) => ({
+          type: entry.type, target: describe(entry.target), attribute: entry.attributeName,
+          oldValue: entry.oldValue,
+          newValue: entry.attributeName ? entry.target.getAttribute(entry.attributeName) : null,
+          added: [...entry.addedNodes].map(describe), removed: [...entry.removedNodes].map(describe)
+        })))
+      })
+      observer.observe(document.documentElement, {
+        subtree: true, childList: true, attributes: true, attributeOldValue: true,
+        attributeFilter: ["class", "style", "hidden", "inert", "tabindex", "aria-hidden", "disabled"]
+      })
+      let frame
+      let previousState
+      const sample = () => {
+        const state = JSON.stringify(snapshot())
+        if (state !== previousState) { record("animation-frame-change"); previousState = state }
+        frame = requestAnimationFrame(sample)
+      }
+      record("before-focus")
+      frame = requestAnimationFrame(sample)
+      window.__diag64FocusTrace = () => {
+        observer.disconnect()
+        cancelAnimationFrame(frame)
+        for (const name of ["focus", "blur", "focusin", "focusout"]) document.removeEventListener(name, onFocus, true)
+        const current = document.querySelector(`[data-message-id="${messageId}"]`)
+        const elements = []
+        for (let node = current?.querySelector(".edit-action-btn") || current; node; node = node.parentElement) elements.push(node)
+        const matchedRules = []
+        const readRules = (rules, conditions = []) => {
+          for (const rule of rules) {
+            if (rule.selectorText) {
+              const matches = elements.filter((element) => element.matches(rule.selectorText))
+              if (matches.length) matchedRules.push({
+                selector: rule.selectorText, css: rule.style.cssText, conditions,
+                nodes: matches.map((element) => nodes.get(element))
+              })
+            }
+            if (rule.cssRules) readRules(rule.cssRules, [...conditions, {
+              text: rule.conditionText || rule.name || rule.constructor.name,
+              mediaMatches: rule instanceof CSSMediaRule ? matchMedia(rule.conditionText).matches : null
+            }])
+          }
+        }
+        for (const sheet of document.styleSheets) {
+          try { readRules(sheet.cssRules) } catch (error) {
+            matchedRules.push({href: sheet.href, error: error.message})
+          }
+        }
+        return {messageId, droppedEvents, events, finalSnapshot: snapshot(), matchedRules}
+      }
+    }, secondId)
+    try {
+      await secondA2.focus()
+      await secondA2.getByRole("button", {name: "Edit message"}).click()
+    } catch (error) {
+      const trace = await a2.page.evaluate(() => window.__diag64FocusTrace()).catch((traceError) => ({traceError: traceError.message}))
+      console.log(`DIAG64_FOCUS_FAILURE ${JSON.stringify(trace)}`)
+      error.message += `\nDIAG64_FOCUS_FAILURE ${JSON.stringify(trace)}`
+      throw error
+    } finally {
+      await a2.page.evaluate(() => {
+        window.__diag64FocusTrace?.()
+        delete window.__diag64FocusTrace
+      }).catch(() => {})
+    }
     await secondA2.getByLabel("Edit message text").fill("1N delayed edit must stay local")
 
     await secondA1.focus()
