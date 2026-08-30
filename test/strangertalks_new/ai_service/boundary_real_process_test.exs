@@ -8,7 +8,8 @@ defmodule StrangertalksNew.AIService.BoundaryRealProcessTest do
   @service_credential "boundary-service-secret"
 
   defp configured? do
-    is_binary(System.get_env("ST_AI_REAL_BASE_URL")) and is_binary(System.get_env("ST_AI_REAL_CASE"))
+    is_binary(System.get_env("ST_AI_REAL_BASE_URL")) and
+      is_binary(System.get_env("ST_AI_REAL_CASE"))
   end
 
   defp call(breaker, opts \\ []) do
@@ -44,7 +45,10 @@ defmodule StrangertalksNew.AIService.BoundaryRealProcessTest do
         send(parent, {:result, call(breaker)})
       end)
 
-    assert_receive {:result, {:ok, %{request_id: request_id, result: %{"value" => "boundary-ok"}}}}, 20_000
+    assert_receive {:result,
+                    {:ok, %{request_id: request_id, result: %{"value" => "boundary-ok"}}}},
+                   20_000
+
     assert {:ok, ^request_id} = Ecto.UUID.cast(request_id)
     assert log =~ request_id
     refute log =~ @service_credential

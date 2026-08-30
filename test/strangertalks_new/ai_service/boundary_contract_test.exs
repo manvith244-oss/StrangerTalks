@@ -123,7 +123,9 @@ defmodule StrangertalksNew.AIService.BoundaryContractTest do
     Agent.update(clock, fn _ -> 30_000 end)
     assert {:ok, :half_open} = CircuitBreaker.checkout(breaker)
     CircuitBreaker.record_outcome(breaker, {:error, "AI_PROVIDER_RATE_LIMITED"})
-    assert %{mode: :closed, failures: 0, probe_in_flight: false} = CircuitBreaker.snapshot(breaker)
+
+    assert %{mode: :closed, failures: 0, probe_in_flight: false} =
+             CircuitBreaker.snapshot(breaker)
   end
 
   test "HALF-OPEN success closes" do
@@ -135,7 +137,9 @@ defmodule StrangertalksNew.AIService.BoundaryContractTest do
     Agent.update(clock, fn _ -> 30_000 end)
     assert {:ok, :half_open} = CircuitBreaker.checkout(breaker)
     CircuitBreaker.record_outcome(breaker, :success)
-    assert %{mode: :closed, failures: 0, probe_in_flight: false} = CircuitBreaker.snapshot(breaker)
+
+    assert %{mode: :closed, failures: 0, probe_in_flight: false} =
+             CircuitBreaker.snapshot(breaker)
   end
 
   test "client sends one attempt, strict empty payload, fresh correlation headers, and no credential in logs" do
@@ -156,12 +160,16 @@ defmodule StrangertalksNew.AIService.BoundaryContractTest do
         send(parent, {:client_result, request(breaker, transport)})
       end)
 
-    assert_receive {:client_result, {:ok, %{request_id: request_id, result: %{"value" => "boundary-ok"}}}}
+    assert_receive {:client_result,
+                    {:ok, %{request_id: request_id, result: %{"value" => "boundary-ok"}}}}
+
     assert {:ok, ^request_id} = Ecto.UUID.cast(request_id)
     assert log =~ request_id
     refute log =~ "boundary-service-secret"
 
-    assert [{"http://127.0.0.1:1/v1/boundary/probe", headers, %{}, 17_000}] = Agent.get(attempts, & &1)
+    assert [{"http://127.0.0.1:1/v1/boundary/probe", headers, %{}, 17_000}] =
+             Agent.get(attempts, & &1)
+
     header_map = Map.new(headers)
     assert header_map["x-st-request-id"] == request_id
     assert header_map["authorization"] == "Bearer boundary-service-secret"
@@ -183,8 +191,11 @@ defmodule StrangertalksNew.AIService.BoundaryContractTest do
         Agent.update(attempts, &(&1 + 1))
 
         case kind do
-          :timeout -> {:error, :timeout}
-          :response -> {:ok, %{status: status, body: envelope_from_headers(headers, status, response_code)}}
+          :timeout ->
+            {:error, :timeout}
+
+          :response ->
+            {:ok, %{status: status, body: envelope_from_headers(headers, status, response_code)}}
         end
       end
 
@@ -265,6 +276,7 @@ defmodule StrangertalksNew.AIService.HealthIndependenceTest do
     assert json_response(conn, 200) == %{"status" => "ready"}
 
     children = Supervisor.which_children(StrangertalksNew.Supervisor)
+
     refute Enum.any?(children, fn {id, _pid, _type, modules} ->
              inspect(id) =~ "AIService" or inspect(modules) =~ "AIService"
            end)
