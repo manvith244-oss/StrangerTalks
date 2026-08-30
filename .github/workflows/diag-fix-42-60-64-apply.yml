@@ -1,4 +1,4 @@
-name: Apply validated #42 #60 #64 hunks to integration
+name: Dispatch K2 exact-SHA matrix
 
 on:
   push:
@@ -6,105 +6,29 @@ on:
       - diag/fix-42-60-64-apply-2026-08-30
 
 permissions:
-  contents: write
+  actions: write
+  contents: read
 
 jobs:
-  transplant:
+  dispatch:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: release/integration-2026-08-28
-          fetch-depth: 0
-
-      - name: Verify exact integration base
+      - name: Dispatch full K2 matrix at exact transplant SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: 00e096b69b247c5fa05ff15cde722e63990703ce
         shell: bash
         run: |
           set -euo pipefail
-          expected='ad12ec90b9c6337557ce32f8f6165d9c461fc3d7'
-          actual="$(git rev-parse HEAD)"
-          echo "EXPECTED_BASE_SHA=$expected"
-          echo "ACTUAL_BASE_SHA=$actual"
-          test "$actual" = "$expected"
-
-      - name: Apply exactly the two validated hunks
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          test_path = Path("test/js/browser_e2e_test.mjs")
-          test_text = test_path.read_text()
-          old_helper = '''async function openConversationInfo(page) {
-            const info = page.locator(".conversation-head-actions .overflow")
-            if ((await info.getAttribute("open")) === null) await info.locator("summary").click()
-            await page.waitForFunction(() => document.querySelector(".conversation-head-actions .overflow")?.open === true)
-            await info.locator(".overflow-menu").waitFor({state: "visible"})
-          }'''
-          new_helper = '''async function openConversationInfo(page) {
-            const info = page.locator(".conversation-head-actions .overflow")
-            await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)))
-            if ((await info.getAttribute("open")) === null) await info.locator("summary").click()
-            await page.waitForFunction(() => document.querySelector(".conversation-head-actions .overflow")?.open === true)
-            await info.locator(".overflow-menu").waitFor({state: "visible"})
-          }'''
-          if test_text.count(old_helper) != 1:
-              raise SystemExit("openConversationInfo exact source did not match once")
-          if test_text.count(new_helper) != 0:
-              raise SystemExit("openConversationInfo validated hunk already present")
-          test_path.write_text(test_text.replace(old_helper, new_helper, 1))
-
-          css_path = Path("priv/static/assets/app.css")
-          css_text = css_path.read_text()
-          marker = '''.message:focus-visible .message-actions-bar {
-            display: inline-flex;
-          }'''
-          focus_rule = '''.message:focus-within .message-action-btn,
-          .message:focus-within .message-actions-bar {
-            display: inline-flex;
-          }'''
-          if focus_rule in css_text:
-              raise SystemExit("focus-within validated hunk already present")
-          if css_text.count(marker) != 1:
-              raise SystemExit("message action marker did not match once")
-          css_path.write_text(css_text.replace(marker, marker + "\n\n" + focus_rule, 1))
-          PY
-
-          git diff --check
-          actual="$(git diff --name-only | sort)"
-          expected=$'priv/static/assets/app.css\ntest/js/browser_e2e_test.mjs'
-          test "$actual" = "$expected"
-          node --check test/js/browser_e2e_test.mjs
-          echo '--- EXACT PRE-COMMIT DIFF ---'
-          git diff -- priv/static/assets/app.css test/js/browser_e2e_test.mjs
-
-      - name: Commit and prove exact two-hunk commit
-        shell: bash
-        run: |
-          set -euo pipefail
-          base='ad12ec90b9c6337557ce32f8f6165d9c461fc3d7'
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add priv/static/assets/app.css test/js/browser_e2e_test.mjs
-          git commit -m 'fix(browser): stabilize menu and focused message actions'
-          new_sha="$(git rev-parse HEAD)"
-          echo "TRANSPLANT_SHA=$new_sha"
-          test "$(git rev-parse HEAD^)" = "$base"
-          actual="$(git diff-tree --no-commit-id --name-only -r HEAD | sort)"
-          expected=$'priv/static/assets/app.css\ntest/js/browser_e2e_test.mjs'
-          test "$actual" = "$expected"
-          echo '--- EXACT COMMITTED DIFF ---'
-          git diff "$base"..HEAD -- priv/static/assets/app.css test/js/browser_e2e_test.mjs
-
-      - name: Recheck remote head and push non-force
-        shell: bash
-        run: |
-          set -euo pipefail
-          base='ad12ec90b9c6337557ce32f8f6165d9c461fc3d7'
-          git fetch origin release/integration-2026-08-28
-          remote="$(git rev-parse FETCH_HEAD)"
-          echo "REMOTE_HEAD_BEFORE_PUSH=$remote"
-          test "$remote" = "$base"
-          git push origin HEAD:refs/heads/release/integration-2026-08-28
+          echo "DISPATCH_TARGET_SHA=$TARGET_SHA"
+          response_code="$(curl -sS -o /tmp/dispatch-body -w '%{http_code}' \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/manvith244-oss/StrangerTalks/actions/workflows/k2-final-integration.yml/dispatches \
+            -d "{\"ref\":\"release/integration-2026-08-28\",\"inputs\":{\"target_sha\":\"$TARGET_SHA\",\"browser_group\":\"all\"}}")"
+          cat /tmp/dispatch-body || true
+          echo "DISPATCH_HTTP_STATUS=$response_code"
+          test "$response_code" = "204"
