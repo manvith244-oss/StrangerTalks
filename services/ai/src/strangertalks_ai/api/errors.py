@@ -15,7 +15,7 @@ from strangertalks_ai.contracts.errors import (
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class AIServiceError(Exception):
     code: ErrorCode
 
