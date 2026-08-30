@@ -1,4 +1,4 @@
-name: Diagnostic apply #42 #60 #64 fixes
+name: Apply validated #42 #60 #64 hunks to integration
 
 on:
   push:
@@ -9,34 +9,26 @@ permissions:
   contents: write
 
 jobs:
-  apply-test-commit:
-    if: ${{ !contains(github.event.head_commit.message, '[diag-applied]') }}
+  transplant:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: strangertalks_local
-          POSTGRES_PASSWORD: strangertalks_test
-          POSTGRES_DB: strangertalks_new_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s --health-timeout 5s --health-retries 5
-    env:
-      MIX_ENV: test
-      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
-      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      PORT: "4000"
-      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: diag/fix-42-60-64-apply-2026-08-30
+          ref: release/integration-2026-08-28
           fetch-depth: 0
 
-      - name: Apply exact scoped hunks
+      - name: Verify exact integration base
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='ad12ec90b9c6337557ce32f8f6165d9c461fc3d7'
+          actual="$(git rev-parse HEAD)"
+          echo "EXPECTED_BASE_SHA=$expected"
+          echo "ACTUAL_BASE_SHA=$actual"
+          test "$actual" = "$expected"
+
+      - name: Apply exactly the two validated hunks
         shell: bash
         run: |
           set -euo pipefail
@@ -60,6 +52,8 @@ jobs:
           }'''
           if test_text.count(old_helper) != 1:
               raise SystemExit("openConversationInfo exact source did not match once")
+          if test_text.count(new_helper) != 0:
+              raise SystemExit("openConversationInfo validated hunk already present")
           test_path.write_text(test_text.replace(old_helper, new_helper, 1))
 
           css_path = Path("priv/static/assets/app.css")
@@ -72,7 +66,7 @@ jobs:
             display: inline-flex;
           }'''
           if focus_rule in css_text:
-              raise SystemExit("focus-within override already present")
+              raise SystemExit("focus-within validated hunk already present")
           if css_text.count(marker) != 1:
               raise SystemExit("message action marker did not match once")
           css_path.write_text(css_text.replace(marker, marker + "\n\n" + focus_rule, 1))
@@ -82,83 +76,35 @@ jobs:
           actual="$(git diff --name-only | sort)"
           expected=$'priv/static/assets/app.css\ntest/js/browser_e2e_test.mjs'
           test "$actual" = "$expected"
-          git diff -- test/js/browser_e2e_test.mjs priv/static/assets/app.css
           node --check test/js/browser_e2e_test.mjs
+          echo '--- EXACT PRE-COMMIT DIFF ---'
+          git diff -- priv/static/assets/app.css test/js/browser_e2e_test.mjs
 
-      - uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.18.4"
-          otp-version: "27.3.4"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-
-      - name: Install browser dependencies
-        run: |
-          mix local.hex --force
-          mix local.rebar --force
-          mix deps.get
-          npm ci
-          npx playwright install --with-deps chromium
-
-      - name: Prepare isolated browser database
-        run: |
-          mix ecto.drop --quiet || true
-          mix ecto.create --quiet
-          mix ecto.migrate --quiet
-
-      - name: Start isolated Phoenix runtime
+      - name: Commit and prove exact two-hunk commit
         shell: bash
         run: |
           set -euo pipefail
-          mix run --no-start -e '
-            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
-            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
-            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
-            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
-            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
-            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
-            Process.sleep(:infinity)
-          ' > /tmp/diag-42-60-64.log 2>&1 &
-          echo $! > /tmp/diag-42-60-64.pid
-          for attempt in $(seq 1 60); do
-            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
-            if ! kill -0 "$(cat /tmp/diag-42-60-64.pid)" 2>/dev/null; then cat /tmp/diag-42-60-64.log; exit 1; fi
-            sleep 1
-          done
-          cat /tmp/diag-42-60-64.log
-          exit 1
-
-      - name: Isolated #42 #60 #64 proof
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --test --test-concurrency=1 --test-name-pattern='Feature 1G E2E-1|Feature 1M E2E-1|Feature 1N E2E-2' test/js/browser_e2e_test.mjs 2>&1 | tee /tmp/diag-42-60-64.tap
-          grep -E '^# (tests|pass|fail|cancelled|skipped|todo) ' /tmp/diag-42-60-64.tap
-          test "$(grep -c '^ok 42 - Feature 1G E2E-1:' /tmp/diag-42-60-64.tap)" -eq 1
-          test "$(grep -c '^ok 60 - Feature 1M E2E-1:' /tmp/diag-42-60-64.tap)" -eq 1
-          test "$(grep -c '^ok 64 - Feature 1N E2E-2:' /tmp/diag-42-60-64.tap)" -eq 1
-
-      - name: Commit only the two scoped source files
-        shell: bash
-        run: |
-          set -euo pipefail
-          git diff --check
-          actual="$(git diff --name-only | sort)"
-          expected=$'priv/static/assets/app.css\ntest/js/browser_e2e_test.mjs'
-          test "$actual" = "$expected"
+          base='ad12ec90b9c6337557ce32f8f6165d9c461fc3d7'
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add priv/static/assets/app.css test/js/browser_e2e_test.mjs
-          git commit -m 'fix(browser): stabilize menu and focused message actions [diag-applied]'
-          git push origin HEAD:refs/heads/diag/fix-42-60-64-apply-2026-08-30
+          git commit -m 'fix(browser): stabilize menu and focused message actions'
+          new_sha="$(git rev-parse HEAD)"
+          echo "TRANSPLANT_SHA=$new_sha"
+          test "$(git rev-parse HEAD^)" = "$base"
+          actual="$(git diff-tree --no-commit-id --name-only -r HEAD | sort)"
+          expected=$'priv/static/assets/app.css\ntest/js/browser_e2e_test.mjs'
+          test "$actual" = "$expected"
+          echo '--- EXACT COMMITTED DIFF ---'
+          git diff "$base"..HEAD -- priv/static/assets/app.css test/js/browser_e2e_test.mjs
 
-      - name: Stop runtime
-        if: always()
+      - name: Recheck remote head and push non-force
+        shell: bash
         run: |
-          if [ -f /tmp/diag-42-60-64.pid ]; then kill "$(cat /tmp/diag-42-60-64.pid)" 2>/dev/null || true; fi
-
-      - name: Runtime log on failure
-        if: failure()
-        run: cat /tmp/diag-42-60-64.log || true
+          set -euo pipefail
+          base='ad12ec90b9c6337557ce32f8f6165d9c461fc3d7'
+          git fetch origin release/integration-2026-08-28
+          remote="$(git rev-parse FETCH_HEAD)"
+          echo "REMOTE_HEAD_BEFORE_PUSH=$remote"
+          test "$remote" = "$base"
+          git push origin HEAD:refs/heads/release/integration-2026-08-28
