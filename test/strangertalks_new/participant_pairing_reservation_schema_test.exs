@@ -6,6 +6,10 @@ defmodule StrangertalksNew.ParticipantPairingReservationSchemaTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias StrangertalksNew.{Matches, Participant, Repo}
 
+  setup do
+    StrangertalksNew.PairingTestIsolation.install!()
+  end
+
   defmodule Reservation do
     use Ecto.Schema
 
@@ -73,7 +77,13 @@ defmodule StrangertalksNew.ParticipantPairingReservationSchemaTest do
       acquired_at = DateTime.utc_now()
       released_at = DateTime.add(acquired_at, 1, :second)
 
-      insert_reservation!(match_1.match_id, participant_a.participant_id, acquired_at, released_at)
+      insert_reservation!(
+        match_1.match_id,
+        participant_a.participant_id,
+        acquired_at,
+        released_at
+      )
+
       insert_reservation!(match_2.match_id, participant_a.participant_id, released_at)
 
       rows =

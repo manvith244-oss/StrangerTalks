@@ -26,6 +26,7 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
   end
 
   setup do
+    StrangertalksNew.PairingTestIsolation.install!()
     Agent.update(QueueState, fn _state -> %{} end)
     :ok
   end
@@ -41,17 +42,23 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
     b_entry = queue_entry(b.participant_id, DateTime.add(now, -2, :second))
     c_entry = queue_entry(c.participant_id, DateTime.add(now, -1, :second))
 
-    Agent.update(QueueState, fn _ -> %{a.participant_id => a_entry, c.participant_id => c_entry} end)
+    Agent.update(QueueState, fn _ ->
+      %{a.participant_id => a_entry, c.participant_id => c_entry}
+    end)
 
     {contender_ac, contender_ab} =
       ParticipantActivityLock.with_participants([a.participant_id], fn ->
-        contender_ac = async_unboxed(:same_ac, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+        contender_ac =
+          async_unboxed(:same_ac, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+
         release_task_after_connection_ready!(contender_ac, :same_ac)
         wait_until_waiting_on_participant_lock!(contender_ac.pid)
 
         Agent.update(QueueState, &Map.put(&1, b.participant_id, b_entry))
 
-        contender_ab = async_unboxed(:same_ab, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+        contender_ab =
+          async_unboxed(:same_ab, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+
         release_task_after_connection_ready!(contender_ab, :same_ab)
         wait_until_waiting_on_participant_lock!(contender_ab.pid)
 
@@ -66,14 +73,20 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
       unboxed(fn ->
         matches = matches_involving(a.participant_id)
         conversations = authoritative_conversations_involving(a.participant_id)
-        reservations = active_reservations_for([a.participant_id, b.participant_id, c.participant_id])
+
+        reservations =
+          active_reservations_for([a.participant_id, b.participant_id, c.participant_id])
 
         assert length(matches) == 1
         assert length(conversations) == 1
         assert length(reservations) == 2
         assert duplicate_active_rows() == 0
 
-        %{matches: length(matches), conversations: length(conversations), reservations: length(reservations)}
+        %{
+          matches: length(matches),
+          conversations: length(conversations),
+          reservations: length(reservations)
+        }
       end)
 
     events = stop_reservation_query_capture!(capture)
@@ -99,7 +112,9 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
 
     {contender_ab, contender_ba} =
       ParticipantActivityLock.with_participants([a.participant_id, b.participant_id], fn ->
-        contender_ab = async_unboxed(:inversion_ab, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+        contender_ab =
+          async_unboxed(:inversion_ab, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+
         release_task_after_connection_ready!(contender_ab, :inversion_ab)
         wait_until_waiting_on_participant_lock!(contender_ab.pid)
 
@@ -109,7 +124,9 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
           |> Map.put(b.participant_id, b_old)
         end)
 
-        contender_ba = async_unboxed(:inversion_ba, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+        contender_ba =
+          async_unboxed(:inversion_ba, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+
         release_task_after_connection_ready!(contender_ba, :inversion_ba)
         wait_until_waiting_on_participant_lock!(contender_ba.pid)
 
@@ -131,7 +148,11 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
         assert length(reservations) == 2
         assert duplicate_active_rows() == 0
 
-        %{matches: length(matches), conversations: length(conversations), reservations: length(reservations)}
+        %{
+          matches: length(matches),
+          conversations: length(conversations),
+          reservations: length(reservations)
+        }
       end)
 
     events = stop_reservation_query_capture!(capture)
@@ -164,7 +185,9 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
     second_entry = queue_entry(second_id, DateTime.add(now, -1, :second))
     Agent.update(QueueState, fn _ -> %{first_id => first_entry, second_id => second_entry} end)
 
-    contender = async_unboxed(:second_conflict, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+    contender =
+      async_unboxed(:second_conflict, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+
     release_task_after_connection_ready!(contender, :second_conflict)
     result = Task.await(contender, 5_000)
     assert created_match_count(result) == 0
@@ -224,13 +247,19 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
       ParticipantActivityLock.with_participants(
         [a.participant_id, b.participant_id, c.participant_id, d.participant_id],
         fn ->
-          pair_ab = async_unboxed(:independent_ab, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+          pair_ab =
+            async_unboxed(:independent_ab, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+
           release_task_after_connection_ready!(pair_ab, :independent_ab)
           wait_until_waiting_on_participant_lock!(pair_ab.pid)
 
-          Agent.update(QueueState, fn _ -> Map.take(entries, [c.participant_id, d.participant_id]) end)
+          Agent.update(QueueState, fn _ ->
+            Map.take(entries, [c.participant_id, d.participant_id])
+          end)
 
-          pair_cd = async_unboxed(:independent_cd, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+          pair_cd =
+            async_unboxed(:independent_cd, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+
           release_task_after_connection_ready!(pair_cd, :independent_cd)
           wait_until_waiting_on_participant_lock!(pair_cd.pid)
 
@@ -247,6 +276,7 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
       unboxed(fn ->
         ab_matches = matches_for_pair(a.participant_id, b.participant_id)
         cd_matches = matches_for_pair(c.participant_id, d.participant_id)
+
         reservations =
           active_reservations_for([
             a.participant_id,
@@ -279,9 +309,14 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
 
     high_entry = queue_entry(high.participant_id, DateTime.add(now, -2, :second))
     low_entry = queue_entry(low.participant_id, DateTime.add(now, -1, :second))
-    Agent.update(QueueState, fn _ -> %{high.participant_id => high_entry, low.participant_id => low_entry} end)
 
-    contender = async_unboxed(:canonical_order, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+    Agent.update(QueueState, fn _ ->
+      %{high.participant_id => high_entry, low.participant_id => low_entry}
+    end)
+
+    contender =
+      async_unboxed(:canonical_order, fn -> MatchmakingEngine.evaluate_pending_matches() end)
+
     release_task_after_connection_ready!(contender, :canonical_order)
     result = Task.await(contender, 5_000)
     assert created_match_count(result) == 1
@@ -322,7 +357,10 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
           query = metadata[:query] |> to_string()
 
           if String.contains?(query, "participant_pairing_reservations") do
-            send(target, {:reservation_query, query, metadata[:params], metadata[:result], measurements})
+            send(
+              target,
+              {:reservation_query, query, metadata[:params], metadata[:result], measurements}
+            )
           end
         end,
         parent
@@ -346,7 +384,11 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
   end
 
   defp reservation_event(query, params, result, measurements) do
-    insert? = String.starts_with?(String.trim_leading(query), "INSERT INTO participant_pairing_reservations")
+    insert? =
+      String.starts_with?(
+        String.trim_leading(query),
+        "INSERT INTO participant_pairing_reservations"
+      )
 
     {match_id, participant_id} =
       if insert? and is_list(params) and length(params) >= 2 do
@@ -508,8 +550,10 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
     Repo.all(
       from match in Matching,
         where:
-          (match.participant_a_id == ^participant_a_id and match.participant_b_id == ^participant_b_id) or
-            (match.participant_a_id == ^participant_b_id and match.participant_b_id == ^participant_a_id)
+          (match.participant_a_id == ^participant_a_id and
+             match.participant_b_id == ^participant_b_id) or
+            (match.participant_a_id == ^participant_b_id and
+               match.participant_b_id == ^participant_a_id)
     )
   end
 
@@ -574,9 +618,11 @@ defmodule StrangertalksNew.ParticipantPairingReservationAcquisitionTest do
     waiting_in_global_lock? =
       Enum.any?(stacktrace, fn
         {:global, function, _arity, _location}
-        when function in [:random_sleep, :set_lock, :trans] -> true
+        when function in [:random_sleep, :set_lock, :trans] ->
+          true
 
-        _frame -> false
+        _frame ->
+          false
       end)
 
     inside_matchmaking_admission? =

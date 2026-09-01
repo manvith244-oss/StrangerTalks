@@ -25,6 +25,7 @@ defmodule StrangertalksNew.ParticipantPairingReservationReleaseTest do
   end
 
   setup do
+    StrangertalksNew.PairingTestIsolation.install!()
     Agent.update(QueueState, fn _state -> %{} end)
     :ok
   end
@@ -38,7 +39,9 @@ defmodule StrangertalksNew.ParticipantPairingReservationReleaseTest do
       refute ConversationServer.release_terminal_status?(status)
     end
 
-    IO.puts("REL-05 PASS classifier release=ENDED,ABANDONED,FAILED,COMPLETED keep=PENDING,ACTIVE,PAUSED")
+    IO.puts(
+      "REL-05 PASS classifier release=ENDED,ABANDONED,FAILED,COMPLETED keep=PENDING,ACTIVE,PAUSED"
+    )
   end
 
   test "ENDED canonical participant completion releases both active reservations" do
@@ -250,7 +253,9 @@ defmodule StrangertalksNew.ParticipantPairingReservationReleaseTest do
   defp terminal_evidence(match_id, conversation_id) do
     unboxed(fn ->
       conversation = Repo.get!(Conversation, conversation_id)
-      reservations = Repo.all(from reservation in Reservation, where: reservation.match_id == ^match_id)
+
+      reservations =
+        Repo.all(from reservation in Reservation, where: reservation.match_id == ^match_id)
 
       %{
         status: conversation.conversation_status,
@@ -264,7 +269,9 @@ defmodule StrangertalksNew.ParticipantPairingReservationReleaseTest do
     unboxed(fn ->
       %{rows: [[backend_pid]]} = Repo.query!("SELECT pg_backend_pid()")
       conversation = Repo.get!(Conversation, conversation_id)
-      reservations = Repo.all(from reservation in Reservation, where: reservation.match_id == ^match_id)
+
+      reservations =
+        Repo.all(from reservation in Reservation, where: reservation.match_id == ^match_id)
 
       %{
         backend_pid: backend_pid,
@@ -277,7 +284,10 @@ defmodule StrangertalksNew.ParticipantPairingReservationReleaseTest do
 
   defp install_release_barrier! do
     unboxed(fn ->
-      Repo.query!("DROP TRIGGER IF EXISTS item3_release_barrier_trigger ON participant_pairing_reservations")
+      Repo.query!(
+        "DROP TRIGGER IF EXISTS item3_release_barrier_trigger ON participant_pairing_reservations"
+      )
+
       Repo.query!("DROP FUNCTION IF EXISTS item3_release_barrier()")
 
       Repo.query!("""
@@ -305,7 +315,10 @@ defmodule StrangertalksNew.ParticipantPairingReservationReleaseTest do
 
   defp drop_release_barrier! do
     unboxed(fn ->
-      Repo.query!("DROP TRIGGER IF EXISTS item3_release_barrier_trigger ON participant_pairing_reservations")
+      Repo.query!(
+        "DROP TRIGGER IF EXISTS item3_release_barrier_trigger ON participant_pairing_reservations"
+      )
+
       Repo.query!("DROP FUNCTION IF EXISTS item3_release_barrier()")
     end)
   end
