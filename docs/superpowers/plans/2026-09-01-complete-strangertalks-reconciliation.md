@@ -31,14 +31,24 @@
 - Consumes: exact prep checkout and local PostgreSQL test configuration.
 - Produces: reproducible baseline command/results recorded in Git history and the session report.
 
-- [ ] Verify `git rev-parse HEAD`, both remote refs, branch name, origin URL, and clean status.
-- [ ] Install only repository-declared dependencies with `mix deps.get` and `npm install` when missing.
-- [ ] Run `mix compile --warnings-as-errors`.
-- [ ] Run `mix test` and record pass/fail counts.
-- [ ] Enumerate maintained `test/js/*_test.mjs` files and run them with Node.
-- [ ] Run available maintained Playwright/browser commands from repository workflows.
-- [ ] Run `mix precommit` and `git diff --check`.
-- [ ] Classify failures as baseline product, harness/environment, or flaky evidence before continuing.
+- [x] Verify `git rev-parse HEAD`, both remote refs, branch name, origin URL, and clean status.
+- [x] Install only repository-declared dependencies with `mix deps.get` and `npm install` when missing.
+- [x] Run `mix compile --warnings-as-errors`.
+- [x] Run `mix test` and record pass/fail counts.
+- [x] Enumerate maintained `test/js/*_test.mjs` files and run them with Node.
+- [x] Run available maintained Playwright/browser commands from repository workflows.
+- [x] Run `mix precommit` and `git diff --check`.
+- [x] Classify failures as baseline product, harness/environment, or flaky evidence before continuing.
+
+**Recorded prep baseline — product SHA `2724d655a1ab7502c0caa39c91644cd6559a5f96`:**
+
+- Environment: Windows, Elixir 1.17.3, OTP 27.3.4, Node 24.17.0, PostgreSQL 17; local test database only.
+- `mix compile --warnings-as-errors`: PASS.
+- `mix test`: 762 tests, 0 failures.
+- `mix precommit`: PASS; 762 tests, 0 failures. The formatter exposed Windows line-ending churn, so the worktree was safely recreated from committed state with worktree-local `core.autocrlf=false`; no product delta was retained.
+- Maintained K2 JS contract subset: product failures in expression entry/loader wiring and Node-unsafe `session_reconciliation_guard.mjs` import. CRLF-sensitive source-regex failures disappeared after the LF worktree correction and are classified as environment/harness failures.
+- Maintained real-browser matrix against isolated `http://localhost:4010`: 152 tests, 97 pass, 55 fail. Direct failures include F04 stale-runtime listener cleanup, delivery-gap/disconnect behavior, desktop keyboard flow, and multiple UI visibility/interaction contracts; many remaining failures share uniform 30–35 second timeouts and require isolated per-suite comparison rather than being treated as independent regressions.
+- `git diff --check`: PASS. Candidate was clean before composition.
 
 ### Task 2: Compose prep and integration
 
@@ -188,4 +198,3 @@
 - [ ] Run Python boundary matrix if integrated.
 - [ ] Audit the actual tree against every capability in the approved request.
 - [ ] Report every skipped, superseded, deferred, blocked, and unresolved item without pushing or deploying.
-
