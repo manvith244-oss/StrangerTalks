@@ -187,7 +187,7 @@ export class LiveCallCoordinator {
     this.transportAudioTransceiver = null
     this.transportVideoTransceiver = null
     this.activeMediaAcquisitionGeneration = 0
-    this.initiationOperationGeneration = 0
+    this.callOperationGeneration = 0
   }
 
   setChannel(channel) {
@@ -199,7 +199,26 @@ export class LiveCallCoordinator {
   }
 
   setConversationId(id) {
+    if (this.conversationId !== id) {
+      this.invalidateCallOperation()
+      this.clearUnsupportedScreenShare()
+    }
     this.conversationId = id
+  }
+
+  invalidateCallOperation() {
+    this.callOperationGeneration++
+    return this.callOperationGeneration
+  }
+
+  callOperationIsCurrent(operationGeneration) {
+    return operationGeneration === this.callOperationGeneration
+  }
+
+  clearUnsupportedScreenShare() {
+    stopMediaTracks(this.localScreenStream)
+    this.localScreenStream = null
+    this.screenSharing = false
   }
 
   setVideoElements(localEl, remoteEl) {
@@ -280,6 +299,8 @@ activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection = thi
       // Busy or active attempt in progress
       return
     }
+    this.invalidateCallOperation()
+    this.clearUnsupportedScreenShare()
     this.callAttemptId = call_attempt_id
     this.role = "callee"
     this.callType = call_type || "voice"
@@ -387,6 +408,9 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
   }
 
   handleMediaUpdated({ call_attempt_id, media_generation, active_media, return_to_voice, actor_id }) {
+    // Screen sharing is intentionally unsupported in V1. Any stale or forged
+    // local projection is destroyed even when the surrounding event is stale.
+    this.clearUnsupportedScreenShare()
     if (this.callAttemptId !== call_attempt_id || this.status !== CALL_STATUS.ACTIVE) return
     this.mediaGeneration = media_generation
 
@@ -445,10 +469,6 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
         const otherKey = Object.keys(active_media.video).find((k) => k !== this.participantId)
         this.peerVideo = otherKey ? Boolean(active_media.video[otherKey]) : false
       }
-    }
-
-    if (active_media?.screen_share) {
-      this.screenSharing = active_media.screen_share.requester_id === this.participantId
     }
 
     this.notifyStateChange()
@@ -521,6 +541,8 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
       throw new Error("Call already in progress")
     }
 
+    const operationGeneration = this.invalidateCallOperation()
+    this.clearUnsupportedScreenShare()
     this.role = "caller"
     this.callType = callType
     this.status = CALL_STATUS.PENDING_OUTGOING
@@ -533,10 +555,9 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
     this.peerVoiceEffectActive = false
     this.notifyStateChange()
 
-    const initiationOperationGeneration = ++this.initiationOperationGeneration
     const initiationConversationId = this.conversationId
     const initiationIsCurrent = () =>
-      this.initiationOperationGeneration === initiationOperationGeneration &&
+      this.callOperationIsCurrent(operationGeneration) &&
       this.status === CALL_STATUS.PENDING_OUTGOING &&
       this.role === "caller" &&
       this.callAttemptId === null &&
@@ -552,8 +573,14 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
           resolve(res)
         })
         .receive("error", (err) => {
-          if (initiationIsCurrent()) this.teardown("initiate_failed")
+          if (!initiationIsCurrent()) { resolve({stale: true, error: err}); return }
+          this.teardown("initiate_failed")
           reject(err)
+        })
+        .receive("timeout", () => {
+          if (!initiationIsCurrent()) { resolve({stale: true, timeout: true}); return }
+          this.teardown("initiate_timeout")
+          reject(new Error("Call initiation timed out"))
         })
     })
   }
@@ -563,24 +590,34 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
       throw new Error("No pending incoming call")
     }
 
+    const operationGeneration = this.invalidateCallOperation()
     const acceptedAttemptId = this.callAttemptId
     const acceptedConversationId = this.conversationId
+    const stillCurrent = () =>
+      this.callOperationIsCurrent(operationGeneration) &&
+      this.status === CALL_STATUS.PENDING_INCOMING &&
+      this.callAttemptId === acceptedAttemptId &&
+      this.conversationId === acceptedConversationId
+
     return new Promise((resolve, reject) => {
       if (!this.channel) return reject(new Error("Channel unavailable"))
       this.channel.push("call:accept", { call_attempt_id: acceptedAttemptId })
         .receive("ok", (res) => {
-          const stillCurrent = this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId
-          if (!stillCurrent) { resolve({ ...res, stale: true }); return }
+          if (!stillCurrent()) { resolve({ ...res, stale: true }); return }
           this.status = CALL_STATUS.CONNECTING
           this.applyOutgoingAudioGate()
           this.notifyStateChange()
           resolve(res)
         })
         .receive("error", (err) => {
-          if (this.status === CALL_STATUS.PENDING_INCOMING && this.callAttemptId === acceptedAttemptId && this.conversationId === acceptedConversationId) {
-            this.teardown("accept_failed")
-          }
+          if (!stillCurrent()) { resolve({stale: true, error: err}); return }
+          this.teardown("accept_failed")
           reject(err)
+        })
+        .receive("timeout", () => {
+          if (!stillCurrent()) { resolve({stale: true, timeout: true}); return }
+          this.teardown("accept_timeout")
+          reject(new Error("Call acceptance timed out"))
         })
     })
   }
@@ -1198,6 +1235,7 @@ async handleIceFailure() {
   }
 
   teardown(reason = "normal") {
+    this.invalidateCallOperation()
     if (this.connectingTimer) {
       clearTimeout(this.connectingTimer)
       this.connectingTimer = null

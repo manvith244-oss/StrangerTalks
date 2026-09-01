@@ -25,6 +25,76 @@ test("T4-SCREEN-002: stale or forged screen-share media projection cannot create
   })
 
   const state = coordinator.getState()
-  assert.equal(state.screenSharing ?? false, false, "OUT-OF-V1 projection must not turn screen sharing on")
-  assert.equal(coordinator.localScreenStream ?? null, null, "no display stream may exist")
+  assert.equal(state.screenSharing, false)
+  assert.equal(coordinator.localScreenStream, null)
+})
+
+test("T4-SCREEN-003: forged projection fails closed by stopping and clearing any stale local display track", () => {
+  let stops = 0
+  const staleTrack = {kind: "video", stop() { stops++ }}
+  const coordinator = new LiveCallCoordinator({participantId: "p1", conversationId: "c1"})
+  coordinator.callAttemptId = "a1"
+  coordinator.status = CALL_STATUS.ACTIVE
+  coordinator.screenSharing = true
+  coordinator.localScreenStream = {getTracks: () => [staleTrack]}
+
+  coordinator.handleMediaUpdated({
+    call_attempt_id: "a1",
+    media_generation: 2,
+    active_media: {screen_share: {requester_id: "p1", media_request_id: "forged"}}
+  })
+
+  assert.equal(stops, 1)
+  assert.equal(coordinator.screenSharing, false)
+  assert.equal(coordinator.localScreenStream, null)
+})
+
+test("T4-SCREEN-004: even a stale wrong-attempt projection cannot preserve hidden screen-share authority", () => {
+  let stops = 0
+  const coordinator = new LiveCallCoordinator({participantId: "p1", conversationId: "c1"})
+  coordinator.callAttemptId = "current-attempt"
+  coordinator.status = CALL_STATUS.ACTIVE
+  coordinator.screenSharing = true
+  coordinator.localScreenStream = {getTracks: () => [{kind: "video", stop() { stops++ }}]}
+
+  coordinator.handleMediaUpdated({
+    call_attempt_id: "stale-attempt",
+    media_generation: 99,
+    active_media: {screen_share: {requester_id: "p1", media_request_id: "stale-forged"}}
+  })
+
+  assert.equal(stops, 1)
+  assert.equal(coordinator.screenSharing, false)
+  assert.equal(coordinator.localScreenStream, null)
+  assert.equal(coordinator.callAttemptId, "current-attempt")
+})
+
+test("T4-SCREEN-005: Conversation replacement clears any stale display stream and keeps V1 screen share absent", () => {
+  let stops = 0
+  const coordinator = new LiveCallCoordinator({participantId: "p1", conversationId: "conversation-a"})
+  coordinator.screenSharing = true
+  coordinator.localScreenStream = {getTracks: () => [{kind: "video", stop() { stops++ }}]}
+
+  coordinator.setConversationId("conversation-b")
+
+  assert.equal(stops, 1)
+  assert.equal(coordinator.conversationId, "conversation-b")
+  assert.equal(coordinator.screenSharing, false)
+  assert.equal(coordinator.localScreenStream, null)
+})
+
+test("T4-SCREEN-006: reconnect-style forged projection remains false/null with zero display capability", () => {
+  const coordinator = new LiveCallCoordinator({participantId: "p1", conversationId: "c1"})
+  coordinator.callAttemptId = "reconnected-attempt"
+  coordinator.status = CALL_STATUS.ACTIVE
+
+  for (const generation of [2, 3, 4]) {
+    coordinator.handleMediaUpdated({
+      call_attempt_id: "reconnected-attempt",
+      media_generation: generation,
+      active_media: {screen_share: {requester_id: "p1", media_request_id: `forged-${generation}`}}
+    })
+    assert.equal(coordinator.screenSharing, false)
+    assert.equal(coordinator.localScreenStream, null)
+  }
 })
