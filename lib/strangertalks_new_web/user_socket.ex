@@ -23,7 +23,10 @@ defmodule StrangertalksNewWeb.UserSocket do
              60_000
            ),
          :ok <- RateLimiter.bind_source(participant.participant_id, source_fingerprint) do
-      {:ok, assign(socket, :participant_id, participant.participant_id)}
+      {:ok,
+       socket
+       |> assign(:participant_id, participant.participant_id)
+       |> assign(:account_session_id, Map.get(authority, :account_session_id))}
     else
       _ -> :error
     end
@@ -32,6 +35,10 @@ defmodule StrangertalksNewWeb.UserSocket do
   def connect(_params, _socket, _connect_info), do: :error
 
   @impl true
+  def id(%{assigns: %{account_session_id: account_session_id}})
+      when is_binary(account_session_id),
+      do: "participant_socket:#{account_session_id}"
+
   def id(socket), do: "participant_socket:#{socket.assigns.participant_id}"
 
   defp authority_source_fingerprint(%{

@@ -31,7 +31,7 @@ defmodule StrangertalksNewWeb.AccountController do
     with {:ok, account_session} <- current_session(conn),
          :ok <- AccountCSRF.verify(conn, account_session),
          {:ok, _} <- Accounts.revoke_session(account_session) do
-      disconnect_participant_sockets(account_session.account.participant_id)
+      disconnect_account_session_socket(account_session.account_session_id)
       conn |> GoogleAuthController.clear_account_cookie() |> send_resp(:no_content, "")
     else
       {:error, :forbidden} -> forbidden(conn)
@@ -83,6 +83,14 @@ defmodule StrangertalksNewWeb.AccountController do
   defp disconnect_participant_sockets(participant_id) do
     StrangertalksNewWeb.Endpoint.broadcast(
       "participant_socket:#{participant_id}",
+      "disconnect",
+      %{}
+    )
+  end
+
+  defp disconnect_account_session_socket(account_session_id) do
+    StrangertalksNewWeb.Endpoint.broadcast(
+      "participant_socket:#{account_session_id}",
       "disconnect",
       %{}
     )
