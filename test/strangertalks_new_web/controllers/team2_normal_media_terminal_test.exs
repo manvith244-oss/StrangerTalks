@@ -79,6 +79,7 @@ defmodule StrangertalksNewWeb.Team2NormalMediaTerminalTest do
 
     {:ok,
      conversation: conversation,
+     conversation_pid: pid,
      participant_a: participant_a,
      participant_b: participant_b,
      token_a: ParticipantToken.sign(participant_a.participant_id)}
@@ -87,14 +88,19 @@ defmodule StrangertalksNewWeb.Team2NormalMediaTerminalTest do
   test "normal-media upload loses authority after durable End", %{
     conn: conn,
     conversation: conversation,
+    conversation_pid: conversation_pid,
     participant_a: participant_a,
     token_a: token_a
   } do
+    monitor_ref = Process.monitor(conversation_pid)
+
     assert {:ok, %{status: "ended"}} =
              ConversationServer.complete_conversation(
                conversation.conversation_id,
                participant_a.participant_id
              )
+
+    assert_receive {:DOWN, ^monitor_ref, :process, ^conversation_pid, :normal}
 
     assert {:error, :terminal_conversation} =
              ConversationServer.ensure_started(conversation.conversation_id)
