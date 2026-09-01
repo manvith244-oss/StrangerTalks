@@ -97,6 +97,8 @@ defmodule StrangertalksNewWeb.ParticipantToken do
       {:error, reason} ->
         {:error, reason}
     end
+  end
+
   defp credential_version(participant_id) do
     case Repo.get(Participant, participant_id) do
       %Participant{credential_version: version} when is_integer(version) -> version
