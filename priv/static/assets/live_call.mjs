@@ -188,6 +188,9 @@ export class LiveCallCoordinator {
     this.transportVideoTransceiver = null
     this.activeMediaAcquisitionGeneration = 0
     this.callOperationGeneration = 0
+    this.conversationSurfaceActive = true
+    this.navigationGeneration = 0
+    this.navigationBlockedAttemptIds = new Set()
   }
 
   setChannel(channel) {
@@ -224,6 +227,89 @@ export class LiveCallCoordinator {
   setVideoElements(localEl, remoteEl) {
     this.localVideoElement = localEl
     this.remoteVideoElement = remoteEl
+  }
+
+  blockNavigationAttempt(callAttemptId) {
+    if (!callAttemptId) return
+    this.navigationBlockedAttemptIds.add(callAttemptId)
+    if (this.navigationBlockedAttemptIds.size > 32) {
+      const oldest = this.navigationBlockedAttemptIds.values().next().value
+      this.navigationBlockedAttemptIds.delete(oldest)
+    }
+  }
+
+  pushNavigationTerminal(event, callAttemptId, {fallbackEnd = false} = {}) {
+    if (!this.channel || !callAttemptId) return
+    const push = this.channel.push(event, {call_attempt_id: callAttemptId})
+    if (!fallbackEnd || !push?.receive) return
+
+    let fallbackSent = false
+    const endIfRaceWon = () => {
+      if (fallbackSent) return
+      fallbackSent = true
+      this.channel?.push("call:end", {call_attempt_id: callAttemptId})
+    }
+    push.receive("error", endIfRaceWon).receive("timeout", endIfRaceWon)
+  }
+
+  terminateAttemptForNavigation(callAttemptId, status, role = this.role) {
+    if (!callAttemptId) return
+    if (status === CALL_STATUS.PENDING_INCOMING || (status === "PENDING" && role === "callee")) {
+      this.pushNavigationTerminal("call:decline", callAttemptId, {fallbackEnd: true})
+    } else if (status === CALL_STATUS.PENDING_OUTGOING || (status === "PENDING" && role === "caller")) {
+      this.pushNavigationTerminal("call:cancel", callAttemptId, {fallbackEnd: true})
+    } else {
+      this.pushNavigationTerminal("call:end", callAttemptId)
+    }
+  }
+
+  setConversationSurfaceActive(active) {
+    const nextActive = Boolean(active)
+    if (this.conversationSurfaceActive === nextActive) return
+    this.conversationSurfaceActive = nextActive
+    if (nextActive) return
+
+    this.navigationGeneration += 1
+    const attemptId = this.callAttemptId
+    const status = this.status
+    const hasMediaAuthority = Boolean(
+      attemptId ||
+      [CALL_STATUS.PENDING_OUTGOING, CALL_STATUS.PENDING_INCOMING, CALL_STATUS.CONNECTING, CALL_STATUS.ACTIVE].includes(status) ||
+      this.localStream || this.localCameraStream || this.localScreenStream || this.peerConnection
+    )
+
+    if (attemptId) this.blockNavigationAttempt(attemptId)
+    if (hasMediaAuthority) this.teardown("navigation_away")
+    if (attemptId) this.terminateAttemptForNavigation(attemptId, status)
+  }
+
+  applyCallStateSync(callState) {
+    if (!callState?.call_attempt_id) return false
+    const attemptId = callState.call_attempt_id
+    const blocked = this.navigationBlockedAttemptIds.has(attemptId)
+    const pendingStatus = callState.role === "caller" ? CALL_STATUS.PENDING_OUTGOING : CALL_STATUS.PENDING_INCOMING
+    const internalStatus = callState.status === "PENDING"
+      ? pendingStatus
+      : (callState.status === "ACTIVE" ? CALL_STATUS.ACTIVE : CALL_STATUS.CONNECTING)
+
+    if (!this.conversationSurfaceActive || blocked) {
+      this.blockNavigationAttempt(attemptId)
+      if (this.callAttemptId === attemptId) this.teardown("navigation_away")
+      this.terminateAttemptForNavigation(attemptId, callState.status, callState.role)
+      return false
+    }
+
+    if (!["ACTIVE", "CONNECTING", "PENDING"].includes(callState.status)) return false
+    this.callAttemptId = attemptId
+    this.role = callState.role
+    this.callType = callState.call_type || "voice"
+    this.mediaGeneration = callState.media_generation || 1
+    this.selfMuted = Boolean(callState.self_muted)
+    this.peerMuted = Boolean(callState.peer_muted)
+    this.activeAt = callState.active_at || null
+    this.status = internalStatus
+    this.notifyStateChange()
+    return true
   }
 
   getState() {
@@ -295,6 +381,11 @@ activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection = thi
   // --- Channel Event Handlers ---
 
   handleIncomingCall({ call_attempt_id, caller_id, call_type }) {
+    if (!this.conversationSurfaceActive || this.navigationBlockedAttemptIds.has(call_attempt_id)) {
+      this.blockNavigationAttempt(call_attempt_id)
+      this.terminateAttemptForNavigation(call_attempt_id, CALL_STATUS.PENDING_INCOMING, "callee")
+      return
+    }
     if (this.status !== CALL_STATUS.IDLE && this.status !== CALL_STATUS.TERMINAL) {
       // Busy or active attempt in progress
       return
@@ -313,6 +404,12 @@ activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection = thi
   }
 
 async handleCallAccepted({ call_attempt_id, callee_session_id, active_at }) {
+  if (!this.conversationSurfaceActive || this.navigationBlockedAttemptIds.has(call_attempt_id)) {
+    this.blockNavigationAttempt(call_attempt_id)
+    if (this.callAttemptId === call_attempt_id) this.teardown("navigation_away")
+    this.terminateAttemptForNavigation(call_attempt_id, CALL_STATUS.ACTIVE)
+    return
+  }
   if (this.callAttemptId !== call_attempt_id) return
   this.activeAt = active_at || Math.floor(Date.now() / 1000)
   this.status = CALL_STATUS.CONNECTING
@@ -537,11 +634,13 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
   // --- Outgoing Actions ---
 
   async initiate(callType = "voice") {
+    if (!this.conversationSurfaceActive) throw new Error("Conversation surface is not active")
     if (this.status !== CALL_STATUS.IDLE && this.status !== CALL_STATUS.TERMINAL) {
       throw new Error("Call already in progress")
     }
 
     const operationGeneration = this.invalidateCallOperation()
+    const navigationGeneration = this.navigationGeneration
     this.clearUnsupportedScreenShare()
     this.role = "caller"
     this.callType = callType
@@ -558,6 +657,8 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
     const initiationConversationId = this.conversationId
     const initiationIsCurrent = () =>
       this.callOperationIsCurrent(operationGeneration) &&
+      this.navigationGeneration === navigationGeneration &&
+      this.conversationSurfaceActive &&
       this.status === CALL_STATUS.PENDING_OUTGOING &&
       this.role === "caller" &&
       this.callAttemptId === null &&
@@ -586,15 +687,20 @@ async handleSignal({ call_attempt_id, media_generation, signal, sender_id }) {
   }
 
   async accept() {
+    if (!this.conversationSurfaceActive) throw new Error("Conversation surface is not active")
     if (this.status !== CALL_STATUS.PENDING_INCOMING || !this.callAttemptId) {
       throw new Error("No pending incoming call")
     }
 
     const operationGeneration = this.invalidateCallOperation()
+    const navigationGeneration = this.navigationGeneration
     const acceptedAttemptId = this.callAttemptId
     const acceptedConversationId = this.conversationId
     const stillCurrent = () =>
       this.callOperationIsCurrent(operationGeneration) &&
+      this.navigationGeneration === navigationGeneration &&
+      this.conversationSurfaceActive &&
+      !this.navigationBlockedAttemptIds.has(acceptedAttemptId) &&
       this.status === CALL_STATUS.PENDING_INCOMING &&
       this.callAttemptId === acceptedAttemptId &&
       this.conversationId === acceptedConversationId
