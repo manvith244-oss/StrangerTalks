@@ -40,10 +40,15 @@ defmodule StrangertalksNew.TerminalObservabilityTest do
   test "normal End emits bounded request, durable commit, client notification, and runtime cleanup checkpoints" do
     %{conversation: conversation, a: a} = active_fixture()
     {:ok, _pid} = ConversationServer.ensure_started(conversation.conversation_id)
-    :ok = ConversationServer.register_channel(conversation.conversation_id, a.participant_id, self())
+
+    :ok =
+      ConversationServer.register_channel(conversation.conversation_id, a.participant_id, self())
 
     assert {:ok, %{status: "ended"}} =
-             ConversationServer.complete_conversation(conversation.conversation_id, a.participant_id)
+             ConversationServer.complete_conversation(
+               conversation.conversation_id,
+               a.participant_id
+             )
 
     assert_event(
       [:strangertalks_new, :terminal, :request_accepted],
@@ -60,9 +65,9 @@ defmodule StrangertalksNew.TerminalObservabilityTest do
       %{terminal_reason: :participant_completed, notification_path: :conversation_bus}
     )
 
-    assert_receive {:terminal_observability,
-                    [:strangertalks_new, :terminal, :runtime_cleanup], %{count: 1},
-                    runtime_metadata}, 1_000
+    assert_receive {:terminal_observability, [:strangertalks_new, :terminal, :runtime_cleanup],
+                    %{count: 1}, runtime_metadata},
+                   1_000
 
     assert runtime_metadata.terminal_reason == :participant_completed
     assert runtime_metadata.cleanup_path in [:process_down, :already_stopped]
@@ -72,7 +77,10 @@ defmodule StrangertalksNew.TerminalObservabilityTest do
   test "terminal persistence failure emits bounded failure telemetry and no false durable commit" do
     %{conversation: conversation, a: a} = active_fixture()
     {:ok, pid} = ConversationServer.ensure_started(conversation.conversation_id)
-    :ok = ConversationServer.register_channel(conversation.conversation_id, a.participant_id, self())
+
+    :ok =
+      ConversationServer.register_channel(conversation.conversation_id, a.participant_id, self())
+
     durable_active = Repo.get!(Conversation, conversation.conversation_id)
 
     :sys.replace_state(pid, fn state ->
@@ -80,19 +88,22 @@ defmodule StrangertalksNew.TerminalObservabilityTest do
     end)
 
     assert {:ok, %{status: "ending"}} =
-             ConversationServer.complete_conversation(conversation.conversation_id, a.participant_id)
+             ConversationServer.complete_conversation(
+               conversation.conversation_id,
+               a.participant_id
+             )
 
-    assert_receive {:terminal_observability,
-                    [:strangertalks_new, :terminal, :persistence_failed], %{count: 1},
-                    metadata}, 1_000
+    assert_receive {:terminal_observability, [:strangertalks_new, :terminal, :persistence_failed],
+                    %{count: 1}, metadata},
+                   1_000
 
     assert metadata.terminal_status == :ENDED
     assert metadata.lifecycle_event == :participant_completed
     assert is_binary(metadata.reason_code) or metadata.reason_code == :redacted
     assert_private_metadata_absent(metadata)
 
-    refute_receive {:terminal_observability,
-                    [:strangertalks_new, :terminal, :durable_commit], _measurements, _metadata},
+    refute_receive {:terminal_observability, [:strangertalks_new, :terminal, :durable_commit],
+                    _measurements, _metadata},
                    100
 
     :sys.replace_state(pid, fn state -> %{state | conversation: durable_active} end)
@@ -117,8 +128,12 @@ defmodule StrangertalksNew.TerminalObservabilityTest do
   test "Block durable commit, client notification, runtime cleanup, and stale post-End Block are observable without identifiers" do
     %{conversation: conversation, a: a, b: b} = active_fixture()
     {:ok, _pid} = ConversationServer.ensure_started(conversation.conversation_id)
-    :ok = ConversationServer.register_channel(conversation.conversation_id, a.participant_id, self())
-    :ok = ConversationServer.register_channel(conversation.conversation_id, b.participant_id, self())
+
+    :ok =
+      ConversationServer.register_channel(conversation.conversation_id, a.participant_id, self())
+
+    :ok =
+      ConversationServer.register_channel(conversation.conversation_id, b.participant_id, self())
 
     assert {:ok, _block} =
              MatchingRules.block_conversation_participant(
@@ -165,7 +180,8 @@ defmodule StrangertalksNew.TerminalObservabilityTest do
 
     refute_receive {:terminal_observability,
                     [:strangertalks_new, :terminal, :client_notification], _measurements,
-                    %{terminal_reason: :blocked}}, 100
+                    %{terminal_reason: :blocked}},
+                   100
   end
 
   test "terminal channel rejoin rejection emits bounded maintained join-failure signal" do
@@ -191,9 +207,9 @@ defmodule StrangertalksNew.TerminalObservabilityTest do
                %{}
              )
 
-    assert_receive {:terminal_observability,
-                    [:strangertalks_new, :conversation, :join, :failed], %{count: 1},
-                    metadata}, 1_000
+    assert_receive {:terminal_observability, [:strangertalks_new, :conversation, :join, :failed],
+                    %{count: 1}, metadata},
+                   1_000
 
     assert is_binary(metadata.reason_code) or metadata.reason_code == :redacted
     assert_private_metadata_absent(metadata)

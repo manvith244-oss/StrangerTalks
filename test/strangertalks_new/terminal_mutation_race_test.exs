@@ -60,7 +60,13 @@ defmodule StrangertalksNew.TerminalMutationRaceTest do
       })
 
     {:ok, server_pid} = ConversationServer.ensure_started(conversation.conversation_id)
-    :ok = ConversationServer.register_channel(conversation.conversation_id, participant_a.participant_id, self())
+
+    :ok =
+      ConversationServer.register_channel(
+        conversation.conversation_id,
+        participant_a.participant_id,
+        self()
+      )
 
     message_id = Ecto.UUID.generate()
 
@@ -285,7 +291,9 @@ defmodule StrangertalksNew.TerminalMutationRaceTest do
     assert terminal.ending_initiator == context.participant_a.participant_id
     assert terminal.conversation_completed == true
     assert terminal.safety_flagged == false
-    assert ConversationServer.lookup(context.conversation.conversation_id) == {:error, :not_started}
+
+    assert ConversationServer.lookup(context.conversation.conversation_id) ==
+             {:error, :not_started}
 
     assert {:error, :terminal_conversation} =
              ConversationServer.ensure_started(context.conversation.conversation_id)

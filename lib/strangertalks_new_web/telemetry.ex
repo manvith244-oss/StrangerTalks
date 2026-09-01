@@ -258,6 +258,7 @@ defmodule StrangertalksNewWeb.Telemetry do
             nil ->
               acc
           end
+
         _child, acc ->
           acc
       end)
