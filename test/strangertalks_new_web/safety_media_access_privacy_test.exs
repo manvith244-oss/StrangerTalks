@@ -6,9 +6,10 @@ defmodule StrangertalksNewWeb.SafetyMediaAccessPrivacyTest do
 
   @secret_bytes <<0, 255, 17, 34, 51, 68, 85, 102>>
 
-  test "durable safety copy is unreachable by submitter, reported participant, outsider, and normal media routes", %{
-    conn: conn
-  } do
+  test "durable safety copy is unreachable by submitter, reported participant, outsider, and normal media routes",
+       %{
+         conn: conn
+       } do
     fixture = conversation_fixture()
 
     assert {:ok, report} =

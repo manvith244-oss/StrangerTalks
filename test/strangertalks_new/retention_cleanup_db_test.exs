@@ -10,7 +10,15 @@ defmodule StrangertalksNew.RetentionCleanupDbTest do
   alias StrangertalksNew.Report
   alias StrangertalksNew.ReportSafetyMedia
   alias StrangertalksNew.SafetyReview
-  alias StrangertalksNew.{Accounts, MatchingRules, Reflections, Reports, RetentionCleanup, SafetyReviews}
+
+  alias StrangertalksNew.{
+    Accounts,
+    MatchingRules,
+    Reflections,
+    Reports,
+    RetentionCleanup,
+    SafetyReviews
+  }
 
   @now ~U[2026-08-26 12:00:00.000000Z]
 
@@ -102,7 +110,11 @@ defmodule StrangertalksNew.RetentionCleanupDbTest do
     assert {:ok, _} = MatchingRules.enforce_block(a.participant_id, b.participant_id, "TEST")
 
     assert {:ok, _} = RetentionCleanup.run(@now).boundary_blocks
-    assert Repo.get_by(BoundaryBlock, blocker_user_id: a.participant_id, blocked_user_id: b.participant_id)
+
+    assert Repo.get_by(BoundaryBlock,
+             blocker_user_id: a.participant_id,
+             blocked_user_id: b.participant_id
+           )
 
     Repo.update_all(
       from(block in BoundaryBlock,
@@ -128,9 +140,13 @@ defmodule StrangertalksNew.RetentionCleanupDbTest do
     assert {:ok, _} = RetentionCleanup.run(@now).inactive_guests
     refute Repo.get(StrangertalksNew.Participant, guest.participant_id)
 
-    protected = participant_fixture(%{presence_state: :OFFLINE, last_active_at: old, created_at: old})
+    protected =
+      participant_fixture(%{presence_state: :OFFLINE, last_active_at: old, created_at: old})
+
     peer = participant_fixture()
-    assert {:ok, _} = MatchingRules.enforce_block(protected.participant_id, peer.participant_id, "TEST")
+
+    assert {:ok, _} =
+             MatchingRules.enforce_block(protected.participant_id, peer.participant_id, "TEST")
 
     assert {:ok, _} = RetentionCleanup.run(@now).inactive_guests
     assert Repo.get(StrangertalksNew.Participant, protected.participant_id)
@@ -149,7 +165,14 @@ defmodule StrangertalksNew.RetentionCleanupDbTest do
 
   test "terminal Conversation referenced by an active Report survives cleanup" do
     {conversation, reporter, _peer, _match} = conversation_fixture(:ENDED, days_ago(30))
-    assert {:ok, report} = Reports.submit_conversation_report(conversation.conversation_id, reporter.participant_id, "SPAM", "evidence")
+
+    assert {:ok, report} =
+             Reports.submit_conversation_report(
+               conversation.conversation_id,
+               reporter.participant_id,
+               "SPAM",
+               "evidence"
+             )
 
     assert {:ok, _} = RetentionCleanup.run(@now).conversations
     assert Repo.get(Conversation, conversation.conversation_id)
@@ -187,7 +210,13 @@ defmodule StrangertalksNew.RetentionCleanupDbTest do
     account = private_account_fixture(participant)
 
     expired = session_fixture(account, expires_at: days_ago(31))
-    revoked = session_fixture(account, expires_at: DateTime.add(@now, 86_400, :second), revoked_at: days_ago(30))
+
+    revoked =
+      session_fixture(account,
+        expires_at: DateTime.add(@now, 86_400, :second),
+        revoked_at: days_ago(30)
+      )
+
     current = session_fixture(account, expires_at: DateTime.add(@now, 86_400, :second))
 
     assert {:ok, _} = RetentionCleanup.run(@now).account_sessions
@@ -198,7 +227,9 @@ defmodule StrangertalksNew.RetentionCleanupDbTest do
 
   test "expired composer grant disappears after 24-hour physical cleanup grace" do
     participant = participant_fixture()
-    assert {:ok, %{grant: grant}} = Reflections.open_composer_grant(participant.participant_id, %{})
+
+    assert {:ok, %{grant: grant}} =
+             Reflections.open_composer_grant(participant.participant_id, %{})
 
     Repo.update_all(
       from(g in StrangertalksNew.Reflections.ComposerGrant, where: g.grant_id == ^grant.grant_id),
@@ -220,7 +251,11 @@ defmodule StrangertalksNew.RetentionCleanupDbTest do
   end
 
   test "cleanup twice remains safe with real database categories" do
-    participant_fixture(%{presence_state: :OFFLINE, last_active_at: days_ago(30), created_at: days_ago(30)})
+    participant_fixture(%{
+      presence_state: :OFFLINE,
+      last_active_at: days_ago(30),
+      created_at: days_ago(30)
+    })
 
     first = RetentionCleanup.run(@now)
     second = RetentionCleanup.run(@now)
@@ -231,7 +266,15 @@ defmodule StrangertalksNew.RetentionCleanupDbTest do
 
   defp report_fixture(evidence \\ "selected evidence") do
     {conversation, reporter, peer, _match} = conversation_fixture(:ENDED, @now)
-    assert {:ok, report} = Reports.submit_conversation_report(conversation.conversation_id, reporter.participant_id, "HARASSMENT", evidence)
+
+    assert {:ok, report} =
+             Reports.submit_conversation_report(
+               conversation.conversation_id,
+               reporter.participant_id,
+               "HARASSMENT",
+               evidence
+             )
+
     {conversation, reporter, peer, report}
   end
 
@@ -251,7 +294,10 @@ defmodule StrangertalksNew.RetentionCleanupDbTest do
 
   defp participant_fixture(attrs \\ %{}) do
     defaults = %{presence_state: :OFFLINE, created_at: @now, last_active_at: @now}
-    {:ok, participant} = StrangertalksNew.Participants.create_participant(Map.merge(defaults, attrs))
+
+    {:ok, participant} =
+      StrangertalksNew.Participants.create_participant(Map.merge(defaults, attrs))
+
     participant
   end
 

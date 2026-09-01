@@ -65,13 +65,13 @@ defmodule StrangertalksNewWeb.ParticipantToken do
           do: {:ok, %{participant_id: participant_id, source_fingerprint: source_fingerprint}},
           else: {:error, :stale_participant_credential}
 
-      {:ok,
-       %{v: 2, participant_id: participant_id, source_fingerprint: source_fingerprint}}
+      {:ok, %{v: 2, participant_id: participant_id, source_fingerprint: source_fingerprint}}
       when is_binary(participant_id) and is_binary(source_fingerprint) and
              byte_size(source_fingerprint) == 32 ->
         if current_version?(participant_id, 0),
           do: {:ok, %{participant_id: participant_id, source_fingerprint: source_fingerprint}},
           else: {:error, :stale_participant_credential}
+
       {:ok, {:participant, participant_id, version}}
       when is_binary(participant_id) and is_integer(version) ->
         if current_version?(participant_id, version),
@@ -82,14 +82,14 @@ defmodule StrangertalksNewWeb.ParticipantToken do
       when is_binary(participant_id) and is_integer(version) and is_binary(account_session_id) ->
         if current_version?(participant_id, version) and
              active_account_session?(account_session_id, participant_id),
-          do:
-            {:ok,
-             %{
-               participant_id: participant_id,
-               source_fingerprint: nil,
-               account_session_id: account_session_id
-             }},
-          else: {:error, :stale_account_session}
+           do:
+             {:ok,
+              %{
+                participant_id: participant_id,
+                source_fingerprint: nil,
+                account_session_id: account_session_id
+              }},
+           else: {:error, :stale_account_session}
 
       {:ok, participant_id} when is_binary(participant_id) ->
         if current_version?(participant_id, 0),

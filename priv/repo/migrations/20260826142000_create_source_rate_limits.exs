@@ -16,8 +16,6 @@ defmodule StrangertalksNew.Repo.Migrations.CreateSourceRateLimits do
 
     create index(:source_rate_limits, [:expires_at_ms])
 
-    create constraint(:source_rate_limits, :source_rate_limits_count_positive,
-             check: "count > 0"
-           )
+    create constraint(:source_rate_limits, :source_rate_limits_count_positive, check: "count > 0")
   end
 end

@@ -24,7 +24,10 @@ defmodule StrangertalksNewWeb.ParticipantController do
 
         {:error, {:rate_limited, _bucket, retry_after_ms}} ->
           conn
-          |> put_resp_header("retry-after", Integer.to_string(max(1, div(retry_after_ms + 999, 1_000))))
+          |> put_resp_header(
+            "retry-after",
+            Integer.to_string(max(1, div(retry_after_ms + 999, 1_000)))
+          )
           |> put_status(:too_many_requests)
           |> json(%{error: %{reason: "participant_issuance_rate_limited"}})
 

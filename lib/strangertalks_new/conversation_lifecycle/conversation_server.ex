@@ -6206,7 +6206,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
                :crypto.hash(:sha256, grant_secret) == grant.secret_verifier ||
                  {:error, :invalid_grant_secret},
              true <-
-               (is_nil(grant.source_epoch_id) or grant.source_epoch_id == state.epoch_id) ||
+               is_nil(grant.source_epoch_id) or grant.source_epoch_id == state.epoch_id ||
                  {:error, :epoch_mismatch},
              target when not is_nil(target) <-
                find_recent_message(state.recent_messages, grant.source_client_message_id),

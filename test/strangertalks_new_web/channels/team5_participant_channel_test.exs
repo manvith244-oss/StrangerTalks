@@ -40,10 +40,14 @@ defmodule StrangertalksNewWeb.Team5ParticipantChannelTest do
     second_token = account_participant_token(second.raw_token)
 
     assert {:ok, first_socket} =
-             Phoenix.ChannelTest.connect(UserSocket, %{}, connect_info: %{auth_token: first_token})
+             Phoenix.ChannelTest.connect(UserSocket, %{},
+               connect_info: %{auth_token: first_token}
+             )
 
     assert {:ok, second_socket} =
-             Phoenix.ChannelTest.connect(UserSocket, %{}, connect_info: %{auth_token: second_token})
+             Phoenix.ChannelTest.connect(UserSocket, %{},
+               connect_info: %{auth_token: second_token}
+             )
 
     first_socket_id = UserSocket.id(first_socket)
     second_socket_id = UserSocket.id(second_socket)
@@ -77,13 +81,16 @@ defmodule StrangertalksNewWeb.Team5ParticipantChannelTest do
 
     assert {:error, _reason} = ParticipantToken.verify(first_token)
     assert {:ok, participant.participant_id} == ParticipantToken.verify(second_token)
+
     assert :error =
              Phoenix.ChannelTest.connect(UserSocket, %{},
                connect_info: %{auth_token: first_token}
              )
 
     assert {:ok, reconnected_second} =
-             Phoenix.ChannelTest.connect(UserSocket, %{}, connect_info: %{auth_token: second_token})
+             Phoenix.ChannelTest.connect(UserSocket, %{},
+               connect_info: %{auth_token: second_token}
+             )
 
     assert UserSocket.id(reconnected_second) == second_socket_id
   end

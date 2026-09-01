@@ -195,7 +195,10 @@ defmodule StrangertalksNew.RetentionClosureDbTest do
         private_note_count: 3
       })
 
-    assert MatchingRules.check_safety_veto?(participant_a.participant_id, participant_b.participant_id)
+    assert MatchingRules.check_safety_veto?(
+             participant_a.participant_id,
+             participant_b.participant_id
+           )
 
     result = RetentionCleanup.run(@now)
     assert {:ok, count} = result.closed_relationships
@@ -216,12 +219,19 @@ defmodule StrangertalksNew.RetentionClosureDbTest do
     assert minimized.relationship_summary == %{}
     assert minimized.private_note_count == 0
 
-    assert MatchingRules.check_safety_veto?(participant_a.participant_id, participant_b.participant_id)
+    assert MatchingRules.check_safety_veto?(
+             participant_a.participant_id,
+             participant_b.participant_id
+           )
 
     retry = RetentionCleanup.run(@now)
     assert {:ok, 0} = retry.closed_relationships
     assert Repo.get(Relationship, relationship.relationship_id)
-    assert MatchingRules.check_safety_veto?(participant_a.participant_id, participant_b.participant_id)
+
+    assert MatchingRules.check_safety_veto?(
+             participant_a.participant_id,
+             participant_b.participant_id
+           )
   end
 
   test "real category failure is isolated, operational failure is raised, and retry is safe" do
@@ -300,7 +310,9 @@ defmodule StrangertalksNew.RetentionClosureDbTest do
   end
 
   defp delete_analytics(id) do
-    {count, _} = Repo.delete_all(from(record in AnalyticsRecord, where: record.analytics_record_id == ^id))
+    {count, _} =
+      Repo.delete_all(from(record in AnalyticsRecord, where: record.analytics_record_id == ^id))
+
     {:ok, count}
   end
 

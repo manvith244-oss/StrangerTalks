@@ -330,7 +330,10 @@ defmodule StrangertalksNew.RetentionCleanup do
 
   defp cleanup_deleted_memories(now) do
     cutoff = RetentionPolicy.cutoff_days(now, RetentionPolicy.deleted_memory_days())
-    delete_count("DELETE FROM memories WHERE deleted_at IS NOT NULL AND deleted_at <= $1", [cutoff])
+
+    delete_count("DELETE FROM memories WHERE deleted_at IS NOT NULL AND deleted_at <= $1", [
+      cutoff
+    ])
   end
 
   defp cleanup_relationship_consents(now) do
