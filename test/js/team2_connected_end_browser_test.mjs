@@ -62,6 +62,9 @@ test("connected two-browser normal End converges both clients and releases later
     await Promise.all([uiWaitForEnded(pageA), uiWaitForEnded(pageB)])
 
     for (const page of [pageA, pageB]) {
+      await page.locator("#message-form").waitFor({state: "hidden"})
+      await page.locator("#end-conversation").waitFor({state: "hidden"})
+
       assert.equal(
         await page.locator('section[data-screen="conversation"]').evaluate((node) => node.classList.contains("active")),
         false
