@@ -12,7 +12,7 @@ defmodule StrangertalksNew.RetentionCleanupDbTest do
   alias StrangertalksNew.SafetyReview
   alias StrangertalksNew.{Accounts, MatchingRules, Reflections, Reports, RetentionCleanup, SafetyReviews}
 
-  @now ~U[2026-08-26 12:00:00Z]
+  @now ~U[2026-08-26 12:00:00.000000Z]
 
   setup do
     Agent.update(StrangertalksNew.QueueEngine.QueueState, fn _ -> %{} end)

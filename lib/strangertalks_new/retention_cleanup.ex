@@ -491,7 +491,7 @@ defmodule StrangertalksNew.RetentionCleanup do
         AND NOT EXISTS (SELECT 1 FROM boundary_blocks block WHERE participant.participant_id IN (block.blocker_user_id, block.blocked_user_id))
         AND NOT EXISTS (SELECT 1 FROM memories memory WHERE memory.owner_participant_id = participant.participant_id)
         AND NOT EXISTS (SELECT 1 FROM reflections reflection WHERE reflection.owner_participant_id = participant.participant_id)
-        AND NOT EXISTS (SELECT 1 FROM composer_grants grant WHERE grant.owner_participant_id = participant.participant_id)
+        AND NOT EXISTS (SELECT 1 FROM composer_grants composer_grant WHERE composer_grant.owner_participant_id = participant.participant_id)
       """,
       [cutoff]
     )

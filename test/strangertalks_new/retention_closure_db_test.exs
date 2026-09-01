@@ -19,7 +19,7 @@ defmodule StrangertalksNew.RetentionClosureDbTest do
     SafetyEvents
   }
 
-  @now ~U[2026-08-26 12:00:00Z]
+  @now ~U[2026-08-26 12:00:00.000000Z]
 
   test "terminal reconnect intents older than 24h delete, active unexpired survives, and retry is idempotent" do
     {relationship, _conversation, participant, _peer} = relationship_fixture()
@@ -280,6 +280,8 @@ defmodule StrangertalksNew.RetentionClosureDbTest do
   defp analytics_fixture(created_at) do
     id = Ecto.UUID.generate()
 
+    {:ok, dumped_id} = Ecto.UUID.dump(id)
+
     Ecto.Adapters.SQL.query!(
       Repo,
       """
@@ -291,7 +293,7 @@ defmodule StrangertalksNew.RetentionClosureDbTest do
         source_type
       ) VALUES ($1, $2, 'DAILY', $3, 'SYSTEM')
       """,
-      [id, created_at, DateTime.to_date(created_at)]
+      [dumped_id, created_at, DateTime.to_date(created_at)]
     )
 
     Repo.get!(AnalyticsRecord, id)

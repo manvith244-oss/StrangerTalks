@@ -1,9 +1,9 @@
 defmodule StrangertalksNew.RetentionCleanupTest do
-  use ExUnit.Case, async: true
+  use StrangertalksNew.DataCase, async: false
 
   alias StrangertalksNew.RetentionCleanup
 
-  @now ~U[2026-08-26 12:00:00Z]
+  @now ~U[2026-08-26 12:00:00.000000Z]
 
   test "29-day safety media remains" do
     created_at = DateTime.add(@now, -29 * 86_400, :second)
