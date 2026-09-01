@@ -191,3 +191,158 @@ test("T4-014: superseded Accept timeout is stale and cannot terminate a newer in
   assert.equal(coordinator.status, CALL_STATUS.PENDING_INCOMING)
   assert.equal(coordinator.role, "callee")
 })
+
+test("T4-015: old Initiate success after same-Conversation supersession is inert", async () => {
+  const pushes = []
+  const coordinator = new LiveCallCoordinator({
+    participantId: "p1",
+    conversationId: "conversation-a",
+    channel: {push() { const push = controllablePush(); pushes.push(push); return push }}
+  })
+
+  const oldPromise = coordinator.initiate("voice")
+  coordinator.teardown("superseded")
+  coordinator.status = CALL_STATUS.IDLE
+  const newPromise = coordinator.initiate("voice")
+
+  pushes[0].fire("ok", {call_attempt_id: "old-attempt"})
+  const oldResult = await oldPromise
+  assert.equal(oldResult.stale, true)
+  assert.equal(coordinator.status, CALL_STATUS.PENDING_OUTGOING)
+  assert.equal(coordinator.callAttemptId, null)
+
+  pushes[1].fire("ok", {call_attempt_id: "new-attempt"})
+  await newPromise
+  assert.equal(coordinator.callAttemptId, "new-attempt")
+})
+
+test("T4-016: old Accept success after supersession is inert and cannot begin WebRTC", async () => {
+  const pushes = []
+  let stateChanges = 0
+  const coordinator = new LiveCallCoordinator({
+    participantId: "p1",
+    conversationId: "conversation-a",
+    channel: {push() { const push = controllablePush(); pushes.push(push); return push }},
+    onStateChange: () => { stateChanges++ }
+  })
+
+  coordinator.callAttemptId = "old-attempt"
+  coordinator.role = "callee"
+  coordinator.status = CALL_STATUS.PENDING_INCOMING
+  const oldPromise = coordinator.accept()
+
+  coordinator.teardown("superseded")
+  coordinator.status = CALL_STATUS.IDLE
+  coordinator.handleIncomingCall({call_attempt_id: "new-attempt", caller_id: "p2", call_type: "voice"})
+  const beforeLateSuccess = stateChanges
+
+  pushes[0].fire("ok", {call_attempt_id: "old-attempt"})
+  const oldResult = await oldPromise
+  assert.equal(oldResult.stale, true)
+  assert.equal(coordinator.callAttemptId, "new-attempt")
+  assert.equal(coordinator.status, CALL_STATUS.PENDING_INCOMING)
+  assert.equal(coordinator.peerConnection, null)
+  assert.equal(stateChanges, beforeLateSuccess)
+})
+
+test("T4-017: current Initiate error still rejects and terminates the current operation", async () => {
+  const push = controllablePush()
+  const coordinator = new LiveCallCoordinator({
+    participantId: "p1",
+    conversationId: "conversation-a",
+    channel: {push() { return push }}
+  })
+
+  const pending = coordinator.initiate("voice")
+  push.fire("error", {reason: "current-initiate-error"})
+  await assert.rejects(pending, (error) => error?.reason === "current-initiate-error")
+  assert.equal(coordinator.status, CALL_STATUS.TERMINAL)
+  assert.equal(coordinator.callAttemptId, null)
+})
+
+test("T4-018: current Initiate timeout still rejects and terminates the current operation", async () => {
+  const push = controllablePush()
+  const coordinator = new LiveCallCoordinator({
+    participantId: "p1",
+    conversationId: "conversation-a",
+    channel: {push() { return push }}
+  })
+
+  const pending = coordinator.initiate("voice")
+  push.fire("timeout")
+  await assert.rejects(pending, /Call initiation timed out/)
+  assert.equal(coordinator.status, CALL_STATUS.TERMINAL)
+})
+
+test("T4-019: current Accept error still rejects and terminates the current operation", async () => {
+  const push = controllablePush()
+  const coordinator = new LiveCallCoordinator({
+    participantId: "p1",
+    conversationId: "conversation-a",
+    channel: {push() { return push }}
+  })
+  coordinator.callAttemptId = "attempt-a"
+  coordinator.role = "callee"
+  coordinator.status = CALL_STATUS.PENDING_INCOMING
+
+  const pending = coordinator.accept()
+  push.fire("error", {reason: "current-accept-error"})
+  await assert.rejects(pending, (error) => error?.reason === "current-accept-error")
+  assert.equal(coordinator.status, CALL_STATUS.TERMINAL)
+  assert.equal(coordinator.callAttemptId, null)
+})
+
+test("T4-020: current Accept timeout still rejects and terminates the current operation", async () => {
+  const push = controllablePush()
+  const coordinator = new LiveCallCoordinator({
+    participantId: "p1",
+    conversationId: "conversation-a",
+    channel: {push() { return push }}
+  })
+  coordinator.callAttemptId = "attempt-a"
+  coordinator.role = "callee"
+  coordinator.status = CALL_STATUS.PENDING_INCOMING
+
+  const pending = coordinator.accept()
+  push.fire("timeout")
+  await assert.rejects(pending, /Call acceptance timed out/)
+  assert.equal(coordinator.status, CALL_STATUS.TERMINAL)
+})
+
+test("T4-021: teardown invalidates an outstanding Initiate success", async () => {
+  const push = controllablePush()
+  const coordinator = new LiveCallCoordinator({
+    participantId: "p1",
+    conversationId: "conversation-a",
+    channel: {push() { return push }}
+  })
+
+  const pending = coordinator.initiate("voice")
+  coordinator.teardown("blocked")
+  push.fire("ok", {call_attempt_id: "late-attempt"})
+  const result = await pending
+  assert.equal(result.stale, true)
+  assert.equal(coordinator.callAttemptId, null)
+  assert.equal(coordinator.status, CALL_STATUS.TERMINAL)
+})
+
+test("T4-022: teardown invalidates an outstanding Accept success", async () => {
+  const push = controllablePush()
+  const coordinator = new LiveCallCoordinator({
+    participantId: "p1",
+    conversationId: "conversation-a",
+    channel: {push() { return push }}
+  })
+  coordinator.callAttemptId = "attempt-a"
+  coordinator.role = "callee"
+  coordinator.status = CALL_STATUS.PENDING_INCOMING
+
+  const pending = coordinator.accept()
+  coordinator.teardown("blocked")
+  push.fire("ok", {call_attempt_id: "attempt-a"})
+  const result = await pending
+  assert.equal(result.stale, true)
+  assert.equal(coordinator.callAttemptId, null)
+  assert.equal(coordinator.status, CALL_STATUS.TERMINAL)
+  assert.equal(coordinator.peerConnection, null)
+})
