@@ -6,6 +6,7 @@ defmodule StrangertalksNewWeb.ConversationTerminalIdempotencyChannelTest do
 
   alias StrangertalksNew.{Conversation, MatchingRules, Participants, Repo}
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
+  alias StrangertalksNew.MatchingRules.BoundaryBlock
   alias StrangertalksNewWeb.{ConversationChannel, ParticipantToken, UserSocket}
 
   setup do
@@ -104,8 +105,11 @@ defmodule StrangertalksNewWeb.ConversationTerminalIdempotencyChannelTest do
     assert_reply stale_block, :ok, %{status: "blocked"}
 
     # The post-End safety action may create a future matching veto for the blocker,
-    # but it must not rewrite or contradict the already-durable terminal result to either client.
-    refute_push "conversation:ended", _payload
+    # but it must only reassert the already-durable terminal result to stale clients.
+    assert_push "conversation:ended", %{
+      status: "ended",
+      reason: "participant_completed"
+    }
 
     after_block = Repo.get!(Conversation, context.conversation.conversation_id)
     assert after_block.conversation_status == :ENDED
@@ -118,6 +122,25 @@ defmodule StrangertalksNewWeb.ConversationTerminalIdempotencyChannelTest do
              context.participant_a.participant_id,
              context.participant_b.participant_id
            )
+
+    assert Repo.aggregate(BoundaryBlock, :count, :blocker_user_id) == 1
+
+    repeated_stale_block = push(socket_b, "conversation:block", %{})
+    assert_reply repeated_stale_block, :ok, %{status: "blocked"}
+
+    assert_push "conversation:ended", %{
+      status: "ended",
+      reason: "participant_completed"
+    }
+
+    after_repeated_block = Repo.get!(Conversation, context.conversation.conversation_id)
+
+    assert after_repeated_block.conversation_status == after_block.conversation_status
+    assert after_repeated_block.ending_type == after_block.ending_type
+    assert after_repeated_block.ending_initiator == after_block.ending_initiator
+    assert after_repeated_block.safety_flagged == after_block.safety_flagged
+    assert after_repeated_block.conversation_completed == after_block.conversation_completed
+    assert Repo.aggregate(BoundaryBlock, :count, :blocker_user_id) == 1
 
     assert {:error, :terminal_conversation} =
              ConversationServer.ensure_started(context.conversation.conversation_id)

@@ -40,10 +40,11 @@ defmodule StrangertalksNew.FX07CanonicalTerminalTruthTest do
     assert canonical.conversation_completed == true
 
     refute_receive %Phoenix.Socket.Broadcast{
-      topic: "conversation:" <> ^conversation_id,
-      event: "conversation:ended",
-      payload: %{status: "ended", reason: "blocked"}
-    }, 200
+                     topic: "conversation:" <> ^conversation_id,
+                     event: "conversation:ended",
+                     payload: %{status: "ended", reason: "blocked"}
+                   },
+                   200
   end
 
   test "X07-04 durable Block wins over a later duplicate End" do
@@ -77,10 +78,11 @@ defmodule StrangertalksNew.FX07CanonicalTerminalTruthTest do
     assert canonical.conversation_completed == false
 
     refute_receive %Phoenix.Socket.Broadcast{
-      topic: "conversation:" <> ^conversation_id,
-      event: "conversation:ended",
-      payload: %{status: "ended", reason: "participant_completed"}
-    }, 200
+                     topic: "conversation:" <> ^conversation_id,
+                     event: "conversation:ended",
+                     payload: %{status: "ended", reason: "participant_completed"}
+                   },
+                   200
   end
 
   defp activate_conversation(conversation_id, participant_a_id, participant_b_id) do
