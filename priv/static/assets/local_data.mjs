@@ -8,6 +8,9 @@ const APPROVED_VOICE_TYPES = new Set(["audio/webm", "audio/ogg", "audio/mp4"])
 const TERMINAL_RETENTION_STATUSES = new Set(["kept", "summary_only", "faded"])
 const BACKUP_RECORD_TYPES = new Set(["identity", "settings", "local_conversation", "local_message", "local_voice_note", "sync_cursor", "summary", "memory", "relationship", "sync_tombstone"])
 const BACKUP_TOMBSTONE_CATEGORIES = new Set(["kept_conversations", "kept_messages", "summaries", "memories", "bonds", "bond_nicknames", "abstract_signature_seeds", "accessibility_settings", "privacy_settings", "user_preferences", "tombstones"])
+const BACKUP_CONVERSATION_KEYS = ["conversation_id", "door_type", "display_door", "abstract_signature_seed", "status", "connection_state", "started_at", "ended_at", "summary_id"]
+const BACKUP_MESSAGE_KEYS = ["conversation_id", "client_message_id", "message_id", "type", "content", "expressive", "mine", "delivery_status", "sent_at", "sequence", "content_revision", "peer_applied_content_revision", "edited", "availability", "unsent", "reply_to_client_message_id", "reply_author_relation", "reply_snippet", "reply_target_availability", "self_reaction", "peer_reaction", "view_once_state", "presentation_limit", "views_remaining", "views_consumed", "media_type", "byte_size"]
+const BACKUP_RELATIONSHIP_KEYS = ["relationship_id", "status", "conversation_id", "abstract_signature_seed", "origin_door_type", "origin_door_label", "formed_at", "private_nickname", "private_label"]
 
 export function signatureSeedFor(conversationId) {
   let hash = 2166136261
@@ -238,6 +241,12 @@ export function chooseConversationRetention(records, conversationId, choice, {su
 export function preserveTerminalRetentionDecisions(current, incoming) {
   const next = new Map(incoming.map((record) => [record.id, record]))
 
+  for (const currentRecord of current) {
+    if (currentRecord.type !== "sync_tombstone") continue
+    const proposed = next.get(currentRecord.id)
+    if (!proposed || proposed.type !== "sync_tombstone") next.set(currentRecord.id, currentRecord)
+  }
+
   for (const conversation of current) {
     if (conversation.type !== "local_conversation" || !TERMINAL_RETENTION_STATUSES.has(conversation.value?.status)) continue
     const proposed = next.get(conversation.id)
@@ -450,18 +459,54 @@ function validBackupRecords(records) {
 
 function validBackupRecord(record) {
   if (!validRecord(record) || !BACKUP_RECORD_TYPES.has(record.type)) return false
-  if (record.type !== "sync_tombstone") return true
-  return record.category === "tombstones" &&
-    typeof record.deleted_at === "string" &&
-    !Number.isNaN(Date.parse(record.deleted_at)) &&
-    record.value &&
-    typeof record.value === "object" &&
-    !Array.isArray(record.value) &&
-    typeof record.value.previous_type === "string" &&
-    record.value.previous_type.trim().length > 0 &&
-    typeof record.value.previous_category === "string" &&
-    BACKUP_TOMBSTONE_CATEGORIES.has(record.value.previous_category)
+  const value = record.value
+  if (record.type === "sync_tombstone") {
+    return record.category === "tombstones" &&
+      typeof record.deleted_at === "string" &&
+      !Number.isNaN(Date.parse(record.deleted_at)) &&
+      onlyKeys(value, ["previous_type", "previous_category"]) &&
+      nonEmptyString(value.previous_type) &&
+      BACKUP_TOMBSTONE_CATEGORIES.has(value.previous_category)
+  }
+  if (record.type === "local_conversation") {
+    const knownShape = onlyKeys(value, BACKUP_CONVERSATION_KEYS) &&
+      nonEmptyString(value.conversation_id) &&
+      record.id === `conversation:${value.conversation_id}`
+    return knownShape && (TERMINAL_RETENTION_STATUSES.has(value.status) || value.status === "temporary")
+  }
+  if (record.type === "local_message") {
+    const messageId = value?.client_message_id || value?.message_id
+    return onlyKeys(value, BACKUP_MESSAGE_KEYS) &&
+      nonEmptyString(value.conversation_id) &&
+      nonEmptyString(messageId) &&
+      record.id === `message:${value.conversation_id}:${messageId}` &&
+      nonEmptyString(value.type) &&
+      !Number.isNaN(Date.parse(value.sent_at))
+  }
+  if (record.type === "summary") {
+    return onlyKeys(value, ["conversation_id", "text"]) &&
+      nonEmptyString(value.conversation_id) &&
+      record.id === `summary:${value.conversation_id}` &&
+      typeof value.text === "string"
+  }
+  if (record.type === "memory") {
+    return onlyKeys(value, ["text", "conversation_id"]) &&
+      typeof value.text === "string" &&
+      (value.conversation_id === undefined || value.conversation_id === null || typeof value.conversation_id === "string")
+  }
+  if (record.type === "relationship") {
+    return onlyKeys(value, BACKUP_RELATIONSHIP_KEYS) &&
+      nonEmptyString(value.relationship_id) &&
+      record.id === `relationship:${value.relationship_id}` &&
+      nonEmptyString(value.status) &&
+      (value.conversation_id === undefined || value.conversation_id === null || typeof value.conversation_id === "string")
+  }
+  return plainObject(value)
 }
+
+function nonEmptyString(value) { return typeof value === "string" && value.trim().length > 0 }
+function plainObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value) }
+function onlyKeys(value, allowed) { return plainObject(value) && Object.keys(value).every((key) => allowed.includes(key)) }
 
 async function serializeBackupRecords(records) {
   const keptIds = new Set(keptConversations(records).map(({value}) => value.conversation_id))

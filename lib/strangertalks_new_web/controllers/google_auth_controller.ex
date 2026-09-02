@@ -51,20 +51,24 @@ defmodule StrangertalksNewWeb.GoogleAuthController do
          true <- Plug.Crypto.secure_compare(:crypto.hash(:sha256, nonce), attempt.nonce_hash),
          {:ok, provider_result} <- GoogleContinuity.provider().exchange_and_verify(code, nonce),
          {:ok, result} <- Accounts.complete_oauth(attempt, provider_result) do
+      if attempt.mode == "LINK_CURRENT_GUEST" do
+        disconnect_participant_sockets(result.account.participant_id)
+      end
+
       conn
       |> delete_session(:google_oauth_nonce)
       |> put_account_cookie(result.raw_token)
-      |> redirect(to: "/?account=connected")
+      |> redirect(to: "/you?account=connected")
     else
       {:error, :existing_account_available} ->
-        redirect(conn, to: "/?account=existing_account_available")
+        redirect(conn, to: "/you?account=existing_account_available")
 
       _ ->
-        redirect(conn, to: "/?account=google_connection_failed")
+        redirect(conn, to: "/you?account=google_connection_failed")
     end
   end
 
-  def callback(conn, _params), do: redirect(conn, to: "/?account=google_connection_failed")
+  def callback(conn, _params), do: redirect(conn, to: "/you?account=google_connection_failed")
 
   def cookie_name, do: @cookie
 
@@ -101,6 +105,14 @@ defmodule StrangertalksNewWeb.GoogleAuthController do
     if GoogleContinuity.enabled?(),
       do: conn |> put_status(:too_many_requests) |> json(%{error: %{reason: "rate_limited"}}),
       else: unavailable(conn)
+  end
+
+  defp disconnect_participant_sockets(participant_id) do
+    StrangertalksNewWeb.Endpoint.broadcast(
+      "participant_socket:#{participant_id}",
+      "disconnect",
+      %{}
+    )
   end
 
   defp rate_allowed?(bucket, conn, limit) do

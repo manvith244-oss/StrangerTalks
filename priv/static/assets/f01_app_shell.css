@@ -1,0 +1,113 @@
+@import url("/assets/conversation_motion.css?v=20260829_v1");
+
+/* F-01 App Shell: one canonical primary navigation region, responsive presentation only. */
+
+#bottom-nav button[aria-current="page"] {
+  border-color: rgba(255, 252, 235, 0.22);
+  background: var(--st-surface-raised);
+  color: var(--st-text);
+  font-weight: 800;
+  box-shadow: inset 3px 0 0 var(--st-advice);
+}
+
+/*
+ * `show(name)` predates route/history navigation and can leave the primary nav's
+ * hidden attribute behind when F-03 presents a permitted route directly. F-01
+ * owns presentation, so expose that same nav on shell-owned surfaces without
+ * manufacturing a second route or lifecycle authority.
+ */
+body:has(.screen.active:is(
+  [data-screen="doors"],
+  [data-screen="chats"],
+  [data-screen="relationships"],
+  [data-screen="settings"],
+  [data-screen="history"],
+  [data-screen="memories"],
+  [data-screen="reflections"],
+  [data-screen="conversation"]
+)) #bottom-nav[hidden] {
+  display: flex;
+}
+
+/* Conversation visual mode must not suppress the canonical F-01 primary nav. */
+body.st-chat-mode #bottom-nav.bottom-nav {
+  display: flex !important;
+}
+
+/* The open Conversation actions menu must escape the live-call panel's stacking layer. */
+body.st-chat-mode .conversation-head:has(.overflow[open]) {
+  z-index: 90;
+}
+
+/* Active Conversation keeps its composer above the compact primary navigation. */
+@media (max-width: 61.999rem) {
+  body:has([data-screen="conversation"].active) .conversation.active {
+    height: calc(100dvh - 7rem - var(--bottom-nav-block-size));
+    min-height: min(24rem, calc(100dvh - 7rem - var(--bottom-nav-block-size)));
+  }
+}
+
+/* 62rem = 992px: the single primary nav changes from bottom bar to left rail. */
+@media (min-width: 62rem) {
+  body {
+    display: grid;
+    grid-template-columns: 11rem minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 100dvh;
+  }
+
+  /* Conversation's visual framing must not inset the app-shell rail itself. */
+  html body.st-chat-mode {
+    padding: 0;
+  }
+
+  .site-header {
+    grid-column: 1 / -1;
+    grid-row: 1;
+  }
+
+  main {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
+  }
+
+  #bottom-nav {
+    position: sticky;
+    z-index: 3;
+    top: 0;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    grid-column: 1;
+    grid-row: 2;
+    width: 100%;
+    min-height: calc(100dvh - 3.75rem);
+    align-self: start;
+    align-items: stretch;
+    justify-content: flex-start;
+    flex-direction: column;
+    gap: var(--st-space-2);
+    padding: var(--st-space-6) var(--st-space-3) var(--st-space-6) max(var(--st-space-3), env(safe-area-inset-left, 0px));
+    border-top: 0;
+    border-right: 1px solid var(--st-border);
+    background: rgba(24, 27, 36, 0.86);
+  }
+
+  #bottom-nav button {
+    width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+    border-radius: var(--st-radius-small);
+    padding-inline: var(--st-space-4);
+    text-align: left;
+  }
+
+  #bottom-nav button[aria-current="page"] {
+    box-shadow: inset 3px 0 0 var(--st-advice);
+  }
+
+  .screen.top-level {
+    padding-bottom: var(--content-bottom-gap);
+  }
+}

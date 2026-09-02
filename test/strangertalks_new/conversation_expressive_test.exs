@@ -31,7 +31,7 @@ defmodule StrangertalksNew.ConversationExpressiveTest do
              id: "warm-wave",
              kind: "sticker",
              asset_path: "/assets/expressive/warm-wave.svg",
-             label: "A friendly wave"
+             label: "A friendly wave sticker"
            }
 
     state = :sys.get_state(ConversationServer.lookup(conversation_id) |> elem(1))

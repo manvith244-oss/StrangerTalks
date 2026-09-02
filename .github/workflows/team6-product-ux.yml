@@ -1,0 +1,199 @@
+name: Team 6 Product UX & Device Gate
+
+on:
+  push:
+    branches:
+      - newteam/arrival-ux
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+
+concurrency:
+  group: team6-product-ux-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  product-ux:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      TEAM6_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout exact event head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Prove exact checkout identity
+        run: |
+          checked_out="$(git rev-parse HEAD)"
+          echo "TEAM6_EXPECTED_SHA=$TEAM6_EXPECTED_SHA"
+          echo "TEAM6_CHECKED_OUT_SHA=$checked_out"
+          test "$checked_out" = "$TEAM6_EXPECTED_SHA"
+          git status --porcelain | tee /tmp/team6-initial-status
+          test ! -s /tmp/team6-initial-status
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Focused UI and interaction regressions
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/instagram_chat_test.mjs \
+            test/js/reply_quote_test.mjs \
+            test/js/reaction_test.mjs \
+            test/js/message_edit_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/pin_test.mjs \
+            test/js/expressive_media_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/team6_media_gate_test.mjs \
+            test/js/team6_media_privacy_test.mjs \
+            test/js/team6_voice_note_permission_test.mjs \
+            test/js/ephemeral_conversation_ux_test.mjs \
+            test/js/atmosphere_test.mjs \
+            test/js/prompt_cards_test.mjs \
+            test/js/companion_test.mjs \
+            test/js/presence_test.mjs
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix browser server
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/team6-product-ux-browser.log 2>&1 &
+          echo $! > /tmp/team6-product-ux-browser.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS http://localhost:4000/ >/dev/null; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/team6-product-ux-browser.pid)" 2>/dev/null; then
+              cat /tmp/team6-product-ux-browser.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/team6-product-ux-browser.log
+          exit 1
+
+      - name: Real Arrival and accessibility browser proof
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/arrival_first_minute_browser_test.mjs \
+            test/js/arrival_accessibility_browser_test.mjs \
+            test/js/team6_real_ux_browser_test.mjs
+
+      - name: Real integrated Conversation recovery and terminal proof
+        run: |
+          node --test --test-concurrency=1 \
+            --test-name-pattern='browser-layer disconnect recovers and catches up exactly once|Conversation end converges both clients and refresh cannot resurrect it|Feature 1D E2E-3: keyboard, focus, touch safety, and reduced motion|Feature 1H E2E-3: keyboard chooser remains functional across accessibility and responsive modes|Feature 1L E2E-2: reconnect, explicit end, and unrecoverable states remain semantically distinct|Feature 1L E2E-3: the real report flow shows safety lifetime limits without adding report fields|Feature 1O E2E-1: standard view-once cycle|Feature 1O\.1 E2E-1: standard view-twice cycle' \
+            test/js/browser_e2e_test.mjs
+
+      # The following tests deliberately install synthetic Conversation DOM state to
+      # attack layout. They are PRESENTATION FIXTURES only, not reachability proof.
+      - name: Presentation fixture layout regressions — not reachability proof
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/instagram_chat_browser_test.mjs \
+            test/js/instagram_chat_report_browser_test.mjs \
+            test/js/team6_product_ux_browser_test.mjs
+
+      - name: Upload Team 6 screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: team6-product-ux-screenshots-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            tmp/team6-real-ux-screenshots
+            tmp/team6-product-ux-screenshots
+            tmp/arrival-first-60-screenshots
+            tmp/chat-ui-screenshots
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop browser server
+        if: always()
+        run: |
+          if [ -f /tmp/team6-product-ux-browser.pid ]; then
+            pid="$(cat /tmp/team6-product-ux-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Reset browser data
+        run: |
+          mix ecto.drop --quiet
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Full repository precommit
+        run: mix precommit
+
+      - name: Final clean tree and exact SHA proof
+        run: |
+          tested_sha="$(git rev-parse HEAD)"
+          git diff --check
+          git status --porcelain | tee /tmp/team6-final-status
+          test ! -s /tmp/team6-final-status
+          test "$tested_sha" = "$TEAM6_EXPECTED_SHA"
+          echo "TEAM6_EXPECTED_SHA=$TEAM6_EXPECTED_SHA"
+          echo "TEAM6_CHECKED_OUT_SHA=$tested_sha"
+          echo "TEAM6_TESTED_SHA=$tested_sha"
+          echo "TEAM6_FINAL_SHA=$tested_sha"
+
+      - name: Browser log on failure
+        if: failure()
+        run: cat /tmp/team6-product-ux-browser.log || true

@@ -6,6 +6,7 @@ const KEY_STORE = "keys"
 export const SYNC_CATEGORIES = Object.freeze(["kept_conversations", "kept_messages", "summaries", "memories", "bonds", "bond_nicknames", "abstract_signature_seeds", "accessibility_settings", "privacy_settings", "user_preferences", "tombstones"])
 export const SYNC_SETTINGS_KEYS = Object.freeze(["settings:privacy", "settings:auto-sync"])
 const ALLOWED_CATEGORIES = new Set(SYNC_CATEGORIES)
+const EPHEMERAL_MESSAGE_TYPES = new Set(["view_once_photo", "view_twice_photo", "view_once_video", "view_twice_video"])
 const MAX_ID_LENGTH = 256
 const MAX_RECORD_BYTES = 256 * 1024
 const MAX_DEPTH = 6
@@ -16,7 +17,7 @@ export function syncableRecords(records) {
   const kept = new Set(records.filter((record) => record.type === "local_conversation" && ["kept", "summary_only"].includes(record.value?.status)).map((record) => record.value.conversation_id))
   return records.filter((record) => {
     if (!categoryFor(record)) return false
-    if (record.type === "local_message") return kept.has(record.value?.conversation_id)
+    if (record.type === "local_message") return kept.has(record.value?.conversation_id) && !EPHEMERAL_MESSAGE_TYPES.has(record.value?.type)
     if (record.type === "local_conversation") return kept.has(record.value?.conversation_id)
     return true
   }).map((record) => ({...record, category: categoryFor(record), deleted_at: record.deleted_at || null}))
@@ -29,9 +30,8 @@ export function validateSyncRecords(records, validationNow = Date.now()) {
     if (!plainObject(record) || !onlyKeys(record, ["id", "type", "category", "value", "updated_at", "deleted_at"])) return false
     if (typeof record.id !== "string" || !record.id.trim() || record.id.length > MAX_ID_LENGTH) return false
     if (!ALLOWED_CATEGORIES.has(record.category) || categoryFor(record) !== record.category) return false
-    const key = `${record.category}:${record.id}`
-    if (ids.has(key)) return false
-    ids.add(key)
+    if (ids.has(record.id)) return false
+    ids.add(record.id)
     if (!validTime(record.updated_at, validationNow) || (record.deleted_at !== null && record.deleted_at !== undefined && !validTime(record.deleted_at, validationNow))) return false
     if (!safeValue(record.value, 0) || new TextEncoder().encode(JSON.stringify(record)).byteLength > MAX_RECORD_BYTES) return false
     return validCategoryShape(record)
@@ -144,11 +144,36 @@ function categoryFor(record) {
   return null
 }
 function validCategoryShape(record) {
-  if (record.category === "tombstones") return onlyKeys(record.value, ["previous_type", "previous_category"]) && typeof record.value.previous_type === "string" && ALLOWED_CATEGORIES.has(record.value.previous_category)
-  if (record.category === "accessibility_settings") return record.id === "settings:privacy" && onlyKeys(record.value, ["reduced_motion"]) && typeof record.value.reduced_motion === "boolean"
-  if (record.category === "user_preferences") return record.id === "settings:auto-sync" && onlyKeys(record.value, ["enabled"]) && typeof record.value.enabled === "boolean"
+  if (record.category === "tombstones") return record.type === "sync_tombstone" && onlyKeys(record.value, ["previous_type", "previous_category"]) && typeof record.value.previous_type === "string" && ALLOWED_CATEGORIES.has(record.value.previous_category)
+  if (record.category === "accessibility_settings") return record.type === "settings" && record.id === "settings:privacy" && onlyKeys(record.value, ["reduced_motion"]) && typeof record.value.reduced_motion === "boolean"
+  if (record.category === "user_preferences") return record.type === "settings" && record.id === "settings:auto-sync" && onlyKeys(record.value, ["enabled"]) && typeof record.value.enabled === "boolean"
   if (record.category === "privacy_settings") return false
-  return plainObject(record.value)
+  if (record.category === "kept_conversations") {
+    return record.type === "local_conversation" &&
+      onlyKeys(record.value, ["conversation_id", "door_type", "display_door", "abstract_signature_seed", "status", "connection_state", "started_at", "ended_at", "summary_id"]) &&
+      typeof record.value.conversation_id === "string" && record.value.conversation_id.length > 0 &&
+      ["kept", "summary_only"].includes(record.value.status)
+  }
+  if (record.category === "kept_messages") {
+    const messageType = record.value?.type || "text"
+    if (record.type !== "local_message" || EPHEMERAL_MESSAGE_TYPES.has(messageType) || !["text", "expressive"].includes(messageType)) return false
+    if (!onlyKeys(record.value, ["conversation_id", "client_message_id", "message_id", "type", "content", "expressive", "mine", "delivery_status", "sent_at", "sequence", "content_revision", "peer_applied_content_revision", "edited", "availability", "unsent", "reply_to_client_message_id", "reply_author_relation", "reply_snippet", "reply_target_availability", "self_reaction", "peer_reaction", "view_once_state", "presentation_limit", "views_remaining", "views_consumed", "media_type", "byte_size"])) return false
+    if (typeof record.value.conversation_id !== "string" || !record.value.conversation_id) return false
+    if (record.value.expressive !== undefined && record.value.expressive !== null && !onlyKeys(record.value.expressive, ["id", "kind", "category", "label", "asset_path"])) return false
+    return record.value.view_once_state === undefined || record.value.view_once_state === null
+  }
+  if (record.category === "summaries") {
+    return record.type === "summary" && onlyKeys(record.value, ["conversation_id", "text"]) && typeof record.value.conversation_id === "string" && typeof record.value.text === "string"
+  }
+  if (record.category === "memories") {
+    return record.type === "memory" && onlyKeys(record.value, ["text", "conversation_id"]) && typeof record.value.text === "string" && (record.value.conversation_id === undefined || typeof record.value.conversation_id === "string")
+  }
+  if (record.category === "bonds") {
+    return record.type === "relationship" &&
+      onlyKeys(record.value, ["relationship_id", "status", "conversation_id", "abstract_signature_seed", "origin_door_type", "origin_door_label", "formed_at", "private_nickname", "private_label"]) &&
+      typeof record.value.relationship_id === "string" && record.value.relationship_id.length > 0
+  }
+  return false
 }
 function safeValue(value, depth) {
   if (depth > MAX_DEPTH || typeof value === "function" || typeof value === "symbol" || typeof value === "bigint") return false

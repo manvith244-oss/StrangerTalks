@@ -99,6 +99,15 @@ defmodule StrangertalksNewWeb.TextMvpIntegrationTest do
 
     assert_reply ref, :ok, %{status: "applied", highest_contiguous_sequence: 2}
 
+    ref =
+      push(conversation_socket_a, "conversation:report", %{
+        "category" => "HARASSMENT",
+        "evidence" => "selected evidence"
+      })
+
+    assert_reply ref, :ok, %{status: "submitted"}
+    assert Repo.aggregate(Report, :count) == 1
+
     ref = push(conversation_socket_a, "conversation:end", %{})
     assert_reply ref, :ok, %{status: "ended"}
     assert Repo.get!(Conversation, conversation_id).conversation_completed == true
@@ -112,15 +121,6 @@ defmodule StrangertalksNewWeb.TextMvpIntegrationTest do
 
     assert_reply ref, :ok, %{status: "created"}
     assert Repo.aggregate(Relationship, :count) == 1
-
-    ref =
-      push(conversation_socket_a, "conversation:report", %{
-        "category" => "HARASSMENT",
-        "evidence" => "selected evidence"
-      })
-
-    assert_reply ref, :ok, %{status: "submitted"}
-    assert Repo.aggregate(Report, :count) == 1
 
     ref = push(conversation_socket_a, "conversation:block", %{})
     assert_reply ref, :ok, %{status: "blocked"}

@@ -1,0 +1,110 @@
+name: Conversation Empty State Proof
+
+on:
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+
+concurrency:
+  group: conversation-empty-state-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  empty-state-browser:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4002"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
+
+    steps:
+      - name: Checkout exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          echo "EXPECTED_EMPTY_STATE_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "ACTUAL_EMPTY_STATE_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/strangertalks-empty-state.log 2>&1 &
+          echo $! > /tmp/strangertalks-empty-state.pid
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$(cat /tmp/strangertalks-empty-state.pid)" 2>/dev/null; then
+              cat /tmp/strangertalks-empty-state.log
+              exit 1
+            fi
+            if curl -fsS http://localhost:4002/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/strangertalks-empty-state.log
+          exit 1
+
+      - name: Empty Conversation browser regression
+        run: node --test test/js/conversation_empty_state_browser_test.mjs
+
+      - name: Stop Phoenix
+        if: always()
+        run: |
+          if [ -f /tmp/strangertalks-empty-state.pid ]; then
+            kill "$(cat /tmp/strangertalks-empty-state.pid)" 2>/dev/null || true
+          fi
+
+      - name: Phoenix log on failure
+        if: failure()
+        run: cat /tmp/strangertalks-empty-state.log || true

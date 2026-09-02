@@ -28,17 +28,19 @@ test("accepted call remains CONNECTING until WebRTC transport establishes media 
   assert.equal(coord.status, CALL_STATUS.CONNECTING)
 })
 
-test("outgoing microphone is fail-closed during CONNECTING and opens exactly with ICE authority", async () => {
+test("outgoing microphone hardware stays closed during CONNECTING and opens only with ACTIVE transport authority", async () => {
   const originalNavigator = globalThis.navigator
   const originalRTC = globalThis.RTCPeerConnection
 
   const audioTrack = { kind: "audio", enabled: true, stop() {} }
   const stream = {
     getAudioTracks: () => [audioTrack],
+    getVideoTracks: () => [],
     getTracks: () => [audioTrack]
   }
 
   let pc
+  let mediaRequests = 0
   class FakeRTCPeerConnection {
     constructor(config) {
       this.config = config
@@ -48,7 +50,11 @@ test("outgoing microphone is fail-closed during CONNECTING and opens exactly wit
       this.senders = []
       pc = this
     }
-    addTrack(track) { this.senders.push({ track }); return { track } }
+    addTransceiver(kind) {
+      const sender = { track: null, async replaceTrack(track) { this.track = track } }
+      this.senders.push(sender)
+      return { kind, sender, receiver: {track: {kind}}, direction: "sendrecv" }
+    }
     getSenders() { return this.senders }
     async createOffer() { return { type: "offer", sdp: "fake" } }
     async setLocalDescription(desc) { this.localDescription = desc }
@@ -57,7 +63,7 @@ test("outgoing microphone is fail-closed during CONNECTING and opens exactly wit
 
   Object.defineProperty(globalThis, "navigator", {
     configurable: true,
-    value: { mediaDevices: { getUserMedia: async () => stream } }
+    value: { mediaDevices: { getUserMedia: async () => { mediaRequests += 1; return stream } } }
   })
   globalThis.RTCPeerConnection = FakeRTCPeerConnection
 
@@ -83,14 +89,18 @@ test("outgoing microphone is fail-closed during CONNECTING and opens exactly wit
     await coord.initializeWebRTC(true)
 
     assert.equal(coord.status, CALL_STATUS.CONNECTING)
-    assert.equal(audioTrack.enabled, false, "mic must be gated while UI/state is CONNECTING")
+    assert.equal(mediaRequests, 0, "CONNECTING must not request microphone hardware at all")
+    assert.equal(coord.localStream, null)
     assert.equal(pc.config.iceTransportPolicy, "relay")
 
     pc.iceConnectionState = "connected"
     pc.oniceconnectionstatechange()
+    await new Promise((resolve) => setImmediate(resolve))
 
     assert.equal(coord.status, CALL_STATUS.ACTIVE)
-    assert.equal(audioTrack.enabled, true, "mic may open only when media authority becomes ACTIVE")
+    assert.equal(mediaRequests, 1, "microphone acquisition may begin only after ACTIVE authority")
+    assert.equal(audioTrack.enabled, true, "ACTIVE unmuted call may transmit microphone")
+    assert.equal(coord.transportAudioTransceiver.sender.track, audioTrack)
   } finally {
     if (originalNavigator === undefined) delete globalThis.navigator
     else Object.defineProperty(globalThis, "navigator", { configurable: true, value: originalNavigator })
@@ -127,25 +137,42 @@ test("voice-expression changes cannot open a CONNECTING microphone", async () =>
 
   assert.equal(audioTrack.enabled, false, "effect reset cannot bypass CONNECTING media gate")
 })
-test("late getUserMedia resolution cannot resurrect a terminal call", async () => {
+
+test("late ACTIVE getUserMedia resolution cannot resurrect a terminal call", async () => {
   const originalNavigator = globalThis.navigator
   const originalRTC = globalThis.RTCPeerConnection
   let resolveMedia
+  let pc
   const stopped = []
   const audioTrack = {kind: "audio", enabled: true, stop() { stopped.push("audio") }}
-  const stream = {getAudioTracks: () => [audioTrack], getTracks: () => [audioTrack]}
-  class FakePC { constructor() { this.iceConnectionState = "new"; this.senders = [] } addTrack(track) { this.senders.push({track}) } getSenders() { return this.senders } close() {} }
+  const stream = {getAudioTracks: () => [audioTrack], getVideoTracks: () => [], getTracks: () => [audioTrack]}
+  class FakePC {
+    constructor() { this.iceConnectionState = "new"; this.senders = []; pc = this }
+    addTransceiver(kind) {
+      const sender = {track: null, async replaceTrack(track) { this.track = track }}
+      this.senders.push(sender)
+      return {kind, sender, receiver: {track: {kind}}, direction: "sendrecv"}
+    }
+    getSenders() { return this.senders }
+    close() {}
+  }
   Object.defineProperty(globalThis, "navigator", {configurable: true, value: {mediaDevices: {getUserMedia: () => new Promise(resolve => { resolveMedia = resolve })}}})
   globalThis.RTCPeerConnection = FakePC
   const channel = {push() { return phoenixPushOk({ice_servers: [{urls: ["turn:relay.invalid:3478"]}]}) }}
   try {
     const coord = new LiveCallCoordinator({participantId: "user-1", conversationId: "conv-1", channel})
     coord.callAttemptId = "attempt-1"; coord.role = "caller"; coord.status = CALL_STATUS.CONNECTING
-    const initializing = coord.initializeWebRTC(false)
+    await coord.initializeWebRTC(false)
+    assert.equal(resolveMedia, undefined, "CONNECTING must not start permission acquisition")
+
+    pc.iceConnectionState = "connected"
+    pc.oniceconnectionstatechange()
     await new Promise(resolve => setImmediate(resolve))
+    assert.equal(typeof resolveMedia, "function", "ACTIVE transition should start permission acquisition")
+
     coord.teardown("conversation_ended")
     resolveMedia(stream)
-    await initializing
+    await new Promise(resolve => setImmediate(resolve))
     assert.deepEqual(stopped, ["audio"])
     assert.equal(coord.localStream, null)
     assert.notEqual(coord.status, CALL_STATUS.ACTIVE)

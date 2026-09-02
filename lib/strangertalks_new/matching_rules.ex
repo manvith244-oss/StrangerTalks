@@ -7,6 +7,7 @@ defmodule StrangertalksNew.MatchingRules do
   import Ecto.Query, warn: false
   alias StrangertalksNew.Repo
   alias StrangertalksNew.Conversation
+  alias StrangertalksNew.Conversations
   alias StrangertalksNew.Relationship
   alias StrangertalksNew.ParticipantActivityLock
   alias StrangertalksNew.ConversationLifecycle.{ConversationServer, Transitions}
@@ -92,18 +93,31 @@ defmodule StrangertalksNew.MatchingRules do
                 current_conversation = Repo.get!(Conversation, conversation_id)
 
                 with {:ok, block} <- insert_block(blocker_id, blocked_id, "CONVERSATION"),
-                     {:ok, _conversation} <-
-                       terminate_conversation_for_block(current_conversation, blocker_id) do
-                  block
+                     {:ok, terminal_conversation} <-
+                       terminate_conversation_for_block(current_conversation, blocker_id),
+                     {:ok, terminal_truth} <-
+                       Conversations.terminal_truth(terminal_conversation) do
+                  {block, terminal_conversation, terminal_truth}
                 else
                   {:error, reason} -> Repo.rollback(reason)
                 end
               end)
 
             case result do
-              {:ok, block} ->
+              {:ok, {block, terminal_conversation, terminal_truth}} ->
+                if terminal_conversation.ending_type == :BLOCK do
+                  StrangertalksNew.Telemetry.execute(
+                    [:terminal, :durable_commit],
+                    %{count: 1},
+                    %{terminal_status: :ENDED, lifecycle_event: :safety_terminated}
+                  )
+                end
+
                 terminate_suspended_runtime(suspended_runtime)
                 stop_conversation_runtime(conversation_id)
+                emit_block_runtime_cleanup(suspended_runtime, terminal_conversation)
+                broadcast_terminal_authority(conversation_id, terminal_truth.client_event)
+                emit_block_notification_observability(terminal_conversation)
                 {:ok, block}
 
               {:error, reason} ->
@@ -142,6 +156,53 @@ defmodule StrangertalksNew.MatchingRules do
       conversation_completed: false,
       safety_flagged: true
     })
+  end
+
+  defp emit_block_notification_observability(%Conversation{ending_type: :BLOCK}) do
+    StrangertalksNew.Telemetry.execute(
+      [:terminal, :client_notification],
+      %{count: 1},
+      %{terminal_reason: :blocked, notification_path: :block_broadcast}
+    )
+  end
+
+  defp emit_block_notification_observability(%Conversation{} = conversation) do
+    StrangertalksNew.Telemetry.execute(
+      [:terminal, :stale_action_rejected],
+      %{count: 1},
+      %{
+        terminal_action: :block,
+        canonical_ending: bounded_ending_type(conversation.ending_type)
+      }
+    )
+
+    :ok
+  end
+
+  defp emit_block_runtime_cleanup({:suspended, _pid}, %Conversation{ending_type: :BLOCK}) do
+    StrangertalksNew.Telemetry.execute(
+      [:terminal, :runtime_cleanup],
+      %{count: 1},
+      %{terminal_reason: :blocked, cleanup_path: :block_suspended_runtime}
+    )
+  end
+
+  defp emit_block_runtime_cleanup(_runtime, _conversation), do: :ok
+
+  defp bounded_ending_type(:NATURAL_END), do: :natural_end
+  defp bounded_ending_type(:BLOCK), do: :block
+  defp bounded_ending_type(:SAFETY_ACTION), do: :safety_action
+  defp bounded_ending_type(:PARTICIPANT_LEFT), do: :participant_left
+  defp bounded_ending_type(:TIMEOUT), do: :timeout
+  defp bounded_ending_type(:DISCONNECT), do: :disconnect
+  defp bounded_ending_type(_ending_type), do: :other_terminal
+
+  defp broadcast_terminal_authority(conversation_id, client_event) do
+    StrangertalksNewWeb.Endpoint.broadcast(
+      "conversation:#{conversation_id}",
+      "conversation:ended",
+      client_event
+    )
   end
 
   defp suspend_conversation_runtime(conversation_id) do

@@ -10,6 +10,7 @@ defmodule StrangertalksNew.IntelligenceV1HostileTest do
     LearningRecord,
     Matching,
     Matches,
+    Message,
     Participant,
     Participants,
     Relationship,
@@ -36,10 +37,14 @@ defmodule StrangertalksNew.IntelligenceV1HostileTest do
              "lib/strangertalks_new/agent_systems/learning_advisor.ex"
            ]
 
-    router = File.read!("lib/strangertalks_new_web/router.ex")
-    refute router =~ "/analytics"
-    refute router =~ "/intelligence"
-    refute router =~ "/learning"
+    routes = StrangertalksNewWeb.Router.__routes__()
+
+    refute Enum.any?(routes, fn route ->
+             Enum.any?(
+               ["/analytics", "/intelligence", "/learning"],
+               &String.contains?(route.path, &1)
+             )
+           end)
 
     operator_task = File.read!("lib/mix/tasks/strangertalks.intelligence.ex")
     assert operator_task =~ "V1Metrics.snapshot"
@@ -57,13 +62,32 @@ defmodule StrangertalksNew.IntelligenceV1HostileTest do
       %{nested: [%{match_id: Ecto.UUID.generate()}]},
       %{"message_id" => Ecto.UUID.generate()},
       %{report_id: Ecto.UUID.generate()},
+      %{continuity_id: Ecto.UUID.generate()},
+      %{"account_id" => Ecto.UUID.generate()},
+      %{bond_id: Ecto.UUID.generate()},
+      %{"persistent_device_id" => "private-device"},
+      %{raw_queue_participant_id: Ecto.UUID.generate()},
       %{"conversation_text" => "private Conversation text"},
+      %{reply_text: "private reply"},
+      %{"unsent_message_text" => "private unsent text"},
+      %{draft_text: "private draft"},
       %{nested: %{report_evidence: "private safety evidence"}},
+      %{"safety_review_evidence" => "private review evidence"},
+      %{raw_safety_payload: %{"private" => true}},
       %{"reflection_text" => "private reflection"},
       %{memory_text: "private memory"},
+      %{"kept_conversation_content" => "private kept content"},
+      %{bond_private_content: "private Bond content"},
+      %{"encrypted_backup_content" => <<1, 2, 3>>},
+      %{private_memory_payload: %{"private" => true}},
       %{"voice_note_bytes" => <<1, 2, 3>>},
       %{voice_note_transcript: "private transcript"},
       %{"call_audio_metadata" => %{"track" => "identifying"}},
+      %{voice_call_audio: <<1, 2, 3>>},
+      %{"video_call_content" => <<4, 5, 6>>},
+      %{video_blob: <<7, 8, 9>>},
+      %{"media_frames" => [<<1>>]},
+      %{reported_media: <<2, 3>>},
       %{authorization: "Bearer private-token"},
       %{"refresh_token" => "private-refresh-token"},
       %{email: "private@example.com"},
@@ -71,8 +95,26 @@ defmodule StrangertalksNew.IntelligenceV1HostileTest do
       %{photo: "private-photo"},
       %{"ip_address" => "203.0.113.7"},
       %{device_fingerprint: "device-secret"},
+      %{"typing_cadence" => 180},
+      %{keystroke_timing: [1, 2, 3]},
       %{"keystroke_latency_variance" => 0.2},
+      %{deleted_characters: 4},
+      %{"draft_evolution" => ["a", "ab"]},
+      %{pause_timing: [100, 200]},
+      %{"typing_speed" => 42.0},
       %{readiness_score: 7.0},
+      %{"readiness_profile" => "ready_to_bond"},
+      %{engagement_score: 0.9},
+      %{"high_engagement_user" => true},
+      %{likely_to_stay: true},
+      %{"high_conversion_participant" => true},
+      %{loneliness_score: 0.8},
+      %{"emotional_dependency" => 0.7},
+      %{mental_health_inference: "private-profile"},
+      %{"political_leaning" => "private-profile"},
+      %{sexual_preference: "private-profile"},
+      %{"relationship_likelihood" => 0.9},
+      %{manipulability: 0.5},
       %{"personality_label" => "private-profile"},
       %{vulnerability_label: "private-profile"},
       %{"biometric_id" => "private-biometric"},
@@ -104,6 +146,101 @@ defmodule StrangertalksNew.IntelligenceV1HostileTest do
                "system" => %{},
                "human_outcomes" => %{}
              })
+  end
+
+  test "canonical analytics ignores raw Conversation text and report evidence and performs no writes" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    %{a: a, b: b, conversation: conversation} = canonical_outcome(now)
+
+    private_message = "TEAM7_PRIVATE_MESSAGE_DO_NOT_LEAK"
+    private_report = "TEAM7_PRIVATE_REPORT_EVIDENCE_DO_NOT_LEAK"
+
+    %Message{}
+    |> Message.changeset(%{
+      conversation_id: conversation.conversation_id,
+      sender_id: a.participant_id,
+      content: private_message,
+      expected_sequence_id: 1,
+      created_at: now,
+      updated_at: now
+    })
+    |> Repo.insert!()
+
+    %Report{}
+    |> Report.changeset(%{
+      created_at: now,
+      updated_at: now,
+      reporting_participant_id: a.participant_id,
+      reported_participant_id: b.participant_id,
+      conversation_id: conversation.conversation_id,
+      report_category: :SPAM,
+      report_status: :SUBMITTED,
+      reporter_context: private_report,
+      deduplication_key: "team7-private-evidence"
+    })
+    |> Repo.insert!()
+
+    before_counts = product_counts()
+    from = DateTime.add(now, -1, :second)
+    to = DateTime.add(now, 1, :second)
+
+    assert {:ok, snapshot} = V1Metrics.snapshot(from, to)
+    serialized = inspect(snapshot)
+
+    refute serialized =~ private_message
+    refute serialized =~ private_report
+    refute serialized =~ a.participant_id
+    refute serialized =~ b.participant_id
+    refute serialized =~ conversation.conversation_id
+    assert snapshot.human_outcomes.reports_submitted == 1
+    assert product_counts() == before_counts
+  end
+
+  test "voluntary relationship metric excludes rows without mutual acceptance" do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+    %{a: a, b: b, match: match, conversation: conversation} = canonical_outcome(now)
+
+    {:ok, relationship} =
+      StrangertalksNew.Relationships.create_relationship(%{
+        created_at: now,
+        updated_at: now,
+        accepted_at: nil,
+        first_conversation_at: conversation.created_at,
+        last_conversation_at: conversation.ended_at,
+        last_activity_at: now,
+        relationship_status: :ACTIVE,
+        origin_door_type: :EXPLORE,
+        participant_a_id: a.participant_id,
+        participant_b_id: b.participant_id,
+        origin_conversation_id: conversation.conversation_id,
+        origin_match_id: match.match_id,
+        participant_a_accepted: true,
+        participant_b_accepted: false,
+        allow_reconnection: true,
+        reconnection_eligible: true,
+        participant_a_closed: false,
+        participant_b_closed: false,
+        participant_a_blocked: false,
+        participant_b_blocked: false,
+        conversation_count: 1,
+        memory_count: 0,
+        reconnection_count: 0,
+        shared_memory_count: 0,
+        private_note_count: 0
+      })
+
+    from = DateTime.add(now, -1, :second)
+    to = DateTime.add(now, 1, :second)
+
+    assert {:ok, snapshot} = V1Metrics.snapshot(from, to)
+    assert snapshot.human_outcomes.voluntary_relationships_created == 0
+
+    relationship
+    |> Relationship.changeset(%{participant_b_accepted: true, accepted_at: now})
+    |> Repo.update!()
+
+    assert {:ok, accepted_snapshot} = V1Metrics.snapshot(from, to)
+    assert accepted_snapshot.human_outcomes.voluntary_relationships_created == 1
   end
 
   test "recommendation analysis is deterministic and leaves product state and configuration untouched" do
@@ -221,6 +358,7 @@ defmodule StrangertalksNew.IntelligenceV1HostileTest do
       participants: Repo.aggregate(Participant, :count, :participant_id),
       matches: Repo.aggregate(Matching, :count, :match_id),
       conversations: Repo.aggregate(Conversation, :count, :conversation_id),
+      messages: Repo.aggregate(Message, :count, :message_id),
       relationships: Repo.aggregate(Relationship, :count, :relationship_id),
       reports: Repo.aggregate(Report, :count, :report_id),
       analytics: Repo.aggregate(AnalyticsRecord, :count, :analytics_record_id),

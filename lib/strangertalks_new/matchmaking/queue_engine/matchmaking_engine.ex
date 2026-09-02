@@ -20,6 +20,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
   @pubsub_topic "strangertalks:matchmaking"
   @scarcity_wait_ms 15_000
+  @valid_doors MapSet.new([:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL])
   @approved_cross_door_pairs MapSet.new([
                                MapSet.new([:JUST_TALK, :EXPLORE]),
                                MapSet.new([:JUST_TALK, :KEEP_IT_LIGHT]),
@@ -42,7 +43,8 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
              (is_binary(conversation_language) or is_nil(conversation_language)) and
              (is_integer(media_overlap) or is_nil(media_overlap)) and
              (is_number(keystroke_profile) or is_nil(keystroke_profile)) do
-    with {:ok, normalized_language} <- ConversationLanguages.normalize(conversation_language) do
+    with :ok <- validate_door(door_type),
+         {:ok, normalized_language} <- ConversationLanguages.normalize(conversation_language) do
       put_queue_entry(
         participant_id,
         door_type,
@@ -63,7 +65,8 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
         conversation_id
       )
       when is_binary(participant_id) and is_atom(door_type) and is_binary(conversation_id) do
-    with {:ok, normalized_language} <-
+    with :ok <- validate_door(door_type),
+         {:ok, normalized_language} <-
            ConversationLanguages.normalize(conversation_language) do
       put_queue_entry(participant_id, door_type, normalized_language, nil, nil, conversation_id)
     end
@@ -501,6 +504,14 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
       Multi.new()
       |> Multi.insert(:match, Matching.changeset(%Matching{}, match_attrs))
+      |> Multi.run(:pairing_reservations, fn repo, %{match: match} ->
+        acquire_pairing_reservations(
+          repo,
+          match.match_id,
+          [p1.participant_id, p2.participant_id],
+          match_found_time
+        )
+      end)
       |> Multi.insert(:conversation, fn %{match: match} ->
         Conversation.changeset(%Conversation{}, %{
           match_id: match.match_id,
@@ -575,6 +586,45 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
       {:invalid_participants, missing_participant_ids}
     end
+  end
+
+  defp acquire_pairing_reservations(repo, match_id, participant_ids, acquired_at) do
+    ordered_participant_ids = participant_ids |> Enum.map(&canonical_uuid!/1) |> Enum.sort()
+
+    case Enum.reduce_while(ordered_participant_ids, :ok, fn participant_id, :ok ->
+           case repo.query(
+                  "INSERT INTO participant_pairing_reservations (match_id, participant_id, acquired_at) VALUES ($1, $2, $3)",
+                  [
+                    dump_uuid!(match_id),
+                    dump_uuid!(participant_id),
+                    DateTime.to_naive(acquired_at)
+                  ]
+                ) do
+             {:ok, _result} -> {:cont, :ok}
+             {:error, reason} -> {:halt, {:error, reason}}
+           end
+         end) do
+      :ok -> {:ok, ordered_participant_ids}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp canonical_uuid!(uuid) do
+    case Ecto.UUID.cast(uuid) do
+      {:ok, canonical_uuid} -> canonical_uuid
+      :error -> raise ArgumentError, "invalid participant UUID"
+    end
+  end
+
+  defp dump_uuid!(uuid) do
+    case Ecto.UUID.dump(uuid) do
+      {:ok, dumped_uuid} -> dumped_uuid
+      :error -> raise ArgumentError, "invalid UUID"
+    end
+  end
+
+  defp validate_door(door_type) do
+    if MapSet.member?(@valid_doors, door_type), do: :ok, else: {:error, :invalid_door}
   end
 
   defp common_door(p1, p2) do
