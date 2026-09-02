@@ -34,7 +34,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   @typing_expiry_ms 5_000
   @mailbox_soft_limit 100
   @mailbox_hard_limit 500
-  @release_terminal_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]
+  @release_terminal_statuses [:ENDED, :ABANDONED, :FAILED]
 
   def max_message_bytes, do: @max_message_bytes
 
@@ -709,7 +709,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
         {:stop, :unknown_conversation}
 
       %Conversation{conversation_status: status}
-      when status in [:ENDED, :ABANDONED, :FAILED, :COMPLETED] ->
+      when status in [:ENDED, :ABANDONED, :FAILED] ->
         {:stop, :terminal_conversation}
 
       conversation ->
