@@ -338,6 +338,8 @@ async function createIdentity(replacing) {
   await putRecord({id: identityKey, type: "identity", value: app.identity, updated_at: now()})
 }
 
+let socketBootFailures = 0
+
 function connectSocket() {
   if (!app.identity?.token) return
   if (app.socket) {
@@ -349,7 +351,18 @@ function connectSocket() {
     reconnectAfterMs: socketReconnectAfterMs,
     rejoinAfterMs: channelRejoinAfterMs
   })
-  app.socket.onError(() => { updateLocalConnection("reconnecting"); announce("Connection interrupted. Reconnecting.") })
+  app.socket.onOpen(() => { socketBootFailures = 0 })
+  app.socket.onError(() => {
+    updateLocalConnection("reconnecting")
+    announce("Connection interrupted. Reconnecting.")
+    if (!app.participantJoined) {
+      socketBootFailures++
+      if (socketBootFailures >= 2) {
+        socketBootFailures = 0
+        recoverIdentity().catch(() => {})
+      }
+    }
+  })
   app.socket.onClose(() => { if (app.conversationId) { updateLocalConnection("recovery") } })
   app.socket.connect()
   app.participant = app.socket.channel(`participant:${app.identity.participant_id}`, {})
