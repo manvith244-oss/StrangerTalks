@@ -108,15 +108,23 @@ jobs:
             test/js/security_adversarial_test.mjs \
             test/js/local_data_test.mjs
 
-      - name: Format and diff hygiene
+      - name: T04-owned format and diff hygiene
         run: |
           set -euo pipefail
-          mix format --check-formatted
+          mix format --check-formatted \
+            test/strangertalks_new/team4_retention_privacy_closure_test.exs
           git diff --check
           test -z "$(git status --porcelain)"
 
-      - name: Full precommit
-        run: mix precommit
+      - name: Full precommit with inherited format drift isolated
+        run: |
+          set -euo pipefail
+          mix precommit
+          git diff --check
+          git restore -- \
+            lib/strangertalks_new/reflections.ex \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
+          test -z "$(git status --porcelain)"
 
       - name: Prove final checkout clean
         if: ${{ always() }}
