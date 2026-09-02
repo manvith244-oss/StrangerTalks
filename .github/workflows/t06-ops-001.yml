@@ -11,13 +11,17 @@ on:
     paths:
       - ".github/workflows/postgres-r2-backup.yml"
       - ".github/workflows/retention-maintenance.yml"
+      - ".github/workflows/team1-core-authority.yml"
       - ".github/workflows/t06-ops-001.yml"
       - "ops/postgres_backup.sh"
       - "ops/postgres_restore.sh"
+      - "ops/run_retention.sh"
+      - "ops/check_candidate_diff.sh"
+      - "ops/preflight_distinct_relationship_participants.sh"
       - "lib/mix/tasks/strangertalks.retention.ex"
       - "lib/strangertalks_new/retention_cleanup.ex"
       - "test/strangertalks_new/retention_*"
-      - "test/strangertalks_new/t06_scheduled_ops_lineage_test.exs"
+      - "test/strangertalks_new/t06_*"
 
 permissions:
   contents: read
@@ -53,6 +57,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ env.EXPECTED_SHA }}
+          fetch-depth: 0
 
       - name: Prove checkout identity
         id: identity
@@ -79,14 +84,17 @@ jobs:
       - name: Install dependencies
         run: mix deps.get
 
-      - name: Scheduled-ops lineage regression
+      - name: Scheduled-ops and T01 CI lineage regressions
         id: lineage
         continue-on-error: true
         shell: bash
         run: |
           set +e
           set -o pipefail
-          mix test test/strangertalks_new/t06_scheduled_ops_lineage_test.exs 2>&1 | tee /tmp/t06-lineage.log
+          mix test \
+            test/strangertalks_new/t06_scheduled_ops_lineage_test.exs \
+            test/strangertalks_new/t06_candidate_diff_integrity_test.exs \
+            2>&1 | tee /tmp/t06-lineage.log
           code=${PIPESTATUS[0]}
           summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t06-lineage.log | tail -1 || true)
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
@@ -112,15 +120,77 @@ jobs:
           echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
           exit "$code"
 
-      - name: Backup and restore shell syntax
+      - name: Operations shell syntax
         id: shellcheck
         continue-on-error: true
         shell: bash
         run: |
           set +e
-          bash -n ops/postgres_backup.sh ops/postgres_restore.sh
+          bash -n \
+            ops/postgres_backup.sh \
+            ops/postgres_restore.sh \
+            ops/run_retention.sh \
+            ops/check_candidate_diff.sh \
+            ops/preflight_distinct_relationship_participants.sh
           code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Execute retention runner against isolated CI database
+        id: retention_runner
+        continue-on-error: true
+        shell: bash
+        env:
+          DATABASE_URL: postgresql://strangertalks_local:strangertalks_test@127.0.0.1:5432/strangertalks_new_test
+        run: |
+          set +e
+          set -o pipefail
+          bash ops/run_retention.sh 2>&1 | tee /tmp/t06-retention-runner.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Install PostgreSQL client for production preflight
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client curl ca-certificates
+
+      - name: Read-only self-relationship preflight against authoritative Supabase
+        id: self_relationship_preflight
+        if: github.event_name == 'push'
+        continue-on-error: true
+        shell: bash
+        env:
+          SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || vars.SUPABASE_DATABASE_URL }}
+          SUPABASE_CA_URL: https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt
+        run: |
+          set +e
+          if [ -z "${SUPABASE_DATABASE_URL:-}" ]; then
+            echo "PREFLIGHT_RESULT=BLOCKED_MISSING_SUPABASE_DATABASE_URL"
+            echo "exit_code=2" >> "$GITHUB_OUTPUT"
+            echo "count=missing" >> "$GITHUB_OUTPUT"
+            echo "result=BLOCKED_MISSING_SUPABASE_DATABASE_URL" >> "$GITHUB_OUTPUT"
+            exit 2
+          fi
+
+          curl --fail --silent --show-error --location "$SUPABASE_CA_URL" -o /tmp/supabase-prod-ca.crt
+
+          output=$(PGSSLMODE=verify-full \
+            PGSSLROOTCERT=/tmp/supabase-prod-ca.crt \
+            DATABASE_URL="$SUPABASE_DATABASE_URL" \
+            bash ops/preflight_distinct_relationship_participants.sh 2>&1)
+          code=$?
+          printf '%s\n' "$output"
+
+          count=$(printf '%s\n' "$output" | awk -F= '/^SELF_RELATIONSHIP_COUNT=/{print $2}' | tail -1)
+          result=$(printf '%s\n' "$output" | awk -F= '/^PREFLIGHT_RESULT=/{print $2}' | tail -1)
+
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "count=${count:-missing}" >> "$GITHUB_OUTPUT"
+          echo "result=${result:-missing}" >> "$GITHUB_OUTPUT"
           exit "$code"
 
       - name: Full repository precommit
@@ -139,6 +209,7 @@ jobs:
 
       - name: Git diff check
         id: diffcheck
+        if: always()
         continue-on-error: true
         shell: bash
         run: |
@@ -150,6 +221,7 @@ jobs:
 
       - name: Prove verification left checkout unchanged
         id: clean
+        if: always()
         continue-on-error: true
         shell: bash
         run: |
@@ -170,23 +242,27 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          LINEAGE_EXIT: ${{ steps.lineage.outputs.exit_code }}
+          LINEAGE_OUTCOME: ${{ steps.lineage.outcome }}
           LINEAGE_SUMMARY: ${{ steps.lineage.outputs.summary }}
-          RETENTION_EXIT: ${{ steps.retention.outputs.exit_code }}
+          RETENTION_OUTCOME: ${{ steps.retention.outcome }}
           RETENTION_SUMMARY: ${{ steps.retention.outputs.summary }}
-          SHELL_EXIT: ${{ steps.shellcheck.outputs.exit_code }}
-          PRECOMMIT_EXIT: ${{ steps.precommit.outputs.exit_code }}
+          SHELL_OUTCOME: ${{ steps.shellcheck.outcome }}
+          RUNNER_OUTCOME: ${{ steps.retention_runner.outcome }}
+          PREFLIGHT_OUTCOME: ${{ steps.self_relationship_preflight.outcome }}
+          PREFLIGHT_COUNT: ${{ steps.self_relationship_preflight.outputs.count }}
+          PREFLIGHT_RESULT: ${{ steps.self_relationship_preflight.outputs.result }}
+          PRECOMMIT_OUTCOME: ${{ steps.precommit.outcome }}
           PRECOMMIT_SUMMARY: ${{ steps.precommit.outputs.summary }}
-          DIFF_EXIT: ${{ steps.diffcheck.outputs.exit_code }}
-          CLEAN_EXIT: ${{ steps.clean.outputs.exit_code }}
+          DIFF_OUTCOME: ${{ steps.diffcheck.outcome }}
+          CLEAN_OUTCOME: ${{ steps.clean.outcome }}
         run: |
           set -euo pipefail
           state=success
-          for value in "$LINEAGE_EXIT" "$RETENTION_EXIT" "$SHELL_EXIT" "$PRECOMMIT_EXIT" "$DIFF_EXIT" "$CLEAN_EXIT"; do
-            if [ "$value" != "0" ]; then state=failure; fi
+          for value in "$LINEAGE_OUTCOME" "$RETENTION_OUTCOME" "$SHELL_OUTCOME" "$RUNNER_OUTCOME" "$PREFLIGHT_OUTCOME" "$PRECOMMIT_OUTCOME" "$DIFF_OUTCOME" "$CLEAN_OUTCOME"; do
+            if [ "$value" != "success" ]; then state=failure; fi
           done
 
-          description="lineage ${LINEAGE_SUMMARY:-missing}; retention ${RETENTION_SUMMARY:-missing}; precommit ${PRECOMMIT_SUMMARY:-missing}"
+          description="lineage ${LINEAGE_SUMMARY:-missing}; retention ${RETENTION_SUMMARY:-missing}; selfrel ${PREFLIGHT_COUNT:-missing}/${PREFLIGHT_RESULT:-missing}; full ${PRECOMMIT_SUMMARY:-missing}"
           description=$(printf '%s' "$description" | cut -c1-140)
 
           gh api --method POST \
@@ -201,19 +277,38 @@ jobs:
         shell: bash
         env:
           CHECKED_OUT_SHA: ${{ steps.identity.outputs.checked_out_sha }}
-          LINEAGE_EXIT: ${{ steps.lineage.outputs.exit_code }}
-          RETENTION_EXIT: ${{ steps.retention.outputs.exit_code }}
-          SHELL_EXIT: ${{ steps.shellcheck.outputs.exit_code }}
-          PRECOMMIT_EXIT: ${{ steps.precommit.outputs.exit_code }}
-          DIFF_EXIT: ${{ steps.diffcheck.outputs.exit_code }}
-          CLEAN_EXIT: ${{ steps.clean.outputs.exit_code }}
+          LINEAGE_OUTCOME: ${{ steps.lineage.outcome }}
+          RETENTION_OUTCOME: ${{ steps.retention.outcome }}
+          SHELL_OUTCOME: ${{ steps.shellcheck.outcome }}
+          RUNNER_OUTCOME: ${{ steps.retention_runner.outcome }}
+          PREFLIGHT_OUTCOME: ${{ steps.self_relationship_preflight.outcome }}
+          PREFLIGHT_EXIT: ${{ steps.self_relationship_preflight.outputs.exit_code }}
+          PRECOMMIT_OUTCOME: ${{ steps.precommit.outcome }}
+          DIFF_OUTCOME: ${{ steps.diffcheck.outcome }}
+          CLEAN_OUTCOME: ${{ steps.clean.outcome }}
         run: |
           set -euo pipefail
+          echo "CHECKED_OUT_SHA=${CHECKED_OUT_SHA:-missing}"
+          echo "LINEAGE_OUTCOME=$LINEAGE_OUTCOME"
+          echo "RETENTION_OUTCOME=$RETENTION_OUTCOME"
+          echo "SHELL_OUTCOME=$SHELL_OUTCOME"
+          echo "RUNNER_OUTCOME=$RUNNER_OUTCOME"
+          echo "PREFLIGHT_OUTCOME=$PREFLIGHT_OUTCOME"
+          echo "PREFLIGHT_EXIT=${PREFLIGHT_EXIT:-missing}"
+          echo "PRECOMMIT_OUTCOME=$PRECOMMIT_OUTCOME"
+          echo "DIFF_OUTCOME=$DIFF_OUTCOME"
+          echo "CLEAN_OUTCOME=$CLEAN_OUTCOME"
+
           test "$CHECKED_OUT_SHA" = "$EXPECTED_SHA"
-          test "$LINEAGE_EXIT" = "0"
-          test "$RETENTION_EXIT" = "0"
-          test "$SHELL_EXIT" = "0"
-          test "$PRECOMMIT_EXIT" = "0"
-          test "$DIFF_EXIT" = "0"
-          test "$CLEAN_EXIT" = "0"
+          test "$LINEAGE_OUTCOME" = "success"
+          test "$RETENTION_OUTCOME" = "success"
+          test "$SHELL_OUTCOME" = "success"
+          test "$RUNNER_OUTCOME" = "success"
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            test "$PREFLIGHT_OUTCOME" = "success"
+            test "$PREFLIGHT_EXIT" = "0"
+          fi
+          test "$PRECOMMIT_OUTCOME" = "success"
+          test "$DIFF_OUTCOME" = "success"
+          test "$CLEAN_OUTCOME" = "success"
           echo "TESTED_SHA=$CHECKED_OUT_SHA"
