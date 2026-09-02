@@ -2,17 +2,22 @@ defmodule StrangertalksNew.T06ScheduledOpsLineageTest do
   use ExUnit.Case, async: true
 
   @retention_workflow ".github/workflows/retention-maintenance.yml"
+  @retention_runner "ops/run_retention.sh"
   @backup_workflow ".github/workflows/postgres-r2-backup.yml"
 
   test "retention has one explicit operations-owned scheduled path to the canonical Mix task" do
     assert File.exists?(@retention_workflow),
            "expected #{@retention_workflow} to define the production retention schedule"
 
+    assert File.exists?(@retention_runner),
+           "expected #{@retention_runner} to provide the executable retention boundary"
+
     workflow = File.read!(@retention_workflow)
+    runner = File.read!(@retention_runner)
 
     assert workflow =~ "schedule:"
     assert workflow =~ "workflow_dispatch:"
-    assert workflow =~ "mix strangertalks.retention"
+    assert workflow =~ "bash ops/run_retention.sh"
     assert workflow =~ "STRANGERTALKS_RETENTION_ENABLED"
     assert workflow =~ "SUPABASE_DATABASE_URL"
     assert workflow =~ "concurrency:"
@@ -21,9 +26,15 @@ defmodule StrangertalksNew.T06ScheduledOpsLineageTest do
     assert workflow =~ "ref: ${{ env.EXPECTED_SHA }}"
     assert workflow =~ "git rev-parse HEAD"
 
+    assert runner =~ "DATABASE_URL"
+    assert runner =~ "mix strangertalks.retention"
+    assert runner =~ "RETENTION_RESULT=PASS"
+
     refute workflow =~ "RetentionPolicy"
     refute workflow =~ "retention_days"
     refute workflow =~ "RETENTION_DAYS"
+    refute runner =~ "RetentionPolicy"
+    refute runner =~ "RETENTION_DAYS"
   end
 
   test "backup workflow executes operational scripts from its exact workflow source SHA" do
