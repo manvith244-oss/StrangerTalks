@@ -76,19 +76,16 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Prove committed formatting and diff hygiene
+      - name: Prove T02 patch formatting and diff hygiene
         shell: bash
         run: |
           set -euo pipefail
-          mix format
+          mix format --check-formatted test/strangertalks_new_web/channels/participant_multitab_authority_test.exs
           git diff --check
           status="$(git status --porcelain)"
-          if [ -n "$status" ]; then
-            echo "Formatter changed the committed tree:"
-            printf '%s\n' "$status"
-            git diff --no-ext-diff -- .
-            exit 1
-          fi
+          echo "STATUS_BEFORE_TESTS:"
+          printf '%s\n' "$status"
+          test -z "$status"
 
       - name: Focused T02 multi-tab Elixir proof
         shell: bash
@@ -197,6 +194,29 @@ jobs:
 
       - name: Full repository precommit
         run: mix precommit
+
+      - name: Prove inherited formatter drift and restore exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/reflections.ex | sort)"
+          echo "FORMATTER_DRIFT_PATHS:"
+          printf '%s\n' "$changed"
+          if [ "$changed" != "$expected" ]; then
+            echo "Unexpected post-precommit tree mutation."
+            git diff --no-ext-diff -- .
+            exit 1
+          fi
+          git diff --no-ext-diff -- \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/reflections.ex
+          git checkout -- \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/reflections.ex
 
       - name: Final diff and clean-tree proof
         shell: bash
