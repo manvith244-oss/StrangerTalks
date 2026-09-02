@@ -140,6 +140,13 @@ defmodule StrangertalksNew.RelationshipTest do
     assert "is invalid" in errors_on(changeset).relationship_status
   end
 
+  test "create_relationship/1 rejects a self relationship", %{valid_attrs: attrs} do
+    invalid = Map.put(attrs, :participant_b_id, attrs.participant_a_id)
+
+    assert {:error, changeset} = Relationships.create_relationship(invalid)
+    assert "must identify two different participants" in errors_on(changeset).participant_b_id
+  end
+
   test "change_relationship/2 outputs an evaluation configuration tracking differences", %{
     valid_attrs: attrs
   } do
