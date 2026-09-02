@@ -204,11 +204,12 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
     }
 
     with {:ok, body} <- response_request(config, request_body),
-         {:ok, decoded} <- decode_structured_output(body) do
-      case decoded do
-        %{"approved" => true} -> :ok
-        %{"approved" => false} -> {:error, :companion_unsafe_output}
-        _ -> {:error, :companion_invalid_output}
+         {:ok, decoded} <- decode_structured_output(body),
+         :ok <- validate_critic_output(decoded) do
+      if decoded["approved"] do
+        :ok
+      else
+        {:error, :companion_unsafe_output}
       end
     end
   end
@@ -246,38 +247,80 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
 
   defp decode_structured_output(_body), do: {:error, :companion_invalid_output}
 
-  defp output_text(body) do
-    body
-    |> Map.get("output", [])
-    |> Enum.flat_map(fn item -> Map.get(item, "content", []) end)
-    |> Enum.find_value(fn
-      %{"type" => "output_text", "text" => text} when is_binary(text) -> text
-      _ -> nil
+  defp output_text(%{"output" => output}) when is_list(output) do
+    Enum.find_value(output, fn
+      %{"content" => content} when is_list(content) ->
+        Enum.find_value(content, fn
+          %{"type" => "output_text", "text" => text} when is_binary(text) -> text
+          _ -> nil
+        end)
+
+      _ ->
+        nil
     end)
   end
 
-  defp normalize_result(%{"decision" => "decline"} = decoded, model) do
+  defp output_text(_body), do: nil
+
+  defp normalize_result(decoded, model) when is_map(decoded) do
+    if exact_keys?(decoded, ["decision", "reason", "suggestions"]) do
+      normalize_companion_result(decoded, model)
+    else
+      {:error, :companion_invalid_output}
+    end
+  end
+
+  defp normalize_result(_decoded, _model), do: {:error, :companion_invalid_output}
+
+  defp normalize_companion_result(
+         %{"decision" => "decline", "reason" => reason, "suggestions" => []},
+         model
+       )
+       when is_nil(reason) or is_binary(reason) do
     {:ok,
      %{
        decision: :decline,
-       reason: decoded["reason"],
+       reason: reason,
        suggestions: [],
        model: model
      }}
   end
 
-  defp normalize_result(%{"decision" => "assist", "suggestions" => suggestions} = decoded, model)
-       when is_list(suggestions) do
-    {:ok,
-     %{
-       decision: :assist,
-       reason: decoded["reason"],
-       suggestions: suggestions,
-       model: model
-     }}
+  defp normalize_companion_result(
+         %{"decision" => "assist", "reason" => reason, "suggestions" => suggestions},
+         model
+       )
+       when (is_nil(reason) or is_binary(reason)) and is_list(suggestions) do
+    if length(suggestions) in 2..4 and Enum.all?(suggestions, &valid_suggestion?/1) do
+      {:ok,
+       %{
+         decision: :assist,
+         reason: reason,
+         suggestions: suggestions,
+         model: model
+       }}
+    else
+      {:error, :companion_invalid_output}
+    end
   end
 
-  defp normalize_result(_decoded, _model), do: {:error, :companion_invalid_output}
+  defp normalize_companion_result(_decoded, _model), do: {:error, :companion_invalid_output}
+
+  defp valid_suggestion?(%{"style" => style, "text" => text} = suggestion)
+       when is_binary(style) and is_binary(text) do
+    exact_keys?(suggestion, ["style", "text"])
+  end
+
+  defp valid_suggestion?(_suggestion), do: false
+
+  defp validate_critic_output(%{"approved" => approved, "reason" => reason} = decoded)
+       when is_boolean(approved) and (is_nil(reason) or is_binary(reason)) do
+    if exact_keys?(decoded, ["approved", "reason"]),
+      do: :ok,
+      else: {:error, :companion_invalid_output}
+  end
+
+  defp validate_critic_output(_decoded), do: {:error, :companion_invalid_output}
 
   defp moderate_output(config, %{decision: :decline, reason: reason}) when is_binary(reason) do
     moderate_texts(config, [reason])
@@ -290,11 +333,11 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
     moderate_texts(config, texts)
   end
 
-  defp moderate_texts(config, texts) do
+  defp moderate_texts(config, texts) when is_list(texts) and texts != [] do
     case config.http_client.moderate(config, texts) do
       {:ok, %{status: status, body: %{"results" => results}}}
       when status in 200..299 and is_list(results) ->
-        moderation_verdict(results)
+        moderation_verdict(results, length(texts))
 
       {:ok, %{status: status}} when status in [408, 409, 429, 500, 502, 503, 504] ->
         {:error, :companion_unavailable}
@@ -304,12 +347,31 @@ defmodule StrangertalksNew.Companion.OpenAIProvider do
     end
   end
 
-  defp moderation_verdict(results) do
-    if Enum.any?(results, &(&1["flagged"] == true)) do
-      {:error, :companion_unsafe_output}
-    else
-      :ok
+  defp moderate_texts(_config, _texts), do: {:error, :companion_provider_failure}
+
+  defp moderation_verdict(results, expected_count) do
+    cond do
+      length(results) != expected_count ->
+        {:error, :companion_provider_failure}
+
+      not Enum.all?(results, &valid_moderation_result?/1) ->
+        {:error, :companion_provider_failure}
+
+      Enum.any?(results, &(&1["flagged"] == true)) ->
+        {:error, :companion_unsafe_output}
+
+      true ->
+        :ok
     end
+  end
+
+  defp valid_moderation_result?(%{"flagged" => flagged}) when is_boolean(flagged), do: true
+  defp valid_moderation_result?(_result), do: false
+
+  defp exact_keys?(map, expected) when is_map(map) do
+    map
+    |> Map.keys()
+    |> Enum.sort() == Enum.sort(expected)
   end
 
   defp system_instructions do
