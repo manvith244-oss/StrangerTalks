@@ -76,32 +76,46 @@ defmodule StrangertalksNew.AgentSystems.TrendBridgeResearch do
 
   defp normalize_signals(_signals), do: {:error, :invalid_trend_research}
 
-  defp validate_output(%{"candidates" => candidates}) when is_list(candidates) do
-    normalized =
-      candidates
-      |> Enum.map(&normalize_candidate/1)
-      |> Enum.filter(&match?({:ok, _}, &1))
-      |> Enum.map(fn {:ok, item} -> item end)
-      |> Enum.uniq_by(&String.downcase(&1.bridge))
-      |> Enum.take(8)
+  defp validate_output(%{"candidates" => candidates} = decoded) when is_list(candidates) do
+    with true <- exact_keys?(decoded, ["candidates"]),
+         true <- length(candidates) in 3..8,
+         {:ok, normalized} <- normalize_candidates(candidates) do
+      deduplicated = Enum.uniq_by(normalized, &String.downcase(&1.bridge))
 
-    if length(normalized) in 3..8,
-      do: {:ok, normalized},
-      else: {:error, :invalid_trend_research_output}
+      if length(deduplicated) in 3..8,
+        do: {:ok, deduplicated},
+        else: {:error, :invalid_trend_research_output}
+    else
+      _ -> {:error, :invalid_trend_research_output}
+    end
   end
 
   defp validate_output(_decoded), do: {:error, :invalid_trend_research_output}
+
+  defp normalize_candidates(candidates) do
+    Enum.reduce_while(candidates, {:ok, []}, fn candidate, {:ok, acc} ->
+      case normalize_candidate(candidate) do
+        {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+        {:error, :invalid} -> {:halt, {:error, :invalid_trend_research_output}}
+      end
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      error -> error
+    end
+  end
 
   defp normalize_candidate(%{
          "tier" => tier,
          "bridge" => bridge,
          "rationale" => rationale
-       })
+       } = candidate)
        when tier in @tiers and is_binary(bridge) and is_binary(rationale) do
     bridge = String.trim(bridge)
     rationale = String.trim(rationale)
 
     cond do
+      not exact_keys?(candidate, ["tier", "bridge", "rationale"]) -> {:error, :invalid}
       bridge == "" or rationale == "" -> {:error, :invalid}
       String.length(bridge) > @max_bridge_chars -> {:error, :invalid}
       String.length(rationale) > 500 -> {:error, :invalid}
@@ -110,6 +124,12 @@ defmodule StrangertalksNew.AgentSystems.TrendBridgeResearch do
   end
 
   defp normalize_candidate(_candidate), do: {:error, :invalid}
+
+  defp exact_keys?(map, expected) when is_map(map) do
+    map
+    |> Map.keys()
+    |> Enum.sort() == Enum.sort(expected)
+  end
 
   defp instructions do
     """
