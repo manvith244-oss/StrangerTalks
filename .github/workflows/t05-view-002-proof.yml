@@ -58,6 +58,7 @@ jobs:
             test/strangertalks_new/view_once_media_store_test.exs \
             test/strangertalks_new/view_once_conversation_test.exs \
             test/strangertalks_new/view_once_safety_report_test.exs \
+            test/strangertalks_new_web/controllers/t05_view_epoch_authority_test.exs \
             test/strangertalks_new_web/controllers/view_once_media_controller_test.exs
       - name: Run client and sync exclusion proofs
         run: |
