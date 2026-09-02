@@ -37,6 +37,9 @@ defmodule StrangertalksNew.CompanionTest do
              model: "fake-companion"
            }}
 
+        :failure ->
+          {:error, :companion_unavailable}
+
         _ ->
           assist_result()
       end
@@ -269,6 +272,26 @@ defmodule StrangertalksNew.CompanionTest do
              })
 
     assert is_binary(reason)
+  end
+
+  test "provider failure leaves the ordinary human Conversation path usable", context do
+    Application.put_env(:strangertalks_new, :companion_test_mode, :failure)
+
+    assert {:error, :companion_unavailable} =
+             Companion.request(context.conversation.conversation_id, context.participant_a, %{
+               "mode" => "respond",
+               "request" => "Help me reply"
+             })
+
+    assert_receive {:companion_context, _captured}
+
+    assert {:ok, %{sequence: 1}} =
+             ConversationServer.append_message(
+               context.conversation.conversation_id,
+               context.participant_a,
+               Ecto.UUID.generate(),
+               "Human message still works."
+             )
   end
 
   defp restore_env(key, nil), do: Application.delete_env(:strangertalks_new, key)
