@@ -4,6 +4,10 @@ defmodule StrangertalksNew.T06ScheduledOpsLineageTest do
   @retention_workflow ".github/workflows/retention-maintenance.yml"
   @retention_runner "ops/run_retention.sh"
   @backup_workflow ".github/workflows/postgres-r2-backup.yml"
+  @team1_workflow ".github/workflows/team1-core-authority.yml"
+  @candidate_diff_checker "ops/check_candidate_diff.sh"
+  @self_relationship_preflight "ops/preflight_distinct_relationship_participants.sh"
+  @t06_gate ".github/workflows/t06-ops-001.yml"
 
   test "retention has one explicit operations-owned scheduled path to the canonical Mix task" do
     assert File.exists?(@retention_workflow),
@@ -65,5 +69,57 @@ defmodule StrangertalksNew.T06ScheduledOpsLineageTest do
         ] do
       assert workflow =~ required, "backup workflow lost required proof marker #{required}"
     end
+  end
+
+  test "Team 1 compares the exact candidate against its actual canonical base, never a frozen historical SHA" do
+    assert File.exists?(@candidate_diff_checker)
+    workflow = File.read!(@team1_workflow)
+
+    refute workflow =~ "TEAM1_START_SHA"
+    refute workflow =~ "e938cdd6e806cc5d05837a9c97755477be95bb27"
+    assert workflow =~ "pull_request:\n    branches:\n      - main"
+    assert workflow =~ "EXPECTED_TEAM1_COMMIT"
+    assert workflow =~ "github.event.pull_request.head.sha || github.sha"
+    assert workflow =~ "github.event.pull_request.base.sha"
+    assert workflow =~ "git merge-base HEAD origin/main"
+    assert workflow =~ "CANDIDATE_BASE_SHA"
+    assert workflow =~ "bash ops/check_candidate_diff.sh \"$CANDIDATE_BASE_SHA\" HEAD"
+
+    checker = File.read!(@candidate_diff_checker)
+    assert checker =~ "git diff --check \"$base_sha...$candidate_sha\""
+    assert checker =~ "git diff --check"
+  end
+
+  test "Team 1 diff failure does not suppress clean-tree proof and both failures remain visible" do
+    workflow = File.read!(@team1_workflow)
+
+    assert workflow =~ "id: diffcheck"
+    assert workflow =~ "id: clean"
+    assert workflow =~ "continue-on-error: true"
+    assert workflow =~ "if: always()"
+    assert workflow =~ "DIFF_EXIT"
+    assert workflow =~ "CLEAN_EXIT"
+    assert workflow =~ "Fail Team 1 gate if required verification failed"
+  end
+
+  test "self-relationship production preflight is count-only and forced read-only" do
+    assert File.exists?(@self_relationship_preflight)
+    script = File.read!(@self_relationship_preflight)
+    gate = File.read!(@t06_gate)
+
+    assert script =~ "default_transaction_read_only=on"
+    assert script =~ "SELECT count(*)::bigint"
+    assert script =~ "participant_a_id = participant_b_id"
+    assert script =~ "AUTHORITATIVE_DB_VERIFIED=supabase"
+    assert script =~ "SELF_RELATIONSHIP_COUNT="
+    assert script =~ "MIGRATION_OPERATIONAL_ELIGIBILITY=ELIGIBLE"
+    assert script =~ "OWNER_CONSTRUCTION_COMMAND_DATA_REMEDIATION_DECISION_REQUIRED"
+    refute script =~ "SELECT *"
+    refute script =~ "DELETE FROM"
+    refute script =~ "UPDATE relationships"
+
+    assert gate =~ "SUPABASE_DATABASE_URL"
+    assert gate =~ "preflight_distinct_relationship_participants.sh"
+    assert gate =~ "SELF_RELATIONSHIP_COUNT"
   end
 end
