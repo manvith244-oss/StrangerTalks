@@ -69,18 +69,20 @@ jobs:
             exit 2
           fi
 
-      - name: Checkout backup scripts only
+      - name: Checkout exact backup operational source
         uses: actions/checkout@v4
         with:
-          ref: release/prep-2026-08-22
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
-      - name: Prove checkout branch and protected files untouched
+      - name: Prove workflow and operational source SHA
         shell: bash
         run: |
           set -euo pipefail
-          echo "phase2_checked_out_sha=$(git rev-parse HEAD)"
-          echo "phase2_checked_out_branch=release/prep-2026-08-22"
+          checked_out_sha=$(git rev-parse HEAD)
+          echo "WORKFLOW_SOURCE_SHA=$GITHUB_SHA"
+          echo "CHECKED_OUT_OPS_SHA=$checked_out_sha"
+          test "$checked_out_sha" = "$GITHUB_SHA"
           git status --porcelain
           test -f ops/postgres_backup.sh
           test -f ops/postgres_restore.sh
