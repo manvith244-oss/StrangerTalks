@@ -11,156 +11,10 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-canonical-terminal-fix:
-    runs-on: macos-latest
-    outputs:
-      needs_fix: ${{ steps.detect.outputs.needs_fix }}
-    steps:
-      - name: Checkout exact T02 candidate
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 2
-
-      - name: Detect exact terminal-runtime state
-        id: detect
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
-
-          server = Path('lib/strangertalks_new/conversation_lifecycle/conversation_server.ex').read_text()
-          pairing = Path('test/strangertalks_new/participant_pairing_reservation_release_cases.exs').read_text()
-
-          old = [
-              '@release_terminal_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]',
-              'when status in [:ENDED, :ABANDONED, :FAILED, :COMPLETED] ->',
-              'release-terminal classifier recognizes exactly ENDED ABANDONED FAILED COMPLETED',
-          ]
-          new = [
-              '@release_terminal_statuses [:ENDED, :ABANDONED, :FAILED]',
-              'when status in [:ENDED, :ABANDONED, :FAILED] ->',
-              'release-terminal classifier recognizes exactly ENDED ABANDONED FAILED',
-          ]
-
-          old_counts = [server.count(old[0]), server.count(old[1]), pairing.count(old[2])]
-          new_counts = [server.count(new[0]), server.count(new[1]), pairing.count(new[2])]
-
-          if old_counts == [1, 1, 1] and new_counts == [0, 0, 0]:
-              value = 'true'
-          elif old_counts == [0, 0, 0] and new_counts == [1, 1, 1]:
-              value = 'false'
-          else:
-              raise SystemExit(f'partial or ambiguous terminal state old={old_counts} new={new_counts}')
-
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:
-              fh.write(f'needs_fix={value}\n')
-          print(f'needs_fix={value}')
-          PY
-
-      - name: Set up BEAM for exact format
-        if: steps.detect.outputs.needs_fix == 'true'
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.18.4"
-          otp-version: "27.3.4"
-
-      - name: Install dependencies for exact format
-        if: steps.detect.outputs.needs_fix == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          mix local.hex --force
-          mix local.rebar --force
-          mix deps.get
-
-      - name: Apply smallest T02 runtime correction
-        if: steps.detect.outputs.needs_fix == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          server = Path('lib/strangertalks_new/conversation_lifecycle/conversation_server.ex')
-          text = server.read_text()
-          replacements = [
-              ('@release_terminal_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]',
-               '@release_terminal_statuses [:ENDED, :ABANDONED, :FAILED]'),
-              ('when status in [:ENDED, :ABANDONED, :FAILED, :COMPLETED] ->',
-               'when status in [:ENDED, :ABANDONED, :FAILED] ->'),
-          ]
-          for old, new in replacements:
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected one exact server occurrence: {old}')
-              text = text.replace(old, new, 1)
-          server.write_text(text)
-
-          pairing = Path('test/strangertalks_new/participant_pairing_reservation_release_cases.exs')
-          text = pairing.read_text()
-          old = '''  test "release-terminal classifier recognizes exactly ENDED ABANDONED FAILED COMPLETED" do
-            for status <- [:ENDED, :ABANDONED, :FAILED, :COMPLETED] do
-              assert ConversationServer.release_terminal_status?(status)
-            end
-
-            for status <- [:PENDING, :ACTIVE, :PAUSED] do
-              refute ConversationServer.release_terminal_status?(status)
-            end
-
-            IO.puts(
-              "REL-05 PASS classifier release=ENDED,ABANDONED,FAILED,COMPLETED keep=PENDING,ACTIVE,PAUSED"
-            )
-          end'''
-          new = '''  test "release-terminal classifier recognizes exactly ENDED ABANDONED FAILED" do
-            for status <- [:ENDED, :ABANDONED, :FAILED] do
-              assert ConversationServer.release_terminal_status?(status)
-            end
-
-            for status <- [:PENDING, :ACTIVE, :PAUSED, :COMPLETED] do
-              refute ConversationServer.release_terminal_status?(status)
-            end
-
-            IO.puts(
-              "REL-05 PASS classifier release=ENDED,ABANDONED,FAILED keep=PENDING,ACTIVE,PAUSED reject=COMPLETED"
-            )
-          end'''
-          if text.count(old) != 1:
-              raise SystemExit('pairing classifier block did not match exactly once')
-          pairing.write_text(text.replace(old, new, 1))
-          PY
-
-          rm -f .github/workflows/t02-runtime-terminal-fix-once.yml
-
-          mix format \
-            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
-            test/strangertalks_new/runtime_terminal_contract_test.exs \
-            test/strangertalks_new/participant_pairing_reservation_release_cases.exs \
-            test/strangertalks_new/runtime_restart_reconciliation_test.exs \
-            lib/strangertalks_new/matchmaking/queue_engine/participant_connection_tracker.ex \
-            lib/strangertalks_new_web/participant_channel.ex
-
-          git diff --check
-
-      - name: Push exact corrected candidate
-        if: steps.detect.outputs.needs_fix == 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "fix(t02): align runtime terminal authority with T01 law"
-          git push origin HEAD:team2/runtime-restart-reconciliation
-
   runtime-restart-reconciliation:
-    needs: apply-canonical-terminal-fix
-    if: needs.apply-canonical-terminal-fix.outputs.needs_fix == 'false'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -193,8 +47,8 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          echo "EXPECTED_T02_RESTART_COMMIT=${{ github.sha }}"
-          echo "ACTUAL_T02_RESTART_COMMIT=$actual"
+          echo "REQUESTED_T02_RESTART_COMMIT=${{ github.sha }}"
+          echo "CHECKED_OUT_T02_RESTART_COMMIT=$actual"
           test "$actual" = "${{ github.sha }}"
           git status --porcelain
 
@@ -245,7 +99,7 @@ jobs:
           set -euo pipefail
           mix precommit
 
-      - name: Prove inherited formatter drift and restore exact checkout
+      - name: Prove only inherited formatter drift and restore exact checkout
         shell: bash
         run: |
           set -euo pipefail
@@ -276,5 +130,5 @@ jobs:
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          echo "T02_RESTART_TESTED_COMMIT=$actual"
+          echo "TESTED_T02_RESTART_COMMIT=$actual"
           test "$actual" = "${{ github.sha }}"
