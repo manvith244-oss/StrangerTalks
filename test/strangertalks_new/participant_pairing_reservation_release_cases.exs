@@ -5,7 +5,7 @@ defmodule StrangertalksNew.ParticipantPairingReservationReleaseTest do
 
   alias Ecto.Adapters.SQL.Sandbox
   alias StrangertalksNew.Conversation
-  alias StrangertalksNew.ConversationLifecycle.ConversationServer
+  alias StrangertalksNew.ConversationLifecycle.{ConversationServer, Transitions}
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.QueueEngine.QueueState
   alias StrangertalksNew.Repo
@@ -30,17 +30,17 @@ defmodule StrangertalksNew.ParticipantPairingReservationReleaseTest do
     :ok
   end
 
-  test "release-terminal classifier recognizes exactly ENDED ABANDONED FAILED COMPLETED" do
-    for status <- [:ENDED, :ABANDONED, :FAILED, :COMPLETED] do
-      assert ConversationServer.release_terminal_status?(status)
+  test "durable terminal classifier recognizes exactly ENDED ABANDONED FAILED" do
+    for status <- [:ENDED, :ABANDONED, :FAILED] do
+      assert Transitions.terminal?(status)
     end
 
-    for status <- [:PENDING, :ACTIVE, :PAUSED] do
-      refute ConversationServer.release_terminal_status?(status)
+    for status <- [:PENDING, :ACTIVE, :PAUSED, :COMPLETED] do
+      refute Transitions.terminal?(status)
     end
 
     IO.puts(
-      "REL-05 PASS classifier release=ENDED,ABANDONED,FAILED,COMPLETED keep=PENDING,ACTIVE,PAUSED"
+      "REL-05 PASS classifier release=ENDED,ABANDONED,FAILED keep=PENDING,ACTIVE,PAUSED reject=COMPLETED"
     )
   end
 
