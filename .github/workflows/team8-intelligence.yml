@@ -1,0 +1,215 @@
+name: Team 7 Intelligence & Privacy Closure Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - newteam/intelligence
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+    paths:
+      - "lib/strangertalks_new/intelligence/**"
+      - "lib/strangertalks_new/analytics_records.ex"
+      - "lib/strangertalks_new/learning_records.ex"
+      - "lib/mix/tasks/strangertalks.intelligence.ex"
+      - "lib/mix/tasks/strangertalks.agents.ex"
+      - "test/strangertalks_new/intelligence_v1_test.exs"
+      - "test/strangertalks_new/intelligence_v1_hostile_test.exs"
+      - "test/strangertalks_new/team7_intelligence_boundary_test.exs"
+      - "test/strangertalks_new/analytics_record_test.exs"
+      - "test/strangertalks_new/learning_record_test.exs"
+      - "docs/TEAM8_INTELLIGENCE_V1.md"
+      - ".github/workflows/team8-intelligence.yml"
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  closure:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout exact Team 7 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+
+      - name: Prove checkout identity
+        id: identity
+        shell: bash
+        run: |
+          checked_out_sha=$(git rev-parse HEAD)
+          echo "EXPECTED_SHA=$EXPECTED_SHA"
+          echo "CHECKED_OUT_SHA=$checked_out_sha"
+          test "$checked_out_sha" = "$EXPECTED_SHA"
+          echo "checked_out_sha=$checked_out_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Focused Team 7 privacy and intelligence regressions
+        id: focused
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix test \
+            test/strangertalks_new/intelligence_v1_test.exs \
+            test/strangertalks_new/intelligence_v1_hostile_test.exs \
+            test/strangertalks_new/team7_intelligence_boundary_test.exs \
+            test/strangertalks_new/analytics_record_test.exs \
+            test/strangertalks_new/learning_record_test.exs \
+            test/strangertalks_new/agent_systems_remediation_test.exs \
+            test/strangertalks_new/agent_systems_functional_test.exs \
+            2>&1 | tee /tmp/team7-focused.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/team7-focused.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Core product smoke without intelligence dependency
+        id: smoke
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix test \
+            test/strangertalks_new/matchmaking_engine_test.exs \
+            test/strangertalks_new/conversation_delivery_test.exs \
+            2>&1 | tee /tmp/team7-core-smoke.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/team7-core-smoke.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Full Elixir precommit
+        id: full
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix precommit 2>&1 | tee /tmp/team7-precommit.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/team7-precommit.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Git diff check
+        id: diffcheck
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          git diff --check
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Prove precommit left checkout unchanged
+        id: clean
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          status=$(git status --porcelain)
+          printf '%s\n' "$status"
+          if [ -n "$status" ]; then
+            echo "--- precommit diff begin ---"
+            git diff --no-ext-diff -- .
+            echo "--- precommit diff end ---"
+            code=1
+          else
+            code=0
+          fi
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Publish exact-SHA Team 7 status
+        if: always() && github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOCUSED_EXIT: ${{ steps.focused.outputs.exit_code }}
+          FOCUSED_SUMMARY: ${{ steps.focused.outputs.summary }}
+          SMOKE_EXIT: ${{ steps.smoke.outputs.exit_code }}
+          SMOKE_SUMMARY: ${{ steps.smoke.outputs.summary }}
+          FULL_EXIT: ${{ steps.full.outputs.exit_code }}
+          FULL_SUMMARY: ${{ steps.full.outputs.summary }}
+          DIFF_EXIT: ${{ steps.diffcheck.outputs.exit_code }}
+          CLEAN_EXIT: ${{ steps.clean.outputs.exit_code }}
+        run: |
+          state=success
+          for value in "$FOCUSED_EXIT" "$SMOKE_EXIT" "$FULL_EXIT" "$DIFF_EXIT" "$CLEAN_EXIT"; do
+            if [ "$value" != "0" ]; then state=failure; fi
+          done
+
+          description="focused ${FOCUSED_SUMMARY:-missing}; smoke ${SMOKE_SUMMARY:-missing}; full ${FULL_SUMMARY:-missing}; diff ${DIFF_EXIT:-missing}; clean ${CLEAN_EXIT:-missing}"
+          description=$(printf '%s' "$description" | cut -c1-140)
+
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/statuses/$EXPECTED_SHA" \
+            -f state="$state" \
+            -f context="team7-intelligence-privacy-closure" \
+            -f description="$description" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Fail gate if any required execution failed
+        if: always()
+        shell: bash
+        env:
+          CHECKED_OUT_SHA: ${{ steps.identity.outputs.checked_out_sha }}
+          FOCUSED_EXIT: ${{ steps.focused.outputs.exit_code }}
+          SMOKE_EXIT: ${{ steps.smoke.outputs.exit_code }}
+          FULL_EXIT: ${{ steps.full.outputs.exit_code }}
+          DIFF_EXIT: ${{ steps.diffcheck.outputs.exit_code }}
+          CLEAN_EXIT: ${{ steps.clean.outputs.exit_code }}
+        run: |
+          test "$CHECKED_OUT_SHA" = "$EXPECTED_SHA"
+          test "$FOCUSED_EXIT" = "0"
+          test "$SMOKE_EXIT" = "0"
+          test "$FULL_EXIT" = "0"
+          test "$DIFF_EXIT" = "0"
+          test "$CLEAN_EXIT" = "0"
+          echo "EXPECTED_SHA=$EXPECTED_SHA"
+          echo "CHECKED_OUT_SHA=$CHECKED_OUT_SHA"
+          echo "TESTED_SHA=$CHECKED_OUT_SHA"

@@ -1,0 +1,241 @@
+name: Team 7 Memory Bonds Return Gate
+
+on:
+  push:
+    branches:
+      - team7/memory-bonds-return-2026-08-24
+      - newteam/continuity
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+
+concurrency:
+  group: team7-memory-bonds-return-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  continuity:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact Team 7 HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          echo "EXPECTED_TEAM7_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "ACTUAL_TEAM7_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          git status --porcelain
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Team 7 focused Elixir continuity tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(
+            find test/strangertalks_new test/strangertalks_new_web -type f \
+              \( -name '*account*test.exs' \
+                 -o -name '*google*test.exs' \
+                 -o -name '*memor*test.exs' \
+                 -o -name '*relationship*test.exs' \
+                 -o -name '*reflection*test.exs' \) \
+              -print | sort
+          )
+          printf 'Focused Team 7 Elixir files (%s):\n' "${#tests[@]}"
+          printf '%s\n' "${tests[@]}"
+          test "${#tests[@]}" -gt 0
+          mix test "${tests[@]}"
+
+      - name: Team 7 local retention export import sync attacks
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test \
+            test/js/local_data_test.mjs \
+            test/js/team7_retention_race_test.mjs \
+            test/js/team7_backup_import_test.mjs \
+            test/js/atomic_restore_test.mjs \
+            test/js/restoration_validation_test.mjs \
+            test/js/encrypted_sync_test.mjs \
+            test/js/reflections_test.mjs \
+            test/js/bond_reconnect_test.mjs \
+            test/js/message_edit_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/ephemeral_conversation_ux_test.mjs \
+            test/js/security_adversarial_test.mjs \
+            > /tmp/team7-js.log 2>&1; then
+            tail -n 60 /tmp/team7-js.log
+          else
+            tail -n 180 /tmp/team7-js.log
+            exit 1
+          fi
+
+      - name: Team 7 Device A to B to A encrypted continuity composite
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test test/js/team7_two_device_continuity_test.mjs > /tmp/team7-two-device.log 2>&1; then
+            cat /tmp/team7-two-device.log
+          else
+            cat /tmp/team7-two-device.log
+            exit 1
+          fi
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix for continuity browser proof
+        env:
+          STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/team7-browser.log 2>&1 &
+          echo $! > /tmp/team7-browser.pid
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$(cat /tmp/team7-browser.pid)" 2>/dev/null; then
+              cat /tmp/team7-browser.log
+              exit 1
+            fi
+            if curl -fsS http://localhost:4000/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/team7-browser.log
+          exit 1
+
+      - name: Team 7 continuity browser matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test test/js/team7_continuity_browser_test.mjs > /tmp/team7-matrix.log 2>&1; then
+            cat /tmp/team7-matrix.log
+          else
+            cat /tmp/team7-matrix.log
+            exit 1
+          fi
+
+      - name: Team 5 real browser continuity attacks
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test test/js/team5_continuity_browser_attack_test.mjs > /tmp/team5-browser-continuity.log 2>&1; then
+            cat /tmp/team5-browser-continuity.log
+          else
+            cat /tmp/team5-browser-continuity.log
+            exit 1
+          fi
+
+      - name: Existing end-to-end browser proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node --test test/js/browser_e2e_test.mjs > /tmp/team7-browser-e2e.log 2>&1; then
+            tail -n 80 /tmp/team7-browser-e2e.log
+          else
+            echo "EXISTING_BROWSER_E2E_FIRST_FAILURE_CONTEXT"
+            tail -n 220 /tmp/team7-browser-e2e.log
+            exit 1
+          fi
+
+      - name: Stop Phoenix browser server
+        if: always()
+        run: |
+          if [ -f /tmp/team7-browser.pid ]; then
+            pid="$(cat /tmp/team7-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Reset browser data before full suite
+        run: |
+          mix ecto.drop --quiet
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Format check
+        run: mix format --check-formatted
+
+      - name: Full precommit
+        shell: bash
+        run: |
+          set -euo pipefail
+          if mix precommit > /tmp/team7-precommit.log 2>&1; then
+            tail -n 100 /tmp/team7-precommit.log
+          else
+            tail -n 240 /tmp/team7-precommit.log
+            exit 1
+          fi
+
+      - name: Diff check
+        run: git diff --check
+
+      - name: Prove final checkout clean
+        shell: bash
+        run: |
+          git status --short --branch
+          git status --porcelain | tee /tmp/team7-status
+          test ! -s /tmp/team7-status
+
+      - name: Record exact tested commit
+        run: echo "TEAM7_TESTED_COMMIT=$(git rev-parse HEAD)"
+
+      - name: Browser server log on failure
+        if: failure()
+        run: cat /tmp/team7-browser.log || true

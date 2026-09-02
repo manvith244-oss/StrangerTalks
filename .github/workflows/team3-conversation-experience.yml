@@ -1,0 +1,243 @@
+name: Team 3 Conversation Experience Proof
+
+on:
+  pull_request:
+    branches:
+      - feature/instagram-chat-ui
+  workflow_dispatch:
+
+concurrency:
+  group: team3-conversation-experience-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  conversation-experience:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+
+    steps:
+      - name: Checkout exact Team 3 commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "EXPECTED_TEAM3_COMMIT=$expected"
+          echo "ACTUAL_TEAM3_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$expected"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix real stack
+        run: |
+          mix run --no-start -e '
+            repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNew.Repo,
+              repo_config
+              |> Keyword.put(:pool, DBConnection.ConnectionPool)
+              |> Keyword.put(:pool_size, 20)
+            )
+            endpoint_config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNewWeb.Endpoint,
+              endpoint_config
+              |> Keyword.put(:server, true)
+              |> Keyword.put(:http, [ip: {127, 0, 0, 1}, port: 4000])
+            )
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/team3-phoenix.log 2>&1 &
+          echo $! > /tmp/team3-phoenix.pid
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$(cat /tmp/team3-phoenix.pid)" 2>/dev/null; then
+              echo "Phoenix exited before becoming ready."
+              cat /tmp/team3-phoenix.log
+              exit 1
+            fi
+            if curl -fsS http://localhost:4000/ >/dev/null; then
+              echo "Team 3 browser endpoint is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Phoenix did not become ready."
+          cat /tmp/team3-phoenix.log
+          exit 1
+
+      - name: Team 3 Conversation browser attacks
+        id: hardened_browser
+        continue-on-error: true
+        run: |
+          node --test \
+            test/js/team3_conversation_experience_gate_test.mjs \
+            test/js/team3_conversation_hostile_test.mjs
+
+      - name: Existing real-stack browser regression
+        id: existing_browser
+        continue-on-error: true
+        run: node --test test/js/browser_e2e_test.mjs
+
+      - name: Conversation interaction regressions
+        id: interaction
+        continue-on-error: true
+        run: |
+          node --test \
+            test/js/instagram_chat_test.mjs \
+            test/js/reply_quote_test.mjs \
+            test/js/reaction_test.mjs \
+            test/js/message_edit_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/pin_test.mjs \
+            test/js/expressive_media_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/atmosphere_test.mjs \
+            test/js/prompt_cards_test.mjs \
+            test/js/companion_test.mjs \
+            test/js/presence_test.mjs
+
+      - name: Stop Phoenix real stack
+        if: always()
+        run: |
+          if [ -f /tmp/team3-phoenix.pid ]; then
+            pid="$(cat /tmp/team3-phoenix.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then
+                break
+              fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then
+              kill -9 "$pid" 2>/dev/null || true
+            fi
+          fi
+
+      - name: Reset database before backend regression
+        run: |
+          mix ecto.drop --quiet
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Focused Conversation backend regressions
+        id: focused_backend
+        continue-on-error: true
+        run: |
+          mix test \
+            test/strangertalks_new/conversation_lifecycle_test.exs \
+            test/strangertalks_new/conversation_delivery_test.exs \
+            test/strangertalks_new/conversation_reply_test.exs \
+            test/strangertalks_new/conversation_reaction_test.exs \
+            test/strangertalks_new/conversation_message_edit_test.exs \
+            test/strangertalks_new/conversation_message_unsend_test.exs \
+            test/strangertalks_new/conversation_pin_test.exs \
+            test/strangertalks_new/conversation_presence_test.exs \
+            test/strangertalks_new/conversation_unsend_report_safety_test.exs \
+            test/strangertalks_new/recovery_restart_test.exs
+
+      - name: Full precommit
+        id: precommit
+        continue-on-error: true
+        run: mix precommit
+
+      - name: Whitespace integrity
+        id: whitespace
+        continue-on-error: true
+        run: git diff --check
+
+      - name: Prove final checkout clean
+        id: clean_tree
+        continue-on-error: true
+        run: |
+          git status --short --branch
+          git status --porcelain | tee /tmp/team3-status
+          test ! -s /tmp/team3-status
+
+      - name: Record exact Team 3 tested commit
+        run: |
+          echo "EXPECTED_TEAM3_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "CHECKED_OUT_TEAM3_COMMIT=$(git rev-parse HEAD)"
+          echo "TEAM3_CONVERSATION_EXPERIENCE_TESTED_COMMIT=$(git rev-parse HEAD)"
+          echo "HARDENED_BROWSER_OUTCOME=${{ steps.hardened_browser.outcome }}"
+          echo "EXISTING_BROWSER_OUTCOME=${{ steps.existing_browser.outcome }}"
+          echo "INTERACTION_OUTCOME=${{ steps.interaction.outcome }}"
+          echo "FOCUSED_BACKEND_OUTCOME=${{ steps.focused_backend.outcome }}"
+          echo "PRECOMMIT_OUTCOME=${{ steps.precommit.outcome }}"
+          echo "WHITESPACE_OUTCOME=${{ steps.whitespace.outcome }}"
+          echo "CLEAN_TREE_OUTCOME=${{ steps.clean_tree.outcome }}"
+
+      - name: Enforce complete Team 3 closure outcomes
+        run: |
+          failed=0
+          for pair in \
+            "hardened_browser=${{ steps.hardened_browser.outcome }}" \
+            "existing_browser=${{ steps.existing_browser.outcome }}" \
+            "interaction=${{ steps.interaction.outcome }}" \
+            "focused_backend=${{ steps.focused_backend.outcome }}" \
+            "precommit=${{ steps.precommit.outcome }}" \
+            "whitespace=${{ steps.whitespace.outcome }}" \
+            "clean_tree=${{ steps.clean_tree.outcome }}"
+          do
+            echo "$pair"
+            case "$pair" in
+              *=success) ;;
+              *) failed=1 ;;
+            esac
+          done
+          test "$failed" -eq 0
+
+      - name: Phoenix log on failure
+        if: failure()
+        run: cat /tmp/team3-phoenix.log || true

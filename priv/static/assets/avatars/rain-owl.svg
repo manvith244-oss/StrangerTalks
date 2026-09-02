@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Rain Owl">
+  <circle cx="32" cy="32" r="30" fill="#181e2b" stroke="#74c7ec" stroke-width="2"/>
+  <circle cx="32" cy="34" r="18" fill="#45475a"/>
+  <circle cx="26" cy="30" r="7" fill="#cdd6f4"/>
+  <circle cx="38" cy="30" r="7" fill="#cdd6f4"/>
+  <circle cx="26" cy="30" r="3.5" fill="#11111b"/>
+  <circle cx="38" cy="30" r="3.5" fill="#11111b"/>
+  <polygon points="32,34 29,38 35,38" fill="#f9e2af"/>
+  <path d="M20 18 L24 26 M44 18 L40 26" stroke="#cdd6f4" stroke-width="3" stroke-linecap="round"/>
+</svg>

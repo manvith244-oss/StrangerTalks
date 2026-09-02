@@ -1,0 +1,177 @@
+name: Team 4 Media Authority Gate
+
+on:
+  push:
+    branches:
+      - newteam/media
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: team4-media-authority-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  media-authority:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4004"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4004
+
+    steps:
+      - name: Checkout exact Team 4 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Prove checkout identity
+        run: |
+          echo "EXPECTED_TEAM4_SHA=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "CHECKED_OUT_TEAM4_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Focused client media authority and Team 11 re-attack
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/team4_media_authority_test.mjs \
+            test/js/team4_call_operation_race_test.mjs \
+            test/js/team11_media_expression_break_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/team6_voice_note_permission_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/team6_media_gate_test.mjs \
+            test/js/team6_media_privacy_test.mjs
+
+      - name: Prepare database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Server endpoint, call, ephemeral and C11 credential authority
+        run: |
+          mix test \
+            test/strangertalks_new/c11_policy_test.exs \
+            test/strangertalks_new/team6_turn_provider_test.exs \
+            test/strangertalks_new/conversation_live_call_test.exs \
+            test/strangertalks_new/team6_media_authority_test.exs \
+            test/strangertalks_new/view_once_conversation_test.exs \
+            test/strangertalks_new/view_once_media_store_test.exs \
+            test/strangertalks_new/view_once_media_validator_test.exs \
+            test/strangertalks_new/view_once_safety_report_test.exs
+
+      - name: Start Phoenix for native Chromium media proof
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/team4-media-browser.log 2>&1 &
+          echo $! > /tmp/team4-media-browser.pid
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$(cat /tmp/team4-media-browser.pid)" 2>/dev/null; then
+              cat /tmp/team4-media-browser.log
+              exit 1
+            fi
+            if curl -fsS http://localhost:4004/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/team4-media-browser.log
+          exit 1
+
+      - name: Native browser media and required device/accessibility proof
+        run: node --test --test-concurrency=1 test/js/team4_media_browser_test.mjs
+
+      - name: Upload Team 4 device screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: team4-media-screenshots-${{ github.event.pull_request.head.sha || github.sha }}
+          path: tmp/team4-media-screenshots
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop browser server
+        if: always()
+        run: |
+          if [ -f /tmp/team4-media-browser.pid ]; then
+            pid="$(cat /tmp/team4-media-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Reset database before full repository suite
+        run: |
+          mix ecto.drop --quiet
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Full repository precommit
+        run: mix precommit
+
+      - name: Diff integrity
+        run: git diff --check
+
+      - name: Clean tree proof
+        run: |
+          git status --porcelain | tee /tmp/team4-status
+          test ! -s /tmp/team4-status
+
+      - name: Exact tested SHA proof
+        run: |
+          echo "EXPECTED_TEAM4_SHA=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "TESTED_TEAM4_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Browser server log on failure
+        if: failure()
+        run: cat /tmp/team4-media-browser.log || true

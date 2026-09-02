@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+cd -P -- "$(dirname -- "$0")"
+
+printf 'phase1_guard_env=%s\n' "${PHASE1_REHEARSAL:-UNSET}"
+repo_root=$(cd -P -- ../../../../.. && pwd)
+printf 'phase1_runner_present=%s\n' "$(test -f "$repo_root/ops/phase1_rehearsal.sh" && echo true || echo false)"
+
+if [ "${PHASE1_REHEARSAL:-0}" = "1" ]; then
+  release_bin="$(pwd -P)/strangertalks_new"
+  /usr/bin/env bash "$repo_root/ops/phase1_rehearsal.sh" "$repo_root" "$release_bin"
+fi
+
+exec ./strangertalks_new eval StrangertalksNew.Release.migrate
