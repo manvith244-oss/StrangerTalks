@@ -30,17 +30,17 @@ defmodule StrangertalksNew.ParticipantPairingReservationReleaseTest do
     :ok
   end
 
-  test "release-terminal classifier recognizes exactly ENDED ABANDONED FAILED COMPLETED" do
-    for status <- [:ENDED, :ABANDONED, :FAILED, :COMPLETED] do
+  test "release-terminal classifier recognizes exactly ENDED ABANDONED FAILED" do
+    for status <- [:ENDED, :ABANDONED, :FAILED] do
       assert ConversationServer.release_terminal_status?(status)
     end
 
-    for status <- [:PENDING, :ACTIVE, :PAUSED] do
+    for status <- [:PENDING, :ACTIVE, :PAUSED, :COMPLETED] do
       refute ConversationServer.release_terminal_status?(status)
     end
 
     IO.puts(
-      "REL-05 PASS classifier release=ENDED,ABANDONED,FAILED,COMPLETED keep=PENDING,ACTIVE,PAUSED"
+      "REL-05 PASS classifier release=ENDED,ABANDONED,FAILED keep=PENDING,ACTIVE,PAUSED reject=COMPLETED"
     )
   end
 
