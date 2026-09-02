@@ -4442,7 +4442,15 @@ function displayReaction(payload) {
   const item = document.createElement("div")
   item.className = "floating-reaction"
   item.setAttribute("role", "status")
-  item.innerHTML = `<span>${payload.emoji || "❤️"}</span> <span class="sr-only">${payload.label || "Reaction"}</span>`
+
+  const emoji = document.createElement("span")
+  emoji.textContent = payload?.emoji || "❤️"
+
+  const label = document.createElement("span")
+  label.className = "sr-only"
+  label.textContent = payload?.label || "Reaction"
+
+  item.append(emoji, document.createTextNode(" "), label)
   container.appendChild(item)
 
   const ring = getStrangerRing()
