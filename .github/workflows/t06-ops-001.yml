@@ -23,6 +23,10 @@ on:
       - "test/strangertalks_new/retention_*"
       - "test/strangertalks_new/t06_*"
 
+concurrency:
+  group: t06-ops-001-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   statuses: write
@@ -68,7 +72,6 @@ jobs:
           echo "EXPECTED_SHA=$EXPECTED_SHA"
           echo "CHECKED_OUT_SHA=$checked_out_sha"
           test "$checked_out_sha" = "$EXPECTED_SHA"
-          echo "checked_out_sha=$checked_out_sha" >> "$GITHUB_OUTPUT"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -170,7 +173,6 @@ jobs:
           set +e
           if [ -z "${SUPABASE_DATABASE_URL:-}" ]; then
             echo "PREFLIGHT_RESULT=BLOCKED_MISSING_SUPABASE_DATABASE_URL"
-            echo "exit_code=2" >> "$GITHUB_OUTPUT"
             echo "count=missing" >> "$GITHUB_OUTPUT"
             echo "result=BLOCKED_MISSING_SUPABASE_DATABASE_URL" >> "$GITHUB_OUTPUT"
             exit 2
@@ -188,7 +190,6 @@ jobs:
           count=$(printf '%s\n' "$output" | awk -F= '/^SELF_RELATIONSHIP_COUNT=/{print $2}' | tail -1)
           result=$(printf '%s\n' "$output" | awk -F= '/^PREFLIGHT_RESULT=/{print $2}' | tail -1)
 
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           echo "count=${count:-missing}" >> "$GITHUB_OUTPUT"
           echo "result=${result:-missing}" >> "$GITHUB_OUTPUT"
           exit "$code"
@@ -242,6 +243,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          IDENTITY_OUTCOME: ${{ steps.identity.outcome }}
           LINEAGE_OUTCOME: ${{ steps.lineage.outcome }}
           LINEAGE_SUMMARY: ${{ steps.lineage.outputs.summary }}
           RETENTION_OUTCOME: ${{ steps.retention.outcome }}
@@ -258,7 +260,7 @@ jobs:
         run: |
           set -euo pipefail
           state=success
-          for value in "$LINEAGE_OUTCOME" "$RETENTION_OUTCOME" "$SHELL_OUTCOME" "$RUNNER_OUTCOME" "$PREFLIGHT_OUTCOME" "$PRECOMMIT_OUTCOME" "$DIFF_OUTCOME" "$CLEAN_OUTCOME"; do
+          for value in "$IDENTITY_OUTCOME" "$LINEAGE_OUTCOME" "$RETENTION_OUTCOME" "$SHELL_OUTCOME" "$RUNNER_OUTCOME" "$PREFLIGHT_OUTCOME" "$PRECOMMIT_OUTCOME" "$DIFF_OUTCOME" "$CLEAN_OUTCOME"; do
             if [ "$value" != "success" ]; then state=failure; fi
           done
 
@@ -276,39 +278,37 @@ jobs:
         if: always()
         shell: bash
         env:
-          CHECKED_OUT_SHA: ${{ steps.identity.outputs.checked_out_sha }}
+          IDENTITY_OUTCOME: ${{ steps.identity.outcome }}
           LINEAGE_OUTCOME: ${{ steps.lineage.outcome }}
           RETENTION_OUTCOME: ${{ steps.retention.outcome }}
           SHELL_OUTCOME: ${{ steps.shellcheck.outcome }}
           RUNNER_OUTCOME: ${{ steps.retention_runner.outcome }}
           PREFLIGHT_OUTCOME: ${{ steps.self_relationship_preflight.outcome }}
-          PREFLIGHT_EXIT: ${{ steps.self_relationship_preflight.outputs.exit_code }}
           PRECOMMIT_OUTCOME: ${{ steps.precommit.outcome }}
           DIFF_OUTCOME: ${{ steps.diffcheck.outcome }}
           CLEAN_OUTCOME: ${{ steps.clean.outcome }}
         run: |
           set -euo pipefail
-          echo "CHECKED_OUT_SHA=${CHECKED_OUT_SHA:-missing}"
+          echo "IDENTITY_OUTCOME=$IDENTITY_OUTCOME"
           echo "LINEAGE_OUTCOME=$LINEAGE_OUTCOME"
           echo "RETENTION_OUTCOME=$RETENTION_OUTCOME"
           echo "SHELL_OUTCOME=$SHELL_OUTCOME"
           echo "RUNNER_OUTCOME=$RUNNER_OUTCOME"
           echo "PREFLIGHT_OUTCOME=$PREFLIGHT_OUTCOME"
-          echo "PREFLIGHT_EXIT=${PREFLIGHT_EXIT:-missing}"
           echo "PRECOMMIT_OUTCOME=$PRECOMMIT_OUTCOME"
           echo "DIFF_OUTCOME=$DIFF_OUTCOME"
           echo "CLEAN_OUTCOME=$CLEAN_OUTCOME"
 
-          test "$CHECKED_OUT_SHA" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$IDENTITY_OUTCOME" = "success"
           test "$LINEAGE_OUTCOME" = "success"
           test "$RETENTION_OUTCOME" = "success"
           test "$SHELL_OUTCOME" = "success"
           test "$RUNNER_OUTCOME" = "success"
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then
             test "$PREFLIGHT_OUTCOME" = "success"
-            test "$PREFLIGHT_EXIT" = "0"
           fi
           test "$PRECOMMIT_OUTCOME" = "success"
           test "$DIFF_OUTCOME" = "success"
           test "$CLEAN_OUTCOME" = "success"
-          echo "TESTED_SHA=$CHECKED_OUT_SHA"
+          echo "TESTED_SHA=$(git rev-parse HEAD)"
