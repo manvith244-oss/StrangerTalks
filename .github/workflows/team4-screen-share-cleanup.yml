@@ -1,0 +1,69 @@
+name: Team 4 Screen Share Cleanup
+
+on:
+  push:
+    branches:
+      - newteam/media
+
+permissions:
+  contents: write
+
+concurrency:
+  group: team4-screen-share-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    if: ${{ !contains(github.event.head_commit.message, '[team4-screen-clean]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: newteam/media
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Remove hidden Screen Share client authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          git pull --rebase origin newteam/media
+          python3 - <<'PY'
+          from pathlib import Path
+          live = Path('priv/static/assets/live_call.mjs')
+          s = live.read_text()
+          s = s.replace('    this.screenSharing = false\n', '')
+          s = s.replace('      screenSharing: this.screenSharing,\n', '')
+          s = s.replace('    this.localScreenStream = null\n', '')
+          s = s.replace('''    if (active_media?.screen_share) {
+      this.screenSharing = active_media.screen_share.requester_id === this.participantId
+    }
+
+''', '')
+          s = s.replace('    stopMediaTracks(this.localScreenStream)\n', '')
+          live.write_text(s)
+
+          test_file = Path('test/js/live_call_test.mjs')
+          t = test_file.read_text()
+          t = t.replace('''    active_media: {
+      video: { "user-1": true, "user-2": false },
+      screen_share: { requester_id: "user-1", media_request_id: "req-1" }
+    }
+''', '''    active_media: {
+      video: { "user-1": true, "user-2": false }
+    }
+''')
+          t = t.replace('  assert.equal(state.screenSharing, true)\n', '')
+          test_file.write_text(t)
+          PY
+
+          node --test --test-concurrency=1 test/js/team4_screen_share_absent_test.mjs test/js/live_call_test.mjs test/js/team6_media_privacy_test.mjs
+          git diff --check
+          rm -f .github/workflows/team4-screen-share-cleanup.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add priv/static/assets/live_call.mjs test/js/live_call_test.mjs .github/workflows/team4-screen-share-cleanup.yml
+          git commit -m 'Team 4: remove hidden Screen Share client authority [team4-screen-clean]'
+          git pull --rebase origin newteam/media
+          git push origin HEAD:newteam/media

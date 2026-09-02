@@ -207,3 +207,42 @@ test("two isolated fresh participants reach one usable Conversation and can talk
     await browser.close().catch(() => {})
   }
 })
+
+test("arrival screen focus does not steal focus from active Conversation content", {timeout: 75_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let a
+  let b
+
+  try {
+    a = await openFresh(browser, {width: 1280, height: 800})
+    b = await openFresh(browser, {width: 1280, height: 800})
+    await a.page.locator("#conversation-language").selectOption("en")
+    await b.page.locator("#conversation-language").selectOption("en")
+
+    await a.page.getByRole("button", {name: /Advice/}).click()
+    await waitForQueue(a.page)
+    await b.page.getByRole("button", {name: /Advice/}).click()
+
+    await Promise.all([
+      a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 20_000}),
+      b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 20_000})
+    ])
+
+    const target = a.page.locator('section[data-screen="conversation"] #message-input')
+    await target.focus()
+    await a.page.locator('section[data-screen="conversation"]').evaluate((screen) => {
+      screen.classList.toggle("arrival-focus-regression-probe")
+    })
+    await a.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+
+    assert.equal(await a.page.evaluate(() => document.activeElement?.id), "message-input")
+    assert.deepEqual(a.errors, [])
+    assert.deepEqual(a.failedRequests, [])
+    assert.deepEqual(b.errors, [])
+    assert.deepEqual(b.failedRequests, [])
+  } finally {
+    await a?.context.close().catch(() => {})
+    await b?.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})

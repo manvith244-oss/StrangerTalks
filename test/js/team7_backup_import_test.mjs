@@ -89,6 +89,23 @@ test("backup rejects duplicate IDs, malformed IDs, malformed timestamps and malf
   }
 })
 
+test("backup rejects malformed retained payload shapes and broken record references", async () => {
+  const malformed = [
+    {id: "memory:bad-shape", type: "memory", value: {text: "looks valid", queue_attempt_id: "must-not-enter-retention"}, updated_at: time},
+    {id: "memory:missing-text", type: "memory", value: {conversation_id: "c1"}, updated_at: time},
+    {id: "summary:wrong-id", type: "summary", value: {conversation_id: "different-conversation", text: "summary"}, updated_at: time},
+    {id: "conversation:wrong-id", type: "local_conversation", value: {conversation_id: "real-id", door_type: "EXPLORE", display_door: "Advice", abstract_signature_seed: "sig-1", status: "kept", connection_state: "ended", started_at: time, ended_at: time, summary_id: null}, updated_at: time},
+    {id: "message:c1:wrong", type: "local_message", value: {conversation_id: "c1", client_message_id: "actual", message_id: "actual", type: "text", content: "bad ref", expressive: null, mine: true, delivery_status: "sent", sent_at: time, sequence: 1, content_revision: 0, peer_applied_content_revision: null, edited: false, availability: "available", unsent: false, reply_to_client_message_id: null, reply_author_relation: null, reply_snippet: null, reply_target_availability: null, self_reaction: null, peer_reaction: null, view_once_state: null, presentation_limit: 1, views_remaining: 1, views_consumed: 0, media_type: null, byte_size: null}, updated_at: time},
+    {id: "relationship:wrong-id", type: "relationship", value: {relationship_id: "real-relationship", status: "created", conversation_id: "c1"}, updated_at: time},
+    {id: "relationship:missing", type: "relationship", value: {status: "created", conversation_id: "c1"}, updated_at: time}
+  ]
+
+  for (const record of malformed) {
+    const envelope = await rawEnvelope([record])
+    await assert.rejects(() => decryptBackup(envelope, "backup-passphrase"), /invalid_backup/)
+  }
+})
+
 test("backup envelope contract rejects unsupported version, iteration drift and malformed envelope", async () => {
   const envelope = await rawEnvelope([memory()])
   assert.equal(validEnvelope(envelope), true)

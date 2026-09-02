@@ -9,10 +9,13 @@ defmodule StrangertalksNew.LearningRecordTest do
     {:ok, participant} =
       StrangertalksNew.Participants.create_participant(%{created_at: @valid_time})
 
+    {:ok, participant_b} =
+      StrangertalksNew.Participants.create_participant(%{created_at: @valid_time})
+
     {:ok, match} =
       StrangertalksNew.Matches.create_match(%{
         participant_a_id: participant.participant_id,
-        participant_b_id: participant.participant_id,
+        participant_b_id: participant_b.participant_id,
         door_type: :JUST_TALK,
         match_status: :ACTIVE,
         match_strategy: :COMPATIBILITY,
@@ -43,7 +46,7 @@ defmodule StrangertalksNew.LearningRecordTest do
       StrangertalksNew.Conversations.create_conversation(%{
         match_id: match.match_id,
         participant_a_id: participant.participant_id,
-        participant_b_id: participant.participant_id,
+        participant_b_id: participant_b.participant_id,
         conversation_status: :ACTIVE,
         created_at: @valid_time,
         door_type: :JUST_TALK,

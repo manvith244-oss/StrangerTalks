@@ -12,7 +12,7 @@ defmodule StrangertalksNew.Accounts do
   }
 
   alias StrangertalksNew.GoogleContinuity.TokenCrypto
-  alias StrangertalksNew.{AccountSyncLock, Repo}
+  alias StrangertalksNew.{AccountSyncLock, Participant, Repo}
 
   @session_seconds 30 * 24 * 60 * 60
   @oauth_seconds 10 * 60
@@ -173,6 +173,11 @@ defmodule StrangertalksNew.Accounts do
       )
 
     Multi.new()
+    |> Multi.update_all(
+      :participant_credential,
+      from(p in Participant, where: p.participant_id == ^participant_id),
+      inc: [credential_version: 1]
+    )
     |> Multi.insert(
       :account,
       Ecto.Changeset.cast(%PrivateAccount{}, account_attrs, Map.keys(account_attrs))
@@ -224,6 +229,11 @@ defmodule StrangertalksNew.Accounts do
     token_attrs = refresh_attrs(token, link.google_account_link_id, link.account_id, %{})
 
     Multi.new()
+    |> Multi.update_all(
+      :participant_credential,
+      from(p in Participant, where: p.participant_id == ^link.account.participant_id),
+      inc: [credential_version: 1]
+    )
     |> Multi.update(
       :account,
       Ecto.Changeset.change(link.account, last_signed_in_at: now, updated_at: now)

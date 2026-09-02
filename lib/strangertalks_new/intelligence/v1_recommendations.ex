@@ -10,6 +10,7 @@ defmodule StrangertalksNew.Intelligence.V1Recommendations do
   alias StrangertalksNew.Intelligence.V1Metrics
 
   @logic_version "team8-v1-recommendations-1"
+  @max_window_seconds 31 * 24 * 60 * 60
 
   @system_keys MapSet.new([
                  :matches_created,
@@ -71,17 +72,21 @@ defmodule StrangertalksNew.Intelligence.V1Recommendations do
   defp canonical_snapshot?(_snapshot), do: false
 
   defp valid_window?(%{from: from, to: to} = window) do
-    MapSet.new(Map.keys(window)) == MapSet.new([:from, :to]) and
-      valid_iso8601?(from) and valid_iso8601?(to)
+    with true <- MapSet.new(Map.keys(window)) == MapSet.new([:from, :to]),
+         {:ok, from_datetime, _from_offset} <- parse_iso8601(from),
+         {:ok, to_datetime, _to_offset} <- parse_iso8601(to),
+         seconds <- DateTime.diff(to_datetime, from_datetime, :second),
+         true <- seconds > 0 and seconds <= @max_window_seconds do
+      true
+    else
+      _ -> false
+    end
   end
 
   defp valid_window?(_window), do: false
 
-  defp valid_iso8601?(value) when is_binary(value) do
-    match?({:ok, %DateTime{}, _offset}, DateTime.from_iso8601(value))
-  end
-
-  defp valid_iso8601?(_value), do: false
+  defp parse_iso8601(value) when is_binary(value), do: DateTime.from_iso8601(value)
+  defp parse_iso8601(_value), do: :error
 
   defp valid_metric_map?(metrics, allowed_keys, numeric_keys) when is_map(metrics) do
     MapSet.new(Map.keys(metrics)) == allowed_keys and
@@ -117,7 +122,7 @@ defmodule StrangertalksNew.Intelligence.V1Recommendations do
             technical_disconnects: disconnects,
             failed_conversations: failures
           },
-          "Team 5 should inspect the underlying reliability failures and regressions before any product-policy change.",
+          "The Conversation Reliability owner should inspect the underlying reliability failures and regressions before any product-policy change.",
           "operational"
         )
         | recommendations
@@ -141,7 +146,7 @@ defmodule StrangertalksNew.Intelligence.V1Recommendations do
             reports_submitted: reports,
             block_terminated_conversations: blocks
           },
-          "Team 4 should review the aggregate incidence and canonical safety records. Do not weaken or automatically retune safety boundaries from this recommendation.",
+          "The Safety/Terminal owner should review the aggregate incidence and canonical safety records. Do not weaken or automatically retune safety boundaries from this recommendation.",
           "safety"
         )
         | recommendations

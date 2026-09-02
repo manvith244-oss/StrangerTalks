@@ -79,6 +79,7 @@ jobs:
       - name: Conversation interaction regressions
         run: |
           node --test \
+            test/js/f09_mobile_flow_test.mjs \
             test/js/instagram_chat_test.mjs \
             test/js/reply_quote_test.mjs \
             test/js/reaction_test.mjs \
@@ -127,6 +128,7 @@ jobs:
       - name: Responsive hostile-user browser checks
         run: |
           node --test \
+            test/js/f09_mobile_flow_browser_test.mjs \
             test/js/instagram_chat_browser_test.mjs \
             test/js/instagram_chat_report_browser_test.mjs
 
