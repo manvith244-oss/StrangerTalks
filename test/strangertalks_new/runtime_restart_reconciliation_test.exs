@@ -4,10 +4,8 @@ defmodule StrangertalksNew.RuntimeRestartReconciliationTest do
 
   @endpoint StrangertalksNewWeb.Endpoint
 
-  alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.Participants
   alias StrangertalksNew.QueueEngine.{ParticipantConnectionTracker, QueueState}
-  alias StrangertalksNew.SessionReconciliation
   alias StrangertalksNewWeb.ParticipantToken
   alias StrangertalksNewWeb.UserSocket
 
@@ -16,41 +14,50 @@ defmodule StrangertalksNew.RuntimeRestartReconciliationTest do
     :ok
   end
 
-  test "QueueState restart intentionally loses queue authority and reconciliation reports AVAILABLE" do
+  test "QueueState restart intentionally loses queue authority and socket reconciliation reports AVAILABLE" do
     participant = participant_fixture()
+    socket = joined_socket(participant)
+    params = queue_params("EXPLORE")
 
-    assert {:ok, %{queue_attempt_id: attempt_id}} =
-             MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "en", nil, nil)
+    ref = push(socket, "queue:join", params)
+    assert_reply ref, :ok, %{status: "queued", queue_attempt_id: attempt_id}
+    assert_push "queue:status", %{status: "queued", queue_attempt_id: ^attempt_id}
 
-    assert {:ok, %{canonical_state: :QUEUED, queue: %{queue_attempt_id: ^attempt_id}}} =
-             SessionReconciliation.reconcile(participant.participant_id)
+    assert %{queue_attempt_id: ^attempt_id} = queue_entry(participant.participant_id)
 
     replacement = restart_named_child(QueueState)
     assert Process.whereis(QueueState) == replacement
     assert queue_state() == %{}
 
-    assert {:ok, %{canonical_state: :AVAILABLE, queue: nil, conversation: nil}} =
-             SessionReconciliation.reconcile(participant.participant_id)
+    ref = push(socket, "session:reconcile", %{})
+
+    assert_reply ref, :ok, %{
+      snapshot: %{canonical_state: :AVAILABLE, queue: nil, conversation: nil}
+    }
   end
 
-  test "stale pre-restart queue attempt cannot mutate a newly established attempt" do
+  test "stale pre-restart socket attempt cannot mutate a newly established attempt" do
     participant = participant_fixture()
+    socket = joined_socket(participant)
+    params = queue_params("EXPLORE")
 
-    assert {:ok, %{queue_attempt_id: old_attempt}} =
-             MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "en", nil, nil)
+    ref = push(socket, "queue:join", params)
+    assert_reply ref, :ok, %{status: "queued", queue_attempt_id: old_attempt}
+    assert_push "queue:status", %{status: "queued", queue_attempt_id: ^old_attempt}
 
     restart_named_child(QueueState)
 
-    assert {:ok, %{queue_attempt_id: new_attempt}} =
-             MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "en", nil, nil)
-
+    ref = push(socket, "queue:join", params)
+    assert_reply ref, :ok, %{status: "queued", queue_attempt_id: new_attempt}
+    assert_push "queue:status", %{status: "queued", queue_attempt_id: ^new_attempt}
     refute new_attempt == old_attempt
 
-    assert {:error, :stale_attempt} =
-             MatchmakingEngine.cancel_queue(participant.participant_id, old_attempt)
-
+    stale_ref = push(socket, "queue:leave", %{"queue_attempt_id" => old_attempt})
+    assert_reply stale_ref, :error, %{reason: "stale_attempt"}
     assert %{queue_attempt_id: ^new_attempt} = queue_entry(participant.participant_id)
-    assert :ok = MatchmakingEngine.cancel_queue(participant.participant_id, new_attempt)
+
+    current_ref = push(socket, "queue:leave", %{"queue_attempt_id" => new_attempt})
+    assert_reply current_ref, :ok, %{status: "left"}
     assert queue_entry(participant.participant_id) == nil
   end
 
