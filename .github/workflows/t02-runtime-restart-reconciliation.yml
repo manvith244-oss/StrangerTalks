@@ -66,15 +66,68 @@ jobs:
           mix local.rebar --force
           mix deps.get
 
-      - name: Check focused test formatting
+      - name: Prove T02-owned formatting and diff hygiene
         shell: bash
         run: |
           set -euo pipefail
-          mix format --check-formatted test/strangertalks_new/runtime_restart_reconciliation_test.exs
+          mix format --check-formatted \
+            test/strangertalks_new/runtime_restart_reconciliation_test.exs \
+            lib/strangertalks_new/matchmaking/queue_engine/participant_connection_tracker.ex \
+            lib/strangertalks_new_web/participant_channel.ex
           git diff --check
 
-      - name: Focused restart reconciliation proof
+      - name: Focused restart and Terminal Truth proof
         shell: bash
         run: |
           set -euo pipefail
-          mix test test/strangertalks_new/runtime_restart_reconciliation_test.exs
+          mix test \
+            test/strangertalks_new/runtime_restart_reconciliation_test.exs \
+            test/strangertalks_new/recovery_restart_test.exs \
+            test/strangertalks_new/security_adversarial_test.exs \
+            test/strangertalks_new_web/channels/participant_channel_test.exs \
+            test/strangertalks_new_web/channels/conversation_channel_test.exs \
+            test/strangertalks_new_web/channels/conversation_terminal_channel_test.exs
+
+      - name: Full repository precommit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix precommit
+
+      - name: Prove inherited formatter drift and restore exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(git status --porcelain)"
+          printf '%s\n' "$status"
+
+          paths="$(git status --porcelain | sed -E 's/^.. //' | sort)"
+          expected="$(printf '%s\n' \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/reflections.ex | sort)"
+
+          test "$paths" = "$expected"
+
+          git diff --check
+          git checkout -- \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/reflections.ex
+
+      - name: Final diff and clean-tree proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code -- .
+          status="$(git status --porcelain)"
+          echo "STATUS_PORCELAIN:"
+          printf '%s\n' "$status"
+          test -z "$status"
+
+      - name: Record exact tested T02 restart commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "T02_RESTART_TESTED_COMMIT=$actual"
+          test "$actual" = "${{ github.sha }}"
