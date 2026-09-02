@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  },
+  "dependencies": {
+    "emoji-picker-element": "^1.29.1",
+    "emoji-picker-element-data": "^1.8.0"
+  }
+}

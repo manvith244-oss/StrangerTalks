@@ -1,0 +1,148 @@
+name: Team 4 Safety Privacy Agency Gate
+
+on:
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+  workflow_dispatch:
+
+concurrency:
+  group: team4-safety-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  team4:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact Team 4 commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          echo "EXPECTED_TEAM4_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "ACTUAL_TEAM4_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+
+      - name: Record branch and initial worktree state
+        run: |
+          git rev-parse HEAD
+          git status --short --branch
+          git status --porcelain
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install Elixir dependencies
+        run: mix deps.get
+
+      - name: Reject retired or vulnerable Hex dependencies
+        run: mix hex.audit
+
+      - name: Team 4 branch formatting and diff hygiene
+        run: |
+          mix format --check-formatted
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Focused safety privacy agency Elixir attacks
+        run: |
+          mix test \
+            test/strangertalks_new/relationship_consent_safety_review_test.exs \
+            test/strangertalks_new/team4_safety_boundary_test.exs \
+            test/strangertalks_new/report_test.exs \
+            test/strangertalks_new/conversation_unsend_report_safety_test.exs \
+            test/strangertalks_new/security_adversarial_test.exs \
+            test/strangertalks_new/matchmaking_engine_test.exs \
+            test/strangertalks_new/recovery_restart_test.exs \
+            test/strangertalks_new/conversation_lifecycle_test.exs \
+            test/strangertalks_new/conversation_live_call_test.exs \
+            test/strangertalks_new/conversation_message_edit_test.exs \
+            test/strangertalks_new/conversation_message_unsend_test.exs \
+            test/strangertalks_new/view_once_conversation_test.exs \
+            test/strangertalks_new/view_once_safety_report_test.exs \
+            test/strangertalks_new/account_sync_test.exs \
+            test/strangertalks_new/google_continuity_config_test.exs \
+            test/strangertalks_new/google_provider_drive_test.exs \
+            test/strangertalks_new/google_provider_oidc_test.exs \
+            test/strangertalks_new/analytics_record_test.exs \
+            test/strangertalks_new/learning_record_test.exs \
+            test/strangertalks_new/memories_test.exs \
+            test/strangertalks_new/safety_events_test.exs \
+            test/strangertalks_new/agent_systems_break_test.exs \
+            test/strangertalks_new/agent_systems_functional_test.exs \
+            test/strangertalks_new/agent_systems_remediation_test.exs \
+            test/strangertalks_new_web/channel_crash_diagnostic_privacy_test.exs \
+            test/strangertalks_new_web/expressive_diagnostic_privacy_test.exs \
+            test/strangertalks_new_web/channels/participant_channel_test.exs \
+            test/strangertalks_new_web/channels/conversation_call_channel_test.exs \
+            test/strangertalks_new_web/channels/conversation_message_edit_channel_test.exs \
+            test/strangertalks_new_web/channels/conversation_message_unsend_channel_test.exs
+
+      - name: Focused browser privacy media and stale-state attacks
+        run: |
+          node --test \
+            test/js/security_adversarial_test.mjs \
+            test/js/session_reconciliation_guard_test.mjs \
+            test/js/local_data_test.mjs \
+            test/js/encrypted_sync_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/message_edit_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/companion_test.mjs
+
+      - name: Full precommit
+        run: mix precommit
+
+      - name: Final diff check
+        if: ${{ always() }}
+        run: git diff --check
+
+      - name: Record final worktree status
+        if: ${{ always() }}
+        run: |
+          git status --short --branch
+          git status --porcelain
+
+      - name: Record exact Team 4 commit
+        if: ${{ always() }}
+        run: echo "TEAM4_TESTED_COMMIT=$(git rev-parse HEAD)"
