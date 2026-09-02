@@ -1,0 +1,219 @@
+name: T06 Scheduled Ops Closure Gate
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - team6/scheduled-ops-lineage-closure
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/postgres-r2-backup.yml"
+      - ".github/workflows/retention-maintenance.yml"
+      - ".github/workflows/t06-ops-001.yml"
+      - "ops/postgres_backup.sh"
+      - "ops/postgres_restore.sh"
+      - "lib/mix/tasks/strangertalks.retention.ex"
+      - "lib/strangertalks_new/retention_cleanup.ex"
+      - "test/strangertalks_new/retention_*"
+      - "test/strangertalks_new/t06_scheduled_ops_lineage_test.exs"
+
+permissions:
+  contents: read
+  statuses: write
+
+jobs:
+  closure:
+    runs-on: ubuntu-24.04
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout exact T06 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+
+      - name: Prove checkout identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out_sha=$(git rev-parse HEAD)
+          echo "EXPECTED_SHA=$EXPECTED_SHA"
+          echo "CHECKED_OUT_SHA=$checked_out_sha"
+          test "$checked_out_sha" = "$EXPECTED_SHA"
+          echo "checked_out_sha=$checked_out_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Scheduled-ops lineage regression
+        id: lineage
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix test test/strangertalks_new/t06_scheduled_ops_lineage_test.exs 2>&1 | tee /tmp/t06-lineage.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t06-lineage.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Retention behavior regressions
+        id: retention
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix test \
+            test/strangertalks_new/retention_cleanup_test.exs \
+            test/strangertalks_new/retention_cleanup_db_test.exs \
+            test/strangertalks_new/retention_closure_db_test.exs \
+            test/strangertalks_new/retention_safety_media_closure_test.exs \
+            2>&1 | tee /tmp/t06-retention.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t06-retention.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Backup and restore shell syntax
+        id: shellcheck
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          bash -n ops/postgres_backup.sh ops/postgres_restore.sh
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Full repository precommit
+        id: precommit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix precommit 2>&1 | tee /tmp/t06-precommit.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t06-precommit.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Git diff check
+        id: diffcheck
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          git diff --check
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Prove verification left checkout unchanged
+        id: clean
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          status=$(git status --porcelain)
+          printf '%s\n' "$status"
+          if [ -n "$status" ]; then
+            git diff --no-ext-diff -- .
+            code=1
+          else
+            code=0
+          fi
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Publish exact-SHA T06 status
+        if: always() && github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINEAGE_EXIT: ${{ steps.lineage.outputs.exit_code }}
+          LINEAGE_SUMMARY: ${{ steps.lineage.outputs.summary }}
+          RETENTION_EXIT: ${{ steps.retention.outputs.exit_code }}
+          RETENTION_SUMMARY: ${{ steps.retention.outputs.summary }}
+          SHELL_EXIT: ${{ steps.shellcheck.outputs.exit_code }}
+          PRECOMMIT_EXIT: ${{ steps.precommit.outputs.exit_code }}
+          PRECOMMIT_SUMMARY: ${{ steps.precommit.outputs.summary }}
+          DIFF_EXIT: ${{ steps.diffcheck.outputs.exit_code }}
+          CLEAN_EXIT: ${{ steps.clean.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          state=success
+          for value in "$LINEAGE_EXIT" "$RETENTION_EXIT" "$SHELL_EXIT" "$PRECOMMIT_EXIT" "$DIFF_EXIT" "$CLEAN_EXIT"; do
+            if [ "$value" != "0" ]; then state=failure; fi
+          done
+
+          description="lineage ${LINEAGE_SUMMARY:-missing}; retention ${RETENTION_SUMMARY:-missing}; precommit ${PRECOMMIT_SUMMARY:-missing}"
+          description=$(printf '%s' "$description" | cut -c1-140)
+
+          gh api --method POST \
+            "repos/$GITHUB_REPOSITORY/statuses/$EXPECTED_SHA" \
+            -f state="$state" \
+            -f context="t06-ops-001" \
+            -f description="$description" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Fail gate if any required verification failed
+        if: always()
+        shell: bash
+        env:
+          CHECKED_OUT_SHA: ${{ steps.identity.outputs.checked_out_sha }}
+          LINEAGE_EXIT: ${{ steps.lineage.outputs.exit_code }}
+          RETENTION_EXIT: ${{ steps.retention.outputs.exit_code }}
+          SHELL_EXIT: ${{ steps.shellcheck.outputs.exit_code }}
+          PRECOMMIT_EXIT: ${{ steps.precommit.outputs.exit_code }}
+          DIFF_EXIT: ${{ steps.diffcheck.outputs.exit_code }}
+          CLEAN_EXIT: ${{ steps.clean.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          test "$CHECKED_OUT_SHA" = "$EXPECTED_SHA"
+          test "$LINEAGE_EXIT" = "0"
+          test "$RETENTION_EXIT" = "0"
+          test "$SHELL_EXIT" = "0"
+          test "$PRECOMMIT_EXIT" = "0"
+          test "$DIFF_EXIT" = "0"
+          test "$CLEAN_EXIT" = "0"
+          echo "TESTED_SHA=$CHECKED_OUT_SHA"
