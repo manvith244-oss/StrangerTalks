@@ -49,6 +49,7 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
     with true <- map_size(params) == 2,
          {:ok, door} <- door_from_string(door_type),
          {:ok, language} <- ConversationLanguages.normalize(conversation_language),
+         :ok <- ParticipantConnectionTracker.register(participant_id, self()),
          :not_queued <- queue_entry_status(participant_id, door, language),
          :ok <- rate_limit(socket, :queue_join, 10, 60_000),
          {:ok, result} <- MatchmakingEngine.join_queue(participant_id, door, language, nil, nil) do
@@ -252,8 +253,11 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
        socket}
 
   def handle_in("session:reconcile", params, socket) when params == %{} do
-    with :ok <- rate_limit(socket, :session_reconcile, 6, 30_000),
-         {:ok, snapshot} <- SessionReconciliation.reconcile(socket.assigns.participant_id) do
+    participant_id = socket.assigns.participant_id
+
+    with :ok <- ParticipantConnectionTracker.register(participant_id, self()),
+         :ok <- rate_limit(socket, :session_reconcile, 6, 30_000),
+         {:ok, snapshot} <- SessionReconciliation.reconcile(participant_id) do
       {:reply, {:ok, %{snapshot: snapshot}}, socket}
     else
       {:error, {:rate_limited, _retry_after_ms} = reason} ->
