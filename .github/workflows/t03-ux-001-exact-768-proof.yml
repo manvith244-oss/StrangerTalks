@@ -1,0 +1,261 @@
+name: T03 UX-001 Exact 768 Browser Proof
+
+on:
+  push:
+    branches:
+      - validation/t03-ux-001-768-cff1d080
+
+concurrency:
+  group: t03-ux-001-exact-768-${{ github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  exact-768:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      T03_EXACT_SHA: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+
+    steps:
+      - name: Checkout exact T03 candidate, not validation branch content
+        uses: actions/checkout@v4
+        with:
+          ref: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+          fetch-depth: 0
+
+      - name: Prove exact candidate identity and clean entry tree
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "T03_EXACT_SHA=$T03_EXACT_SHA"
+          echo "T03_CHECKED_OUT_SHA=$actual"
+          test "$actual" = "$T03_EXACT_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies and Chromium
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare browser database
+        run: |
+          set -euo pipefail
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start exact-SHA Phoenix browser server
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/t03-768-browser.log 2>&1 &
+          echo $! > /tmp/t03-768-browser.pid
+          for attempt in $(seq 1 45); do
+            pid="$(cat /tmp/t03-768-browser.pid)"
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat /tmp/t03-768-browser.log
+              exit 1
+            fi
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null; then
+              echo "T03_768_SERVER_READY"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/t03-768-browser.log
+          exit 1
+
+      - name: Build ephemeral exact-768 harnesses without changing candidate files
+        run: |
+          set -euo pipefail
+          mkdir -p tmp
+          python3 <<'PY'
+          from pathlib import Path
+
+          # 1) Real Arrival -> Queue -> matched Conversation surface proof at exact 768x1024.
+          source = Path("test/js/team6_real_ux_browser_test.mjs").read_text()
+          source = source.replace("{width: 390, height: 844}", "{width: 768, height: 1024}")
+
+          arrival_needle = '    await user.page.screenshot({path: path.join(SCREENSHOTS, "real-390x844-arrival.png"), fullPage: true})\n'
+          arrival_extra = arrival_needle + '''
+            assert.deepEqual(await user.page.evaluate(() => [innerWidth, innerHeight]), [768, 1024], "exact 768x1024 viewport")
+            await assertNoOverflow(user.page, "real Arrival 768x1024")
+            const arrivalDoors = user.page.locator("button.door")
+            assert.equal(await arrivalDoors.count(), 4, "all Four Doors are present")
+            for (let index = 0; index < 4; index += 1) {
+              const door = arrivalDoors.nth(index)
+              assert.equal(await door.isVisible(), true, `Door ${index + 1} is visible`)
+              assert.equal(await door.isEnabled(), true, `Door ${index + 1} is enabled`)
+              const box = await door.boundingBox()
+              assert.ok(box && box.x >= -1 && box.x + box.width <= 769, `Door ${index + 1} stays inside 768px viewport`)
+            }
+            await arrivalDoors.first().focus()
+            assert.equal(await arrivalDoors.first().evaluate(node => node === document.activeElement), true, "Door keyboard focus works")
+            assert.equal(await user.page.locator("#conversation-language").isVisible(), true, "Conversation Language control is visible")
+          '''
+          if arrival_needle not in source:
+              raise SystemExit("arrival injection point not found")
+          source = source.replace(arrival_needle, arrival_extra, 1)
+
+          conversation_needle = '    await assertNoOverflow(a.page, "real Conversation")\n'
+          conversation_extra = conversation_needle + '''
+            const shellGeometry = await a.page.evaluate(() => {
+              const nav = document.querySelector("#bottom-nav")
+              const composer = document.querySelector("#message-form")
+              const timeline = document.querySelector(".message-viewport")
+              const navBox = nav.getBoundingClientRect()
+              const composerBox = composer.getBoundingClientRect()
+              return {
+                width: innerWidth,
+                height: innerHeight,
+                navVisible: getComputedStyle(nav).display !== "none" && navBox.width > 0 && navBox.height > 0,
+                navTop: navBox.top,
+                navBottom: navBox.bottom,
+                composerBottom: composerBox.bottom,
+                timelineOverflowY: getComputedStyle(timeline).overflowY,
+                timelineTop: timeline.getBoundingClientRect().top,
+                timelineBottom: timeline.getBoundingClientRect().bottom
+              }
+            })
+            assert.equal(shellGeometry.width, 768, "Conversation remains at exact 768px width")
+            assert.equal(shellGeometry.height, 1024, "Conversation remains at exact 1024px height")
+            assert.equal(shellGeometry.navVisible, true, "canonical bottom navigation remains visible")
+            assert.ok(shellGeometry.navBottom <= 1025, "bottom navigation remains inside viewport")
+            assert.ok(shellGeometry.composerBottom <= shellGeometry.navTop + 4, "composer does not overlap bottom navigation")
+            assert.match(shellGeometry.timelineOverflowY, /auto|scroll/, "message timeline remains vertically scrollable")
+            assert.ok(shellGeometry.timelineBottom > shellGeometry.timelineTop, "message timeline has usable height")
+          '''
+          if conversation_needle not in source:
+              raise SystemExit("conversation injection point not found")
+          source = source.replace(conversation_needle, conversation_extra, 1)
+          Path("tmp/t03_768_real_ux.mjs").write_text(source)
+
+          # 2) Real terminal transition proof at exact 768x1024; add ended-screen usability assertions.
+          nav = Path("test/js/navigation_history_browser_test.mjs").read_text()
+          nav = nav.replace("{width: 1280, height: 800}", "{width: 768, height: 1024}")
+          ended_needle = '''    await activeScreen(pair.a.page, "ended").waitFor({state: "visible"})
+            assert.equal(new URL(pair.a.page.url()).pathname, "/conversation/ended")
+          '''
+          ended_extra = ended_needle + '''
+            const endedText = await pair.a.page.locator('section[data-screen="ended"].active').textContent()
+            assert.match(endedText, /Conversation ended/i, "terminal state is unmistakable")
+            for (const selector of ["#keep-conversation", "#summary-choice-form button", "#fade-conversation"]) {
+              const control = pair.a.page.locator(selector)
+              assert.equal(await control.isVisible(), true, `${selector} is visible after terminal transition`)
+              assert.equal(await control.isEnabled(), true, `${selector} is enabled after terminal transition`)
+              const box = await control.boundingBox()
+              assert.ok(box && box.x >= -1 && box.x + box.width <= 769, `${selector} stays inside 768px viewport`)
+            }
+            await pair.a.page.locator("#keep-conversation").focus()
+            assert.equal(await pair.a.page.locator("#keep-conversation").evaluate(node => node === document.activeElement), true, "terminal choice keyboard focus works")
+            assert.equal(await pair.a.page.locator('section[data-screen="conversation"].active').count(), 0, "live Conversation screen is no longer active")
+            assert.equal(await pair.a.page.locator("#message-form").isVisible(), false, "live composer is not presented after terminal transition")
+            assert.equal(await pair.a.page.locator("#btn-voice-call").isVisible(), false, "live voice control is not presented after terminal transition")
+            const endedOverflow = await pair.a.page.evaluate(() => ({width: innerWidth, scrollWidth: document.documentElement.scrollWidth}))
+            assert.equal(endedOverflow.width, 768, "ended screen is exact 768px")
+            assert.ok(endedOverflow.scrollWidth <= endedOverflow.width + 1, "ended screen has no horizontal overflow")
+          '''
+          if ended_needle not in nav:
+              raise SystemExit("ended injection point not found")
+          nav = nav.replace(ended_needle, ended_extra, 1)
+          Path("tmp/t03_768_navigation.mjs").write_text(nav)
+
+          # 3) Original T03 historical-delete regression, unchanged semantically, at exact 768x1024.
+          history = Path("test/js/t03_history_route_browser_test.mjs").read_text()
+          history = history.replace("{width: 390, height: 844}", "{width: 768, height: 1024}")
+          history_needle = '    assert.match(await page.locator(".local-copy-banner").innerText(), /not an active Conversation/i)\n'
+          history_extra = history_needle + '''
+            assert.deepEqual(await page.evaluate(() => [innerWidth, innerHeight]), [768, 1024], "historical return is exact 768x1024")
+            const historyOverflow = await page.evaluate(() => ({width: innerWidth, scrollWidth: document.documentElement.scrollWidth}))
+            assert.ok(historyOverflow.scrollWidth <= historyOverflow.width + 1, "historical copy has no horizontal overflow")
+            assert.equal(await page.locator('section[data-screen="history"] #message-form').count(), 0, "historical copy has no live composer")
+            assert.equal(await page.locator('section[data-screen="history"] #typing').count(), 0, "historical copy has no live typing state")
+            assert.equal(await page.locator('section[data-screen="history"] #presence').count(), 0, "historical copy has no live presence state")
+          '''
+          if history_needle not in history:
+              raise SystemExit("history injection point not found")
+          history = history.replace(history_needle, history_extra, 1)
+          Path("tmp/t03_768_history_route.mjs").write_text(history)
+          PY
+
+          echo "Ephemeral harnesses created under ignored tmp/ only"
+          test "$(git rev-parse HEAD)" = "$T03_EXACT_SHA"
+
+      - name: Exact 768 Arrival Queue Conversation proof
+        run: node --test --test-concurrency=1 tmp/t03_768_real_ux.mjs
+
+      - name: Exact 768 real terminal and retention-entry proof
+        run: node --test --test-concurrency=1 --test-name-pattern="F03 browser J09" tmp/t03_768_navigation.mjs
+
+      - name: Exact 768 historical return and delete-route GREEN proof
+        run: node --test --test-concurrency=1 tmp/t03_768_history_route.mjs
+
+      - name: Record exact 768 proof result
+        run: |
+          set -euo pipefail
+          echo "VIEWPORT=768x1024"
+          echo "EXACT_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$T03_EXACT_SHA"
+          echo "RESULT=PASS"
+
+      - name: Stop browser server
+        if: always()
+        run: |
+          if [ -f /tmp/t03-768-browser.pid ]; then
+            pid="$(cat /tmp/t03-768-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Browser server log on failure
+        if: failure()
+        run: cat /tmp/t03-768-browser.log || true
