@@ -172,19 +172,35 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
   defp normalize_values(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_values(value), do: value
 
-  defp validate_output(%{"recommendations" => recommendations}) when is_list(recommendations) do
-    normalized =
-      recommendations
-      |> Enum.map(&normalize_recommendation/1)
-      |> Enum.filter(&match?({:ok, _}, &1))
-      |> Enum.map(fn {:ok, item} -> item end)
-      |> Enum.uniq_by(&String.downcase(&1.title))
-      |> Enum.take(5)
+  defp validate_output(%{"recommendations" => recommendations} = decoded)
+       when is_list(recommendations) do
+    with true <- exact_keys?(decoded, ["recommendations"]),
+         true <- length(recommendations) in 1..5,
+         {:ok, normalized} <- normalize_recommendations(recommendations) do
+      deduplicated = Enum.uniq_by(normalized, &String.downcase(&1.title))
 
-    if normalized == [], do: {:error, :invalid_learning_output}, else: {:ok, normalized}
+      if deduplicated == [],
+        do: {:error, :invalid_learning_output},
+        else: {:ok, deduplicated}
+    else
+      _ -> {:error, :invalid_learning_output}
+    end
   end
 
   defp validate_output(_decoded), do: {:error, :invalid_learning_output}
+
+  defp normalize_recommendations(recommendations) do
+    Enum.reduce_while(recommendations, {:ok, []}, fn recommendation, {:ok, acc} ->
+      case normalize_recommendation(recommendation) do
+        {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+        {:error, :invalid} -> {:halt, {:error, :invalid_learning_output}}
+      end
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      error -> error
+    end
+  end
 
   defp normalize_recommendation(%{
          "title" => title,
@@ -192,11 +208,12 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
          "evidence" => evidence,
          "experiment" => experiment,
          "confidence" => confidence
-       })
+       } = item)
        when confidence in ["low", "medium", "high"] do
     values = [title, hypothesis, evidence, experiment]
 
-    if Enum.all?(values, &(is_binary(&1) and String.trim(&1) != "" and String.length(&1) <= 600)) do
+    if exact_keys?(item, ["title", "hypothesis", "evidence", "experiment", "confidence"]) and
+         Enum.all?(values, &(is_binary(&1) and String.trim(&1) != "" and String.length(&1) <= 600)) do
       {:ok,
        %{
          title: String.trim(title),
@@ -211,6 +228,12 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
   end
 
   defp normalize_recommendation(_item), do: {:error, :invalid}
+
+  defp exact_keys?(map, expected) when is_map(map) do
+    map
+    |> Map.keys()
+    |> Enum.sort() == Enum.sort(expected)
+  end
 
   defp instructions do
     """
