@@ -62,15 +62,20 @@ defmodule StrangertalksNew.FutureSocial.CircleFormation do
          :ok <- reject_duplicate_participants(candidates) do
       {cohort_order, cohorts} = build_cohorts(candidates)
 
-      {circles, indexed_waiting} =
+      {reversed_circles, indexed_waiting} =
         Enum.reduce(cohort_order, {[], []}, fn formation_key, {circles_acc, waiting_acc} ->
           {cohort_circles, cohort_waiting} =
             cohorts
             |> Map.fetch!(formation_key)
             |> form_cohort(formation_key, min_size, max_size)
 
-          {circles_acc ++ cohort_circles, waiting_acc ++ cohort_waiting}
+          {
+            Enum.reverse(cohort_circles, circles_acc),
+            Enum.reverse(cohort_waiting, waiting_acc)
+          }
         end)
+
+      circles = Enum.reverse(reversed_circles)
 
       waiting =
         indexed_waiting
