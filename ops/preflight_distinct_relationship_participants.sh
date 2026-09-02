@@ -8,24 +8,33 @@ command -v psql >/dev/null 2>&1 || {
   exit 127
 }
 
-export PGOPTIONS='-c default_transaction_read_only=on'
+query='SELECT count(*)::bigint FROM public.relationships WHERE participant_a_id = participant_b_id;'
 
-readonly_state=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c "SHOW default_transaction_read_only")
-readonly_state=$(printf '%s' "$readonly_state" | tail -n 1 | tr -d '[:space:]')
+transaction_output=$(
+  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -Atq <<'SQL'
+BEGIN TRANSACTION READ ONLY;
+SELECT current_setting('transaction_read_only');
+SELECT count(*)::bigint
+FROM public.relationships
+WHERE participant_a_id = participant_b_id;
+ROLLBACK;
+SQL
+)
+
+readonly_state=$(printf '%s\n' "$transaction_output" | awk '/^(on|off)$/ {print; exit}')
+count=$(printf '%s\n' "$transaction_output" | awk '/^[0-9]+$/ {value=$0} END {print value}')
 
 if [ "$readonly_state" != "on" ]; then
   echo "AUTHORITATIVE_DB_VERIFIED=false"
+  echo "READ_ONLY_GUARD=transaction_read_only:${readonly_state:-missing}"
   echo "PREFLIGHT_RESULT=BLOCKED_READ_ONLY_GUARD_NOT_ACTIVE"
   exit 2
 fi
 
-query='SELECT count(*)::bigint FROM public.relationships WHERE participant_a_id = participant_b_id;'
-count=$(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c "$query")
-count=$(printf '%s' "$count" | tail -n 1 | tr -d '[:space:]')
-
 case "$count" in
   ''|*[!0-9]*)
     echo "AUTHORITATIVE_DB_VERIFIED=false"
+    echo "READ_ONLY_GUARD=transaction_read_only:on"
     echo "PREFLIGHT_RESULT=BLOCKED_INVALID_COUNT_RESULT"
     exit 2
     ;;
@@ -33,6 +42,7 @@ esac
 
 echo "AUTHORITATIVE_DB_VERIFIED=supabase"
 echo "QUERY_USED=$query"
+echo "READ_ONLY_GUARD=transaction_read_only:on"
 echo "SELF_RELATIONSHIP_COUNT=$count"
 
 if [ "$count" = "0" ]; then

@@ -3,6 +3,7 @@ defmodule StrangertalksNew.T06ScheduledOpsLineageTest do
 
   @retention_workflow ".github/workflows/retention-maintenance.yml"
   @retention_runner "ops/run_retention.sh"
+  @precommit_runner "ops/run_precommit_isolated.sh"
   @backup_workflow ".github/workflows/postgres-r2-backup.yml"
   @team1_workflow ".github/workflows/team1-core-authority.yml"
   @candidate_diff_checker "ops/check_candidate_diff.sh"
@@ -102,14 +103,34 @@ defmodule StrangertalksNew.T06ScheduledOpsLineageTest do
     assert workflow =~ "Fail Team 1 gate if required verification failed"
   end
 
-  test "self-relationship production preflight is count-only and forced read-only" do
+  test "maintained mutating precommit runs in an exact-SHA worktree without dirtying the proof checkout" do
+    assert File.exists?(@precommit_runner)
+    runner = File.read!(@precommit_runner)
+    team1 = File.read!(@team1_workflow)
+    t06 = File.read!(@t06_gate)
+
+    assert runner =~ "EXPECTED_SHA"
+    assert runner =~ "git worktree add --detach"
+    assert runner =~ "mix precommit"
+    assert runner =~ "ISOLATED_PRECOMMIT_TESTED_SHA="
+    assert runner =~ "ISOLATED_PRECOMMIT_RESULT=PASS"
+    assert runner =~ "status --porcelain"
+
+    assert team1 =~ "EXPECTED_SHA=\"$EXPECTED_TEAM1_COMMIT\" bash ops/run_precommit_isolated.sh"
+    assert t06 =~ "bash ops/run_precommit_isolated.sh"
+  end
+
+  test "self-relationship production preflight is count-only inside an explicit read-only transaction" do
     assert File.exists?(@self_relationship_preflight)
     script = File.read!(@self_relationship_preflight)
     gate = File.read!(@t06_gate)
 
-    assert script =~ "default_transaction_read_only=on"
+    assert script =~ "BEGIN TRANSACTION READ ONLY"
+    assert script =~ "current_setting('transaction_read_only')"
+    assert script =~ "ROLLBACK"
     assert script =~ "SELECT count(*)::bigint"
     assert script =~ "participant_a_id = participant_b_id"
+    assert script =~ "READ_ONLY_GUARD=transaction_read_only:on"
     assert script =~ "AUTHORITATIVE_DB_VERIFIED=supabase"
     assert script =~ "SELF_RELATIONSHIP_COUNT="
     assert script =~ "MIGRATION_OPERATIONAL_ELIGIBILITY=ELIGIBLE"

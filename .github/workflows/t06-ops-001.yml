@@ -16,6 +16,7 @@ on:
       - "ops/postgres_backup.sh"
       - "ops/postgres_restore.sh"
       - "ops/run_retention.sh"
+      - "ops/run_precommit_isolated.sh"
       - "ops/check_candidate_diff.sh"
       - "ops/preflight_distinct_relationship_participants.sh"
       - "lib/mix/tasks/strangertalks.retention.ex"
@@ -133,6 +134,7 @@ jobs:
             ops/postgres_backup.sh \
             ops/postgres_restore.sh \
             ops/run_retention.sh \
+            ops/run_precommit_isolated.sh \
             ops/check_candidate_diff.sh \
             ops/preflight_distinct_relationship_participants.sh
           code=$?
@@ -194,14 +196,14 @@ jobs:
           echo "result=${result:-missing}" >> "$GITHUB_OUTPUT"
           exit "$code"
 
-      - name: Full repository precommit
+      - name: Full repository precommit in detached exact-SHA worktree
         id: precommit
         continue-on-error: true
         shell: bash
         run: |
           set +e
           set -o pipefail
-          mix precommit 2>&1 | tee /tmp/t06-precommit.log
+          bash ops/run_precommit_isolated.sh 2>&1 | tee /tmp/t06-precommit.log
           code=${PIPESTATUS[0]}
           summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t06-precommit.log | tail -1 || true)
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"

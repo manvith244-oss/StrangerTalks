@@ -131,8 +131,8 @@ jobs:
           mix ecto.create --quiet
           mix ecto.migrate --quiet
 
-      - name: Full repository precommit
-        run: mix precommit
+      - name: Full repository precommit in detached exact-SHA worktree
+        run: EXPECTED_SHA="$EXPECTED_TEAM1_COMMIT" bash ops/run_precommit_isolated.sh
 
       - name: Candidate-relative diff integrity
         id: diffcheck
