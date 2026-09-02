@@ -1,20 +1,93 @@
-name: Team 9 Normal Media Sharing Proof
+name: T09 Exact-SHA Verification Gate
 
 on:
-  pull_request:
+  push:
     branches:
-      - release/prep-2026-08-22
+      - team9/verification-baseline-gate
   workflow_dispatch:
-
-concurrency:
-  group: team9-normal-media-${{ github.event.pull_request.head.sha || github.sha }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
+env:
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  BASE_SHA: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+  CANDIDATE_SHA: a20df2c23ebf251b209ba52bfa0370a47a5d1867
+  T09_PROOF_SHA: 27268a84dbf49933e6930d3c7129e8cae4de3b4d
+  PRE_CONSTRAINT_VERSION: '20260830044500'
+
 jobs:
-  normal-media-sharing:
+  baseline:
+    name: T09 baseline exact-SHA gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+      - name: Prove baseline identity and clean worktree
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "REQUESTED_SHA=$BASE_SHA"
+          echo "CHECKED_OUT_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          test -z "$(git status --porcelain)"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+      - name: Clean DB migration
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: High-value realtime and security suites
+        run: |
+          node --test \
+            test/js/terminal_truth_client_test.mjs \
+            test/js/session_reconciliation_guard_test.mjs \
+            test/js/security_adversarial_test.mjs
+      - name: Full precommit
+        run: mix precommit
+      - name: Negative control and final integrity proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          if bash -c 'exit 23'; then exit 1; fi
+          echo 'NEGATIVE_CONTROL=nonzero_detected'
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          echo "TESTED_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+  browser:
+    name: T09 baseline actual-browser gate
     runs-on: ubuntu-latest
     timeout-minutes: 45
     services:
@@ -24,249 +97,221 @@ jobs:
           POSTGRES_USER: strangertalks_local
           POSTGRES_PASSWORD: strangertalks_test
           POSTGRES_DB: strangertalks_new_test
-        ports:
-          - 5432:5432
+        ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
+          --health-interval 10s --health-timeout 5s --health-retries 5
     env:
-      MIX_ENV: test
-      PORT: "4000"
-      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
-      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
-
+      STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4000
     steps:
-      - name: Checkout exact Team 9 commit
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      - name: Prove checkout identity
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+      - name: Prove baseline browser identity
         run: |
-          expected="${{ github.event.pull_request.head.sha || github.sha }}"
-          echo "EXPECTED_TEAM9_COMMIT=$expected"
-          echo "CHECKED_OUT_TEAM9_COMMIT=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "$expected"
-
-      - name: Set up BEAM
-        uses: erlef/setup-beam@v1
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          test -z "$(git status --porcelain)"
+      - uses: erlef/setup-beam@v1
         with:
-          elixir-version: "1.18.4"
-          otp-version: "27.3.4"
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+      - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: '22'
           cache: npm
-
-      - name: Install dependencies
+      - name: Install browser dependencies
         run: |
           mix local.hex --force
           mix local.rebar --force
           mix deps.get
           npm ci
           npx playwright install --with-deps chromium
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg
-
-      - name: Prepare database
+      - name: Prepare DB
         run: |
+          mix ecto.drop --quiet || true
           mix ecto.create --quiet
           mix ecto.migrate --quiet
-
-      - name: Elixir formatting gate
-        id: format
-        continue-on-error: true
-        run: mix format --check-formatted
-
-      - name: Focused normal media backend attacks
-        id: focused_backend
-        continue-on-error: true
+      - name: Start Phoenix
+        shell: bash
         run: |
-          mix test \
-            test/strangertalks_new/normal_media_store_test.exs \
-            test/strangertalks_new_web/controllers/normal_media_controller_test.exs
-
-      - name: Normal media client attacks
-        id: focused_js
-        continue-on-error: true
-        run: node --test test/js/normal_media_test.mjs
-
-      - name: Team 4 View Once and View Twice regressions
-        id: team4_media
-        continue-on-error: true
-        run: |
-          mix test test/strangertalks_new_web/controllers/view_once_media_controller_test.exs
-          node --test \
-            test/js/view_once_test.mjs \
-            test/js/team6_media_gate_test.mjs \
-            test/js/team6_media_privacy_test.mjs
-
-      - name: Team 3 Conversation ordering and replay regressions
-        id: team3_backend
-        continue-on-error: true
-        run: |
-          mix test \
-            test/strangertalks_new/conversation_lifecycle_test.exs \
-            test/strangertalks_new/conversation_delivery_test.exs \
-            test/strangertalks_new/recovery_restart_test.exs
-
-      - name: Start Phoenix real stack
-        id: phoenix
-        continue-on-error: true
-        run: |
+          set -euo pipefail
           mix run --no-start -e '
-            repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
-            Application.put_env(
-              :strangertalks_new,
-              StrangertalksNew.Repo,
-              repo_config
-              |> Keyword.put(:pool, DBConnection.ConnectionPool)
-              |> Keyword.put(:pool_size, 20)
-            )
             endpoint_config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
-            Application.put_env(
-              :strangertalks_new,
-              StrangertalksNewWeb.Endpoint,
-              endpoint_config
-              |> Keyword.put(:server, true)
-              |> Keyword.put(:http, [ip: {127, 0, 0, 1}, port: 4000])
-            )
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, endpoint_config |> Keyword.put(:server, true) |> Keyword.put(:http, [ip: {127,0,0,1}, port: 4000]))
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
             Process.sleep(:infinity)
-          ' > /tmp/team9-phoenix.log 2>&1 &
-          echo $! > /tmp/team9-phoenix.pid
-          for attempt in $(seq 1 45); do
-            if ! kill -0 "$(cat /tmp/team9-phoenix.pid)" 2>/dev/null; then
-              echo "Phoenix exited before becoming ready."
-              cat /tmp/team9-phoenix.log
-              exit 1
-            fi
-            if curl -fsS http://localhost:4000/ >/dev/null; then
-              echo "Team 9 browser endpoint is ready."
-              exit 0
-            fi
+          ' > /tmp/t09-phoenix.log 2>&1 &
+          echo $! >/tmp/t09-phoenix.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:4000/ >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/t09-phoenix.pid)" 2>/dev/null; then cat /tmp/t09-phoenix.log; exit 1; fi
             sleep 1
           done
-          echo "Phoenix did not become ready."
-          cat /tmp/team9-phoenix.log
+          cat /tmp/t09-phoenix.log
           exit 1
-
-      - name: Real browser normal media hostile proof
-        id: browser
-        continue-on-error: true
-        run: node --test test/js/normal_media_browser_test.mjs
-
-      - name: Team 3 real-stack replay and hostile regressions
-        id: team3_browser
-        continue-on-error: true
-        run: |
-          node --test \
-            test/js/team3_conversation_experience_gate_test.mjs \
-            test/js/team3_conversation_hostile_test.mjs
-
-      - name: Existing real-stack browser regression
-        id: existing_browser
-        continue-on-error: true
-        run: node --test test/js/browser_e2e_test.mjs
-
-      - name: Upload Team 9 browser screenshots
+      - name: Maintained browser E2E
+        run: node --test --test-concurrency=1 test/js/browser_e2e_test.mjs
+      - name: Stop Phoenix
         if: always()
-        uses: actions/upload-artifact@v4
+        run: |
+          if [ -f /tmp/t09-phoenix.pid ]; then kill "$(cat /tmp/t09-phoenix.pid)" 2>/dev/null || true; fi
+      - name: Final browser integrity proof
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+  t01:
+    name: T09 T01 hostile exact-SHA proof
+    needs: baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
         with:
-          name: team9-normal-media-browser-${{ github.event.pull_request.head.sha || github.sha }}
-          path: /tmp/team9-normal-media-browser
-          if-no-files-found: ignore
-
-      - name: Stop Phoenix real stack
-        if: always()
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+      - name: Exact candidate identity and diff scope
+        shell: bash
         run: |
-          if [ -f /tmp/team9-phoenix.pid ]; then
-            pid="$(cat /tmp/team9-phoenix.pid)"
-            kill "$pid" 2>/dev/null || true
-            for attempt in $(seq 1 20); do
-              if ! kill -0 "$pid" 2>/dev/null; then
-                break
-              fi
-              sleep 0.25
-            done
-            if kill -0 "$pid" 2>/dev/null; then
-              kill -9 "$pid" 2>/dev/null || true
-            fi
-          fi
-
-      - name: Reset database before full regression
+          set -euo pipefail
+          echo "REQUESTED_SHA=$CANDIDATE_SHA"
+          echo "CHECKED_OUT_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          expected=$(printf '%s\n' lib/strangertalks_new/relationship.ex priv/repo/migrations/20260902183000_enforce_distinct_relationship_participants.exs test/strangertalks_new/relationship_test.exs | sort)
+          actual=$(git diff --name-only "$BASE_SHA"...HEAD | sort)
+          printf '%s\n' "$actual"
+          test "$actual" = "$expected"
+          git diff --check "$BASE_SHA"...HEAD
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+      - name: Install dependencies
         run: |
-          mix ecto.drop --quiet
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: M1 clean database migration
+        run: |
+          mix ecto.drop --quiet || true
           mix ecto.create --quiet
           mix ecto.migrate --quiet
-
-      - name: Full precommit
-        id: precommit
-        continue-on-error: true
-        run: mix precommit
-
-      - name: Whitespace integrity
-        id: whitespace
-        continue-on-error: true
-        run: git diff --check
-
-      - name: Prove final checkout clean
-        id: clean_tree
-        continue-on-error: true
+      - name: Inject immutable T09 hostile tests
+        shell: bash
         run: |
-          git status --short --branch
-          git status --porcelain | tee /tmp/team9-status
-          test ! -s /tmp/team9-status
-
-      - name: Record exact Team 9 tested commit
+          set -euo pipefail
+          git show "$T09_PROOF_SHA:test/t09/t01_self_relationship_verification_test.exs" > test/t09_self_relationship_verification_runtime_test.exs
+      - name: V1 V2 V3 V4 V5 V7
+        run: mix test test/t09_self_relationship_verification_runtime_test.exs --trace
+      - name: Remove injected test
+        run: rm -f test/t09_self_relationship_verification_runtime_test.exs
+      - name: V6 V8 relevant regressions
         run: |
-          echo "EXPECTED_TEAM9_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
-          echo "CHECKED_OUT_TEAM9_COMMIT=$(git rev-parse HEAD)"
-          echo "TEAM9_NORMAL_MEDIA_TESTED_COMMIT=$(git rev-parse HEAD)"
-          echo "FORMAT_OUTCOME=${{ steps.format.outcome }}"
-          echo "FOCUSED_BACKEND_OUTCOME=${{ steps.focused_backend.outcome }}"
-          echo "FOCUSED_JS_OUTCOME=${{ steps.focused_js.outcome }}"
-          echo "TEAM4_MEDIA_OUTCOME=${{ steps.team4_media.outcome }}"
-          echo "TEAM3_BACKEND_OUTCOME=${{ steps.team3_backend.outcome }}"
-          echo "PHOENIX_OUTCOME=${{ steps.phoenix.outcome }}"
-          echo "BROWSER_OUTCOME=${{ steps.browser.outcome }}"
-          echo "TEAM3_BROWSER_OUTCOME=${{ steps.team3_browser.outcome }}"
-          echo "EXISTING_BROWSER_OUTCOME=${{ steps.existing_browser.outcome }}"
-          echo "PRECOMMIT_OUTCOME=${{ steps.precommit.outcome }}"
-          echo "WHITESPACE_OUTCOME=${{ steps.whitespace.outcome }}"
-          echo "CLEAN_TREE_OUTCOME=${{ steps.clean_tree.outcome }}"
-
-      - name: Enforce complete Team 9 closure outcomes
+          mix test \
+            test/strangertalks_new/relationship_test.exs \
+            test/strangertalks_new/relationship_reconnections_test.exs \
+            test/strangertalks_new/team4_safety_boundary_test.exs \
+            test/strangertalks_new_web/channels/participant_channel_test.exs \
+            test/strangertalks_new/matchmaking_engine_test.exs \
+            --trace
+      - name: Extract migration seed helper
+        shell: bash
+        run: git show "$T09_PROOF_SHA:test/t09/support/seed_valid_relationship.exs" > /tmp/t09_seed.exs
+      - name: M2 existing valid relationship survives migration
+        shell: bash
         run: |
-          failed=0
-          for pair in \
-            "format=${{ steps.format.outcome }}" \
-            "focused_backend=${{ steps.focused_backend.outcome }}" \
-            "focused_js=${{ steps.focused_js.outcome }}" \
-            "team4_media=${{ steps.team4_media.outcome }}" \
-            "team3_backend=${{ steps.team3_backend.outcome }}" \
-            "phoenix=${{ steps.phoenix.outcome }}" \
-            "browser=${{ steps.browser.outcome }}" \
-            "team3_browser=${{ steps.team3_browser.outcome }}" \
-            "existing_browser=${{ steps.existing_browser.outcome }}" \
-            "precommit=${{ steps.precommit.outcome }}" \
-            "whitespace=${{ steps.whitespace.outcome }}" \
-            "clean_tree=${{ steps.clean_tree.outcome }}"
-          do
-            echo "$pair"
-            case "$pair" in
-              *=success) ;;
-              *) failed=1 ;;
-            esac
-          done
-          test "$failed" -eq 0
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet --to "$PRE_CONSTRAINT_VERSION"
+          mix run /tmp/t09_seed.exs
+          test "$(mix run -e 'IO.puts(StrangertalksNew.Repo.aggregate(StrangertalksNew.Relationship, :count, :relationship_id))' | tail -n1)" = 1
+          mix ecto.migrate --quiet
+          test "$(mix run -e 'IO.puts(StrangertalksNew.Repo.aggregate(StrangertalksNew.Relationship, :count, :relationship_id))' | tail -n1)" = 1
+          test "$(mix run -e 'r=StrangertalksNew.Repo.query!("SELECT count(*) FROM pg_constraint WHERE conname = $1", ["relationships_distinct_participants_check"]); IO.puts(r.rows |> hd() |> hd())' | tail -n1)" = 1
+          echo T09_M2=pass
+      - name: M3 historical self relationship fails closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet --to "$PRE_CONSTRAINT_VERSION"
+          mix run /tmp/t09_seed.exs
+          mix run -e 'StrangertalksNew.Repo.query!("UPDATE relationships SET participant_b_id = participant_a_id")'
+          test "$(mix run -e 'r=StrangertalksNew.Repo.query!("SELECT count(*) FROM relationships WHERE participant_a_id = participant_b_id"); IO.puts(r.rows |> hd() |> hd())' | tail -n1)" = 1
+          set +e
+          output=$(mix ecto.migrate 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -ne 0
+          printf '%s\n' "$output" | grep -F 'Cannot add relationships_distinct_participants_check: self relationships exist'
+          test "$(mix run -e 'r=StrangertalksNew.Repo.query!("SELECT count(*) FROM relationships WHERE participant_a_id = participant_b_id"); IO.puts(r.rows |> hd() |> hd())' | tail -n1)" = 1
+          test "$(mix run -e 'r=StrangertalksNew.Repo.query!("SELECT count(*) FROM pg_constraint WHERE conname = $1", ["relationships_distinct_participants_check"]); IO.puts(r.rows |> hd() |> hd())' | tail -n1)" = 0
+          echo T09_M3=pass
+      - name: M4 rollback removes constraint and preserves valid row
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet --to "$PRE_CONSTRAINT_VERSION"
+          mix run /tmp/t09_seed.exs
+          mix ecto.migrate --quiet
+          mix ecto.rollback --quiet --step 1
+          test "$(mix run -e 'IO.puts(StrangertalksNew.Repo.aggregate(StrangertalksNew.Relationship, :count, :relationship_id))' | tail -n1)" = 1
+          test "$(mix run -e 'r=StrangertalksNew.Repo.query!("SELECT count(*) FROM pg_constraint WHERE conname = $1", ["relationships_distinct_participants_check"]); IO.puts(r.rows |> hd() |> hd())' | tail -n1)" = 0
+          echo T09_M4=pass
+      - name: Independent full precommit
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          mix precommit
+      - name: Final candidate integrity proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check "$BASE_SHA"...HEAD
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          echo "TESTED_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
 
-      - name: Phoenix log on failure
-        if: failure()
-        run: cat /tmp/team9-phoenix.log || true
+  final:
+    name: T09 fail-closed summary
+    if: always()
+    needs: [baseline, browser, t01]
+    runs-on: ubuntu-latest
+    steps:
+      - shell: bash
+        run: |
+          set -euo pipefail
+          echo baseline=${{ needs.baseline.result }}
+          echo browser=${{ needs.browser.result }}
+          echo t01=${{ needs.t01.result }}
+          test "${{ needs.baseline.result }}" = success
+          test "${{ needs.browser.result }}" = success
+          test "${{ needs.t01.result }}" = success
+          echo T09_GATE=VERIFICATION_COMPLETE
