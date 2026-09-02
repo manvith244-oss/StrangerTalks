@@ -1,0 +1,45 @@
+name: T03 Apply History Route Fix
+
+on:
+  push:
+    branches:
+      - team3/core-journey-browser-closure
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: ${{ !contains(github.event.head_commit.message, 'fix(t03): replace invalidated history route') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@v4
+        with:
+          ref: team3/core-journey-browser-closure
+          fetch-depth: 0
+
+      - name: Replace only the proven history-delete route drift
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('priv/static/assets/app.js')
+          text = path.read_text()
+          old = 'await replaceWithSyncTombstones(records, deleteKeptConversation(records, app.historyConversationId, {deleteSummary})); releaseAllVoiceUrls(); show("chats") })'
+          new = 'await replaceWithSyncTombstones(records, deleteKeptConversation(records, app.historyConversationId, {deleteSummary})); releaseAllVoiceUrls(); await navigation.replace("/chats") })'
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one history-delete target, found {count}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- priv/static/assets/app.js
+
+      - name: Commit focused production fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add priv/static/assets/app.js
+          git commit -m "fix(t03): replace invalidated history route after deletion"
+          git push origin HEAD:team3/core-journey-browser-closure
