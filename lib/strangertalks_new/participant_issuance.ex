@@ -19,7 +19,7 @@ defmodule StrangertalksNew.ParticipantIssuance do
 
   def create(source, attrs, participants_context \\ Participants) when is_map(attrs) do
     result =
-      SourceRateLimiter.transact_source(source, @policies, fn _source_fingerprint ->
+      SourceRateLimiter.transact_source(source, policies(), fn _source_fingerprint ->
         case participants_context.create_participant(attrs) do
           {:ok, participant} -> {:ok, participant}
           {:error, reason} -> {:error, {:participant_creation_failed, reason}}
@@ -80,5 +80,6 @@ defmodule StrangertalksNew.ParticipantIssuance do
     end
   end
 
-  def policies, do: @policies
+  def policies,
+    do: Application.get_env(:strangertalks_new, :participant_issuance_policies, @policies)
 end
