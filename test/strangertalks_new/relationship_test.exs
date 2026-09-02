@@ -148,7 +148,9 @@ defmodule StrangertalksNew.RelationshipTest do
     assert "must identify two different participants" in errors_on(changeset).participant_b_id
   end
 
-  test "database rejects a self relationship when the changeset is bypassed", %{valid_attrs: attrs} do
+  test "database rejects a self relationship when the changeset is bypassed", %{
+    valid_attrs: attrs
+  } do
     assert {:ok, relationship} = Relationships.create_relationship(attrs)
 
     assert {:error,
