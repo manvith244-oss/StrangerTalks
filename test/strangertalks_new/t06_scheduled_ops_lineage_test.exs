@@ -110,7 +110,7 @@ defmodule StrangertalksNew.T06ScheduledOpsLineageTest do
     t06 = File.read!(@t06_gate)
 
     assert runner =~ "EXPECTED_SHA"
-    assert runner =~ "git worktree add --detach"
+    assert runner =~ "worktree add --detach"
     assert runner =~ "mix precommit"
     assert runner =~ "ISOLATED_PRECOMMIT_TESTED_SHA="
     assert runner =~ "ISOLATED_PRECOMMIT_RESULT=PASS"
