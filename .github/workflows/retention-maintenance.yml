@@ -40,6 +40,7 @@ jobs:
           git status --porcelain
           test -f lib/mix/tasks/strangertalks.retention.ex
           test -f lib/strangertalks_new/retention_cleanup.ex
+          test -f ops/run_retention.sh
 
       - name: Guard authoritative production database credential
         shell: bash
@@ -78,6 +79,4 @@ jobs:
           POOL_SIZE: '2'
         run: |
           set -euo pipefail
-          export SECRET_KEY_BASE="$(openssl rand -hex 64)"
-          mix strangertalks.retention
-          echo "RETENTION_RESULT=PASS"
+          bash ops/run_retention.sh
