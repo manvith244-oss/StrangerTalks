@@ -244,7 +244,7 @@ defmodule StrangertalksNew.Team4ReportBlockAbuseClosureTest do
   test "repeated Block does not rebroadcast terminal authority after the first applied action" do
     {conversation, participant_a, _participant_b} = conversation_fixture()
     topic = "conversation:#{conversation.conversation_id}"
-    :ok = @endpoint.subscribe(topic)
+    :ok = Phoenix.PubSub.subscribe(StrangertalksNew.PubSub, topic)
 
     assert {:ok, _block} =
              MatchingRules.block_conversation_participant(
