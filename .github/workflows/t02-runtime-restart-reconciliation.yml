@@ -1,0 +1,80 @@
+name: T02 Runtime Restart Reconciliation Gate
+
+on:
+  push:
+    branches:
+      - team2/runtime-restart-reconciliation
+  workflow_dispatch:
+
+concurrency:
+  group: t02-runtime-restart-${{ github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-restart-reconciliation:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact T02 restart commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Prove checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "EXPECTED_T02_RESTART_COMMIT=${{ github.sha }}"
+          echo "ACTUAL_T02_RESTART_COMMIT=$actual"
+          test "$actual" = "${{ github.sha }}"
+          git status --porcelain
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Check focused test formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix format --check-formatted test/strangertalks_new/runtime_restart_reconciliation_test.exs
+          git diff --check
+
+      - name: Focused restart reconciliation proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/runtime_restart_reconciliation_test.exs
