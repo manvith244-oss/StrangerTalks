@@ -45,6 +45,7 @@ defmodule StrangertalksNew.RuntimeRestartReconciliationTest do
              MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "en", nil, nil)
 
     refute new_attempt == old_attempt
+
     assert {:error, :stale_attempt} =
              MatchmakingEngine.cancel_queue(participant.participant_id, old_attempt)
 
@@ -92,10 +93,14 @@ defmodule StrangertalksNew.RuntimeRestartReconciliationTest do
     assert_reply ref, :ok, %{status: "queued", queue_attempt_id: ^new_attempt}
     assert map_size(queue_state()) == 1
 
-    :ok = ParticipantConnectionTracker.unregister(participant.participant_id, socket_a1.channel_pid)
+    :ok =
+      ParticipantConnectionTracker.unregister(participant.participant_id, socket_a1.channel_pid)
+
     assert %{queue_attempt_id: ^new_attempt} = queue_entry(participant.participant_id)
 
-    :ok = ParticipantConnectionTracker.unregister(participant.participant_id, socket_a2.channel_pid)
+    :ok =
+      ParticipantConnectionTracker.unregister(participant.participant_id, socket_a2.channel_pid)
+
     assert queue_entry(participant.participant_id) == nil
   end
 
