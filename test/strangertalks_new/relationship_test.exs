@@ -2,6 +2,7 @@ defmodule StrangertalksNew.RelationshipTest do
   use StrangertalksNew.DataCase, async: true
   alias StrangertalksNew.Relationships
   alias StrangertalksNew.Relationship
+  alias StrangertalksNew.Repo
 
   @valid_time DateTime.from_naive!(~N[2026-07-03 00:00:00.000000], "Etc/UTC")
 
@@ -145,6 +146,26 @@ defmodule StrangertalksNew.RelationshipTest do
 
     assert {:error, changeset} = Relationships.create_relationship(invalid)
     assert "must identify two different participants" in errors_on(changeset).participant_b_id
+  end
+
+  test "database rejects a self relationship when the changeset is bypassed", %{valid_attrs: attrs} do
+    assert {:ok, relationship} = Relationships.create_relationship(attrs)
+
+    assert {:error,
+            %Postgrex.Error{
+              postgres: %{
+                code: :check_violation,
+                constraint: "relationships_distinct_participants_check"
+              }
+            }} =
+             Repo.query(
+               """
+               UPDATE relationships
+               SET participant_b_id = participant_a_id
+               WHERE relationship_id = $1
+               """,
+               [Ecto.UUID.dump!(relationship.relationship_id)]
+             )
   end
 
   test "change_relationship/2 outputs an evaluation configuration tracking differences", %{
