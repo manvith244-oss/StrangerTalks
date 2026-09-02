@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - team7/provider-output-failure-closure-diff-proof
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
 
 permissions:
   contents: read
