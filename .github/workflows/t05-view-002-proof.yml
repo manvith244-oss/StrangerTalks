@@ -1,0 +1,68 @@
+name: T05 VIEW 002 Proof
+
+on:
+  push:
+    branches:
+      - team5/limited-view-presentation-atomicity
+
+permissions:
+  contents: read
+
+jobs:
+  limited-view-proof:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Prepare database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Run T05 limited-view atomicity and existing server proofs
+        run: |
+          mix test \
+            test/strangertalks_new/t05_view_presentation_atomicity_test.exs \
+            test/strangertalks_new/view_once_media_store_test.exs \
+            test/strangertalks_new/view_once_conversation_test.exs \
+            test/strangertalks_new/view_once_safety_report_test.exs \
+            test/strangertalks_new_web/controllers/view_once_media_controller_test.exs
+      - name: Run client and sync exclusion proofs
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/view_once_test.mjs \
+            test/js/encrypted_sync_test.mjs
+      - name: Diff integrity
+        run: git diff --check
