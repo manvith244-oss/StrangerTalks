@@ -2,6 +2,7 @@ defmodule StrangertalksNew.ConversationTest do
   use StrangertalksNew.DataCase, async: true
   alias StrangertalksNew.Conversations
   alias StrangertalksNew.Conversation
+  alias StrangertalksNew.Repo
 
   @valid_time DateTime.from_naive!(~N[2026-07-03 02:00:00.000000], "Etc/UTC")
 
@@ -95,9 +96,20 @@ defmodule StrangertalksNew.ConversationTest do
     assert conv.conversation_status == :ACTIVE
   end
 
-  test "change_conversation/2 tracks changes correctly", %{valid_attrs: attrs} do
+  test "COMPLETED is rejected by application authority and PostgreSQL", %{valid_attrs: attrs} do
     {:ok, conv} = Conversations.create_conversation(attrs)
     changeset = Conversations.change_conversation(conv, %{conversation_status: :COMPLETED})
-    assert changeset.changes == %{conversation_status: :COMPLETED}
+
+    refute changeset.valid?
+    assert "is invalid" in errors_on(changeset).conversation_status
+
+    assert {:error,
+            %Postgrex.Error{
+              postgres: %{code: :check_violation, constraint: "conversation_status_check"}
+            }} =
+             Repo.query(
+               "UPDATE conversations SET conversation_status = 'COMPLETED' WHERE conversation_id = $1",
+               [Ecto.UUID.dump!(conv.conversation_id)]
+             )
   end
 end

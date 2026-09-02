@@ -34,8 +34,12 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   @typing_expiry_ms 5_000
   @mailbox_soft_limit 100
   @mailbox_hard_limit 500
+  @release_terminal_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]
 
   def max_message_bytes, do: @max_message_bytes
+
+  @doc false
+  def release_terminal_status?(status), do: status in @release_terminal_statuses
 
   @impl true
   def format_status(_status), do: %{state: :redacted, message: :redacted}
@@ -5205,7 +5209,60 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       end
 
     attrs = if ended_at, do: Map.put(extra_attrs, :ended_at, ended_at), else: extra_attrs
-    StrangertalksNew.ConversationLifecycle.Transitions.transition(conversation, event, attrs)
+
+    Repo.transaction(fn ->
+      case StrangertalksNew.ConversationLifecycle.Transitions.transition(
+             conversation,
+             event,
+             attrs
+           ) do
+        {:ok, persisted_conversation} ->
+          case maybe_release_pairing_reservations(persisted_conversation, ended_at) do
+            :ok -> persisted_conversation
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, persisted_conversation} -> {:ok, persisted_conversation}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_release_pairing_reservations(
+         %Conversation{conversation_status: status} = conversation,
+         ended_at
+       ) do
+    if release_terminal_status?(status) do
+      release_pairing_reservations(
+        conversation.match_id,
+        ended_at || conversation.ended_at || DateTime.utc_now()
+      )
+    else
+      :ok
+    end
+  end
+
+  defp release_pairing_reservations(match_id, released_at) do
+    with {:ok, dumped_match_id} <- Ecto.UUID.dump(match_id),
+         {:ok, _result} <-
+           Repo.query(
+             """
+             UPDATE participant_pairing_reservations
+             SET released_at = $2
+             WHERE match_id = $1
+               AND released_at IS NULL
+             """,
+             [dumped_match_id, DateTime.to_naive(released_at)]
+           ) do
+      :ok
+    else
+      :error -> {:error, :invalid_match_id}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp prune_completed(state) do
@@ -6149,7 +6206,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
                :crypto.hash(:sha256, grant_secret) == grant.secret_verifier ||
                  {:error, :invalid_grant_secret},
              true <-
-               (is_nil(grant.source_epoch_id) or grant.source_epoch_id == state.epoch_id) ||
+               is_nil(grant.source_epoch_id) or grant.source_epoch_id == state.epoch_id ||
                  {:error, :epoch_mismatch},
              target when not is_nil(target) <-
                find_recent_message(state.recent_messages, grant.source_client_message_id),

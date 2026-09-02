@@ -6,10 +6,12 @@ defmodule StrangertalksNew.ConversationLifecycle.Transitions do
   consistently applies durable timestamps and ending metadata.
   """
 
+  import Ecto.Query, warn: false
+
   alias StrangertalksNew.Conversation
   alias StrangertalksNew.Repo
 
-  @terminal_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]
+  @terminal_statuses [:ENDED, :ABANDONED, :FAILED]
 
   @type event ::
           :participants_connected
@@ -182,30 +184,85 @@ defmodule StrangertalksNew.ConversationLifecycle.Transitions do
   def terminal?(status) when is_atom(status), do: status in @terminal_statuses
 
   defp apply_transition(conv, target_status, event, attrs) do
+    if terminal?(target_status) do
+      StrangertalksNew.Telemetry.execute(
+        [:terminal, :request_accepted],
+        %{count: 1},
+        %{terminal_status: target_status, lifecycle_event: event}
+      )
+    end
+
     try do
-      case conv
-           |> Conversation.changeset(attrs)
-           |> Repo.update() do
-        {:ok, updated} ->
-          StrangertalksNew.Telemetry.execute(
-            [:conversation, :transitioned],
-            %{count: 1},
-            %{
-              from_status: conv.conversation_status,
-              to_status: target_status,
-              lifecycle_event: event
-            }
-          )
+      changeset = Conversation.changeset(conv, attrs)
 
-          {:ok, updated}
-
-        {:error, reason} ->
-          {:error, reason}
+      if changeset.valid? do
+        persist_if_canonical(conv, changeset, target_status, event)
+      else
+        emit_terminal_persistence_failure(target_status, event, changeset)
+        {:error, changeset}
       end
     rescue
-      exception -> {:error, exception}
+      exception ->
+        emit_terminal_persistence_failure(target_status, event, exception)
+        {:error, exception}
     catch
-      :exit, reason -> {:error, reason}
+      :exit, reason ->
+        emit_terminal_persistence_failure(target_status, event, reason)
+        {:error, reason}
+    end
+  end
+
+  defp emit_terminal_persistence_failure(target_status, event, reason) do
+    if terminal?(target_status) do
+      StrangertalksNew.Telemetry.failure(
+        [:terminal, :persistence_failed],
+        reason,
+        %{terminal_status: target_status, lifecycle_event: event}
+      )
+    end
+  end
+
+  defp persist_if_canonical(conv, changeset, target_status, event) do
+    expected_status = conv.conversation_status
+
+    query =
+      from current in Conversation,
+        where:
+          current.conversation_id == ^conv.conversation_id and
+            current.conversation_status == ^expected_status
+
+    case Repo.update_all(query, set: Map.to_list(changeset.changes)) do
+      {1, _} ->
+        updated = Repo.get!(Conversation, conv.conversation_id)
+
+        StrangertalksNew.Telemetry.execute(
+          [:conversation, :transitioned],
+          %{count: 1},
+          %{
+            from_status: expected_status,
+            to_status: target_status,
+            lifecycle_event: event
+          }
+        )
+
+        if terminal?(target_status) and updated.ending_type != :BLOCK do
+          StrangertalksNew.Telemetry.execute(
+            [:terminal, :durable_commit],
+            %{count: 1},
+            %{terminal_status: target_status, lifecycle_event: event}
+          )
+        end
+
+        {:ok, updated}
+
+      {0, _} ->
+        case Repo.get(Conversation, conv.conversation_id) do
+          nil ->
+            {:error, :conversation_not_found}
+
+          %Conversation{conversation_status: canonical_status} ->
+            {:error, {:invalid_transition, canonical_status, event}}
+        end
     end
   end
 end

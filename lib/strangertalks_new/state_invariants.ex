@@ -14,7 +14,7 @@ defmodule StrangertalksNew.StateInvariants do
 
   require Logger
 
-  @terminal_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]
+  @terminal_statuses [:ENDED, :ABANDONED, :FAILED]
   @non_terminal_statuses [:PENDING, :ACTIVE, :PAUSED]
 
   @doc """

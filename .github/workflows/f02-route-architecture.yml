@@ -1,0 +1,111 @@
+name: F-02 Route Architecture Proof
+
+on:
+  push:
+    branches:
+      - f02/route-architecture-wave-a
+  pull_request:
+    branches:
+      - release/prep-2026-08-22
+    paths:
+      - "lib/strangertalks_new_web/router.ex"
+      - "lib/strangertalks_new_web/controllers/page_controller.ex"
+      - "lib/strangertalks_new_web/controllers/google_auth_controller.ex"
+      - "priv/static/index.html"
+      - "priv/static/assets/route_contract.mjs"
+      - "priv/static/assets/route_runtime.mjs"
+      - "test/strangertalks_new_web/controllers/route_architecture_test.exs"
+      - "test/js/route_contract_test.mjs"
+      - ".github/workflows/f02-route-architecture.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: f02-route-architecture-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  route-contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact F-02 commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "EXPECTED_F02_COMMIT=$expected"
+          echo "ACTUAL_F02_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$expected"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+
+      - name: Prepare database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Frozen Phoenix direct-entry contract
+        id: phoenix-route-contract
+        continue-on-error: true
+        run: mix test test/strangertalks_new_web/controllers/route_architecture_test.exs
+
+      - name: Frozen browser route contract
+        id: browser-route-contract
+        continue-on-error: true
+        run: node --test test/js/route_contract_test.mjs
+
+      - name: Full precommit regression
+        id: full-precommit
+        continue-on-error: true
+        run: |
+          mix precommit
+          git diff --exit-code
+
+      - name: Require focused contracts and precommit
+        if: always()
+        run: |
+          test "${{ steps.phoenix-route-contract.outcome }}" = "success"
+          test "${{ steps.browser-route-contract.outcome }}" = "success"
+          test "${{ steps.full-precommit.outcome }}" = "success"

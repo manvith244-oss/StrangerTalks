@@ -213,9 +213,26 @@ function exactMessage(page, text) {
   return page.locator("#messages li span").filter({hasText: text})
 }
 
+async function openMessageTools(page) {
+  const form = page.locator('section[data-screen="conversation"].active #message-form')
+  if (!(await form.evaluate(node => node.classList.contains("ig-tray-open")))) {
+    await page.locator(".ig-compose-plus").click()
+  }
+  await page.waitForFunction(() => document.querySelector("#message-form")?.classList.contains("ig-tray-open"))
+  await page.locator("#ig-message-tools").waitFor({state: "visible"})
+}
+
+async function openConversationInfo(page) {
+  const info = page.locator(".conversation-head-actions .overflow")
+  await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 0)))
+  if ((await info.getAttribute("open")) === null) await info.locator("summary").click()
+  await page.waitForFunction(() => document.querySelector(".conversation-head-actions .overflow")?.open === true)
+  await info.locator(".overflow-menu").waitFor({state: "visible"})
+}
+
 async function sendMessage(page, text) {
   await page.locator("#message-input").fill(text)
-  await page.locator("#message-form button.primary").click()
+  await page.locator('section[data-screen="conversation"].active #message-form').getByRole("button", {name: "Send message"}).click()
   const message = exactMessage(page, text)
   await message.waitFor({state: "visible"})
   return message
@@ -717,6 +734,109 @@ test("browser-layer disconnect recovers and catches up exactly once", {timeout: 
   }
 })
 
+test("peer reconnect preserves intentional timeline position and follows when near bottom", {timeout: 150_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let pair
+
+  const timelinePosition = (page) => page.locator("#message-viewport").evaluate((viewport) => ({
+    scrollTop: viewport.scrollTop,
+    maxScrollTop: viewport.scrollHeight - viewport.clientHeight,
+    bottomDistance: viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+  }))
+
+  const setBottomDistance = async (page, distance) => {
+    await page.locator("#message-viewport").evaluate((viewport, requestedDistance) => {
+      const maxScrollTop = viewport.scrollHeight - viewport.clientHeight
+      viewport.scrollTop = Math.max(0, maxScrollTop - requestedDistance)
+    }, distance)
+    await page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    }))
+  }
+
+  try {
+    pair = await matchPair(browser, "Advice", {controllableA: true})
+    await pair.a.page.emulateMedia({reducedMotion: "reduce"})
+    await pair.b.page.emulateMedia({reducedMotion: "reduce"})
+    await pair.b.page.setViewportSize({width: 390, height: 720})
+
+    for (let index = 0; index < 12; index += 1) {
+      const text = `Reconnect scroll seed ${index}: ${"A real Conversation timeline needs enough content to prove the viewport keeps its reader-selected anchor. ".repeat(3)}`.trim()
+      await sendAndReceive(pair.a, pair.b, text, pair.conversationTopic)
+    }
+
+    const seeded = await timelinePosition(pair.b.page)
+    assert.ok(seeded.maxScrollTop > 300, `seeded timeline must overflow substantially; maxScrollTop=${seeded.maxScrollTop}`)
+
+    const reconnectPeerAndWaitForPresence = async (label) => {
+      const disconnectMark = pair.b.journal.mark()
+      await pair.a.disconnectSocket()
+      await pair.a.page.locator("#presence").filter({hasText: /Reconnecting|Disconnected/}).waitFor({state: "visible"})
+      await pair.b.journal.waitFor(
+        event => event.type === "frame_received" &&
+          event.topic === pair.conversationTopic &&
+          event.event === "conversation:presence" &&
+          event.body?.status !== "connected",
+        `${label} peer disconnect presence`,
+        disconnectMark
+      )
+
+      const connectedMark = pair.b.journal.mark()
+      const joinMark = pair.a.journal.mark()
+      pair.a.reconnectSocket()
+
+      const connectedPresence = await pair.b.journal.waitFor(
+        event => event.type === "frame_received" &&
+          event.topic === pair.conversationTopic &&
+          event.event === "conversation:presence" &&
+          event.body?.status === "connected",
+        `${label} peer connected presence`,
+        connectedMark
+      )
+      await pair.a.journal.waitFor(
+        event => event.type === "frame_received" &&
+          event.topic === pair.conversationTopic &&
+          event.event === "phx_reply" &&
+          event.body?.status === "ok",
+        `${label} peer ConversationChannel rejoin`,
+        joinMark
+      )
+      assert.equal(connectedPresence.body.status, "connected", `${label} uses the real connected-presence handler`)
+      await pair.b.page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      }))
+    }
+
+    await setBottomDistance(pair.b.page, 320)
+    const intentionallyScrolledUp = await timelinePosition(pair.b.page)
+    assert.ok(intentionallyScrolledUp.bottomDistance > 80, "the reader is intentionally outside the near-bottom threshold")
+
+    await reconnectPeerAndWaitForPresence("scrolled-up")
+    const afterScrolledUpReconnect = await timelinePosition(pair.b.page)
+    assert.ok(
+      Math.abs(afterScrolledUpReconnect.scrollTop - intentionallyScrolledUp.scrollTop) <= 1,
+      `peer reconnect must preserve the intentional scroll anchor; before=${intentionallyScrolledUp.scrollTop} after=${afterScrolledUpReconnect.scrollTop}`
+    )
+    assert.ok(afterScrolledUpReconnect.bottomDistance > 80, "the reconnect does not force the reader back to newest")
+
+    await setBottomDistance(pair.b.page, 40)
+    const nearBottom = await timelinePosition(pair.b.page)
+    assert.ok(nearBottom.bottomDistance > 10 && nearBottom.bottomDistance <= 80, `near-bottom setup must exercise the follow threshold; distance=${nearBottom.bottomDistance}`)
+
+    await reconnectPeerAndWaitForPresence("near-bottom")
+    const afterNearBottomReconnect = await timelinePosition(pair.b.page)
+    assert.ok(afterNearBottomReconnect.bottomDistance <= 1, `near-bottom reconnect must follow to newest; distance=${afterNearBottomReconnect.bottomDistance}`)
+    assert.ok(afterNearBottomReconnect.scrollTop > nearBottom.scrollTop, "near-bottom reconnect performs the existing bottom follow")
+
+    assertClean(pair.b)
+    assertClean(pair.a, {allowedFailedRequest: request => new URL(request.url).pathname === "/socket/websocket"})
+  } finally {
+    await pair?.a.context.close().catch(() => {})
+    await pair?.b.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
+
 test("same participant keeps the Conversation through first-tab close and recovers after final-tab close", {timeout: 60_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let pair
@@ -992,7 +1112,7 @@ test("real browser reply: peer delivers message, author replies with canonical q
 
     // B types and sends reply
     await b.page.locator("#message-input").fill("This is my answer B")
-    await b.page.locator("#message-form button.primary").click()
+    await b.page.locator('section[data-screen="conversation"].active #message-form').getByRole("button", {name: "Send message"}).click()
 
     // A receives reply with quote preview
     const replyBubbleA = a.page.locator("#messages li", {hasText: "This is my answer B"})
@@ -1351,6 +1471,7 @@ test("Feature 1C: Session Pinned Messages - private pin, panel view, jump to mes
     assert.equal(isPinnedA, true, "Message on participant A has is-pinned class")
 
     // Pinned control on A shows count 1
+    await openConversationInfo(pair.a.page)
     const pinControlA = pair.a.page.locator("#pinned-messages-control")
     await pinControlA.waitFor({state: "visible"})
     const pinCountA = await pair.a.page.locator("#pinned-count").textContent()
@@ -1414,6 +1535,7 @@ test("Feature 1C: Scenario B - same participant second tab converges without ref
 
     // Tab 2 converges to pinned state without refresh
     await bubbleInA2.locator(".message-pinned-badge").waitFor({state: "visible"})
+    await openConversationInfo(aTab2)
     const pinControlA2 = aTab2.locator("#pinned-messages-control")
     await pinControlA2.waitFor({state: "visible"})
 
@@ -1497,6 +1619,7 @@ test("D3: Pin state is isolated when Conversation A ends and Conversation B begi
     await conversationAMessage.locator(".pin-action-btn").click()
     await conversationAMessage.locator(".message-pinned-badge").waitFor({state: "visible"})
     assert.equal((await a.page.locator("#pinned-count").textContent()).trim(), "1")
+    await openConversationInfo(a.page)
     await a.page.locator("#pinned-messages-control").click()
     assert.match(await a.page.locator("#pinned-messages-panel").textContent(), /D3 Conversation A pinned message/)
 
@@ -1572,6 +1695,7 @@ test("Feature 1D E2E-1: real two-user expressive send is canonical and singular"
   try {
     pair = await matchPair(browser, "Distract")
     const mark = pair.b.journal.mark()
+    await openMessageTools(pair.a.page)
     await pair.a.page.locator("#expressive-open").click()
     await pair.a.page.locator("#expressive-search").fill("bright")
     await pair.a.page.getByRole("option", {name: "A bright spark"}).click()
@@ -1595,6 +1719,7 @@ test("Feature 1D E2E-2: unsent search and browsing remain private", {timeout: 60
     const sentinel = "private-sentinel-1d-937"
     const markA = pair.a.journal.mark()
     const markB = pair.b.journal.mark()
+    await openMessageTools(pair.a.page)
     await pair.a.page.locator("#expressive-open").click()
     await pair.a.page.locator("#expressive-search").fill(sentinel)
     await pair.a.page.locator("#expressive-close").click()
@@ -1615,6 +1740,7 @@ test("Feature 1D E2E-3: keyboard, focus, touch safety, and reduced motion", {tim
   try {
     pair = await matchPair(browser, "Advice")
     await pair.a.page.emulateMedia({reducedMotion: "reduce"})
+    await openMessageTools(pair.a.page)
     await pair.a.page.locator("#expressive-open").focus()
     await pair.a.page.keyboard.press("Enter")
     await pair.a.page.locator("#expressive-search").press("Tab")
@@ -1647,6 +1773,7 @@ test("Feature 1D diagnostic proof: real expressive asset failure remains content
     const frameMark = pair.b.journal.mark()
     const failedMark = pair.b.failedRequests.length
 
+    await openMessageTools(pair.a.page)
     await pair.a.page.locator("#expressive-open").click()
     await pair.a.page.locator("#expressive-search").fill("private-filter-1d")
     await pair.a.page.locator("#expressive-search").fill("bright")
@@ -1925,6 +2052,7 @@ test("Feature 1G E2E-1: Quiet Mode toggle, header UI, and peer privacy", {timeou
     assert.equal(await quietBtnA.textContent(), "🔔")
 
     // Enable Quiet Mode on A
+    await openConversationInfo(pair.a.page)
     await quietBtnA.click()
     assert.equal(await quietBtnA.getAttribute("aria-pressed"), "true")
     assert.equal(await quietBtnA.getAttribute("aria-label"), "Quiet Mode, on")
@@ -1936,6 +2064,7 @@ test("Feature 1G E2E-1: Quiet Mode toggle, header UI, and peer privacy", {timeou
     assert.equal(await quietBtnB.textContent(), "🔔")
 
     // Disable Quiet Mode on A
+    await openConversationInfo(pair.a.page)
     await quietBtnA.click()
     assert.equal(await quietBtnA.getAttribute("aria-pressed"), "false")
     assert.equal(await quietBtnA.getAttribute("aria-label"), "Quiet Mode, off")
@@ -1957,6 +2086,7 @@ test("Feature 1G E2E-2: Quiet Mode socket reconnect preservation and refresh res
     const quietBtnA = pair.a.page.locator("#quiet-mode-control")
 
     // Enable Quiet Mode on A
+    await openConversationInfo(pair.a.page)
     await quietBtnA.click()
     assert.equal(await quietBtnA.getAttribute("aria-pressed"), "true")
 
@@ -1993,6 +2123,7 @@ test("Feature 1G E2E-3: Quiet Mode delivery preservation and conversation lifecy
     const quietBtnA = pair.a.page.locator("#quiet-mode-control")
 
     // Enable Quiet Mode on A
+    await openConversationInfo(pair.a.page)
     await quietBtnA.click()
     assert.equal(await quietBtnA.getAttribute("aria-pressed"), "true")
 
@@ -2022,6 +2153,8 @@ test("Feature 1H E2E-1: choose Rain Window locally while Conversation controls r
     const originalBackground = await conversationA.evaluate(node => getComputedStyle(node).backgroundImage)
     const peerMark = pair.b.journal.mark()
 
+    await openConversationInfo(pair.a.page)
+
     await pair.a.page.locator("#atmosphere-control").click()
     const rain = pair.a.page.locator('[data-atmosphere-option="rain-window"]')
     await rain.click()
@@ -2050,6 +2183,7 @@ test("Feature 1H E2E-2: reconnect preserves, tabs stay independent, and refresh 
   let tabA2
   try {
     pair = await matchPair(browser, "Vent", {controllableA: true})
+    await openConversationInfo(pair.a.page)
     await pair.a.page.locator("#atmosphere-control").click()
     await pair.a.page.locator('[data-atmosphere-option="late-night-library"]').click()
     assert.equal(await pair.a.page.locator('section[data-screen="conversation"]').getAttribute("data-atmosphere"), "late-night-library")
@@ -2068,6 +2202,7 @@ test("Feature 1H E2E-2: reconnect preserves, tabs stay independent, and refresh 
     tabA2 = await openSameParticipantTab(pair.a.context)
     assert.equal(await waitForConversation(tabA2), pair.conversationTopic)
     assert.equal(await tabA2.page.locator('section[data-screen="conversation"]').getAttribute("data-atmosphere"), null)
+    await openConversationInfo(tabA2.page)
     await tabA2.page.locator("#atmosphere-control").click()
     await tabA2.page.locator('[data-atmosphere-option="coffee-shop"]').click()
     assert.equal(await tabA2.page.locator('section[data-screen="conversation"]').getAttribute("data-atmosphere"), "coffee-shop")
@@ -2092,6 +2227,7 @@ test("Feature 1H E2E-3: keyboard chooser remains functional across accessibility
     await pair.a.page.emulateMedia({reducedMotion: "reduce", forcedColors: "active"})
     await pair.a.page.setViewportSize({width: 390, height: 844})
 
+    await openConversationInfo(pair.a.page)
     const control = pair.a.page.locator("#atmosphere-control")
     await control.focus()
     await pair.a.page.keyboard.press("Enter")
@@ -2101,7 +2237,7 @@ test("Feature 1H E2E-3: keyboard chooser remains functional across accessibility
     assert.equal(await train.getAttribute("aria-pressed"), "true")
     assert.equal(await pair.a.page.locator('section[data-screen="conversation"]').getAttribute("data-atmosphere"), "train-journey")
     assert.equal(await pair.a.page.locator("#message-input").isVisible(), true)
-    assert.equal(await control.isVisible(), true)
+    assert.equal(await control.isVisible(), false)
     const mobileComposer = await pair.a.page.locator("#message-form").boundingBox()
     assert.ok(mobileComposer && mobileComposer.x >= 0 && mobileComposer.x + mobileComposer.width <= 390)
 
@@ -2110,6 +2246,8 @@ test("Feature 1H E2E-3: keyboard chooser remains functional across accessibility
     const wideComposer = await pair.a.page.locator("#message-form").boundingBox()
     assert.ok(wideTimeline && wideTimeline.width <= 800)
     assert.ok(wideComposer && wideComposer.width <= 800)
+
+    await openConversationInfo(pair.a.page)
 
     await pair.a.page.locator("#quiet-mode-control").click()
     assert.equal(await pair.a.page.locator("#quiet-mode-control").getAttribute("aria-pressed"), "true")
@@ -2135,6 +2273,8 @@ test("Feature 1I E2E-1: Ambient Audio requires explicit enable and stops on disa
     assert.equal(await audio.evaluate(element => element.paused), true, "page load is silent")
     assert.equal(await audio.getAttribute("src"), null, "page load has no selected audio source")
 
+    await openConversationInfo(pair.a.page)
+
     await pair.a.page.locator("#atmosphere-control").click()
     await pair.a.page.locator('[data-atmosphere-option="rain-window"]').click()
     assert.equal(await audio.evaluate(element => element.paused), true, "theme selection remains silent")
@@ -2142,6 +2282,7 @@ test("Feature 1I E2E-1: Ambient Audio requires explicit enable and stops on disa
 
     const peerMark = pair.b.journal.mark()
     const assetResponse = pair.a.page.waitForResponse(response => new URL(response.url()).pathname === "/assets/ambient/rain-window.wav")
+    await openConversationInfo(pair.a.page)
     await pair.a.page.locator("#ambient-audio-control").click()
     assert.equal((await assetResponse).ok(), true, "same-origin Rain asset loads")
     await pair.a.page.waitForFunction(() => !document.querySelector("#ambient-audio").paused)
@@ -2151,12 +2292,15 @@ test("Feature 1I E2E-1: Ambient Audio requires explicit enable and stops on disa
     await sendAndReceive(pair.a, pair.b, "ambient leaves canonical delivery alone", pair.conversationTopic)
     await pair.a.page.locator("#messages li", {hasText: "ambient leaves canonical delivery alone"}).locator("small", {hasText: "delivered"}).waitFor({state: "visible"})
 
+    await openConversationInfo(pair.a.page)
+
     await pair.a.page.locator("#ambient-audio-control").click()
     assert.equal(await audio.evaluate(element => element.paused), true)
     assert.equal(await pair.a.page.locator("#ambient-audio-control").getAttribute("aria-pressed"), "false")
 
     await pair.a.page.route("**/assets/ambient/train-journey.wav", route => route.abort("failed"))
     await pair.a.page.locator('[data-atmosphere-option="train-journey"]').click()
+    await openConversationInfo(pair.a.page)
     await pair.a.page.locator("#ambient-audio-control").click()
     await pair.a.page.waitForFunction(() => ["unavailable", "blocked"].includes(document.querySelector("#ambient-audio-control").dataset.playbackStatus))
     assert.equal(await audio.evaluate(element => element.paused), true, "asset failure degrades to silence")
@@ -2175,15 +2319,19 @@ test("Feature 1I E2E-2: Quiet Mode and visibility locally suppress and resume am
   let pair
   try {
     pair = await matchPair(browser, "Vent")
+    await openConversationInfo(pair.a.page)
     await pair.a.page.locator("#atmosphere-control").click()
     await pair.a.page.locator('[data-atmosphere-option="coffee-shop"]').click()
+    await openConversationInfo(pair.a.page)
     await pair.a.page.locator("#ambient-audio-control").click()
     await pair.a.page.waitForFunction(() => !document.querySelector("#ambient-audio").paused)
 
     const networkMark = pair.a.journal.mark()
+    await openConversationInfo(pair.a.page)
     await pair.a.page.locator("#quiet-mode-control").click()
     assert.equal(await pair.a.page.locator("#ambient-audio").evaluate(audio => audio.paused), true)
     assert.equal(await pair.a.page.locator("#ambient-audio-control").getAttribute("aria-pressed"), "true", "preference remains ON")
+    await openConversationInfo(pair.a.page)
     await pair.a.page.locator("#quiet-mode-control").click()
     await pair.a.page.waitForFunction(() => !document.querySelector("#ambient-audio").paused)
     assert.equal(pair.a.journal.events.slice(networkMark).some(event => /quiet|ambient|audio/.test(event.event || "")), false)
@@ -2219,8 +2367,11 @@ test("Feature 1I E2E-3: explicit voice playback suppresses ambience and Conversa
     await pair.a.page.locator("#voice-stop").click()
     await pair.a.page.locator("#voice-preview").waitFor({state: "visible"})
 
+    await openConversationInfo(pair.a.page)
+
     await pair.a.page.locator("#atmosphere-control").click()
     await pair.a.page.locator('[data-atmosphere-option="night-observatory"]').click()
+    await openConversationInfo(pair.a.page)
     await pair.a.page.locator("#ambient-audio-control").click()
     await pair.a.page.waitForFunction(() => !document.querySelector("#ambient-audio").paused)
 
@@ -2256,6 +2407,7 @@ test("Feature 1J E2E-1: prompt inserts locally and only edited explicit Send rea
     const senderMark = pair.a.journal.mark()
     const peerMark = pair.b.journal.mark()
 
+    await openMessageTools(pair.a.page)
     await pair.a.page.locator("#prompt-control").click()
     const option = pair.a.page.locator('[data-prompt-option="start-1"]')
     await option.click()
@@ -2272,7 +2424,7 @@ test("Feature 1J E2E-1: prompt inserts locally and only edited explicit Send rea
 
     await pair.a.page.locator("#message-input").fill(finalText)
     const explicitSendMark = pair.a.journal.mark()
-    await pair.a.page.locator("#message-form button.primary").click()
+    await pair.a.page.locator('section[data-screen="conversation"].active #message-form').getByRole("button", {name: "Send message"}).click()
     const sent = await pair.a.journal.waitFor(
       event => event.type === "frame_sent" && event.topic === pair.conversationTopic && event.event === "message:send",
       "1J explicit ordinary message Send",
@@ -2340,6 +2492,7 @@ test("Feature 1J E2E-3: Prompt helper is tab-local, keyboard accessible, and lif
     pair = await matchPair(browser, "Vent")
     const firstTabMark = pair.a.journal.mark()
     const peerMark = pair.b.journal.mark()
+    await openMessageTools(pair.a.page)
     await pair.a.page.locator("#prompt-control").click()
     await pair.a.page.locator('[data-prompt-category="recover"]').click()
     await pair.a.page.locator('[data-prompt-option="recover-3"]').click()
@@ -2352,6 +2505,7 @@ test("Feature 1J E2E-3: Prompt helper is tab-local, keyboard accessible, and lif
 
     await tabA2.page.emulateMedia({reducedMotion: "reduce", forcedColors: "active"})
     await tabA2.page.setViewportSize({width: 390, height: 844})
+    await openMessageTools(tabA2.page)
     const control = tabA2.page.locator("#prompt-control")
     await control.focus()
     await tabA2.page.keyboard.press("Enter")
@@ -2517,6 +2671,7 @@ test("Feature 1K E2E-3: expressive first contribution retires once and remains r
     ])
     const markA = pair.a.journal.mark()
     const markB = pair.b.journal.mark()
+    await openMessageTools(pair.a.page)
     await pair.a.page.locator("#expressive-open").click()
     await pair.a.page.locator("#expressive-search").fill("bright")
     await pair.a.page.getByRole("option", {name: "A bright spark"}).click()
@@ -2591,7 +2746,7 @@ test("Feature 1L E2E-1: entry disclosure opens details and remains a local cue i
     assert.equal(topicA, topicB)
     const cue = a.page.locator(".temporary-conversation-cue")
     await cue.waitFor({state: "visible"})
-    assert.equal(await cue.locator("strong").textContent(), "Temporary Conversation")
+    assert.equal(await cue.locator("strong").textContent(), "Temporary chat")
     const cueTrigger = cue.getByRole("button", {name: "Learn what happens to this Conversation when it ends"})
     const cueTarget = await cueTrigger.boundingBox()
     assert.ok(cueTarget && cueTarget.height >= 44)
@@ -2918,7 +3073,7 @@ test("Feature 1N E2E-1: basic Unsend preserves identity and delivery while sanit
     await targetB.locator(".reply-action-btn").click()
     await pair.b.page.locator("#reply-staging").waitFor({state: "visible"})
     await pair.b.page.locator("#message-input").fill("1N reply survives")
-    await pair.b.page.locator("#message-form button.primary").click()
+    await pair.b.page.locator('section[data-screen="conversation"].active #message-form').getByRole("button", {name: "Send message"}).click()
     const replyA = pair.a.page.locator("#messages li", {hasText: "1N reply survives"})
     await replyA.waitFor({state: "visible"})
     assert.equal(await replyA.locator(".reply-snippet").textContent(), "1N target private text")
@@ -2930,6 +3085,7 @@ test("Feature 1N E2E-1: basic Unsend preserves identity and delivery while sanit
 
     await targetB.hover()
     await targetB.getByRole("button", {name: "Pin message"}).click()
+    await openConversationInfo(pair.b.page)
     await pair.b.page.locator("#pinned-messages-control").waitFor({state: "visible"})
 
     const unsendMark = pair.a.journal.mark()
@@ -2968,6 +3124,8 @@ test("Feature 1N E2E-1: basic Unsend preserves identity and delivery while sanit
       assert.equal(await terminalA.getByRole("button", {name: action}).count(), 0)
       assert.equal(await terminalB.getByRole("button", {name: action}).count(), 0)
     }
+
+    await openConversationInfo(pair.b.page)
 
     await pair.b.page.locator("#pinned-messages-control").click()
     const pinPanel = pair.b.page.locator("#pinned-messages-panel")
@@ -3073,6 +3231,7 @@ test("Feature 1N E2E-3: offline recovery retains tombstone then post-prune autho
     const messageId = await targetA.getAttribute("data-message-id")
     await targetB.hover()
     await targetB.getByRole("button", {name: "Pin message"}).click()
+    await openConversationInfo(pair.b.page)
     await pair.b.page.locator("#pinned-messages-control").waitFor({state: "visible"})
 
     await pair.b.disconnectSocket()
@@ -3130,6 +3289,7 @@ test("Feature 1N E2E-3: offline recovery retains tombstone then post-prune autho
     await pair.b.page.locator(`[data-message-id="${messageId}"]`).waitFor({state: "detached"})
     assert.equal(await exactMessage(pair.b.page, oldText).count(), 0)
     assert.equal(await pair.b.page.locator(`[data-message-id="${messageId}"]`, {hasText: "Message unsent"}).count(), 0)
+    await openConversationInfo(pair.b.page)
     await pair.b.page.locator("#pinned-messages-control").click()
     const pinPanel = pair.b.page.locator("#pinned-messages-panel")
     await pinPanel.waitFor({state: "visible"})
@@ -3545,6 +3705,7 @@ function createTestMp4Buffer(width = 1280, height = 720, durationSec = 5.0) {
 async function stageAndSendViewOnceVideo(user) {
   const mp4Buffer = createTestMp4Buffer(1280, 720, 5.0)
 
+  await openMessageTools(user.page)
   const fileChooserPromise = user.page.waitForEvent("filechooser")
   await user.page.locator("#view-once-video-picker-btn").click()
   const fileChooser = await fileChooserPromise
@@ -3664,6 +3825,7 @@ test("Feature 1O.2 E2E-3: action exclusions on view-once video", {timeout: 120_0
 async function stageAndSendViewTwiceVideo(user) {
   const mp4Buffer = createTestMp4Buffer(1280, 720, 5.0)
 
+  await openMessageTools(user.page)
   const fileChooserPromise = user.page.waitForEvent("filechooser")
   await user.page.locator("#view-once-video-picker-btn").click()
   const fileChooser = await fileChooserPromise
@@ -4075,6 +4237,9 @@ test("Feature 1Q E2E-RTV: Video to Return to Voice closes camera and render whil
     await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
     await pair.b.page.locator("#live-call-active").waitFor({state: "visible"})
 
+    await pair.a.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+    await pair.b.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+
     // Video active: Return to Voice button is visible
     await pair.a.page.locator("#btn-call-return-to-voice").waitFor({state: "visible"})
 
@@ -4120,6 +4285,9 @@ test("Feature 1Q E2E-REACTION: Ephemeral reaction is fanned out, deduplicated, a
     await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
     await pair.b.page.locator("#live-call-active").waitFor({state: "visible"})
 
+    await pair.a.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+    await pair.b.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+
     // A sends Heart reaction
     await pair.a.page.locator("#btn-react-heart").click()
 
@@ -4162,6 +4330,9 @@ test("Feature 1Q E2E-RING: StrangerTalks Ring live presence updates with call st
     await pair.b.page.locator("#live-call-incoming").waitFor({state: "visible"})
     await pair.b.page.locator("#btn-call-accept").click()
     await pair.a.page.locator("#live-call-active").waitFor({state: "visible"})
+
+    await pair.a.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
+    await pair.b.page.locator("#live-call-status").filter({hasText: "Call Active"}).waitFor({state: "visible"})
 
     // In active call, Ring has active class
     const aRingClass = await pair.a.page.locator("#stranger-call-ring").getAttribute("class")

@@ -22,7 +22,7 @@ const conversation = temporaryConversation({conversation_id: "conversation-a", d
 const message = localMessage({conversation_id: "conversation-a", message_id: "message-a", content: "hello", mine: true, delivery_status: "delivered", sent_at: startedAt})
 
 test("encrypted backup round trips through a versioned PBKDF2/AES-GCM envelope", async () => {
-  const records = [{id: "note:1", type: "memory", value: "private", updated_at: "2026-08-05T00:00:00Z"}]
+  const records = [{id: "note:1", type: "memory", value: {text: "private"}, updated_at: "2026-08-05T00:00:00Z"}]
   const envelope = await encryptBackup(records, "correct horse battery staple")
   assert.equal(validEnvelope(envelope), true)
   assert.deepEqual(await decryptBackup(envelope, "correct horse battery staple"), records)
