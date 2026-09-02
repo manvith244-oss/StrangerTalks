@@ -5,11 +5,16 @@ defmodule StrangertalksNew.QueueEngine.ParticipantConnectionTracker do
   A participant leaves the volatile matchmaking queue only after their final
   registered ParticipantChannel disappears. ConversationChannel liveness is
   owned independently by each ConversationServer.
+
+  Tracker registrations and queue membership form one transient authority
+  generation. If this tracker restarts, any surviving QueueState generation is
+  invalidated rather than leaving queue authority detached from socket liveness.
   """
 
   use GenServer
 
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
+  alias StrangertalksNew.QueueEngine.QueueState
 
   def start_link(_opts), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
 
@@ -24,7 +29,10 @@ defmodule StrangertalksNew.QueueEngine.ParticipantConnectionTracker do
   end
 
   @impl true
-  def init(:ok), do: {:ok, %{participants: %{}, monitor_refs: %{}}}
+  def init(:ok) do
+    invalidate_stale_queue_authority()
+    {:ok, %{participants: %{}, monitor_refs: %{}}}
+  end
 
   @impl true
   def handle_call({:register, participant_id, channel_pid}, _from, state) do
@@ -67,6 +75,20 @@ defmodule StrangertalksNew.QueueEngine.ParticipantConnectionTracker do
   end
 
   def handle_info(_message, state), do: {:noreply, state}
+
+  defp invalidate_stale_queue_authority do
+    case Process.whereis(QueueState) do
+      nil ->
+        :ok
+
+      _pid ->
+        try do
+          Agent.update(QueueState, fn _state -> %{} end)
+        catch
+          :exit, _reason -> :ok
+        end
+    end
+  end
 
   defp remove_channel(state, participant_id, channel_pid, demonitor?) do
     if demonitor? do
