@@ -28,15 +28,42 @@ A feature is not considered absent merely because it is absent from `main`, and 
 - `06_TECHNOLOGY_DECISION_FRAMEWORK.md` — how technologies are adopted, deferred, triggered or rejected.
 - `07_TEAM_REGISTRY_AND_DEPENDENCIES.md` — construction teams and ownership graph.
 - `08_CURRENT_CONSTRUCTION_BASELINE.md` — current evidence-backed architecture and known non-main work.
+- `09_OWNER_CONSTITUTION_AND_PROXY_BOUNDARIES.md` — reusable owner decisions and strict boundaries for the Owner Proxy.
+- `10_BRANCH_SALVAGE_LEDGER.md` — branch/capability classification and archaeology queue.
 - `TEAM_PACKET_TEMPLATE.md` — mandatory structure for dedicated team files.
 
 ## Dedicated team packets
 
-See `teams/`.
+Current packets:
+
+- `teams/T00_REPOSITORY_INTEGRATION_AUTHORITY.md`
+- `teams/T01_CORE_BACKEND_DOMAIN.md`
+- `teams/T02_REALTIME_DISTRIBUTED_SYSTEMS.md`
+- `teams/T03_FRONTEND_CLIENT_RUNTIME.md`
+- `teams/T04_IDENTITY_SECURITY_PRIVACY.md`
+- `teams/T05_MEDIA_WEBRTC.md`
+- `teams/T06_AI_ML_AGENT_SYSTEMS.md`
+- `teams/T07_DATA_SEARCH_ANALYTICS.md`
+- `teams/T08_PLATFORM_DEVOPS_SRE.md`
+- `teams/T09_QA_RELIABILITY_PERFORMANCE.md`
+- `teams/T10_PRODUCT_UX_ACCESSIBILITY_I18N.md`
+- `teams/T11_ARCHITECTURE_TECHNICAL_COUNCIL.md`
+
+## Prompt-chain operating model
+
+The construction system separates:
+
+**Owner → Orchestrator → Owner Proxy (only when established policy can answer) → Prompt Compiler → Execution Team → Verifier/Break Team → Integration Authority.**
+
+This formalizes the recent workflow in which one model coordinates work, another team can answer established owner-policy questions, a dedicated team compiles the final execution prompt, and a separate execution agent changes the repository.
+
+The purpose is to preserve intent while preventing prompt drift, invented owner decisions and self-certified completion.
 
 ## Portability
 
 These documents are written so they can be used by Claude, ChatGPT, Codex, human engineers, future agents, or another orchestration system. Model names are implementation details; roles and contracts are the durable interface.
+
+GitHub is the preferred canonical storage location for construction law because the documents remain versioned beside the code and can be tied to exact SHAs. A Notion/Drive view may be created later as a navigation/mirror layer, but it should not silently become a second conflicting source of truth.
 
 ## Evolution clause
 
