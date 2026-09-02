@@ -55,7 +55,10 @@ defmodule StrangertalksNew.FutureSocial.CircleFormationTest do
              CircleFormation.form(input, min_size: 4, max_size: 6)
 
     assert length(circle.members) == 6
-    assert Enum.map(circle.members, & &1.participant_id) == Enum.map(Enum.take(input, 6), & &1.participant_id)
+
+    assert Enum.map(circle.members, & &1.participant_id) ==
+             Enum.map(Enum.take(input, 6), & &1.participant_id)
+
     assert waiting.participant_id == "participant-7"
   end
 
@@ -113,7 +116,11 @@ defmodule StrangertalksNew.FutureSocial.CircleFormationTest do
     assert Ecto.Enum.values(StrangertalksNew.Matching, :door_type) == @encounter_doors
     assert Ecto.Enum.values(StrangertalksNew.Conversation, :door_type) == @encounter_doors
     assert Ecto.Enum.values(StrangertalksNew.Relationship, :origin_door_type) == @encounter_doors
-    assert Ecto.Enum.values(StrangertalksNew.Relationship, :origin_participant_a_door_type) == @encounter_doors
-    assert Ecto.Enum.values(StrangertalksNew.Relationship, :origin_participant_b_door_type) == @encounter_doors
+
+    assert Ecto.Enum.values(StrangertalksNew.Relationship, :origin_participant_a_door_type) ==
+             @encounter_doors
+
+    assert Ecto.Enum.values(StrangertalksNew.Relationship, :origin_participant_b_door_type) ==
+             @encounter_doors
   end
 end
