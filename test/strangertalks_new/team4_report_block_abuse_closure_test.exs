@@ -135,7 +135,7 @@ defmodule StrangertalksNew.Team4ReportBlockAbuseClosureTest do
         "evidence" => "invalid category"
       })
 
-    assert_reply invalid_category, :error, %{code: "INVALID_REPORT_CATEGORY"}
+    assert_reply invalid_category, :error, %{code: "INVALID_REQUEST"}
 
     oversized =
       push(socket_a, "conversation:report", %{
