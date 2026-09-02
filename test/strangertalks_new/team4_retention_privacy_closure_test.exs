@@ -217,7 +217,10 @@ defmodule StrangertalksNew.Team4RetentionPrivacyClosureTest do
   defp block_fixture do
     blocker = participant_fixture()
     blocked = participant_fixture()
-    assert {:ok, _} = MatchingRules.enforce_block(blocker.participant_id, blocked.participant_id, "TEST")
+
+    assert {:ok, _} =
+             MatchingRules.enforce_block(blocker.participant_id, blocked.participant_id, "TEST")
+
     {blocker, blocked}
   end
 
