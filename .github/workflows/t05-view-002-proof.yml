@@ -57,6 +57,7 @@ jobs:
             test/strangertalks_new/t05_view_presentation_atomicity_test.exs \
             test/strangertalks_new/t05_view_epoch_restart_test.exs \
             test/strangertalks_new/t05_view_capacity_structure_test.exs \
+            test/strangertalks_new/t05_view_reachable_capacity_test.exs \
             test/strangertalks_new/view_once_media_store_test.exs \
             test/strangertalks_new/view_once_conversation_test.exs \
             test/strangertalks_new/view_once_safety_report_test.exs \
