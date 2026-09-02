@@ -1,0 +1,414 @@
+name: T09 Exact-SHA Verification Baseline
+
+on:
+  push:
+    branches:
+      - team9/verification-baseline-gate
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  BASE_SHA: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+  CANDIDATE_SHA: a20df2c23ebf251b209ba52bfa0370a47a5d1867
+  T09_PROOF_SHA: 27268a84dbf49933e6930d3c7129e8cae4de3b4d
+  PRE_RELATIONSHIP_CONSTRAINT_VERSION: '20260830044500'
+
+jobs:
+  baseline-core:
+    name: Baseline exact-SHA core gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - name: Checkout requested canonical base
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+
+      - name: Prove requested equals checked-out SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "T09_REQUESTED_SHA=$BASE_SHA"
+          actual="$(git rev-parse HEAD)"
+          echo "T09_CHECKED_OUT_SHA=$actual"
+          test "$actual" = "$BASE_SHA"
+          test -z "$(git status --porcelain)"
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install declared dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+
+      - name: Prepare clean baseline database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: High-value realtime terminal and security JS contracts
+        run: |
+          node --test \
+            test/js/terminal_truth_client_test.mjs \
+            test/js/session_reconciliation_guard_test.mjs \
+            test/js/security_adversarial_test.mjs \
+            test/js/live_call_test.mjs
+
+      - name: Full repository precommit at canonical base
+        run: mix precommit
+
+      - name: Controlled nonzero detection proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          if bash -c 'exit 23'; then
+            echo 'negative control unexpectedly succeeded'
+            exit 1
+          fi
+          echo 'T09_NEGATIVE_CONTROL=nonzero_detected'
+
+      - name: Prove tested SHA and clean tree after gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          tested="$(git rev-parse HEAD)"
+          echo "T09_TESTED_SHA=$tested"
+          test "$tested" = "$BASE_SHA"
+
+  baseline-browser:
+    name: Baseline actual-browser gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      PORT: '4000'
+      STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4000
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_SHA }}
+          fetch-depth: 0
+
+      - name: Prove browser source SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+          test -z "$(git status --porcelain)"
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install browser dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start exact-SHA Phoenix runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/t09-browser.log 2>&1 &
+          echo $! > /tmp/t09-browser.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/t09-browser.pid)" 2>/dev/null; then
+              cat /tmp/t09-browser.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/t09-browser.log
+          exit 1
+
+      - name: Run maintained composed browser E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 test/js/browser_e2e_test.mjs 2>&1 | tee /tmp/t09-browser.tap
+
+      - name: Upload browser TAP
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t09-baseline-browser-tap
+          path: /tmp/t09-browser.tap
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Browser failure log
+        if: failure()
+        run: cat /tmp/t09-browser.log || true
+
+      - name: Stop browser runtime
+        if: always()
+        run: |
+          if [ -f /tmp/t09-browser.pid ]; then kill "$(cat /tmp/t09-browser.pid)" 2>/dev/null || true; fi
+
+      - name: Prove browser tested exact SHA and clean source
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$BASE_SHA"
+
+  t01-self-bond:
+    name: T01 self-Bond hostile exact-SHA verification
+    needs: baseline-core
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - name: Checkout exact requested T01 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Exact-SHA and clean-worktree intake proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "T09_REQUESTED_SHA=$CANDIDATE_SHA"
+          echo "T09_CHECKED_OUT_SHA=$actual"
+          test "$actual" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+
+      - name: Candidate diff scope and candidate-only whitespace proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(printf '%s\n' \
+            lib/strangertalks_new/relationship.ex \
+            priv/repo/migrations/20260902183000_enforce_distinct_relationship_participants.exs \
+            test/strangertalks_new/relationship_test.exs | sort)
+          actual=$(git diff --name-only "$BASE_SHA"...HEAD | sort)
+          printf '%s\n' "$actual"
+          test "$actual" = "$expected"
+          git diff --check "$BASE_SHA"...HEAD
+          git diff --check
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+
+      - name: Install candidate dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: M1 clean database migration
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Extract immutable T09 hostile proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$T09_PROOF_SHA:test/t09/t01_self_relationship_verification_test.exs" > test/t09_self_relationship_verification_runtime_test.exs
+          test -s test/t09_self_relationship_verification_runtime_test.exs
+
+      - name: V1 V2 V3 V4 V5 V7 hostile relationship proof
+        run: mix test test/t09_self_relationship_verification_runtime_test.exs --trace
+
+      - name: Remove injected proof before source-integrity checks
+        run: rm -f test/t09_self_relationship_verification_runtime_test.exs
+
+      - name: V6 V8 mutual Bond reconnect safety and matchmaking regressions
+        run: |
+          mix test \
+            test/strangertalks_new/relationship_test.exs \
+            test/strangertalks_new/relationship_reconnections_test.exs \
+            test/strangertalks_new/team4_safety_boundary_test.exs \
+            test/strangertalks_new_web/channels/participant_channel_test.exs \
+            test/strangertalks_new/matchmaking_engine_test.exs \
+            --trace
+
+      - name: Extract immutable pre-migration seed helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show "$T09_PROOF_SHA:test/t09/support/seed_valid_relationship.exs" > /tmp/t09_seed_valid_relationship.exs
+          test -s /tmp/t09_seed_valid_relationship.exs
+
+      - name: M2 existing valid Relationships survive migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet --to "$PRE_RELATIONSHIP_CONSTRAINT_VERSION"
+          mix run /tmp/t09_seed_valid_relationship.exs
+          before=$(mix run -e 'IO.puts(StrangertalksNew.Repo.aggregate(StrangertalksNew.Relationship, :count, :relationship_id))' | tail -n 1)
+          test "$before" = '1'
+          mix ecto.migrate --quiet
+          after=$(mix run -e 'IO.puts(StrangertalksNew.Repo.aggregate(StrangertalksNew.Relationship, :count, :relationship_id))' | tail -n 1)
+          test "$after" = '1'
+          constraint=$(mix run -e 'r=StrangertalksNew.Repo.query!("SELECT count(*) FROM pg_constraint WHERE conname = ''relationships_distinct_participants_check''"); IO.puts(r.rows |> hd() |> hd())' | tail -n 1)
+          test "$constraint" = '1'
+          echo "T09_M2=valid_relationship_preserved"
+
+      - name: M3 pre-existing self Relationship makes migration fail closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet --to "$PRE_RELATIONSHIP_CONSTRAINT_VERSION"
+          mix run /tmp/t09_seed_valid_relationship.exs
+          mix run -e 'StrangertalksNew.Repo.query!("UPDATE relationships SET participant_b_id = participant_a_id")'
+          self_before=$(mix run -e 'r=StrangertalksNew.Repo.query!("SELECT count(*) FROM relationships WHERE participant_a_id = participant_b_id"); IO.puts(r.rows |> hd() |> hd())' | tail -n 1)
+          test "$self_before" = '1'
+          set +e
+          output=$(mix ecto.migrate 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -ne 0
+          printf '%s\n' "$output" | grep -F 'Cannot add relationships_distinct_participants_check: self relationships exist'
+          self_after=$(mix run -e 'r=StrangertalksNew.Repo.query!("SELECT count(*) FROM relationships WHERE participant_a_id = participant_b_id"); IO.puts(r.rows |> hd() |> hd())' | tail -n 1)
+          test "$self_after" = '1'
+          constraint=$(mix run -e 'r=StrangertalksNew.Repo.query!("SELECT count(*) FROM pg_constraint WHERE conname = ''relationships_distinct_participants_check''"); IO.puts(r.rows |> hd() |> hd())' | tail -n 1)
+          test "$constraint" = '0'
+          echo "T09_M3=fail_closed_row_preserved"
+
+      - name: M4 rollback removes only new constraint and preserves valid Relationship
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet --to "$PRE_RELATIONSHIP_CONSTRAINT_VERSION"
+          mix run /tmp/t09_seed_valid_relationship.exs
+          mix ecto.migrate --quiet
+          before=$(mix run -e 'IO.puts(StrangertalksNew.Repo.aggregate(StrangertalksNew.Relationship, :count, :relationship_id))' | tail -n 1)
+          test "$before" = '1'
+          mix ecto.rollback --quiet --step 1
+          after=$(mix run -e 'IO.puts(StrangertalksNew.Repo.aggregate(StrangertalksNew.Relationship, :count, :relationship_id))' | tail -n 1)
+          test "$after" = '1'
+          constraint=$(mix run -e 'r=StrangertalksNew.Repo.query!("SELECT count(*) FROM pg_constraint WHERE conname = ''relationships_distinct_participants_check''"); IO.puts(r.rows |> hd() |> hd())' | tail -n 1)
+          test "$constraint" = '0'
+          echo "T09_M4=rollback_preserved_valid_relationship"
+
+      - name: Restore full candidate schema and independently rerun precommit
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          mix precommit
+
+      - name: Final candidate exact-SHA clean-tree proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check "$BASE_SHA"...HEAD
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          tested="$(git rev-parse HEAD)"
+          echo "T09_TESTED_SHA=$tested"
+          test "$tested" = "$CANDIDATE_SHA"
+
+  final-gate:
+    name: T09 fail-closed summary
+    if: always()
+    needs: [baseline-core, baseline-browser, t01-self-bond]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail closed on any required red
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "baseline-core=${{ needs.baseline-core.result }}"
+          echo "baseline-browser=${{ needs.baseline-browser.result }}"
+          echo "t01-self-bond=${{ needs.t01-self-bond.result }}"
+          test "${{ needs.baseline-core.result }}" = success
+          test "${{ needs.baseline-browser.result }}" = success
+          test "${{ needs.t01-self-bond.result }}" = success
+          echo 'T09_GATE=VERIFICATION_COMPLETE'
