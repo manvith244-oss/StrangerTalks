@@ -1,0 +1,27 @@
+name: T07 Provider Diff Proof
+
+on:
+  push:
+    branches:
+      - team7/provider-output-failure-closure-diff-proof
+
+permissions:
+  contents: read
+
+jobs:
+  diff-proof:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact T07 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 7ba08e32257acea73dec19657ef3d82af871d085
+          fetch-depth: 0
+
+      - name: Prove exact candidate and diff hygiene
+        run: |
+          test "$(git rev-parse HEAD)" = "7ba08e32257acea73dec19657ef3d82af871d085"
+          git merge-base --is-ancestor 423442915e37fd6aadd25bd1c6a300eed2b464f0 HEAD
+          git diff --check 423442915e37fd6aadd25bd1c6a300eed2b464f0...HEAD
+          git diff --check
+          echo "T07_DIFF_CHECKED_SHA=$(git rev-parse HEAD)"
