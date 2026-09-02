@@ -1,0 +1,141 @@
+name: T03 UX-001 Canonical Main Baseline
+
+on:
+  push:
+    branches:
+      - validation/t03-ux-001-main-baseline-4234429
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-browser:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      T03_BASELINE_SHA: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+
+    steps:
+      - name: Checkout exact canonical base
+        uses: actions/checkout@v4
+        with:
+          ref: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+          fetch-depth: 0
+
+      - name: Prove exact checkout identity
+        run: |
+          checked_out="$(git rev-parse HEAD)"
+          echo "T03_BASELINE_SHA=$T03_BASELINE_SHA"
+          echo "T03_CHECKED_OUT_SHA=$checked_out"
+          test "$checked_out" = "$T03_BASELINE_SHA"
+          git status --porcelain | tee /tmp/t03-baseline-initial-status
+          test ! -s /tmp/t03-baseline-initial-status
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix browser server
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/t03-baseline-browser.log 2>&1 &
+          echo $! > /tmp/t03-baseline-browser.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS http://localhost:4000/ >/dev/null; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/t03-baseline-browser.pid)" 2>/dev/null; then
+              cat /tmp/t03-baseline-browser.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/t03-baseline-browser.log
+          exit 1
+
+      - name: Canonical-main Arrival and real-UX comparison
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/arrival_first_minute_browser_test.mjs \
+            test/js/arrival_accessibility_browser_test.mjs \
+            test/js/team6_real_ux_browser_test.mjs
+
+      - name: Upload baseline screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t03-ux-001-main-baseline-4234429
+          path: |
+            tmp/team6-real-ux-screenshots
+            tmp/arrival-first-60-screenshots
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Baseline browser log
+        if: always()
+        run: cat /tmp/t03-baseline-browser.log || true
+
+      - name: Stop browser server
+        if: always()
+        run: |
+          if [ -f /tmp/t03-baseline-browser.pid ]; then
+            pid="$(cat /tmp/t03-baseline-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Final exact-base and tree proof
+        if: always()
+        run: |
+          tested_sha="$(git rev-parse HEAD)"
+          git status --porcelain | tee /tmp/t03-baseline-final-status
+          test ! -s /tmp/t03-baseline-final-status
+          test "$tested_sha" = "$T03_BASELINE_SHA"
+          echo "T03_BASELINE_TESTED_SHA=$tested_sha"
