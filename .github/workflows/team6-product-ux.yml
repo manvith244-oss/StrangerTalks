@@ -138,6 +138,10 @@ jobs:
             --test-name-pattern='browser-layer disconnect recovers and catches up exactly once|Conversation end converges both clients and refresh cannot resurrect it|Feature 1D E2E-3: keyboard, focus, touch safety, and reduced motion|Feature 1H E2E-3: keyboard chooser remains functional across accessibility and responsive modes|Feature 1L E2E-2: reconnect, explicit end, and unrecoverable states remain semantically distinct|Feature 1L E2E-3: the real report flow shows safety lifetime limits without adding report fields|Feature 1O E2E-1: standard view-once cycle|Feature 1O\.1 E2E-1: standard view-twice cycle' \
             test/js/browser_e2e_test.mjs
 
+      - name: T03 historical return route regression
+        run: |
+          node --test --test-concurrency=1 test/js/t03_history_route_browser_test.mjs
+
       # The following tests deliberately install synthetic Conversation DOM state to
       # attack layout. They are PRESENTATION FIXTURES only, not reachability proof.
       - name: Presentation fixture layout regressions — not reachability proof
@@ -190,7 +194,7 @@ jobs:
           test ! -s /tmp/team6-final-status
           test "$tested_sha" = "$TEAM6_EXPECTED_SHA"
           echo "TEAM6_EXPECTED_SHA=$TEAM6_EXPECTED_SHA"
-          echo "TEAM6_CHECKED_OUT_SHA=$tested_sha"
+          echo "TEAM6_CHECKED_OUT_SHA=$checked_out"
           echo "TEAM6_TESTED_SHA=$tested_sha"
           echo "TEAM6_FINAL_SHA=$tested_sha"
 
