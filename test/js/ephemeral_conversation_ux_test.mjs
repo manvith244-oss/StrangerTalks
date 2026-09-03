@@ -20,12 +20,12 @@ const exactCopy = [
   "A short connection interruption doesn't automatically end the Conversation. StrangerTalks may be able to reconnect you and restore the current Conversation.",
   "When the Conversation ends",
   "When the Conversation ends, the live temporary Conversation is no longer available as an active Conversation. StrangerTalks also removes the server-owned voice-note audio for that Conversation.",
-  "Some information already stored on a participant's own device can have a separate local lifetime.",
+  "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary.",
   "Safety reports are different",
   "If you submit a safety report, that report is stored separately and can remain after the Conversation ends.",
   "An unsent text message may be kept temporarily inside the active Conversation for safety reporting. If that unsent message is reported while the safety copy is still available, the specific message text may be stored with the report.",
   "The current report flow does not automatically save the ordinary chat transcript, Reply structure, GIF or sticker choice, voice-note identity or audio, or the surrounding Conversation history into the report.",
-  "StrangerTalks currently has no automatic expiry or cleanup for stored report and safety-review records.",
+  "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling.",
   "The other person can still keep what they receive",
   "Temporary doesn't mean the other participant cannot save what they see or hear. They can take screenshots, record their screen, copy text, photograph the screen, or otherwise keep information outside StrangerTalks.",
   "The other participant can still keep information they receive—for example by taking a screenshot, recording the screen, copying text, photographing the screen, or saving it another way. StrangerTalks can't remove copies they keep outside the temporary Conversation.",
@@ -42,7 +42,7 @@ const exactCopy = [
   "About this report",
   "Reports are stored separately for safety and can remain after this Conversation ends.",
   "Submitting this report does not automatically save the ordinary Conversation transcript, Reply structure, GIF or sticker choice, voice-note identity or audio, or surrounding chat history into the report.",
-  "Stored report and safety-review records currently have no automatic expiry or cleanup.",
+  "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling.",
   "Submit Report"
 ]
 
