@@ -178,3 +178,50 @@ jobs:
         run: |
           set -euo pipefail
           mix test test/strangertalks_new_web/controllers/team2_normal_media_terminal_test.exs --trace
+
+  recovery-hygiene:
+    name: exact-recovery-001-formatter-hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact RECOVERY-001
+        uses: actions/checkout@v4
+        with:
+          ref: 4d1631e4e1c7a72108939f94ce4b9fa365426170
+          fetch-depth: 0
+
+      - name: Prove exact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "4d1631e4e1c7a72108939f94ce4b9fa365426170"
+          echo "REQUESTED=4d1631e4e1c7a72108939f94ce4b9fa365426170"
+          echo "CHECKED_OUT=$(git rev-parse HEAD)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Exact rejected-path format check
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix format --check-formatted test/strangertalks_new/relationship_test.exs
+
+      - name: Prove no candidate-owned formatter mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -z "$(git status --porcelain -- test/strangertalks_new/relationship_test.exs)"
+          echo "CANDIDATE_OWNED_FORMATTER_DRIFT=NONE"
+          echo "TESTED_SHA=$(git rev-parse HEAD)"
