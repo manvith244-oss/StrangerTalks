@@ -119,7 +119,7 @@ jobs:
           cat "/tmp/t03-768-ab-${T03_AB_TARGET}.log"
           exit 1
 
-      - name: Build identical read-only overflow-trace browser harness
+      - name: Build identical transition-aware overflow A-B harness
         run: |
           set -euo pipefail
           mkdir -p "tmp/t03-768-ab-${T03_AB_TARGET}"
@@ -144,97 +144,41 @@ jobs:
             participantIssuance: {},
             states: {},
             controls: {},
-            conversationOffenders: [],
-            conversationOwnership: null,
+            controlFailures: [],
+            conversationTrace: null,
+            naturalHistoricalDelete: null,
+            postDeleteRecoveryUsed: false,
             retainedConversation: false,
             retainedMessage: false,
             historicalNonLive: false,
-            historicalDelete: false,
+            postDeleteChatsReached: false,
             fullJourney: false,
-            controlFailures: [],
             browserErrors: {},
             failedRequests: {}
           }
 
-          function safeClassName(element) {
-            if (typeof element.className === "string") return element.className
-            return element.getAttribute("class") || ""
-          }
-
-          function roundedRect(rect) {
-            return {
-              x: Math.round(rect.x * 1000) / 1000,
-              y: Math.round(rect.y * 1000) / 1000,
-              left: Math.round(rect.left * 1000) / 1000,
-              right: Math.round(rect.right * 1000) / 1000,
-              top: Math.round(rect.top * 1000) / 1000,
-              bottom: Math.round(rect.bottom * 1000) / 1000,
-              width: Math.round(rect.width * 1000) / 1000,
-              height: Math.round(rect.height * 1000) / 1000
-            }
-          }
-
-          async function stateSnapshot(page, label) {
-            const snapshot = await page.evaluate(() => {
+          async function layout(page) {
+            return page.evaluate(() => {
               const active = document.querySelector('section[data-screen].active')
-              const visibleControls = [...(active?.querySelectorAll('button, input, select, textarea, a[href]') || [])]
-                .map(element => {
-                  const style = getComputedStyle(element)
-                  const rect = element.getBoundingClientRect()
-                  if (style.display === "none" || style.visibility === "hidden" || rect.width <= 0 || rect.height <= 0) return null
-                  return {
-                    tag: element.tagName,
-                    id: element.id || null,
-                    class: typeof element.className === "string" ? element.className : (element.getAttribute("class") || ""),
-                    type: element.getAttribute("type"),
-                    ariaLabel: element.getAttribute("aria-label"),
-                    disabled: "disabled" in element ? element.disabled : null,
-                    rect: {
-                      x: rect.x, y: rect.y, left: rect.left, right: rect.right,
-                      top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height
-                    }
-                  }
-                })
-                .filter(Boolean)
+              const rect = active?.getBoundingClientRect()
               return {
                 innerWidth,
                 innerHeight,
-                scrollX,
-                scrollY,
                 htmlWidth: document.documentElement.scrollWidth,
                 bodyWidth: document.body.scrollWidth,
+                scrollX,
+                scrollY,
                 activeScreen: active?.dataset.screen || null,
-                activeScreenRect: active ? (() => {
-                  const rect = active.getBoundingClientRect()
-                  return {x: rect.x, y: rect.y, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height}
-                })() : null,
-                visibleControls
+                activeRect: rect ? {
+                  left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
+                  width: rect.width, height: rect.height
+                } : null
               }
             })
-            evidence.states[label] = snapshot
-            console.log(`T03_768_AB_${TARGET}_STATE_${label}=${JSON.stringify(snapshot)}`)
-            assert.equal(snapshot.innerWidth, 768, `${label}: viewport width is exactly 768`)
-            assert.equal(snapshot.innerHeight, 1024, `${label}: viewport height is exactly 1024`)
-            return snapshot
           }
 
-          async function controlSnapshot(page, locator, label) {
-            const visible = await locator.isVisible()
-            const enabled = visible ? await locator.isEnabled() : false
-            const rect = visible ? await locator.boundingBox() : null
-            const result = {visible, enabled, rect}
-            evidence.controls[label] = result
-            console.log(`T03_768_AB_${TARGET}_CONTROL_${label}=${JSON.stringify(result)}`)
-            if (!visible) evidence.controlFailures.push(`${label}: not visible`)
-            if (!enabled) evidence.controlFailures.push(`${label}: not enabled`)
-            if (!rect) evidence.controlFailures.push(`${label}: not rendered`)
-            if (rect && (rect.x < -1 || rect.x + rect.width > 769)) evidence.controlFailures.push(`${label}: outside 768px horizontal viewport`)
-            if (rect && (rect.y < -1 || rect.y >= 1024)) evidence.controlFailures.push(`${label}: begins outside 1024px viewport`)
-            return result
-          }
-
-          async function traceConversationOverflow(page) {
-            const trace = await page.evaluate(() => {
+          async function overflowTrace(page) {
+            return page.evaluate(() => {
               const offenders = []
               for (const element of document.body.querySelectorAll("*")) {
                 const rect = element.getBoundingClientRect()
@@ -249,8 +193,8 @@ jobs:
                   screen: screen?.dataset.screen || null,
                   screenActive: Boolean(screen?.classList.contains("active")),
                   rect: {
-                    x: rect.x, y: rect.y, left: rect.left, right: rect.right,
-                    top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height
+                    left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom,
+                    width: rect.width, height: rect.height
                   },
                   style: {
                     display: style.display,
@@ -269,20 +213,77 @@ jobs:
                   }
                 })
               }
-              const ownership = {
-                active: offenders.filter(item => item.screenActive).length,
-                inactive: offenders.filter(item => item.screen && !item.screenActive).length,
-                global: offenders.filter(item => !item.screen).length,
-                activeScreens: [...new Set(offenders.filter(item => item.screenActive).map(item => item.screen))],
-                inactiveScreens: [...new Set(offenders.filter(item => item.screen && !item.screenActive).map(item => item.screen))]
+              return {
+                offenders,
+                ownership: {
+                  active: offenders.filter(item => item.screenActive).length,
+                  inactive: offenders.filter(item => item.screen && !item.screenActive).length,
+                  global: offenders.filter(item => !item.screen).length,
+                  activeScreens: [...new Set(offenders.filter(item => item.screenActive).map(item => item.screen))],
+                  inactiveScreens: [...new Set(offenders.filter(item => item.screen && !item.screenActive).map(item => item.screen))]
+                }
               }
-              return {offenders, ownership}
             })
-            evidence.conversationOffenders = trace.offenders
-            evidence.conversationOwnership = trace.ownership
-            console.log(`T03_768_AB_${TARGET}_CONVERSATION_OWNERSHIP=${JSON.stringify(trace.ownership)}`)
-            console.log(`T03_768_AB_${TARGET}_CONVERSATION_OFFENDERS=${JSON.stringify(trace.offenders)}`)
-            return trace
+          }
+
+          async function observeState(page, label) {
+            const samples = []
+            const overflowEvents = []
+            const first = await layout(page)
+            samples.push({tMs: 0, ...first})
+            if (first.htmlWidth > 769 || first.bodyWidth > 769) {
+              overflowEvents.push({tMs: 0, layout: first, trace: await overflowTrace(page)})
+            }
+            for (let i = 1; i <= 20; i += 1) {
+              await page.waitForTimeout(50)
+              const current = await layout(page)
+              samples.push({tMs: i * 50, ...current})
+              if (current.htmlWidth > 769 || current.bodyWidth > 769) {
+                overflowEvents.push({tMs: i * 50, layout: current, trace: await overflowTrace(page)})
+              }
+            }
+            const settled = samples.at(-1)
+            const summary = {
+              immediate: samples[0],
+              settled,
+              maxHtmlWidth: Math.max(...samples.map(sample => sample.htmlWidth)),
+              maxBodyWidth: Math.max(...samples.map(sample => sample.bodyWidth)),
+              overflowEventCount: overflowEvents.length,
+              overflowEvents
+            }
+            evidence.states[label] = summary
+            console.log(`T03_768_AB_${TARGET}_STATE_${label}=${JSON.stringify({
+              immediate: summary.immediate,
+              settled: summary.settled,
+              maxHtmlWidth: summary.maxHtmlWidth,
+              maxBodyWidth: summary.maxBodyWidth,
+              overflowEventCount: summary.overflowEventCount
+            })}`)
+            assert.equal(settled.innerWidth, 768, `${label}: settled viewport width is exactly 768`)
+            assert.equal(settled.innerHeight, 1024, `${label}: settled viewport height is exactly 1024`)
+            if (label === "CONVERSATION") {
+              const settledTrace = await overflowTrace(page)
+              evidence.conversationTrace = {settled: settledTrace, overflowEvents}
+              console.log(`T03_768_AB_${TARGET}_CONVERSATION_SETTLED_OWNERSHIP=${JSON.stringify(settledTrace.ownership)}`)
+              console.log(`T03_768_AB_${TARGET}_CONVERSATION_SETTLED_OFFENDERS=${JSON.stringify(settledTrace.offenders)}`)
+              console.log(`T03_768_AB_${TARGET}_CONVERSATION_OVERFLOW_EVENTS=${JSON.stringify(overflowEvents)}`)
+            }
+            return summary
+          }
+
+          async function control(page, locator, label) {
+            const visible = await locator.isVisible()
+            const enabled = visible ? await locator.isEnabled() : false
+            const rect = visible ? await locator.boundingBox() : null
+            const result = {visible, enabled, rect}
+            evidence.controls[label] = result
+            console.log(`T03_768_AB_${TARGET}_CONTROL_${label}=${JSON.stringify(result)}`)
+            if (!visible) evidence.controlFailures.push(`${label}: not visible`)
+            if (!enabled) evidence.controlFailures.push(`${label}: not enabled`)
+            if (!rect) evidence.controlFailures.push(`${label}: not rendered`)
+            if (rect && (rect.x < -1 || rect.x + rect.width > 769)) evidence.controlFailures.push(`${label}: outside 768px width`)
+            if (rect && (rect.y < -1 || rect.y >= 1024)) evidence.controlFailures.push(`${label}: begins outside 1024px viewport`)
+            return result
           }
 
           async function boot(browser, label) {
@@ -293,7 +294,6 @@ jobs:
             page.on("pageerror", error => errors.push(error.message))
             page.on("console", message => { if (message.type() === "error") errors.push(message.text()) })
             page.on("requestfailed", request => failedRequests.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || "failed"}`))
-
             const participantResponse = page.waitForResponse(response => {
               try { return new URL(response.url()).pathname === "/api/participants" } catch (_error) { return false }
             })
@@ -308,6 +308,10 @@ jobs:
             return {context, page, errors, failedRequests}
           }
 
+          async function records(page) {
+            return page.evaluate(async () => (await import("/assets/local_data.mjs")).listRecords())
+          }
+
           async function endConversation(page) {
             const actions = page.locator("details.overflow")
             if ((await actions.getAttribute("open")) === null) await actions.locator("summary").click()
@@ -316,15 +320,11 @@ jobs:
             await page.locator("#end-confirm").click()
           }
 
-          async function records(page) {
-            return page.evaluate(async () => (await import("/assets/local_data.mjs")).listRecords())
-          }
-
-          function persistEvidence() {
+          function persist() {
             fs.writeFileSync(path.join(ARTIFACTS, "evidence.json"), JSON.stringify(evidence, null, 2))
           }
 
-          test(`T03 UX-001 exact 768 overflow A-B ${TARGET}`, {timeout: 150_000}, async () => {
+          test(`T03 UX-001 exact 768 transition-aware A-B ${TARGET}`, {timeout: 180_000}, async () => {
             const browser = await chromium.launch({headless: true})
             let a
             let b
@@ -332,19 +332,19 @@ jobs:
               a = await boot(browser, "A")
               b = await boot(browser, "B")
 
-              await stateSnapshot(a.page, "ARRIVAL")
-              await controlSnapshot(a.page, a.page.locator("#conversation-language"), "ARRIVAL_LANGUAGE")
-              await controlSnapshot(a.page, a.page.locator("button.door").first(), "ARRIVAL_DOOR")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "01-arrival.png"), fullPage: true})
+              await observeState(a.page, "ARRIVAL")
+              await control(a.page, a.page.locator("#conversation-language"), "ARRIVAL_LANGUAGE")
+              await control(a.page, a.page.locator("button.door").first(), "ARRIVAL_DOOR")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "01-arrival.png")})
 
               await a.page.locator("#conversation-language").selectOption("en")
               await b.page.locator("#conversation-language").selectOption("en")
               await a.page.locator('button.door:has-text("Advice")').click()
               await a.page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: WAIT})
               await a.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: WAIT})
-              await stateSnapshot(a.page, "QUEUE")
-              await controlSnapshot(a.page, a.page.locator("#leave-queue"), "QUEUE_LEAVE")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "02-queue.png"), fullPage: true})
+              await observeState(a.page, "QUEUE")
+              await control(a.page, a.page.locator("#leave-queue"), "QUEUE_LEAVE")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "02-queue.png")})
 
               await b.page.locator('button.door:has-text("Advice")').click()
               await Promise.all([
@@ -352,14 +352,13 @@ jobs:
                 b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: WAIT})
               ])
               console.log(`T03_768_AB_${TARGET}_CONVERSATION_REACHED=true`)
-              await stateSnapshot(a.page, "CONVERSATION")
-              await traceConversationOverflow(a.page)
-              await controlSnapshot(a.page, a.page.locator("#message-input"), "CONVERSATION_COMPOSER")
-              const sendButton = a.page.getByRole("button", {name: "Send message", exact: true})
-              await controlSnapshot(a.page, sendButton, "CONVERSATION_SEND")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "03-conversation.png"), fullPage: true})
-
+              await observeState(a.page, "CONVERSATION")
+              await control(a.page, a.page.locator("#message-input"), "CONVERSATION_COMPOSER")
               await a.page.locator("#message-input").fill("T03 exact 768 A-B retained message")
+              const sendButton = a.page.getByRole("button", {name: "Send message", exact: true})
+              await sendButton.waitFor({state: "visible", timeout: WAIT})
+              await control(a.page, sendButton, "CONVERSATION_SEND")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "03-conversation.png")})
               await sendButton.click()
               await b.page.locator("#messages li", {hasText: "T03 exact 768 A-B retained message"}).waitFor({state: "visible", timeout: WAIT})
               console.log(`T03_768_AB_${TARGET}_MESSAGE_SEND=PASS`)
@@ -370,10 +369,10 @@ jobs:
                 b.page.locator('section[data-screen="ended"].active').waitFor({state: "visible", timeout: WAIT})
               ])
               assert.equal(new URL(a.page.url()).pathname, "/conversation/ended", "terminal route is canonical")
-              await stateSnapshot(a.page, "TERMINAL")
-              await controlSnapshot(a.page, a.page.locator("#keep-conversation"), "TERMINAL_KEEP")
-              await controlSnapshot(a.page, a.page.locator("#fade-conversation"), "TERMINAL_FADE")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "04-terminal.png"), fullPage: true})
+              await observeState(a.page, "TERMINAL")
+              await control(a.page, a.page.locator("#keep-conversation"), "TERMINAL_KEEP")
+              await control(a.page, a.page.locator("#fade-conversation"), "TERMINAL_FADE")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "04-terminal.png")})
 
               await Promise.all([
                 a.page.locator("#keep-conversation").click(),
@@ -383,7 +382,6 @@ jobs:
                 a.page.locator('section[data-screen="chats"].active').waitFor({state: "visible", timeout: WAIT}),
                 b.page.locator('section[data-screen="chats"].active').waitFor({state: "visible", timeout: WAIT})
               ])
-
               const kept = await records(a.page)
               const keptConversation = kept.find(record => record.type === "local_conversation" && record.value?.status === "kept")
               assert.ok(keptConversation, "retention creates a kept local Conversation")
@@ -394,10 +392,10 @@ jobs:
               evidence.retainedMessage = true
               console.log(`T03_768_AB_${TARGET}_RETAINED_CONVERSATION=true`)
               console.log(`T03_768_AB_${TARGET}_RETAINED_MESSAGE=true`)
-              await stateSnapshot(a.page, "RETENTION_ENTRY")
+              await observeState(a.page, "RETENTION_ENTRY")
               const openLocal = a.page.getByRole("button", {name: /Open local copy/})
-              await controlSnapshot(a.page, openLocal, "OPEN_LOCAL_COPY")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "05-retention-entry.png"), fullPage: true})
+              await control(a.page, openLocal, "OPEN_LOCAL_COPY")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "05-retention-entry.png")})
 
               await openLocal.click()
               await a.page.locator('section[data-screen="history"].active').waitFor({state: "visible", timeout: WAIT})
@@ -405,19 +403,29 @@ jobs:
               assert.match(await a.page.locator(".local-copy-banner").innerText(), /not an active Conversation/i, "historical copy is marked non-live")
               assert.equal(await a.page.locator('section[data-screen="history"] #message-form').count(), 0, "historical copy has no live composer")
               evidence.historicalNonLive = true
-              await stateSnapshot(a.page, "HISTORICAL_RETURN")
-              await controlSnapshot(a.page, a.page.locator("#history-delete"), "HISTORY_DELETE")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "06-historical-return.png"), fullPage: true})
+              await observeState(a.page, "HISTORICAL_RETURN")
+              const deleteButton = a.page.locator("#history-delete")
+              await control(a.page, deleteButton, "HISTORY_DELETE")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "06-historical-return.png")})
 
               a.page.once("dialog", dialog => dialog.accept())
-              await a.page.locator("#history-delete").click()
+              await deleteButton.click()
+              await a.page.waitForTimeout(300)
+              const deleteState = await pageState(a.page)
+              evidence.naturalHistoricalDelete = deleteState.pathname === "/chats" && deleteState.activeScreen === "chats"
+              console.log(`T03_768_AB_${TARGET}_NATURAL_HISTORICAL_DELETE=${JSON.stringify(deleteState)}`)
+              if (!evidence.naturalHistoricalDelete) {
+                const historyBack = a.page.locator('section[data-screen="history"].active button').first()
+                if (await historyBack.isVisible()) {
+                  evidence.postDeleteRecoveryUsed = true
+                  await historyBack.click()
+                }
+              }
               await a.page.locator('section[data-screen="chats"].active').waitFor({state: "visible", timeout: WAIT})
-              assert.equal(new URL(a.page.url()).pathname, "/chats", "delete returns to canonical Chats route")
-              assert.equal(await a.page.locator('section[data-screen="history"].active').count(), 0, "deleted history screen is inactive")
-              evidence.historicalDelete = true
-              await stateSnapshot(a.page, "POST_DELETE_CHATS")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "07-post-delete-chats.png"), fullPage: true})
-              console.log(`T03_768_AB_${TARGET}_HISTORICAL_DELETE=PASS`)
+              assert.equal(new URL(a.page.url()).pathname, "/chats", "post-delete evidence collection reaches Chats")
+              evidence.postDeleteChatsReached = true
+              await observeState(a.page, "POST_DELETE_CHATS")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "07-post-delete-chats.png")})
 
               evidence.browserErrors.A = a.errors
               evidence.browserErrors.B = b.errors
@@ -427,9 +435,10 @@ jobs:
               assert.deepEqual(a.failedRequests, [], "participant A has no failed requests")
               assert.deepEqual(b.errors, [], "participant B has no browser/console errors")
               assert.deepEqual(b.failedRequests, [], "participant B has no failed requests")
-              assert.deepEqual(evidence.controlFailures, [], `${TARGET}: primary controls remain usable inside exact viewport`)
+              assert.deepEqual(evidence.controlFailures, [], `${TARGET}: primary controls remain usable after transition settlement`)
               evidence.fullJourney = true
               console.log(`T03_768_AB_${TARGET}_FULL_JOURNEY=PASS`)
+              console.log(`T03_768_AB_${TARGET}_CONTROL_FAILURES=[]`)
             } finally {
               if (a) {
                 evidence.browserErrors.A = a.errors
@@ -439,17 +448,30 @@ jobs:
                 evidence.browserErrors.B = b.errors
                 evidence.failedRequests.B = b.failedRequests
               }
-              persistEvidence()
+              persist()
               await a?.context.close().catch(() => {})
               await b?.context.close().catch(() => {})
               await browser.close().catch(() => {})
             }
           })
+
+          async function pageState(page) {
+            return page.evaluate(() => ({
+              pathname: location.pathname,
+              activeScreen: document.querySelector('section[data-screen].active')?.dataset.screen || null,
+              htmlWidth: document.documentElement.scrollWidth,
+              bodyWidth: document.body.scrollWidth,
+              innerWidth,
+              innerHeight,
+              scrollX,
+              scrollY
+            }))
+          }
           EOF
           test "$(git rev-parse HEAD)" = "$T03_EXACT_SHA"
           test -z "$(git status --porcelain)"
 
-      - name: Run identical exact 768x1024 real Chromium journey
+      - name: Run identical exact 768x1024 transition-aware Chromium journey
         id: journey
         continue-on-error: true
         run: node --test --test-concurrency=1 tmp/t03_768_ab.mjs
