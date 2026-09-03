@@ -1,0 +1,104 @@
+name: T05 NET 003 Final Hygiene Classification
+
+on:
+  push:
+    branches:
+      - team5/net-003-hygiene-final-f68a
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-hygiene:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f68a039af2f1267e4222036e787e0954cf8f5266
+          fetch-depth: 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Prove exact candidate identity and narrow production diff
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "f68a039af2f1267e4222036e787e0954cf8f5266"
+          test "$(git rev-parse HEAD^)" = "77475e8fc42b4054db5f123bf96a97c9caa6392b"
+          test -z "$(git status --porcelain)"
+          mapfile -t changed < <(git diff --name-only 77475e8fc42b4054db5f123bf96a97c9caa6392b...HEAD)
+          test "${#changed[@]}" -eq 1
+          test "${changed[0]}" = "priv/static/assets/live_call.mjs"
+          git diff --check 77475e8fc42b4054db5f123bf96a97c9caa6392b...HEAD
+          echo 'T05_NET_003_PRODUCTION_DIFF=NARROW_ONE_FILE'
+      - name: Prove failing repository precommit assertion is not a deterministic T05 candidate regression
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          mix test test/strangertalks_new_web/controllers/team2_normal_media_terminal_test.exs:88
+          echo 'TEAM2_TARGETED_ASSERTION_ON_F68A=PASS'
+      - name: Compare formatter side effects RED parent vs successor
+        run: |
+          set -euo pipefail
+
+          git checkout --force 77475e8fc42b4054db5f123bf96a97c9caa6392b
+          git clean -fd
+          mix format
+          git diff --name-only | sort > /tmp/red-format-paths
+          git diff > /tmp/red-format.patch
+          echo 'RED_FORMAT_PATHS_BEGIN'
+          cat /tmp/red-format-paths
+          echo 'RED_FORMAT_PATHS_END'
+
+          git reset --hard 77475e8fc42b4054db5f123bf96a97c9caa6392b
+          git clean -fd
+          git checkout --force f68a039af2f1267e4222036e787e0954cf8f5266
+          mix format
+          git diff --name-only | sort > /tmp/successor-format-paths
+          git diff > /tmp/successor-format.patch
+          echo 'SUCCESSOR_FORMAT_PATHS_BEGIN'
+          cat /tmp/successor-format-paths
+          echo 'SUCCESSOR_FORMAT_PATHS_END'
+
+          cmp /tmp/red-format-paths /tmp/successor-format-paths
+          cmp /tmp/red-format.patch /tmp/successor-format.patch
+          if grep -Fxq 'priv/static/assets/live_call.mjs' /tmp/successor-format-paths; then
+            echo 'T05_CANDIDATE_FORMAT_DRIFT=YES'
+            exit 1
+          fi
+          echo 'FORMAT_SIDE_EFFECTS=IDENTICAL_PARENT_SUCCESSOR'
+      - name: Restore exact successor and prove clean tree
+        run: |
+          set -euo pipefail
+          git reset --hard f68a039af2f1267e4222036e787e0954cf8f5266
+          git clean -fd
+          test "$(git rev-parse HEAD)" = "f68a039af2f1267e4222036e787e0954cf8f5266"
+          git diff --check 77475e8fc42b4054db5f123bf96a97c9caa6392b...HEAD
+          test -z "$(git status --porcelain)"
+          echo 'T05_NET_003_CANDIDATE_HYGIENE=CLEAN'
+          echo 'REPOSITORY_PRECOMMIT_CLASSIFICATION=NONDETERMINISTIC_TEAM2_SERVER_TEST_OUTSIDE_T05_BROWSER_DIFF'
