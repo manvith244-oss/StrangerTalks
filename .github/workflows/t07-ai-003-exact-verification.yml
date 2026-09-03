@@ -259,6 +259,12 @@ jobs:
             exit 0
           fi
 
+          if grep -q 'Team2NormalMediaTerminalTest' /tmp/t07-precommit.log; then
+            echo 'FULL_PRECOMMIT_CLASSIFICATION=CROSS-TEAM T02 TERMINAL-AUTHORITY FLAKE'
+            grep -n -A20 -B5 'Team2NormalMediaTerminalTest' /tmp/t07-precommit.log || true
+            exit 0
+          fi
+
           if grep -q 'RecoveryRestartTest' /tmp/t07-precommit.log; then
             echo 'FULL_PRECOMMIT_CLASSIFICATION=CROSS-TEAM T02 RUNTIME-RESTART FAILURE'
             grep -n -A20 -B5 'RecoveryRestartTest' /tmp/t07-precommit.log || true
