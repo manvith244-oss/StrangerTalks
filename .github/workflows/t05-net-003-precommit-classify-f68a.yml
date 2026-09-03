@@ -1,0 +1,102 @@
+name: T05 NET 003 Precommit Classification
+
+on:
+  push:
+    branches:
+      - team5/net-003-precommit-classify-f68a
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f68a039af2f1267e4222036e787e0954cf8f5266
+          fetch-depth: 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install deps once
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: A/B reproduce Team2 precommit failure on RED parent and successor
+        run: |
+          set -euo pipefail
+          reproduce() {
+            sha="$1"
+            label="$2"
+            git checkout --force "$sha"
+            test "$(git rev-parse HEAD)" = "$sha"
+            git clean -fd
+            mix ecto.drop --quiet || true
+            mix ecto.create --quiet
+            mix ecto.migrate --quiet
+            set +e
+            mix test test/strangertalks_new_web/controllers/team2_normal_media_terminal_test.exs:88 > "/tmp/${label}.log" 2>&1
+            rc=$?
+            set -e
+            cat "/tmp/${label}.log"
+            test "$rc" -ne 0
+            grep -F 'Team2NormalMediaTerminalTest' "/tmp/${label}.log"
+            grep -F 'assert {:error, :terminal_conversation} = ConversationServer.ensure_started(conversation.conversation_id)' "/tmp/${label}.log"
+            grep -F 'right: {:ok, #PID<' "/tmp/${label}.log"
+            echo "${label}_TEAM2_BASELINE_FAILURE=REPRODUCED"
+          }
+          reproduce 77475e8fc42b4054db5f123bf96a97c9caa6392b RED_PARENT
+          reproduce f68a039af2f1267e4222036e787e0954cf8f5266 SUCCESSOR
+          echo 'TEAM2_PRECOMMIT_FAILURE_CLASSIFICATION=INHERITED_NON_T05'
+      - name: A/B formatter classification
+        run: |
+          set -euo pipefail
+          git checkout --force 77475e8fc42b4054db5f123bf96a97c9caa6392b
+          git clean -fd
+          mix format
+          git diff --name-only | sort > /tmp/parent-format-paths
+          git diff > /tmp/parent-format.patch
+          echo 'PARENT_FORMAT_PATHS:'
+          cat /tmp/parent-format-paths
+          git reset --hard 77475e8fc42b4054db5f123bf96a97c9caa6392b
+
+          git checkout --force f68a039af2f1267e4222036e787e0954cf8f5266
+          git clean -fd
+          mix format
+          git diff --name-only | sort > /tmp/candidate-format-paths
+          git diff > /tmp/candidate-format.patch
+          echo 'CANDIDATE_FORMAT_PATHS:'
+          cat /tmp/candidate-format-paths
+          cmp /tmp/parent-format-paths /tmp/candidate-format-paths
+          cmp /tmp/parent-format.patch /tmp/candidate-format.patch
+          if grep -Fxq 'priv/static/assets/live_call.mjs' /tmp/candidate-format-paths; then
+            echo 'T05_CANDIDATE_FORMAT_DRIFT=YES'
+            exit 1
+          fi
+          echo 'FORMAT_DRIFT_CLASSIFICATION=IDENTICAL_INHERITED_BASELINE'
+          git reset --hard f68a039af2f1267e4222036e787e0954cf8f5266
+          git clean -fd
+          git diff --check 77475e8fc42b4054db5f123bf96a97c9caa6392b...HEAD
+          test -z "$(git status --porcelain)"
+          echo 'T05_NET_003_CANDIDATE_HYGIENE=CLEAN'
