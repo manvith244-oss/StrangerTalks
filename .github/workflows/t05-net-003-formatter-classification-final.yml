@@ -1,0 +1,191 @@
+name: T05 NET 003 Formatter Classification Final
+
+on:
+  push:
+    branches:
+      - team5/net-003-formatter-classification-final
+
+permissions:
+  contents: read
+
+jobs:
+  formatter-classification:
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+      RED_SHA: 77475e8fc42b4054db5f123bf96a97c9caa6392b
+      SUCCESSOR_SHA: f68a039af2f1267e4222036e787e0954cf8f5266
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install formatter dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Capture RED formatter evidence
+        run: |
+          set -euo pipefail
+          git checkout --force "$RED_SHA"
+          git reset --hard "$RED_SHA"
+          git clean -fd
+
+          echo "RED_EXACT_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$RED_SHA"
+          sha256sum .formatter.exs | tee /tmp/red-formatter-hash
+          echo 'RED_FORMATTER_CONTENT_BEGIN'
+          cat .formatter.exs
+          echo 'RED_FORMATTER_CONTENT_END'
+
+          git ls-files | awk '
+            /^[^/]+\.(ex|exs)$/ ||
+            /^(config|lib|test)\/.*\.(ex|exs)$/ ||
+            /^priv\/[^/]+\/seeds\.exs$/ ||
+            /^priv\/[^/]+\/migrations\/.*\.(ex|exs)$/
+          ' | sort -u > /tmp/red-formatter-input-paths
+
+          : > /tmp/red-formatter-input-hashes
+          while IFS= read -r path; do
+            sha256sum "$path" >> /tmp/red-formatter-input-hashes
+          done < /tmp/red-formatter-input-paths
+
+          echo 'RED_FORMATTER_INPUT_HASHES_BEGIN'
+          cat /tmp/red-formatter-input-hashes
+          echo 'RED_FORMATTER_INPUT_HASHES_END'
+
+          git diff --name-only "$RED_SHA" "$SUCCESSOR_SHA" | sort -u > /tmp/red-to-successor-changed-paths
+          echo 'RED_TO_SUCCESSOR_CHANGED_PATHS_BEGIN'
+          cat /tmp/red-to-successor-changed-paths
+          echo 'RED_TO_SUCCESSOR_CHANGED_PATHS_END'
+
+          mix format
+          git diff --name-only | sort -u > /tmp/red-format-paths
+          git diff --binary > /tmp/red-format.patch
+          sha256sum /tmp/red-format.patch | tee /tmp/red-format-patch-hash
+
+          echo 'RED_FORMAT_PATHS_BEGIN'
+          cat /tmp/red-format-paths
+          echo 'RED_FORMAT_PATHS_END'
+          echo 'RED_FORMAT_PATCH_BEGIN'
+          cat /tmp/red-format.patch
+          echo 'RED_FORMAT_PATCH_END'
+
+      - name: Capture successor formatter evidence
+        run: |
+          set -euo pipefail
+          git reset --hard "$RED_SHA"
+          git clean -fd
+          git checkout --force "$SUCCESSOR_SHA"
+          git reset --hard "$SUCCESSOR_SHA"
+
+          echo "SUCCESSOR_EXACT_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$SUCCESSOR_SHA"
+          sha256sum .formatter.exs | tee /tmp/successor-formatter-hash
+          echo 'SUCCESSOR_FORMATTER_CONTENT_BEGIN'
+          cat .formatter.exs
+          echo 'SUCCESSOR_FORMATTER_CONTENT_END'
+
+          git ls-files | awk '
+            /^[^/]+\.(ex|exs)$/ ||
+            /^(config|lib|test)\/.*\.(ex|exs)$/ ||
+            /^priv\/[^/]+\/seeds\.exs$/ ||
+            /^priv\/[^/]+\/migrations\/.*\.(ex|exs)$/
+          ' | sort -u > /tmp/successor-formatter-input-paths
+
+          : > /tmp/successor-formatter-input-hashes
+          while IFS= read -r path; do
+            sha256sum "$path" >> /tmp/successor-formatter-input-hashes
+          done < /tmp/successor-formatter-input-paths
+
+          echo 'SUCCESSOR_FORMATTER_INPUT_HASHES_BEGIN'
+          cat /tmp/successor-formatter-input-hashes
+          echo 'SUCCESSOR_FORMATTER_INPUT_HASHES_END'
+
+          mix format
+          git diff --name-only | sort -u > /tmp/successor-format-paths
+          git diff --binary > /tmp/successor-format.patch
+          sha256sum /tmp/successor-format.patch | tee /tmp/successor-format-patch-hash
+
+          echo 'SUCCESSOR_FORMAT_PATHS_BEGIN'
+          cat /tmp/successor-format-paths
+          echo 'SUCCESSOR_FORMAT_PATHS_END'
+          echo 'SUCCESSOR_FORMAT_PATCH_BEGIN'
+          cat /tmp/successor-format.patch
+          echo 'SUCCESSOR_FORMAT_PATCH_END'
+
+      - name: Classify formatter evidence visibly
+        run: |
+          set -uo pipefail
+
+          echo 'FORMATTER_HASH_DIFF_BEGIN'
+          diff -u /tmp/red-formatter-hash /tmp/successor-formatter-hash
+          formatter_hash_rc=$?
+          echo 'FORMATTER_HASH_DIFF_END'
+
+          echo 'FORMATTER_INPUT_PATH_DIFF_BEGIN'
+          diff -u /tmp/red-formatter-input-paths /tmp/successor-formatter-input-paths
+          input_path_rc=$?
+          echo 'FORMATTER_INPUT_PATH_DIFF_END'
+
+          echo 'FORMATTER_INPUT_HASH_DIFF_BEGIN'
+          diff -u /tmp/red-formatter-input-hashes /tmp/successor-formatter-input-hashes
+          input_hash_rc=$?
+          echo 'FORMATTER_INPUT_HASH_DIFF_END'
+
+          echo 'FORMATTER_CHANGED_PATH_INTERSECTION_BEGIN'
+          comm -12 /tmp/red-to-successor-changed-paths /tmp/successor-formatter-input-paths | tee /tmp/changed-formatter-intersection
+          echo 'FORMATTER_CHANGED_PATH_INTERSECTION_END'
+
+          echo 'FORMATTER_PATH_LIST_DIFF_BEGIN'
+          diff -u /tmp/red-format-paths /tmp/successor-format-paths
+          format_path_rc=$?
+          echo 'FORMATTER_PATH_LIST_DIFF_END'
+
+          echo 'FORMATTER_PATCH_HASHES_BEGIN'
+          cat /tmp/red-format-patch-hash
+          cat /tmp/successor-format-patch-hash
+          echo 'FORMATTER_PATCH_HASHES_END'
+
+          echo 'FORMATTER_PATCH_DIFF_BEGIN'
+          diff -u /tmp/red-format.patch /tmp/successor-format.patch
+          patch_rc=$?
+          echo 'FORMATTER_PATCH_DIFF_END'
+
+          if [ -s /tmp/changed-formatter-intersection ]; then
+            echo 'FORMATTER_CLASSIFICATION=CASE4_RED_TO_SUCCESSOR_CHANGE_IS_FORMATTER_VISIBLE'
+            exit 14
+          fi
+
+          if [ "$formatter_hash_rc" -ne 0 ] || [ "$input_path_rc" -ne 0 ] || [ "$input_hash_rc" -ne 0 ]; then
+            echo 'FORMATTER_CLASSIFICATION=CASE3_FORMATTER_VISIBLE_TRACKED_INPUT_DIFFERS'
+            exit 13
+          fi
+
+          if [ "$format_path_rc" -ne 0 ] || [ "$patch_rc" -ne 0 ]; then
+            echo 'FORMATTER_CLASSIFICATION=CASE2_IDENTICAL_INPUTS_DIFFERENT_FORMATTER_OUTPUT'
+            exit 12
+          fi
+
+          echo 'FORMATTER_CLASSIFICATION=CASE1_IDENTICAL_INPUTS_IDENTICAL_SIDE_EFFECTS_PREVIOUS_FAILURE_HARNESS_NOISE'
+
+      - name: Restore exact successor and prove final clean state
+        if: always()
+        run: |
+          set -euo pipefail
+          git reset --hard
+          git clean -fd
+          git checkout --force "$SUCCESSOR_SHA"
+          git reset --hard "$SUCCESSOR_SHA"
+          test "$(git rev-parse HEAD)" = "$SUCCESSOR_SHA"
+          git diff --check "$RED_SHA"..."$SUCCESSOR_SHA"
+          test -z "$(git status --porcelain)"
+          echo "FINAL_RESTORED_SHA=$(git rev-parse HEAD)"
+          echo 'FINAL_SUCCESSOR_WORKTREE=CLEAN'
