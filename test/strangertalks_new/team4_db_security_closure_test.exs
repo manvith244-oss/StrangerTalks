@@ -42,7 +42,9 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
 
     for [table_name, rls_enabled, rls_forced] <- rows do
       assert rls_enabled, "expected public.#{table_name} to have RLS enabled"
-      refute rls_forced, "public.#{table_name} must not FORCE RLS over the direct Phoenix owner path"
+
+      refute rls_forced,
+             "public.#{table_name} must not FORCE RLS over the direct Phoenix owner path"
     end
   end
 
@@ -86,14 +88,17 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     current_role = Repo.query!("SELECT current_user").rows |> hd() |> hd()
 
     acl =
-      Repo.query!("""
-      SELECT COALESCE(array_to_string(d.defaclacl, ','), '')
-      FROM pg_default_acl d
-      JOIN pg_namespace n ON n.oid = d.defaclnamespace
-      WHERE n.nspname = 'public'
-        AND d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = $1)
-        AND d.defaclobjtype = 'r'
-      """, [current_role]).rows
+      Repo.query!(
+        """
+        SELECT COALESCE(array_to_string(d.defaclacl, ','), '')
+        FROM pg_default_acl d
+        JOIN pg_namespace n ON n.oid = d.defaclnamespace
+        WHERE n.nspname = 'public'
+          AND d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = $1)
+          AND d.defaclobjtype = 'r'
+        """,
+        [current_role]
+      ).rows
       |> case do
         [[value]] -> value
         [] -> ""
@@ -124,15 +129,18 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
   end
 
   defp existing_application_tables do
-    Repo.query!("""
-    SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.relname = ANY($1::text[])
-      AND c.relkind IN ('r', 'p')
-    ORDER BY c.relname
-    """, [@application_tables]).rows
+    Repo.query!(
+      """
+      SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public'
+        AND c.relname = ANY($1::text[])
+        AND c.relkind IN ('r', 'p')
+      ORDER BY c.relname
+      """,
+      [@application_tables]
+    ).rows
   end
 
   defp existing_roles(roles) do
