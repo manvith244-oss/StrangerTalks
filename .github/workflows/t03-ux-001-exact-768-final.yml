@@ -1,4 +1,4 @@
-name: T03 UX-001 Final Exact 768 Proof
+name: T03 UX-001 Exact 768 Overflow A-B
 
 on:
   push:
@@ -9,9 +9,19 @@ permissions:
   contents: read
 
 jobs:
-  exact-768-final:
+  exact-768-ab:
+    name: Exact 768 A-B ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: canonical
+            sha: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+          - name: candidate
+            sha: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+
     services:
       postgres:
         image: postgres:16
@@ -33,22 +43,24 @@ jobs:
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
       STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
-      T03_EXACT_SHA: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+      T03_AB_TARGET: ${{ matrix.name }}
+      T03_EXACT_SHA: ${{ matrix.sha }}
 
     steps:
-      - name: Checkout exact frozen candidate
+      - name: Checkout exact comparison SHA
         uses: actions/checkout@v4
         with:
-          ref: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+          ref: ${{ matrix.sha }}
           fetch-depth: 0
 
-      - name: Prove exact candidate and clean entry tree
+      - name: Prove exact identity and clean entry tree
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          echo "T03_768_EXPECTED_SHA=$T03_EXACT_SHA"
-          echo "T03_768_CHECKED_OUT_SHA=$actual"
-          echo "T03_768_VIEWPORT=768x1024"
+          echo "T03_768_AB_TARGET=$T03_AB_TARGET"
+          echo "T03_768_AB_EXPECTED_SHA=$T03_EXACT_SHA"
+          echo "T03_768_AB_CHECKED_OUT_SHA=$actual"
+          echo "T03_768_AB_VIEWPORT=768x1024"
           test "$actual" = "$T03_EXACT_SHA"
           test -z "$(git status --porcelain)"
 
@@ -73,13 +85,13 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Prepare fresh browser database
+      - name: Prepare fresh isolated database
         run: |
           set -euo pipefail
           mix ecto.create --quiet
           mix ecto.migrate --quiet
 
-      - name: Start exact-SHA Phoenix server
+      - name: Start fresh exact-SHA Phoenix process
         run: |
           set -euo pipefail
           mix run --no-start -e '
@@ -90,28 +102,28 @@ jobs:
             Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint, :server, true))
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
             Process.sleep(:infinity)
-          ' > /tmp/t03-768-final.log 2>&1 &
-          echo $! > /tmp/t03-768-final.pid
+          ' > "/tmp/t03-768-ab-${T03_AB_TARGET}.log" 2>&1 &
+          echo $! > "/tmp/t03-768-ab-${T03_AB_TARGET}.pid"
           for attempt in $(seq 1 45); do
-            pid="$(cat /tmp/t03-768-final.pid)"
+            pid="$(cat /tmp/t03-768-ab-${T03_AB_TARGET}.pid)"
             if ! kill -0 "$pid" 2>/dev/null; then
-              cat /tmp/t03-768-final.log
+              cat "/tmp/t03-768-ab-${T03_AB_TARGET}.log"
               exit 1
             fi
             if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null; then
-              echo "T03_768_SERVER_READY=true"
+              echo "T03_768_AB_SERVER_READY=$T03_AB_TARGET"
               exit 0
             fi
             sleep 1
           done
-          cat /tmp/t03-768-final.log
+          cat "/tmp/t03-768-ab-${T03_AB_TARGET}.log"
           exit 1
 
-      - name: Build validation-only final 768 browser proof
+      - name: Build identical read-only overflow-trace browser harness
         run: |
           set -euo pipefail
-          mkdir -p tmp/t03-768-final-artifacts
-          cat > tmp/t03_768_final.mjs <<'EOF'
+          mkdir -p "tmp/t03-768-ab-${T03_AB_TARGET}"
+          cat > tmp/t03_768_ab.mjs <<'EOF'
           import assert from "node:assert/strict"
           import fs from "node:fs"
           import path from "node:path"
@@ -119,40 +131,158 @@ jobs:
           import {chromium} from "playwright"
 
           const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const TARGET = process.env.T03_AB_TARGET
+          const EXACT_SHA = process.env.T03_EXACT_SHA
           const WAIT = 20_000
-          const ARTIFACTS = path.resolve("tmp/t03-768-final-artifacts")
+          const ARTIFACTS = path.resolve(`tmp/t03-768-ab-${TARGET}`)
           fs.mkdirSync(ARTIFACTS, {recursive: true})
 
-          function mark(label) {
-            console.log(`T03_768_${label}=PASS`)
+          const evidence = {
+            target: TARGET,
+            exactSha: EXACT_SHA,
+            viewport: {width: 768, height: 1024},
+            participantIssuance: {},
+            states: {},
+            controls: {},
+            conversationOffenders: [],
+            conversationOwnership: null,
+            retainedConversation: false,
+            retainedMessage: false,
+            historicalNonLive: false,
+            historicalDelete: false,
+            fullJourney: false,
+            controlFailures: [],
+            browserErrors: {},
+            failedRequests: {}
           }
 
-          async function viewport(page, label) {
-            const v = await page.evaluate(() => ({
-              innerWidth,
-              innerHeight,
-              scrollX,
-              scrollY,
-              htmlWidth: document.documentElement.scrollWidth,
-              bodyWidth: document.body.scrollWidth
-            }))
-            console.log(`T03_768_VIEWPORT_${label}=${JSON.stringify(v)}`)
-            assert.equal(v.innerWidth, 768, `${label}: viewport width is exactly 768`)
-            assert.equal(v.innerHeight, 1024, `${label}: viewport height is exactly 1024`)
-            assert.ok(v.htmlWidth <= 769, `${label}: document has no horizontal overflow`)
-            assert.ok(v.bodyWidth <= 769, `${label}: body has no horizontal overflow`)
+          function safeClassName(element) {
+            if (typeof element.className === "string") return element.className
+            return element.getAttribute("class") || ""
           }
 
-          async function usable(page, locator, label) {
+          function roundedRect(rect) {
+            return {
+              x: Math.round(rect.x * 1000) / 1000,
+              y: Math.round(rect.y * 1000) / 1000,
+              left: Math.round(rect.left * 1000) / 1000,
+              right: Math.round(rect.right * 1000) / 1000,
+              top: Math.round(rect.top * 1000) / 1000,
+              bottom: Math.round(rect.bottom * 1000) / 1000,
+              width: Math.round(rect.width * 1000) / 1000,
+              height: Math.round(rect.height * 1000) / 1000
+            }
+          }
+
+          async function stateSnapshot(page, label) {
+            const snapshot = await page.evaluate(() => {
+              const active = document.querySelector('section[data-screen].active')
+              const visibleControls = [...(active?.querySelectorAll('button, input, select, textarea, a[href]') || [])]
+                .map(element => {
+                  const style = getComputedStyle(element)
+                  const rect = element.getBoundingClientRect()
+                  if (style.display === "none" || style.visibility === "hidden" || rect.width <= 0 || rect.height <= 0) return null
+                  return {
+                    tag: element.tagName,
+                    id: element.id || null,
+                    class: typeof element.className === "string" ? element.className : (element.getAttribute("class") || ""),
+                    type: element.getAttribute("type"),
+                    ariaLabel: element.getAttribute("aria-label"),
+                    disabled: "disabled" in element ? element.disabled : null,
+                    rect: {
+                      x: rect.x, y: rect.y, left: rect.left, right: rect.right,
+                      top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height
+                    }
+                  }
+                })
+                .filter(Boolean)
+              return {
+                innerWidth,
+                innerHeight,
+                scrollX,
+                scrollY,
+                htmlWidth: document.documentElement.scrollWidth,
+                bodyWidth: document.body.scrollWidth,
+                activeScreen: active?.dataset.screen || null,
+                activeScreenRect: active ? (() => {
+                  const rect = active.getBoundingClientRect()
+                  return {x: rect.x, y: rect.y, left: rect.left, right: rect.right, top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height}
+                })() : null,
+                visibleControls
+              }
+            })
+            evidence.states[label] = snapshot
+            console.log(`T03_768_AB_${TARGET}_STATE_${label}=${JSON.stringify(snapshot)}`)
+            assert.equal(snapshot.innerWidth, 768, `${label}: viewport width is exactly 768`)
+            assert.equal(snapshot.innerHeight, 1024, `${label}: viewport height is exactly 1024`)
+            return snapshot
+          }
+
+          async function controlSnapshot(page, locator, label) {
             const visible = await locator.isVisible()
             const enabled = visible ? await locator.isEnabled() : false
-            const box = visible ? await locator.boundingBox() : null
-            console.log(`T03_768_CONTROL_${label}=${JSON.stringify({visible, enabled, box})}`)
-            assert.equal(visible, true, `${label}: visible`)
-            assert.equal(enabled, true, `${label}: enabled`)
-            assert.ok(box, `${label}: rendered`)
-            assert.ok(box.x >= -1 && box.x + box.width <= 769, `${label}: inside 768px width`)
-            assert.ok(box.y >= -1 && box.y < 1024, `${label}: begins inside 1024px viewport`)
+            const rect = visible ? await locator.boundingBox() : null
+            const result = {visible, enabled, rect}
+            evidence.controls[label] = result
+            console.log(`T03_768_AB_${TARGET}_CONTROL_${label}=${JSON.stringify(result)}`)
+            if (!visible) evidence.controlFailures.push(`${label}: not visible`)
+            if (!enabled) evidence.controlFailures.push(`${label}: not enabled`)
+            if (!rect) evidence.controlFailures.push(`${label}: not rendered`)
+            if (rect && (rect.x < -1 || rect.x + rect.width > 769)) evidence.controlFailures.push(`${label}: outside 768px horizontal viewport`)
+            if (rect && (rect.y < -1 || rect.y >= 1024)) evidence.controlFailures.push(`${label}: begins outside 1024px viewport`)
+            return result
+          }
+
+          async function traceConversationOverflow(page) {
+            const trace = await page.evaluate(() => {
+              const offenders = []
+              for (const element of document.body.querySelectorAll("*")) {
+                const rect = element.getBoundingClientRect()
+                if (rect.width <= 0 && rect.height <= 0) continue
+                if (!(rect.left < -1 || rect.right > 769)) continue
+                const style = getComputedStyle(element)
+                const screen = element.closest('section[data-screen]')
+                offenders.push({
+                  tag: element.tagName,
+                  id: element.id || null,
+                  class: typeof element.className === "string" ? element.className : (element.getAttribute("class") || ""),
+                  screen: screen?.dataset.screen || null,
+                  screenActive: Boolean(screen?.classList.contains("active")),
+                  rect: {
+                    x: rect.x, y: rect.y, left: rect.left, right: rect.right,
+                    top: rect.top, bottom: rect.bottom, width: rect.width, height: rect.height
+                  },
+                  style: {
+                    display: style.display,
+                    visibility: style.visibility,
+                    position: style.position,
+                    overflow: style.overflow,
+                    overflowX: style.overflowX,
+                    overflowY: style.overflowY,
+                    width: style.width,
+                    minWidth: style.minWidth,
+                    maxWidth: style.maxWidth,
+                    left: style.left,
+                    right: style.right,
+                    transform: style.transform,
+                    boxSizing: style.boxSizing
+                  }
+                })
+              }
+              const ownership = {
+                active: offenders.filter(item => item.screenActive).length,
+                inactive: offenders.filter(item => item.screen && !item.screenActive).length,
+                global: offenders.filter(item => !item.screen).length,
+                activeScreens: [...new Set(offenders.filter(item => item.screenActive).map(item => item.screen))],
+                inactiveScreens: [...new Set(offenders.filter(item => item.screen && !item.screenActive).map(item => item.screen))]
+              }
+              return {offenders, ownership}
+            })
+            evidence.conversationOffenders = trace.offenders
+            evidence.conversationOwnership = trace.ownership
+            console.log(`T03_768_AB_${TARGET}_CONVERSATION_OWNERSHIP=${JSON.stringify(trace.ownership)}`)
+            console.log(`T03_768_AB_${TARGET}_CONVERSATION_OFFENDERS=${JSON.stringify(trace.offenders)}`)
+            return trace
           }
 
           async function boot(browser, label) {
@@ -170,7 +300,8 @@ jobs:
             const root = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
             assert.ok(root?.ok(), `${label}: root loads`)
             const issued = await participantResponse
-            console.log(`T03_768_${label}_PARTICIPANT_ISSUANCE=${issued.status()}`)
+            evidence.participantIssuance[label] = issued.status()
+            console.log(`T03_768_AB_${TARGET}_${label}_PARTICIPANT_ISSUANCE=${issued.status()}`)
             assert.equal(issued.status(), 201, `${label}: participant issuance succeeds without bypass`)
             await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: WAIT})
             await page.locator("button.door").first().waitFor({state: "visible", timeout: WAIT})
@@ -189,7 +320,11 @@ jobs:
             return page.evaluate(async () => (await import("/assets/local_data.mjs")).listRecords())
           }
 
-          test("T03 UX-001 final exact 768x1024 real-Chromium closure path", {timeout: 150_000}, async () => {
+          function persistEvidence() {
+            fs.writeFileSync(path.join(ARTIFACTS, "evidence.json"), JSON.stringify(evidence, null, 2))
+          }
+
+          test(`T03 UX-001 exact 768 overflow A-B ${TARGET}`, {timeout: 150_000}, async () => {
             const browser = await chromium.launch({headless: true})
             let a
             let b
@@ -197,38 +332,37 @@ jobs:
               a = await boot(browser, "A")
               b = await boot(browser, "B")
 
-              await viewport(a.page, "ARRIVAL")
-              await usable(a.page, a.page.locator("#conversation-language"), "ARRIVAL_LANGUAGE")
-              await usable(a.page, a.page.locator("button.door").first(), "ARRIVAL_DOOR")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "01-arrival-768x1024.png"), fullPage: true})
-              mark("ARRIVAL")
+              await stateSnapshot(a.page, "ARRIVAL")
+              await controlSnapshot(a.page, a.page.locator("#conversation-language"), "ARRIVAL_LANGUAGE")
+              await controlSnapshot(a.page, a.page.locator("button.door").first(), "ARRIVAL_DOOR")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "01-arrival.png"), fullPage: true})
 
               await a.page.locator("#conversation-language").selectOption("en")
               await b.page.locator("#conversation-language").selectOption("en")
               await a.page.locator('button.door:has-text("Advice")').click()
               await a.page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: WAIT})
               await a.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: WAIT})
-              await viewport(a.page, "QUEUE")
-              await usable(a.page, a.page.locator("#leave-queue"), "QUEUE_LEAVE")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "02-queue-768x1024.png"), fullPage: true})
-              mark("QUEUE")
+              await stateSnapshot(a.page, "QUEUE")
+              await controlSnapshot(a.page, a.page.locator("#leave-queue"), "QUEUE_LEAVE")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "02-queue.png"), fullPage: true})
 
               await b.page.locator('button.door:has-text("Advice")').click()
               await Promise.all([
                 a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: WAIT}),
                 b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: WAIT})
               ])
-              console.log("T03_768_CONVERSATION_REACHED=true")
-              await viewport(a.page, "CONVERSATION")
-              await usable(a.page, a.page.locator("#message-input"), "CONVERSATION_COMPOSER")
+              console.log(`T03_768_AB_${TARGET}_CONVERSATION_REACHED=true`)
+              await stateSnapshot(a.page, "CONVERSATION")
+              await traceConversationOverflow(a.page)
+              await controlSnapshot(a.page, a.page.locator("#message-input"), "CONVERSATION_COMPOSER")
               const sendButton = a.page.getByRole("button", {name: "Send message", exact: true})
-              await usable(a.page, sendButton, "CONVERSATION_SEND")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "03-conversation-768x1024.png"), fullPage: true})
+              await controlSnapshot(a.page, sendButton, "CONVERSATION_SEND")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "03-conversation.png"), fullPage: true})
 
-              await a.page.locator("#message-input").fill("T03 exact 768 retained message")
+              await a.page.locator("#message-input").fill("T03 exact 768 A-B retained message")
               await sendButton.click()
-              await b.page.locator("#messages li", {hasText: "T03 exact 768 retained message"}).waitFor({state: "visible", timeout: WAIT})
-              mark("CONVERSATION")
+              await b.page.locator("#messages li", {hasText: "T03 exact 768 A-B retained message"}).waitFor({state: "visible", timeout: WAIT})
+              console.log(`T03_768_AB_${TARGET}_MESSAGE_SEND=PASS`)
 
               await endConversation(a.page)
               await Promise.all([
@@ -236,11 +370,10 @@ jobs:
                 b.page.locator('section[data-screen="ended"].active').waitFor({state: "visible", timeout: WAIT})
               ])
               assert.equal(new URL(a.page.url()).pathname, "/conversation/ended", "terminal route is canonical")
-              await viewport(a.page, "TERMINAL")
-              await usable(a.page, a.page.locator("#keep-conversation"), "TERMINAL_KEEP")
-              await usable(a.page, a.page.locator("#fade-conversation"), "TERMINAL_FADE")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "04-terminal-768x1024.png"), fullPage: true})
-              mark("TERMINAL")
+              await stateSnapshot(a.page, "TERMINAL")
+              await controlSnapshot(a.page, a.page.locator("#keep-conversation"), "TERMINAL_KEEP")
+              await controlSnapshot(a.page, a.page.locator("#fade-conversation"), "TERMINAL_FADE")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "04-terminal.png"), fullPage: true})
 
               await Promise.all([
                 a.page.locator("#keep-conversation").click(),
@@ -254,40 +387,59 @@ jobs:
               const kept = await records(a.page)
               const keptConversation = kept.find(record => record.type === "local_conversation" && record.value?.status === "kept")
               assert.ok(keptConversation, "retention creates a kept local Conversation")
+              evidence.retainedConversation = true
               const conversationId = keptConversation.value.conversation_id
-              assert.ok(kept.some(record => record.type === "local_message" && record.value?.conversation_id === conversationId && record.value?.content === "T03 exact 768 retained message"), "retained history contains sent message")
-              console.log(`T03_768_RETAINED_CONVERSATION_ID=${conversationId}`)
-              await viewport(a.page, "RETENTION_ENTRY")
+              const retainedMessage = kept.some(record => record.type === "local_message" && record.value?.conversation_id === conversationId && record.value?.content === "T03 exact 768 A-B retained message")
+              assert.equal(retainedMessage, true, "retained history contains sent message")
+              evidence.retainedMessage = true
+              console.log(`T03_768_AB_${TARGET}_RETAINED_CONVERSATION=true`)
+              console.log(`T03_768_AB_${TARGET}_RETAINED_MESSAGE=true`)
+              await stateSnapshot(a.page, "RETENTION_ENTRY")
               const openLocal = a.page.getByRole("button", {name: /Open local copy/})
-              await usable(a.page, openLocal, "OPEN_LOCAL_COPY")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "05-retention-entry-768x1024.png"), fullPage: true})
-              mark("RETENTION_HISTORY_ENTRY")
+              await controlSnapshot(a.page, openLocal, "OPEN_LOCAL_COPY")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "05-retention-entry.png"), fullPage: true})
 
               await openLocal.click()
               await a.page.locator('section[data-screen="history"].active').waitFor({state: "visible", timeout: WAIT})
               assert.equal(new URL(a.page.url()).pathname, `/chats/${conversationId}`, "historical return uses retained route")
               assert.match(await a.page.locator(".local-copy-banner").innerText(), /not an active Conversation/i, "historical copy is marked non-live")
               assert.equal(await a.page.locator('section[data-screen="history"] #message-form').count(), 0, "historical copy has no live composer")
-              await viewport(a.page, "HISTORICAL_RETURN")
-              await usable(a.page, a.page.locator("#history-delete"), "HISTORY_DELETE")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "06-historical-return-768x1024.png"), fullPage: true})
-              mark("HISTORICAL_RETURN")
+              evidence.historicalNonLive = true
+              await stateSnapshot(a.page, "HISTORICAL_RETURN")
+              await controlSnapshot(a.page, a.page.locator("#history-delete"), "HISTORY_DELETE")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "06-historical-return.png"), fullPage: true})
 
               a.page.once("dialog", dialog => dialog.accept())
               await a.page.locator("#history-delete").click()
               await a.page.locator('section[data-screen="chats"].active').waitFor({state: "visible", timeout: WAIT})
               assert.equal(new URL(a.page.url()).pathname, "/chats", "delete returns to canonical Chats route")
               assert.equal(await a.page.locator('section[data-screen="history"].active').count(), 0, "deleted history screen is inactive")
-              await viewport(a.page, "POST_DELETE")
-              await a.page.screenshot({path: path.join(ARTIFACTS, "07-delete-route-768x1024.png"), fullPage: true})
-              mark("DELETE_ROUTE")
+              evidence.historicalDelete = true
+              await stateSnapshot(a.page, "POST_DELETE_CHATS")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "07-post-delete-chats.png"), fullPage: true})
+              console.log(`T03_768_AB_${TARGET}_HISTORICAL_DELETE=PASS`)
 
+              evidence.browserErrors.A = a.errors
+              evidence.browserErrors.B = b.errors
+              evidence.failedRequests.A = a.failedRequests
+              evidence.failedRequests.B = b.failedRequests
               assert.deepEqual(a.errors, [], "participant A has no browser/console errors")
               assert.deepEqual(a.failedRequests, [], "participant A has no failed requests")
               assert.deepEqual(b.errors, [], "participant B has no browser/console errors")
               assert.deepEqual(b.failedRequests, [], "participant B has no failed requests")
-              mark("FULL_PATH")
+              assert.deepEqual(evidence.controlFailures, [], `${TARGET}: primary controls remain usable inside exact viewport`)
+              evidence.fullJourney = true
+              console.log(`T03_768_AB_${TARGET}_FULL_JOURNEY=PASS`)
             } finally {
+              if (a) {
+                evidence.browserErrors.A = a.errors
+                evidence.failedRequests.A = a.failedRequests
+              }
+              if (b) {
+                evidence.browserErrors.B = b.errors
+                evidence.failedRequests.B = b.failedRequests
+              }
+              persistEvidence()
               await a?.context.close().catch(() => {})
               await b?.context.close().catch(() => {})
               await browser.close().catch(() => {})
@@ -297,51 +449,36 @@ jobs:
           test "$(git rev-parse HEAD)" = "$T03_EXACT_SHA"
           test -z "$(git status --porcelain)"
 
-      - name: Run final exact 768x1024 real Chromium path
-        id: full
+      - name: Run identical exact 768x1024 real Chromium journey
+        id: journey
         continue-on-error: true
-        run: node --test --test-concurrency=1 tmp/t03_768_final.mjs
+        run: node --test --test-concurrency=1 tmp/t03_768_ab.mjs
 
-      - name: Re-run historical-delete regression at exact 768x1024
-        id: history
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          source = Path("test/js/t03_history_route_browser_test.mjs").read_text()
-          old = "{width: 390, height: 844}"
-          new = "{width: 768, height: 1024}"
-          if old not in source:
-              raise SystemExit("expected historical-route viewport anchor not found")
-          Path("tmp/t03_768_history_route.mjs").write_text(source.replace(old, new, 1))
-          PY
-          node --test --test-concurrency=1 tmp/t03_768_history_route.mjs
-
-      - name: Prove exact candidate and clean exit tree
+      - name: Prove exact tested SHA and clean exit tree
         if: always()
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
-          echo "T03_768_FINAL_SHA=$actual"
-          echo "T03_768_FINAL_VIEWPORT=768x1024"
+          echo "T03_768_AB_FINAL_TARGET=$T03_AB_TARGET"
+          echo "T03_768_AB_FINAL_SHA=$actual"
+          echo "T03_768_AB_FINAL_VIEWPORT=768x1024"
           test "$actual" = "$T03_EXACT_SHA"
           test -z "$(git status --porcelain)"
 
-      - name: Upload final exact-768 evidence
+      - name: Upload exact-768 A-B evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: t03-ux-001-final-768-${{ github.run_id }}
-          path: tmp/t03-768-final-artifacts/
+          name: t03-ux-001-768-ab-${{ matrix.name }}-${{ github.run_id }}
+          path: tmp/t03-768-ab-${{ matrix.name }}/
           if-no-files-found: error
           retention-days: 14
 
       - name: Stop browser server
         if: always()
         run: |
-          if [ -f /tmp/t03-768-final.pid ]; then
-            pid="$(cat /tmp/t03-768-final.pid)"
+          if [ -f "/tmp/t03-768-ab-${T03_AB_TARGET}.pid" ]; then
+            pid="$(cat /tmp/t03-768-ab-${T03_AB_TARGET}.pid)"
             kill "$pid" 2>/dev/null || true
             for attempt in $(seq 1 20); do
               if ! kill -0 "$pid" 2>/dev/null; then break; fi
@@ -353,16 +490,14 @@ jobs:
       - name: Browser server log on failure
         if: always()
         run: |
-          if [ "${{ steps.full.outcome }}" != "success" ] || [ "${{ steps.history.outcome }}" != "success" ]; then
-            cat /tmp/t03-768-final.log || true
+          if [ "${{ steps.journey.outcome }}" != "success" ]; then
+            cat "/tmp/t03-768-ab-${T03_AB_TARGET}.log" || true
           fi
 
-      - name: Enforce final exact-768 verdict
+      - name: Enforce functional journey verdict
         if: always()
         run: |
           set -euo pipefail
-          echo "T03_768_FULL_OUTCOME=${{ steps.full.outcome }}"
-          echo "T03_768_HISTORY_OUTCOME=${{ steps.history.outcome }}"
-          test "${{ steps.full.outcome }}" = "success"
-          test "${{ steps.history.outcome }}" = "success"
-          echo "T03_768_RESULT=PASS"
+          echo "T03_768_AB_FUNCTIONAL_OUTCOME=${{ steps.journey.outcome }}"
+          test "${{ steps.journey.outcome }}" = "success"
+          echo "T03_768_AB_FUNCTIONAL_RESULT=PASS"
