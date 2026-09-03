@@ -93,10 +93,12 @@ defmodule StrangertalksNew.FutureSocial.CircleFormationHostileCapacityTest do
     first = candidates(1, {:topic, "sparse", "en"}, "sparse")
     assert {:ok, %{circles: [], waiting: ^first}} = form(first)
 
-    second = first ++ [
-      %{participant_id: "sparse-2", formation_key: {:topic, "sparse", "en"}},
-      %{participant_id: "sparse-3", formation_key: {:topic, "sparse", "en"}}
-    ]
+    second =
+      first ++
+        [
+          %{participant_id: "sparse-2", formation_key: {:topic, "sparse", "en"}},
+          %{participant_id: "sparse-3", formation_key: {:topic, "sparse", "en"}}
+        ]
 
     assert {:ok, %{circles: [], waiting: ^second}} = form(second)
 
