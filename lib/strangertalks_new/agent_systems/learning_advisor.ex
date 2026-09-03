@@ -47,6 +47,29 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
     :aggregation_level
   ]
 
+  @forbidden_personal_keys [
+    :participant_id,
+    :participant_a_id,
+    :participant_b_id,
+    :conversation_id,
+    :match_id,
+    :message_id,
+    :report_id,
+    :reporter_context,
+    :review_notes,
+    "participant_id",
+    "participant_a_id",
+    "participant_b_id",
+    "conversation_id",
+    "match_id",
+    "message_id",
+    "report_id",
+    "reporter_context",
+    "review_notes"
+  ]
+
+  @personal_data_markers [:contains_personal_data, "contains_personal_data"]
+
   def advise_latest(limit \\ 12)
 
   def advise_latest(limit) when is_integer(limit) and limit in 1..@max_rows do
@@ -116,16 +139,21 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
   defp normalize_snapshot(rows) do
     rows
     |> Enum.reduce_while({:ok, []}, fn row, {:ok, acc} ->
-      if is_map(row) do
-        projected =
-          row
-          |> Map.take(@allowed_fields)
-          |> normalize_values()
+      if is_map(row) and not is_struct(row) do
+        case inspect_privacy(row) do
+          :safe ->
+            projected =
+              row
+              |> Map.take(@allowed_fields)
+              |> normalize_values()
 
-        if personal_key_present?(row) do
-          {:halt, {:error, :personal_data_not_allowed}}
-        else
-          {:cont, {:ok, [projected | acc]}}
+            {:cont, {:ok, [projected | acc]}}
+
+          :forbidden ->
+            {:halt, {:error, :personal_data_not_allowed}}
+
+          :unsupported ->
+            {:halt, {:error, :invalid_learning_snapshot}}
         end
       else
         {:halt, {:error, :invalid_learning_snapshot}}
@@ -137,27 +165,61 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
     end
   end
 
-  defp personal_key_present?(row) do
-    forbidden = [
-      :participant_id,
-      :participant_a_id,
-      :participant_b_id,
-      :conversation_id,
-      :message_id,
-      :reporter_context,
-      :review_notes,
-      "participant_id",
-      "participant_a_id",
-      "participant_b_id",
-      "conversation_id",
-      "message_id",
-      "reporter_context",
-      "review_notes"
-    ]
+  defp inspect_privacy(%Decimal{}), do: :safe
+  defp inspect_privacy(%Date{}), do: :safe
+  defp inspect_privacy(%DateTime{}), do: :safe
+  defp inspect_privacy(value) when is_struct(value), do: :unsupported
 
-    Enum.any?(forbidden, &Map.has_key?(row, &1)) or
-      Map.get(row, :contains_personal_data) == true or
-      Map.get(row, "contains_personal_data") == true
+  defp inspect_privacy(value) when is_map(value) do
+    value
+    |> Map.to_list()
+    |> inspect_entries()
+  end
+
+  defp inspect_privacy(value) when is_list(value) do
+    if Keyword.keyword?(value) do
+      inspect_entries(value)
+    else
+      inspect_sequence(value)
+    end
+  end
+
+  defp inspect_privacy(value)
+       when is_binary(value) or is_number(value) or is_boolean(value) or is_atom(value) or
+              is_nil(value),
+       do: :safe
+
+  defp inspect_privacy(_value), do: :unsupported
+
+  defp inspect_entries(entries) do
+    Enum.reduce_while(entries, :safe, fn
+      {key, nested}, :safe ->
+        cond do
+          key in @forbidden_personal_keys ->
+            {:halt, :forbidden}
+
+          key in @personal_data_markers and nested == true ->
+            {:halt, :forbidden}
+
+          not (is_atom(key) or is_binary(key)) ->
+            {:halt, :unsupported}
+
+          true ->
+            case inspect_privacy(nested) do
+              :safe -> {:cont, :safe}
+              result -> {:halt, result}
+            end
+        end
+    end)
+  end
+
+  defp inspect_sequence(values) do
+    Enum.reduce_while(values, :safe, fn value, :safe ->
+      case inspect_privacy(value) do
+        :safe -> {:cont, :safe}
+        result -> {:halt, result}
+      end
+    end)
   end
 
   defp normalize_values(%Decimal{} = value), do: Decimal.to_string(value, :normal)
@@ -168,7 +230,14 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
     Map.new(value, fn {key, item} -> {key, normalize_values(item)} end)
   end
 
-  defp normalize_values(value) when is_list(value), do: Enum.map(value, &normalize_values/1)
+  defp normalize_values(value) when is_list(value) do
+    if Keyword.keyword?(value) do
+      Map.new(value, fn {key, item} -> {key, normalize_values(item)} end)
+    else
+      Enum.map(value, &normalize_values/1)
+    end
+  end
+
   defp normalize_values(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_values(value), do: value
 
@@ -263,7 +332,7 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
               hypothesis: %{type: "string"},
               evidence: %{type: "string"},
               experiment: %{type: "string"},
-              confidence: %{type: "string", enum: ["low", "medium", "high"]}
+              confidence: %{type: "string", enum: ["low", "medium", "high"]
             },
             required: ["title", "hypothesis", "evidence", "experiment", "confidence"]
           }
