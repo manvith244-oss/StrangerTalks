@@ -26,6 +26,7 @@ jobs:
       - name: Run NET-003 hard-failure and authority regressions
         run: |
           node --test --test-concurrency=1 \
+            test/js/t05_net_003_credential_timeout_test.mjs \
             test/js/t05_net_003_ice_failure_test.mjs \
             test/js/t05_call_end_aba_closure_test.mjs \
             test/js/team6_media_gate_test.mjs \
