@@ -1,0 +1,254 @@
+name: T03 UX-001 Isolated Focus A-B Proof
+
+on:
+  push:
+    branches:
+      - validation/t03-ux-001-focus-ab
+
+permissions:
+  contents: read
+
+jobs:
+  focus-ab:
+    name: Focus ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: canonical
+            sha: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+          - name: candidate
+            sha: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      T03_TEST_SHA: ${{ matrix.sha }}
+      T03_TEST_NAME: ${{ matrix.name }}
+
+    steps:
+      - name: Checkout exact comparison SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.sha }}
+          fetch-depth: 0
+
+      - name: Prove exact identity and clean entry tree
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "T03_FOCUS_TARGET=$T03_TEST_NAME"
+          echo "T03_FOCUS_EXPECTED_SHA=$T03_TEST_SHA"
+          echo "T03_FOCUS_CHECKED_OUT_SHA=$actual"
+          test "$actual" = "$T03_TEST_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies and Chromium
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare fresh isolated database
+        run: |
+          set -euo pipefail
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start fresh exact-SHA Phoenix process
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > "/tmp/t03-focus-${T03_TEST_NAME}.log" 2>&1 &
+          echo $! > "/tmp/t03-focus-${T03_TEST_NAME}.pid"
+          for attempt in $(seq 1 45); do
+            pid="$(cat /tmp/t03-focus-${T03_TEST_NAME}.pid)"
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat "/tmp/t03-focus-${T03_TEST_NAME}.log"
+              exit 1
+            fi
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null; then
+              echo "T03_FOCUS_SERVER_READY=$T03_TEST_NAME"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "/tmp/t03-focus-${T03_TEST_NAME}.log"
+          exit 1
+
+      - name: Build identical validation-only focus probe
+        run: |
+          set -euo pipefail
+          mkdir -p "tmp/t03-focus-${T03_TEST_NAME}"
+          cat > tmp/t03_focus_ab.mjs <<'EOF'
+          import assert from "node:assert/strict"
+          import fs from "node:fs"
+          import path from "node:path"
+          import test from "node:test"
+          import {chromium} from "playwright"
+
+          const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const TARGET = process.env.T03_TEST_NAME
+          const WAIT = 20_000
+          const ARTIFACTS = path.resolve(`tmp/t03-focus-${TARGET}`)
+          fs.mkdirSync(ARTIFACTS, {recursive: true})
+
+          async function openFresh(browser, label) {
+            const context = await browser.newContext({viewport: {width: 1280, height: 800}})
+            const page = await context.newPage()
+            const errors = []
+            const failedRequests = []
+            page.on("pageerror", error => errors.push(error.message))
+            page.on("console", message => { if (message.type() === "error") errors.push(message.text()) })
+            page.on("requestfailed", request => failedRequests.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || "failed"}`))
+
+            const participantResponse = page.waitForResponse(response => {
+              try { return new URL(response.url()).pathname === "/api/participants" } catch (_error) { return false }
+            })
+            const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
+            assert.ok(response?.ok(), `${label}: root page loads`)
+            const issued = await participantResponse
+            console.log(`T03_FOCUS_${TARGET}_${label}_PARTICIPANT_ISSUANCE=${issued.status()}`)
+            assert.equal(issued.status(), 201, `${label}: fresh participant issuance must succeed`)
+
+            await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: WAIT})
+            await page.locator("button.door").first().waitFor({state: "visible", timeout: WAIT})
+            return {context, page, errors, failedRequests}
+          }
+
+          async function waitForQueue(page) {
+            await page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: WAIT})
+          }
+
+          test(`T03 isolated focus proof ${TARGET}`, {timeout: 90_000}, async () => {
+            const browser = await chromium.launch({headless: true})
+            let a
+            let b
+            try {
+              a = await openFresh(browser, "A")
+              b = await openFresh(browser, "B")
+              await a.page.locator("#conversation-language").selectOption("en")
+              await b.page.locator("#conversation-language").selectOption("en")
+
+              await a.page.getByRole("button", {name: /Advice/}).click()
+              await waitForQueue(a.page)
+              await b.page.getByRole("button", {name: /Advice/}).click()
+
+              await Promise.all([
+                a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: WAIT}),
+                b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: WAIT})
+              ])
+              console.log(`T03_FOCUS_${TARGET}_CONVERSATION_REACHED=true`)
+
+              const target = a.page.locator('section[data-screen="conversation"] #message-input')
+              assert.equal(await target.isVisible(), true, "message-input is visible in active Conversation")
+              assert.equal(await target.isEnabled(), true, "message-input is enabled in active Conversation")
+              await target.focus()
+
+              await a.page.locator('section[data-screen="conversation"]').evaluate(screen => {
+                screen.classList.toggle("arrival-focus-regression-probe")
+              })
+              await a.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+
+              const active = await a.page.evaluate(() => ({
+                id: document.activeElement?.id || "",
+                tag: document.activeElement?.tagName || "",
+                ariaLabel: document.activeElement?.getAttribute?.("aria-label") || ""
+              }))
+              console.log(`T03_FOCUS_${TARGET}_ACTIVE_ELEMENT=${JSON.stringify(active)}`)
+              await a.page.screenshot({path: path.join(ARTIFACTS, `${TARGET}-focus-result.png`), fullPage: false})
+
+              assert.equal(active.id, "message-input", "active Conversation retains message-input focus across the arrival-focus transition")
+              console.log(`T03_FOCUS_${TARGET}_ASSERTION=PASS`)
+              assert.deepEqual(a.errors, [], "participant A has no browser/console errors")
+              assert.deepEqual(a.failedRequests, [], "participant A has no failed requests")
+              assert.deepEqual(b.errors, [], "participant B has no browser/console errors")
+              assert.deepEqual(b.failedRequests, [], "participant B has no failed requests")
+            } finally {
+              await a?.context.close().catch(() => {})
+              await b?.context.close().catch(() => {})
+              await browser.close().catch(() => {})
+            }
+          })
+          EOF
+          test "$(git rev-parse HEAD)" = "$T03_TEST_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Run isolated real-Chromium focus proof
+        run: node --test --test-concurrency=1 tmp/t03_focus_ab.mjs
+
+      - name: Prove tested SHA again and clean exit tree
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "T03_FOCUS_FINAL_SHA=$actual"
+          test "$actual" = "$T03_TEST_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload focus evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t03-focus-${{ matrix.name }}-${{ github.run_id }}
+          path: tmp/t03-focus-${{ matrix.name }}/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Stop focus server
+        if: always()
+        run: |
+          if [ -f "/tmp/t03-focus-${T03_TEST_NAME}.pid" ]; then
+            pid="$(cat /tmp/t03-focus-${T03_TEST_NAME}.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Browser server log on failure
+        if: failure()
+        run: cat "/tmp/t03-focus-${T03_TEST_NAME}.log" || true
