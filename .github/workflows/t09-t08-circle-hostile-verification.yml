@@ -247,6 +247,7 @@ jobs:
                 candidates(3, :left, "left") ++ candidates(3, :right, "right")
 
               assert {:ok, %{circles: [], waiting: waiting}} = form(split)
+
               assert MapSet.new(Enum.map(waiting, & &1.participant_id)) ==
                        MapSet.new(Enum.map(split, & &1.participant_id))
             end
