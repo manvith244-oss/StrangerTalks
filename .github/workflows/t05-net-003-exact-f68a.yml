@@ -1,0 +1,310 @@
+name: T05 NET 003 Exact Successor Proof
+
+on:
+  push:
+    branches:
+      - team5/net-003-exact-proof-f68a
+
+permissions:
+  contents: read
+
+jobs:
+  adverse-network-exact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f68a039af2f1267e4222036e787e0954cf8f5266
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Exact identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "f68a039af2f1267e4222036e787e0954cf8f5266"
+          test "$(git rev-parse HEAD^)" = "77475e8fc42b4054db5f123bf96a97c9caa6392b"
+          test -z "$(git status --porcelain)"
+      - name: Run accepted NET-003 RED surface and inherited authority regressions
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/t05_net_003_credential_timeout_test.mjs \
+            test/js/t05_net_003_ice_failure_test.mjs \
+            test/js/t05_call_end_aba_closure_test.mjs \
+            test/js/team6_media_gate_test.mjs \
+            test/js/team4_media_authority_test.mjs \
+            test/js/team4_call_operation_race_test.mjs \
+            test/js/live_call_signal_queue_regression_test.mjs \
+            test/js/fx04_media_navigation_boundary_test.mjs \
+            test/js/live_call_test.mjs
+      - name: Create ephemeral hostile NET-003 matrix
+        run: |
+          cat > test/js/t05_net_003_ephemeral_exact_test.mjs <<'EOF'
+          import assert from "node:assert/strict"
+          import test from "node:test"
+          import {CALL_STATUS, LiveCallCoordinator} from "../../priv/static/assets/live_call.mjs"
+
+          function pushOk(payload = {}) {
+            return {receive(kind, cb) { if (kind === "ok") queueMicrotask(() => cb(payload)); return this }}
+          }
+          function pushError(payload = {reason: "failure"}) {
+            return {receive(kind, cb) { if (kind === "error") queueMicrotask(() => cb(payload)); return this }}
+          }
+          function controlledPush() {
+            const handlers = new Map()
+            return {handlers, receive(kind, cb) { handlers.set(kind, cb); return this }, fire(kind, payload) { handlers.get(kind)?.(payload) }}
+          }
+          const flush = async () => { await new Promise(r => setImmediate(r)); await new Promise(r => setImmediate(r)) }
+
+          test("fatal termination is exactly once even if the same attempt is spuriously rebound", () => {
+            const events = []
+            const coord = new LiveCallCoordinator({channel: {push(event, payload) { events.push({event, payload}); return pushOk() }}})
+            const pc1 = {close() {}}
+            coord.callAttemptId = "attempt-dedupe"
+            coord.mediaGeneration = 1
+            coord.status = CALL_STATUS.CONNECTING
+            coord.peerConnection = pc1
+            assert.equal(coord.fatalTerminateCurrentAttempt({callAttemptId: "attempt-dedupe", mediaGeneration: 1, peerConnection: pc1, reason: "ice_failed"}), true)
+
+            const pc2 = {close() {}}
+            coord.callAttemptId = "attempt-dedupe"
+            coord.mediaGeneration = 1
+            coord.status = CALL_STATUS.CONNECTING
+            coord.peerConnection = pc2
+            assert.equal(coord.fatalTerminateCurrentAttempt({callAttemptId: "attempt-dedupe", mediaGeneration: 1, peerConnection: pc2, reason: "connection_error"}), false)
+            assert.equal(events.filter(e => e.event === "call:end" && e.payload.call_attempt_id === "attempt-dedupe").length, 1)
+          })
+
+          test("fatal setup failure after a server attempt exists ends that exact attempt", async () => {
+            const originalRTC = globalThis.RTCPeerConnection
+            const events = []
+            let closed = false
+            class BrokenRTC {
+              constructor() { this.iceConnectionState = "new" }
+              close() { closed = true }
+            }
+            globalThis.RTCPeerConnection = BrokenRTC
+            try {
+              const coord = new LiveCallCoordinator({channel: {push(event, payload) {
+                events.push({event, payload})
+                if (event === "call:request_credentials") return pushOk({ice_servers: [{urls: ["turn:127.0.0.1:3478"]}]})
+                return pushOk()
+              }}})
+              coord.callAttemptId = "attempt-setup"
+              coord.mediaGeneration = 1
+              coord.status = CALL_STATUS.CONNECTING
+              await coord.initializeWebRTC(true)
+              assert.equal(closed, true)
+              assert.equal(coord.status, CALL_STATUS.TERMINAL)
+              assert.equal(events.filter(e => e.event === "call:end" && e.payload.call_attempt_id === "attempt-setup").length, 1)
+            } finally { if (originalRTC === undefined) delete globalThis.RTCPeerConnection; else globalThis.RTCPeerConnection = originalRTC }
+          })
+
+          test("pre-attempt setup failure cannot invent call:end", async () => {
+            const events = []
+            const coord = new LiveCallCoordinator({channel: {push(event, payload) { events.push({event, payload}); return pushError() }}})
+            coord.status = CALL_STATUS.CONNECTING
+            await coord.initializeWebRTC(true)
+            assert.equal(events.some(e => e.event === "call:end"), false)
+          })
+
+          test("credential error after an existing attempt terminates the exact attempt", async () => {
+            const events = []
+            const coord = new LiveCallCoordinator({channel: {push(event, payload) {
+              events.push({event, payload})
+              if (event === "call:request_credentials") return pushError({reason: "turn_down"})
+              return pushOk()
+            }}})
+            coord.callAttemptId = "attempt-cred-error"
+            coord.mediaGeneration = 1
+            coord.status = CALL_STATUS.CONNECTING
+            await coord.initializeWebRTC(true)
+            assert.equal(coord.status, CALL_STATUS.TERMINAL)
+            assert.equal(events.filter(e => e.event === "call:end" && e.payload.call_attempt_id === "attempt-cred-error").length, 1)
+          })
+
+          test("stale credential timeout from Call A cannot terminate current Call B", async () => {
+            const push = controlledPush()
+            const events = []
+            const coord = new LiveCallCoordinator({channel: {push(event, payload) { events.push({event, payload}); return push }}})
+            coord.callAttemptId = "attempt-a"
+            coord.mediaGeneration = 1
+            coord.status = CALL_STATUS.CONNECTING
+            const pending = coord.initializeWebRTC(true)
+            await flush()
+            assert.equal(push.handlers.has("timeout"), true)
+
+            const currentPc = {close() { throw new Error("Call B must survive stale timeout") }}
+            coord.callAttemptId = "attempt-b"
+            coord.mediaGeneration = 2
+            coord.status = CALL_STATUS.ACTIVE
+            coord.peerConnection = currentPc
+            push.fire("timeout")
+            await pending
+            assert.equal(coord.callAttemptId, "attempt-b")
+            assert.equal(coord.status, CALL_STATUS.ACTIVE)
+            assert.equal(coord.peerConnection, currentPc)
+            assert.equal(events.some(e => e.event === "call:end" && e.payload?.call_attempt_id === "attempt-b"), false)
+          })
+
+          test("required voice microphone denial terminates exact server attempt", async () => {
+            const originalRTC = globalThis.RTCPeerConnection
+            const originalNavigator = globalThis.navigator
+            const events = []
+            class RTC {
+              constructor() { this.iceConnectionState = "new"; this.senders = [] }
+              addTransceiver(kind) { const sender = {track: null, async replaceTrack(track) { this.track = track }}; this.senders.push(sender); return {sender, receiver: {track: {kind}}} }
+              getSenders() { return this.senders }
+              async createOffer() { return {type: "offer", sdp: "x"} }
+              async setLocalDescription(desc) { this.localDescription = desc }
+              close() { this.closed = true }
+            }
+            globalThis.RTCPeerConnection = RTC
+            Object.defineProperty(globalThis, "navigator", {configurable: true, value: {mediaDevices: {getUserMedia: async () => { const e = new Error("denied"); e.name = "NotAllowedError"; throw e }}}})
+            try {
+              const coord = new LiveCallCoordinator({channel: {push(event, payload) {
+                events.push({event, payload})
+                if (event === "call:request_credentials") return pushOk({ice_servers: [{urls: ["turn:127.0.0.1:3478"]}]})
+                return pushOk()
+              }}})
+              coord.callAttemptId = "attempt-voice-denied"
+              coord.mediaGeneration = 1
+              coord.status = CALL_STATUS.CONNECTING
+              coord.callType = "voice"
+              await coord.initializeWebRTC(true)
+              const pc = coord.peerConnection
+              pc.iceConnectionState = "connected"
+              pc.oniceconnectionstatechange()
+              await flush()
+              assert.equal(coord.status, CALL_STATUS.TERMINAL)
+              assert.equal(events.filter(e => e.event === "call:end" && e.payload.call_attempt_id === "attempt-voice-denied").length, 1)
+            } finally {
+              if (originalRTC === undefined) delete globalThis.RTCPeerConnection; else globalThis.RTCPeerConnection = originalRTC
+              if (originalNavigator === undefined) delete globalThis.navigator; else Object.defineProperty(globalThis, "navigator", {configurable: true, value: originalNavigator})
+            }
+          })
+          EOF
+          node --test --test-concurrency=1 test/js/t05_net_003_ephemeral_exact_test.mjs
+          rm test/js/t05_net_003_ephemeral_exact_test.mjs
+      - name: Hygiene and clean exact checkout
+        run: |
+          set -euo pipefail
+          git diff --check 77475e8fc42b4054db5f123bf96a97c9caa6392b...HEAD
+          test -z "$(git status --porcelain)"
+
+  local-relay-browser-exact:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      PORT: 4000
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f68a039af2f1267e4222036e787e0954cf8f5266
+          fetch-depth: 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Exact identity
+        run: test "$(git rev-parse HEAD)" = "f68a039af2f1267e4222036e787e0954cf8f5266"
+      - name: Install application and browser dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Start isolated coturn
+        run: |
+          set -euo pipefail
+          if ss -lntu | grep -Eq ':3478[[:space:]]'; then exit 1; fi
+          sudo apt-get update -qq
+          sudo apt-get install -y coturn
+          sudo systemctl stop coturn 2>/dev/null || true
+          sudo pkill -x turnserver 2>/dev/null || true
+          cat > /tmp/turnserver.conf <<'EOF'
+          listening-ip=127.0.0.1
+          relay-ip=127.0.0.1
+          listening-port=3478
+          min-port=49160
+          max-port=49200
+          fingerprint
+          use-auth-secret
+          static-auth-secret=team6-test-only-coturn-secret
+          realm=strangertalks.test
+          allow-loopback-peers
+          no-multicast-peers
+          no-cli
+          no-tls
+          no-dtls
+          EOF
+          sudo turnserver -c /tmp/turnserver.conf > /tmp/t05-net-coturn.log 2>&1 &
+          echo $! > /tmp/t05-net-coturn.pid
+          for attempt in $(seq 1 30); do
+            if sudo ss -lunp | grep ':3478' | grep -Fq 'turnserver'; then echo 'LOCAL_TURN_LISTENER=ready'; exit 0; fi
+            sleep 1
+          done
+          cat /tmp/t05-net-coturn.log
+          exit 1
+      - name: Prepare browser database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start Phoenix
+        run: |
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/t05-net-phoenix.log 2>&1 &
+          echo $! > /tmp/t05-net-phoenix.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/t05-net-phoenix.pid)" 2>/dev/null; then cat /tmp/t05-net-phoenix.log; exit 1; fi
+            sleep 1
+          done
+          cat /tmp/t05-net-phoenix.log
+          exit 1
+      - name: Real Chromium relay proof
+        run: |
+          node --test --test-concurrency=1 \
+            --test-name-pattern='Feature 1Q E2E-(RTV|REACTION|RING)' \
+            test/js/browser_e2e_test.mjs
+      - name: Provider and relay-only policy regressions
+        run: |
+          mix test test/strangertalks_new/team6_turn_provider_test.exs test/strangertalks_new/c11_policy_test.exs
+          node --test --test-concurrency=1 test/js/team6_media_gate_test.mjs
+          git diff --check 77475e8fc42b4054db5f123bf96a97c9caa6392b...HEAD
+          test -z "$(git status --porcelain)"
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -f /tmp/t05-net-phoenix.pid ]; then kill "$(cat /tmp/t05-net-phoenix.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/t05-net-coturn.pid ]; then sudo kill "$(cat /tmp/t05-net-coturn.pid)" 2>/dev/null || true; fi
