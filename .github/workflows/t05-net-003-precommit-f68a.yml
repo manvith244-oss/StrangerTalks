@@ -1,0 +1,79 @@
+name: T05 NET 003 Exact Precommit
+
+on:
+  push:
+    branches:
+      - team5/net-003-precommit-f68a
+
+permissions:
+  contents: read
+
+jobs:
+  exact-precommit:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f68a039af2f1267e4222036e787e0954cf8f5266
+          fetch-depth: 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Exact identity and clean input
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "f68a039af2f1267e4222036e787e0954cf8f5266"
+          test -z "$(git status --porcelain)"
+      - name: Install deps
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Full repository precommit
+        run: mix precommit
+      - name: Classify formatter side effects without broad ownership
+        run: |
+          set -euo pipefail
+          echo 'PRECOMMIT_STATUS_BEGIN'
+          git status --porcelain
+          echo 'PRECOMMIT_STATUS_END'
+          if git status --porcelain | grep -q 'priv/static/assets/live_call.mjs'; then
+            echo 'T05_CANDIDATE_FORMAT_DRIFT=YES'
+            exit 1
+          fi
+          dirty="$(git status --porcelain | sed 's/^...//' | sort)"
+          if [ -n "$dirty" ]; then
+            unexpected="$(printf '%s\n' "$dirty" | grep -Ev '^(lib/strangertalks_new/conversation_lifecycle/conversation_server\.ex|lib/strangertalks_new/reflections\.ex)$' || true)"
+            if [ -n "$unexpected" ]; then
+              echo 'UNCLASSIFIED_PRECOMMIT_DIRTY_PATHS:'
+              printf '%s\n' "$unexpected"
+              exit 1
+            fi
+            echo 'INHERITED_BASELINE_FORMAT_DRIFT=YES'
+            git diff -- lib/strangertalks_new/conversation_lifecycle/conversation_server.ex lib/strangertalks_new/reflections.ex
+            git restore -- lib/strangertalks_new/conversation_lifecycle/conversation_server.ex lib/strangertalks_new/reflections.ex
+          else
+            echo 'INHERITED_BASELINE_FORMAT_DRIFT=NO'
+          fi
+          git diff --check 77475e8fc42b4054db5f123bf96a97c9caa6392b...HEAD
+          test -z "$(git status --porcelain)"
+          echo 'T05_NET_003_PRECOMMIT=GREEN'
