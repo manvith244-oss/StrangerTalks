@@ -36,16 +36,15 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      EXPECTED_SHA: 6937f3c71e04ad006ae0b543f536179c5996d5f4
+      EXPECTED_SHA: 3a8c9fbee6e919d2986e67d86a7c2ee140936df4
 
     steps:
-      - name: Checkout exact T08 hostile RED snapshot
+      - name: Checkout exact T08 target-fix snapshot
         uses: actions/checkout@v4
         with:
           ref: ${{ env.EXPECTED_SHA }}
 
       - name: Prove checkout identity
-        id: identity
         shell: bash
         run: |
           set -euo pipefail
@@ -66,8 +65,11 @@ jobs:
           mix local.rebar --force
           mix deps.get
 
-      - name: Hostile proof formatting
-        run: mix format --check-formatted test/strangertalks_new/future_social/circle_formation_hostile_capacity_test.exs
+      - name: T08 formatting
+        run: |
+          mix format --check-formatted \
+            lib/strangertalks_new/future_social/circle_formation.ex \
+            test/strangertalks_new/future_social/circle_formation_hostile_capacity_test.exs
 
       - name: Frozen FUTURE-001 contract
         id: original
@@ -100,7 +102,7 @@ jobs:
       - name: Diff hygiene
         run: git diff --check
 
-      - name: Prove RED contract
+      - name: Prove target fix and isolate remaining envelope RED
         if: always()
         shell: bash
         env:
@@ -113,4 +115,5 @@ jobs:
           echo "FUTURE_002=$HOSTILE_SUMMARY exit=$HOSTILE_EXIT"
           test "$ORIGINAL_EXIT" = "0"
           test "$HOSTILE_EXIT" != "0"
-          echo "RED_PROOF_SHA=$EXPECTED_SHA"
+          test "$HOSTILE_SUMMARY" = "9 tests, 1 failure"
+          echo "TARGET_FIX_SHA=$EXPECTED_SHA"
