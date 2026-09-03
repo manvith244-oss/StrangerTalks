@@ -1,0 +1,96 @@
+name: T05 NET 003 Apply Fix
+
+on:
+  push:
+    branches:
+      - team5/net-003-fix-applier
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: team5/net-003-real-webrtc-proof
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Assert preserved RED parent
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "77475e8fc42b4054db5f123bf96a97c9caa6392b"
+          test -z "$(git status --porcelain)"
+      - name: Apply narrow fatal-attempt termination fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("priv/static/assets/live_call.mjs")
+          source = path.read_text()
+
+          def replace_once(old, new):
+              global source
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one replacement, found {count}: {old[:80]!r}")
+              source = source.replace(old, new, 1)
+
+          replace_once(
+              "    this.navigationGeneration = 0\n    this.navigationBlockedAttemptIds = new Set()\n",
+              "    this.navigationGeneration = 0\n    this.navigationBlockedAttemptIds = new Set()\n    this.fatalTerminatedAttemptIds = new Set()\n"
+          )
+
+          replace_once(
+              "activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection = this.peerConnection) {\n  return Boolean(\n    callAttemptId &&\n    this.callAttemptId === callAttemptId &&\n    this.mediaGeneration === mediaGeneration &&\n    this.status === CALL_STATUS.ACTIVE &&\n    (!peerConnection || this.peerConnection === peerConnection)\n  )\n}\n\n  // --- Channel Event Handlers ---\n",
+              "activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection = this.peerConnection) {\n  return Boolean(\n    callAttemptId &&\n    this.callAttemptId === callAttemptId &&\n    this.mediaGeneration === mediaGeneration &&\n    this.status === CALL_STATUS.ACTIVE &&\n    (!peerConnection || this.peerConnection === peerConnection)\n  )\n}\n\nfatalTerminateCurrentAttempt({callAttemptId, mediaGeneration, peerConnection = this.peerConnection, reason = \"connection_error\"} = {}) {\n  const attemptId = callAttemptId || this.callAttemptId\n  const generation = mediaGeneration ?? this.mediaGeneration\n  if (!this.mediaAttemptIsCurrent(attemptId, generation, peerConnection)) return false\n  if (this.fatalTerminatedAttemptIds.has(attemptId)) return false\n\n  this.fatalTerminatedAttemptIds.add(attemptId)\n  if (this.fatalTerminatedAttemptIds.size > 32) {\n    const oldest = this.fatalTerminatedAttemptIds.values().next().value\n    this.fatalTerminatedAttemptIds.delete(oldest)\n  }\n\n  this.teardown(reason)\n  this.channel?.push(\"call:end\", {call_attempt_id: attemptId})\n  return true\n}\n\n  // --- Channel Event Handlers ---\n"
+          )
+
+          replace_once(
+              "      this.channel.push(\"call:request_credentials\", { call_attempt_id: this.callAttemptId })\n        .receive(\"ok\", (creds) => {\n          this.credentials = creds\n          resolve(creds)\n        })\n        .receive(\"error\", reject)\n",
+              "      this.channel.push(\"call:request_credentials\", { call_attempt_id: this.callAttemptId })\n        .receive(\"ok\", (creds) => {\n          this.credentials = creds\n          resolve(creds)\n        })\n        .receive(\"error\", reject)\n        .receive(\"timeout\", () => reject(new Error(\"TURN credential request timed out\")))\n"
+          )
+
+          replace_once(
+              "  } catch (error) {\n    if (this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) {\n      this.onError(error)\n      this.teardown(\"connection_error\")\n    }\n  }\n}\n\nasync activateLocalMedia",
+              "  } catch (error) {\n    if (this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) {\n      this.onError(error)\n      this.fatalTerminateCurrentAttempt({\n        callAttemptId: setupAttemptId,\n        mediaGeneration: setupGeneration,\n        peerConnection,\n        reason: \"connection_error\"\n      })\n    }\n  }\n}\n\nasync activateLocalMedia"
+          )
+
+          replace_once(
+              "  } catch (error) {\n    if (this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)) {\n      this.onError(error)\n      this.teardown(\"media_permission_failed\")\n    }\n    return\n  }\n",
+              "  } catch (error) {\n    if (this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)) {\n      this.onError(error)\n      this.fatalTerminateCurrentAttempt({\n        callAttemptId,\n        mediaGeneration,\n        peerConnection,\n        reason: \"media_permission_failed\"\n      })\n    }\n    return\n  }\n"
+          )
+
+          replace_once(
+              "  } catch {\n    if (this.mediaAttemptIsCurrent(attemptId, generation, peerConnection)) this.teardown(\"ice_failed\")\n  }\n}\n",
+              "  } catch {\n    if (this.mediaAttemptIsCurrent(attemptId, generation, peerConnection)) {\n      this.fatalTerminateCurrentAttempt({\n        callAttemptId: attemptId,\n        mediaGeneration: generation,\n        peerConnection,\n        reason: \"ice_failed\"\n      })\n    }\n  }\n}\n"
+          )
+
+          path.write_text(source)
+          PY
+      - name: Prove focused RED surface turns GREEN before commit
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 \
+            test/js/t05_net_003_credential_timeout_test.mjs \
+            test/js/t05_net_003_ice_failure_test.mjs \
+            test/js/t05_call_end_aba_closure_test.mjs \
+            test/js/team6_media_gate_test.mjs \
+            test/js/team4_media_authority_test.mjs \
+            test/js/team4_call_operation_race_test.mjs \
+            test/js/live_call_signal_queue_regression_test.mjs
+          git diff --check
+          test "$(git status --porcelain | wc -l)" -eq 1
+          git status --porcelain | grep -Fx ' M priv/static/assets/live_call.mjs'
+      - name: Commit narrow successor and push without force
+        run: |
+          set -euo pipefail
+          git config user.name "StrangerTalks T05 CI"
+          git config user.email "actions@users.noreply.github.com"
+          git add priv/static/assets/live_call.mjs
+          git commit -m "fix(t05): terminate fatal local call attempts"
+          test "$(git rev-parse HEAD^)" = "77475e8fc42b4054db5f123bf96a97c9caa6392b"
+          git push origin HEAD:team5/net-003-real-webrtc-proof
