@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: t04-db-security-${{ github.sha }}
+  group: t04-db-security-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -84,9 +84,9 @@ jobs:
           END $$;
 
           ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public
-            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO anon, authenticated, service_role;
+            GRANT ALL PRIVILEGES ON TABLES TO anon, authenticated, service_role;
           ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public
-            GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO anon, authenticated, service_role;
+            GRANT ALL PRIVILEGES ON SEQUENCES TO anon, authenticated, service_role;
           SQL
 
       - name: Prepare database through exact repository migrations
