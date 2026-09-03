@@ -1,9 +1,9 @@
 name: T07 AI-003 Exact Verification
 
 on:
-  pull_request:
+  push:
     branches:
-      - release/prep-2026-08-22
+      - team7/ai-003-exact-verification
   workflow_dispatch:
 
 permissions:
@@ -31,14 +31,14 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      EXPECTED_SHA: 57198192ba970174c439a6f852aa37d51ab5a1ea
+      EXPECTED_SHA: f04aa0ffd746aab4c56f07873d2766a9117510f6
       CANONICAL_BASE: 423442915e37fd6aadd25bd1c6a300eed2b464f0
 
     steps:
       - name: Checkout exact T07 AI-003 candidate
         uses: actions/checkout@v4
         with:
-          ref: 57198192ba970174c439a6f852aa37d51ab5a1ea
+          ref: f04aa0ffd746aab4c56f07873d2766a9117510f6
           fetch-depth: 0
 
       - name: Prove exact checkout identity
