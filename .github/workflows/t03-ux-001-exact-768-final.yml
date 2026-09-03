@@ -1,0 +1,368 @@
+name: T03 UX-001 Final Exact 768 Proof
+
+on:
+  push:
+    branches:
+      - validation/t03-ux-001-768-final
+
+permissions:
+  contents: read
+
+jobs:
+  exact-768-final:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      T03_EXACT_SHA: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+
+    steps:
+      - name: Checkout exact frozen candidate
+        uses: actions/checkout@v4
+        with:
+          ref: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+          fetch-depth: 0
+
+      - name: Prove exact candidate and clean entry tree
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "T03_768_EXPECTED_SHA=$T03_EXACT_SHA"
+          echo "T03_768_CHECKED_OUT_SHA=$actual"
+          echo "T03_768_VIEWPORT=768x1024"
+          test "$actual" = "$T03_EXACT_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies and Chromium
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare fresh browser database
+        run: |
+          set -euo pipefail
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start exact-SHA Phoenix server
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/t03-768-final.log 2>&1 &
+          echo $! > /tmp/t03-768-final.pid
+          for attempt in $(seq 1 45); do
+            pid="$(cat /tmp/t03-768-final.pid)"
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat /tmp/t03-768-final.log
+              exit 1
+            fi
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null; then
+              echo "T03_768_SERVER_READY=true"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/t03-768-final.log
+          exit 1
+
+      - name: Build validation-only final 768 browser proof
+        run: |
+          set -euo pipefail
+          mkdir -p tmp/t03-768-final-artifacts
+          cat > tmp/t03_768_final.mjs <<'EOF'
+          import assert from "node:assert/strict"
+          import fs from "node:fs"
+          import path from "node:path"
+          import test from "node:test"
+          import {chromium} from "playwright"
+
+          const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const WAIT = 20_000
+          const ARTIFACTS = path.resolve("tmp/t03-768-final-artifacts")
+          fs.mkdirSync(ARTIFACTS, {recursive: true})
+
+          function mark(label) {
+            console.log(`T03_768_${label}=PASS`)
+          }
+
+          async function viewport(page, label) {
+            const v = await page.evaluate(() => ({
+              innerWidth,
+              innerHeight,
+              scrollX,
+              scrollY,
+              htmlWidth: document.documentElement.scrollWidth,
+              bodyWidth: document.body.scrollWidth
+            }))
+            console.log(`T03_768_VIEWPORT_${label}=${JSON.stringify(v)}`)
+            assert.equal(v.innerWidth, 768, `${label}: viewport width is exactly 768`)
+            assert.equal(v.innerHeight, 1024, `${label}: viewport height is exactly 1024`)
+            assert.ok(v.htmlWidth <= 769, `${label}: document has no horizontal overflow`)
+            assert.ok(v.bodyWidth <= 769, `${label}: body has no horizontal overflow`)
+          }
+
+          async function usable(page, locator, label) {
+            const visible = await locator.isVisible()
+            const enabled = visible ? await locator.isEnabled() : false
+            const box = visible ? await locator.boundingBox() : null
+            console.log(`T03_768_CONTROL_${label}=${JSON.stringify({visible, enabled, box})}`)
+            assert.equal(visible, true, `${label}: visible`)
+            assert.equal(enabled, true, `${label}: enabled`)
+            assert.ok(box, `${label}: rendered`)
+            assert.ok(box.x >= -1 && box.x + box.width <= 769, `${label}: inside 768px width`)
+            assert.ok(box.y >= -1 && box.y < 1024, `${label}: begins inside 1024px viewport`)
+          }
+
+          async function boot(browser, label) {
+            const context = await browser.newContext({viewport: {width: 768, height: 1024}})
+            const page = await context.newPage()
+            const errors = []
+            const failedRequests = []
+            page.on("pageerror", error => errors.push(error.message))
+            page.on("console", message => { if (message.type() === "error") errors.push(message.text()) })
+            page.on("requestfailed", request => failedRequests.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || "failed"}`))
+
+            const participantResponse = page.waitForResponse(response => {
+              try { return new URL(response.url()).pathname === "/api/participants" } catch (_error) { return false }
+            })
+            const root = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
+            assert.ok(root?.ok(), `${label}: root loads`)
+            const issued = await participantResponse
+            console.log(`T03_768_${label}_PARTICIPANT_ISSUANCE=${issued.status()}`)
+            assert.equal(issued.status(), 201, `${label}: participant issuance succeeds without bypass`)
+            await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: WAIT})
+            await page.locator("button.door").first().waitFor({state: "visible", timeout: WAIT})
+            return {context, page, errors, failedRequests}
+          }
+
+          async function endConversation(page) {
+            const actions = page.locator("details.overflow")
+            if ((await actions.getAttribute("open")) === null) await actions.locator("summary").click()
+            await page.locator("#end-conversation").click()
+            await page.locator("#end-confirmation-dialog").waitFor({state: "visible", timeout: WAIT})
+            await page.locator("#end-confirm").click()
+          }
+
+          async function records(page) {
+            return page.evaluate(async () => (await import("/assets/local_data.mjs")).listRecords())
+          }
+
+          test("T03 UX-001 final exact 768x1024 real-Chromium closure path", {timeout: 150_000}, async () => {
+            const browser = await chromium.launch({headless: true})
+            let a
+            let b
+            try {
+              a = await boot(browser, "A")
+              b = await boot(browser, "B")
+
+              await viewport(a.page, "ARRIVAL")
+              await usable(a.page, a.page.locator("#conversation-language"), "ARRIVAL_LANGUAGE")
+              await usable(a.page, a.page.locator("button.door").first(), "ARRIVAL_DOOR")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "01-arrival-768x1024.png"), fullPage: true})
+              mark("ARRIVAL")
+
+              await a.page.locator("#conversation-language").selectOption("en")
+              await b.page.locator("#conversation-language").selectOption("en")
+              await a.page.locator('button.door:has-text("Advice")').click()
+              await a.page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: WAIT})
+              await a.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: WAIT})
+              await viewport(a.page, "QUEUE")
+              await usable(a.page, a.page.locator("#leave-queue"), "QUEUE_LEAVE")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "02-queue-768x1024.png"), fullPage: true})
+              mark("QUEUE")
+
+              await b.page.locator('button.door:has-text("Advice")').click()
+              await Promise.all([
+                a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: WAIT}),
+                b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: WAIT})
+              ])
+              console.log("T03_768_CONVERSATION_REACHED=true")
+              await viewport(a.page, "CONVERSATION")
+              await usable(a.page, a.page.locator("#message-input"), "CONVERSATION_COMPOSER")
+              const sendButton = a.page.getByRole("button", {name: "Send message", exact: true})
+              await usable(a.page, sendButton, "CONVERSATION_SEND")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "03-conversation-768x1024.png"), fullPage: true})
+
+              await a.page.locator("#message-input").fill("T03 exact 768 retained message")
+              await sendButton.click()
+              await b.page.locator("#messages li", {hasText: "T03 exact 768 retained message"}).waitFor({state: "visible", timeout: WAIT})
+              mark("CONVERSATION")
+
+              await endConversation(a.page)
+              await Promise.all([
+                a.page.locator('section[data-screen="ended"].active').waitFor({state: "visible", timeout: WAIT}),
+                b.page.locator('section[data-screen="ended"].active').waitFor({state: "visible", timeout: WAIT})
+              ])
+              assert.equal(new URL(a.page.url()).pathname, "/conversation/ended", "terminal route is canonical")
+              await viewport(a.page, "TERMINAL")
+              await usable(a.page, a.page.locator("#keep-conversation"), "TERMINAL_KEEP")
+              await usable(a.page, a.page.locator("#fade-conversation"), "TERMINAL_FADE")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "04-terminal-768x1024.png"), fullPage: true})
+              mark("TERMINAL")
+
+              await Promise.all([
+                a.page.locator("#keep-conversation").click(),
+                b.page.locator("#keep-conversation").click()
+              ])
+              await Promise.all([
+                a.page.locator('section[data-screen="chats"].active').waitFor({state: "visible", timeout: WAIT}),
+                b.page.locator('section[data-screen="chats"].active').waitFor({state: "visible", timeout: WAIT})
+              ])
+
+              const kept = await records(a.page)
+              const keptConversation = kept.find(record => record.type === "local_conversation" && record.value?.status === "kept")
+              assert.ok(keptConversation, "retention creates a kept local Conversation")
+              const conversationId = keptConversation.value.conversation_id
+              assert.ok(kept.some(record => record.type === "local_message" && record.value?.conversation_id === conversationId && record.value?.content === "T03 exact 768 retained message"), "retained history contains sent message")
+              console.log(`T03_768_RETAINED_CONVERSATION_ID=${conversationId}`)
+              await viewport(a.page, "RETENTION_ENTRY")
+              const openLocal = a.page.getByRole("button", {name: /Open local copy/})
+              await usable(a.page, openLocal, "OPEN_LOCAL_COPY")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "05-retention-entry-768x1024.png"), fullPage: true})
+              mark("RETENTION_HISTORY_ENTRY")
+
+              await openLocal.click()
+              await a.page.locator('section[data-screen="history"].active').waitFor({state: "visible", timeout: WAIT})
+              assert.equal(new URL(a.page.url()).pathname, `/chats/${conversationId}`, "historical return uses retained route")
+              assert.match(await a.page.locator(".local-copy-banner").innerText(), /not an active Conversation/i, "historical copy is marked non-live")
+              assert.equal(await a.page.locator('section[data-screen="history"] #message-form').count(), 0, "historical copy has no live composer")
+              await viewport(a.page, "HISTORICAL_RETURN")
+              await usable(a.page, a.page.locator("#history-delete"), "HISTORY_DELETE")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "06-historical-return-768x1024.png"), fullPage: true})
+              mark("HISTORICAL_RETURN")
+
+              a.page.once("dialog", dialog => dialog.accept())
+              await a.page.locator("#history-delete").click()
+              await a.page.locator('section[data-screen="chats"].active').waitFor({state: "visible", timeout: WAIT})
+              assert.equal(new URL(a.page.url()).pathname, "/chats", "delete returns to canonical Chats route")
+              assert.equal(await a.page.locator('section[data-screen="history"].active').count(), 0, "deleted history screen is inactive")
+              await viewport(a.page, "POST_DELETE")
+              await a.page.screenshot({path: path.join(ARTIFACTS, "07-delete-route-768x1024.png"), fullPage: true})
+              mark("DELETE_ROUTE")
+
+              assert.deepEqual(a.errors, [], "participant A has no browser/console errors")
+              assert.deepEqual(a.failedRequests, [], "participant A has no failed requests")
+              assert.deepEqual(b.errors, [], "participant B has no browser/console errors")
+              assert.deepEqual(b.failedRequests, [], "participant B has no failed requests")
+              mark("FULL_PATH")
+            } finally {
+              await a?.context.close().catch(() => {})
+              await b?.context.close().catch(() => {})
+              await browser.close().catch(() => {})
+            }
+          })
+          EOF
+          test "$(git rev-parse HEAD)" = "$T03_EXACT_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Run final exact 768x1024 real Chromium path
+        id: full
+        continue-on-error: true
+        run: node --test --test-concurrency=1 tmp/t03_768_final.mjs
+
+      - name: Re-run historical-delete regression at exact 768x1024
+        id: history
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path("test/js/t03_history_route_browser_test.mjs").read_text()
+          old = "{width: 390, height: 844}"
+          new = "{width: 768, height: 1024}"
+          if old not in source:
+              raise SystemExit("expected historical-route viewport anchor not found")
+          Path("tmp/t03_768_history_route.mjs").write_text(source.replace(old, new, 1))
+          PY
+          node --test --test-concurrency=1 tmp/t03_768_history_route.mjs
+
+      - name: Prove exact candidate and clean exit tree
+        if: always()
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "T03_768_FINAL_SHA=$actual"
+          echo "T03_768_FINAL_VIEWPORT=768x1024"
+          test "$actual" = "$T03_EXACT_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Upload final exact-768 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t03-ux-001-final-768-${{ github.run_id }}
+          path: tmp/t03-768-final-artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Stop browser server
+        if: always()
+        run: |
+          if [ -f /tmp/t03-768-final.pid ]; then
+            pid="$(cat /tmp/t03-768-final.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Browser server log on failure
+        if: always()
+        run: |
+          if [ "${{ steps.full.outcome }}" != "success" ] || [ "${{ steps.history.outcome }}" != "success" ]; then
+            cat /tmp/t03-768-final.log || true
+          fi
+
+      - name: Enforce final exact-768 verdict
+        if: always()
+        run: |
+          set -euo pipefail
+          echo "T03_768_FULL_OUTCOME=${{ steps.full.outcome }}"
+          echo "T03_768_HISTORY_OUTCOME=${{ steps.history.outcome }}"
+          test "${{ steps.full.outcome }}" = "success"
+          test "${{ steps.history.outcome }}" = "success"
+          echo "T03_768_RESULT=PASS"
