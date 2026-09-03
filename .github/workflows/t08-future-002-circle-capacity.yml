@@ -1,5 +1,8 @@
 name: T08 Future 002 Circle Capacity Closure Gate
 
+# Closure rerun after removal of an accidental non-packet scratch file.
+# This comment changes no kernel, hostile-proof, or acceptance semantics.
+
 on:
   push:
     branches:
