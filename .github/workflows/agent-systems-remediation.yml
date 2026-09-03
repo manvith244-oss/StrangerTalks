@@ -33,16 +33,22 @@ jobs:
       T07_REVIEWED_SHA: 492fae85c54d91f9c88d0574900aef3479e0a2fe
 
     steps:
-      - name: Checkout diagnostic child of exact T07 candidate
+      - name: Checkout diagnostic descendant of exact T07 candidate
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Prove diagnostic parent is exact frozen T07 candidate
+      - name: Prove exact T07 ancestry and diagnostic-only diff
         run: |
           set -euo pipefail
-          parent=$(git rev-parse HEAD~2)
-          test "$parent" = "$T07_REVIEWED_SHA"
-          echo "T07_REVIEWED_SHA=$parent"
-          git diff --name-only "$T07_REVIEWED_SHA"..HEAD
+          git merge-base --is-ancestor "$T07_REVIEWED_SHA" HEAD
+          mapfile -t changed < <(git diff --name-only "$T07_REVIEWED_SHA"..HEAD | sort)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = ".github/workflows/agent-systems-remediation.yml"
+          test "${changed[1]}" = "test/strangertalks_new/t04_aireview_001_hostile_proof_test.exs"
+          test "$(git rev-parse "$T07_REVIEWED_SHA^{tree}")" = "854ca41b3c99014b6068975eeee9a16eedf29777"
+          echo "T07_REVIEWED_SHA=$T07_REVIEWED_SHA"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
