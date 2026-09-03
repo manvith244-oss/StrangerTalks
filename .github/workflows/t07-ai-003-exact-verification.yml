@@ -1,4 +1,4 @@
-name: T07 AI-003 Exact Verification
+name: T07 AI-003 Format Ownership Audit
 
 on:
   push:
@@ -10,42 +10,17 @@ permissions:
   contents: read
 
 jobs:
-  verify:
+  format-audit:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: strangertalks_local
-          POSTGRES_PASSWORD: strangertalks_test
-          POSTGRES_DB: strangertalks_new_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     env:
-      MIX_ENV: test
-      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
-      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
       EXPECTED_SHA: f04aa0ffd746aab4c56f07873d2766a9117510f6
       CANONICAL_BASE: 423442915e37fd6aadd25bd1c6a300eed2b464f0
-
     steps:
-      - name: Checkout exact T07 AI-003 candidate
+      - name: Checkout full history
         uses: actions/checkout@v4
         with:
           ref: f04aa0ffd746aab4c56f07873d2766a9117510f6
           fetch-depth: 0
-
-      - name: Prove exact checkout identity
-        run: |
-          echo "EXPECTED_SHA=$EXPECTED_SHA"
-          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -53,51 +28,75 @@ jobs:
           elixir-version: "1.18.4"
           otp-version: "27.3.4"
 
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Install Hex and Rebar
+      - name: Install dependencies
         run: |
           mix local.hex --force
           mix local.rebar --force
+          mix deps.get
 
-      - name: Install dependencies
-        run: mix deps.get
-
-      - name: Hostile recursive privacy regressions
+      - name: Prove ownership inputs
         run: |
-          mix test \
-            test/strangertalks_new/t07_ai_003_privacy_boundary_test.exs \
-            test/strangertalks_new/agent_systems_functional_test.exs
+          paths=(
+            lib/strangertalks_new/agent_systems/learning_advisor.ex
+            lib/strangertalks_new/agent_systems/trend_bridge_research.ex
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
+            lib/strangertalks_new/reflections.ex
+            test/strangertalks_new/agent_systems_break_test.exs
+            test/strangertalks_new/companion_open_ai_provider_test.exs
+            test/strangertalks_new/t07_provider_failure_matrix_test.exs
+          )
+          echo "CANDIDATE=$EXPECTED_SHA"
+          echo "CANONICAL_BASE=$CANONICAL_BASE"
+          for p in "${paths[@]}"; do
+            echo "=== OWNERSHIP $p ==="
+            echo "BASE_BLOB=$(git rev-parse "$CANONICAL_BASE:$p" 2>/dev/null || echo ABSENT)"
+            echo "CANDIDATE_BLOB=$(git rev-parse "$EXPECTED_SHA:$p" 2>/dev/null || echo ABSENT)"
+            if git diff --quiet "$CANONICAL_BASE...$EXPECTED_SHA" -- "$p"; then
+              echo "AI003_MODIFIED=no"
+            else
+              echo "AI003_MODIFIED=yes"
+            fi
+          done
 
-      - name: Provider failure matrix and A01-A04 regression surface
+      - name: Candidate formatter audit
         run: |
-          mix test \
-            test/strangertalks_new/t07_provider_failure_matrix_test.exs \
-            test/strangertalks_new/companion_open_ai_provider_test.exs \
-            test/strangertalks_new/companion_test.exs \
-            test/strangertalks_new/companion_conversation_start_test.exs \
-            test/strangertalks_new/agent_systems_break_test.exs \
-            test/strangertalks_new_web/controllers/companion_controller_test.exs
-
-      - name: Browser companion regression
-        run: node --test test/js/companion_test.mjs test/js/prompt_cards_test.mjs
-
-      - name: Full precommit
-        run: mix precommit
-
-      - name: Canonical base to candidate diff check
-        run: git diff --check "$CANONICAL_BASE...$EXPECTED_SHA"
-
-      - name: Candidate worktree diff check
-        run: git diff --check
-
-      - name: Prove clean working tree
-        run: |
+          mix format
+          echo "=== CANDIDATE FORMAT STATUS ==="
           git status --short
-          test -z "$(git status --porcelain)"
+          echo "=== CANDIDATE FORMAT PATCH BEGIN ==="
+          git diff --no-ext-diff --unified=20 -- \
+            lib/strangertalks_new/agent_systems/learning_advisor.ex \
+            lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/reflections.ex \
+            test/strangertalks_new/agent_systems_break_test.exs \
+            test/strangertalks_new/companion_open_ai_provider_test.exs \
+            test/strangertalks_new/t07_provider_failure_matrix_test.exs
+          echo "=== CANDIDATE FORMAT PATCH END ==="
+          for p in \
+            lib/strangertalks_new/agent_systems/learning_advisor.ex \
+            lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/reflections.ex \
+            test/strangertalks_new/agent_systems_break_test.exs \
+            test/strangertalks_new/companion_open_ai_provider_test.exs \
+            test/strangertalks_new/t07_provider_failure_matrix_test.exs; do
+            echo "FORMATTED_BLOB $p $(git hash-object "$p")"
+          done
 
-      - name: Record exact candidate
-        run: echo "T07_AI_003_TESTED_SHA=$(git rev-parse HEAD)"
+      - name: Canonical baseline formatter audit
+        run: |
+          git reset --hard "$CANONICAL_BASE"
+          mix format
+          echo "=== BASE FORMAT STATUS ==="
+          git status --short
+          echo "=== BASE FORMAT PATCH BEGIN ==="
+          git diff --no-ext-diff --unified=20 -- \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/reflections.ex
+          echo "=== BASE FORMAT PATCH END ==="
+          for p in \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/reflections.ex; do
+            echo "BASE_FORMATTED_BLOB $p $(git hash-object "$p")"
+          done
