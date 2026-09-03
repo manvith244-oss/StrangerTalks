@@ -1,0 +1,408 @@
+name: T03 PRIV-002 retention privacy copy apply
+
+on:
+  push:
+    branches:
+      - validation/t03-priv-002-copy-apply
+
+permissions:
+  contents: write
+
+concurrency:
+  group: t03-priv-002-copy-apply
+  cancel-in-progress: false
+
+env:
+  MIX_ENV: test
+  PORT: 4000
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+  PRODUCT_BRANCH: team3/retention-privacy-copy-authority-002
+  EXPECTED_BASE: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout exact T03 successor branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PRODUCT_BRANCH }}
+          fetch-depth: 0
+
+      - name: Prove untouched frozen base
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "T03_PRIV_002_ENTRY_SHA=$actual"
+          echo "T03_PRIV_002_EXPECTED_BASE=$EXPECTED_BASE"
+          test "$actual" = "$EXPECTED_BASE"
+          test -z "$(git status --porcelain)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies and Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Add focused PRIV-002 contract and prove RED baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > test/js/t03_privacy_retention_copy_test.mjs <<'EOF'
+          import assert from "node:assert/strict"
+          import {readFileSync} from "node:fs"
+          import test from "node:test"
+
+          const html = readFileSync(new URL("../../priv/static/index.html", import.meta.url), "utf8")
+          const app = readFileSync(new URL("../../priv/static/assets/app.js", import.meta.url), "utf8")
+
+          const ordinaryCopy = "This is a temporary Conversation, not a permanent chat-history thread."
+          const localCopy = "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary."
+          const safetyScheduleCopy = "Limited safety evidence is minimized or deleted on its own safety-retention schedule."
+          const safetySeparationCopy = "Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
+          const mediaSafetyCopy = "If you report a View-Once photo while StrangerTalks still has its server-owned safety copy, the photo may be stored separately as limited safety evidence. That sensitive evidence is minimized or deleted on its own safety-retention schedule."
+
+          function lifetimeReportsCopy() {
+            return html.match(/<section aria-labelledby="lifetime-reports-title">[\s\S]*?<\/section>/)?.[0] || ""
+          }
+
+          function staticReportCopy() {
+            return html.match(/<form id="report-form"[\s\S]*?<\/form>/)?.[0] || ""
+          }
+
+          function dynamicReportCopy() {
+            return app.match(/reportForm\.insertAdjacentHTML\("afterbegin",[\s\S]*?\)\n/)?.[0] || ""
+          }
+
+          test("T03 PRIV-002 distinguishes ordinary, participant-local, and separately authorized safety retention", () => {
+            const lifetime = lifetimeReportsCopy()
+            const staticReport = staticReportCopy()
+            const dynamicReport = dynamicReportCopy()
+
+            assert.ok(html.includes(ordinaryCopy), "ordinary live Conversation is not described as permanent history")
+            assert.ok(html.includes(localCopy), "participant-retained local copy has its own local lifetime and Fade boundary")
+            assert.ok(lifetime.includes(safetyScheduleCopy), "lifetime dialog describes bounded safety-evidence cleanup")
+            assert.ok(lifetime.includes(safetySeparationCopy), "lifetime dialog separates Unsend/Fade from safety authority")
+            assert.ok(staticReport.includes(mediaSafetyCopy), "View-Once report disclosure describes limited safety evidence")
+            assert.ok(dynamicReport.includes(safetyScheduleCopy), "rendered report disclosure describes bounded safety-evidence cleanup")
+            assert.ok(dynamicReport.includes(safetySeparationCopy), "rendered report disclosure separates participant disappearance from safety authority")
+          })
+
+          test("T03 PRIV-002 user-facing privacy surfaces reject stale indefinite and unsupported legal guarantees", () => {
+            const uiCopy = [lifetimeReportsCopy(), staticReportCopy(), dynamicReportCopy()].join("\n")
+            assert.doesNotMatch(uiCopy, /no automatic expiry|no automatic cleanup|no automatic expiry or cleanup/i)
+            assert.doesNotMatch(uiCopy, /fully compliant|legally required for|we never retain anything|deletion is immediate everywhere/i)
+          })
+          EOF
+
+          set +e
+          node --test test/js/t03_privacy_retention_copy_test.mjs > /tmp/t03-priv-002-red.log 2>&1
+          red_status=$?
+          set -e
+          cat /tmp/t03-priv-002-red.log
+          if [ "$red_status" -eq 0 ]; then
+            echo "Expected focused PRIV-002 test to fail against frozen stale copy"
+            exit 1
+          fi
+          grep -Eq "participant-retained local copy|bounded safety-evidence cleanup|View-Once report disclosure" /tmp/t03-priv-002-red.log
+          echo "T03_PRIV_002_TDD_RED=PROVEN"
+
+      - name: Apply exact T04-authorized copy correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path("priv/static/index.html"): [
+                  (
+                      "Some information already stored on a participant's own device can have a separate local lifetime.",
+                      "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary."
+                  ),
+                  (
+                      "If you report a View-Once photo while StrangerTalks still has its server-owned safety copy, the photo may be stored separately as safety evidence. Safety reports currently have no automatic expiry or cleanup.",
+                      "If you report a View-Once photo while StrangerTalks still has its server-owned safety copy, the photo may be stored separately as limited safety evidence. That sensitive evidence is minimized or deleted on its own safety-retention schedule."
+                  ),
+                  (
+                      "StrangerTalks currently has no automatic expiry or cleanup for stored report and safety-review records.",
+                      "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
+                  ),
+              ],
+              Path("priv/static/assets/app.js"): [
+                  (
+                      "Stored report and safety-review records currently have no automatic expiry or cleanup.",
+                      "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
+                  ),
+              ],
+              Path("test/js/ephemeral_conversation_ux_test.mjs"): [
+                  (
+                      "Some information already stored on a participant's own device can have a separate local lifetime.",
+                      "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary."
+                  ),
+                  (
+                      "StrangerTalks currently has no automatic expiry or cleanup for stored report and safety-review records.",
+                      "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
+                  ),
+                  (
+                      "Stored report and safety-review records currently have no automatic expiry or cleanup.",
+                      "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
+                  ),
+              ],
+              Path("test/js/message_unsend_test.mjs"): [
+                  (
+                      "narrow 1L amendment locks the approved safety disclosure and existing no-expiry truth",
+                      "T03 PRIV-002 keeps the approved Unsend disclosure and bounded safety-retention truth"
+                  ),
+                  (
+                      "Stored report and safety-review records currently have no automatic expiry or cleanup.",
+                      "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
+                  ),
+              ],
+          }
+
+          for path, pairs in replacements.items():
+              text = path.read_text()
+              for old, new in pairs:
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f"{path}: expected exactly one occurrence of {old!r}, found {count}")
+                  text = text.replace(old, new)
+              path.write_text(text)
+          PY
+
+          echo "T03_PRIV_002_CHANGED_PATHS_PRETEST:"
+          git status --short
+
+      - name: Run focused and relevant frontend regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test \
+            test/js/t03_privacy_retention_copy_test.mjs \
+            test/js/ephemeral_conversation_ux_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/local_data_test.mjs \
+            test/js/navigation_history_test.mjs \
+            test/js/route_contract_test.mjs
+          echo "T03_PRIV_002_FRONTEND_REGRESSIONS=PASS"
+
+      - name: Run T04 authority regressions consumed by copy
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test \
+            test/strangertalks_new/retention_policy_test.exs \
+            test/strangertalks_new/retention_cleanup_test.exs \
+            test/strangertalks_new/conversation_unsend_report_safety_test.exs
+          echo "T03_PRIV_002_T04_AUTHORITY_REGRESSIONS=PASS"
+
+      - name: Start fresh Phoenix for rendered privacy proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/t03-priv-002-server.log 2>&1 &
+          echo $! > /tmp/t03-priv-002-server.pid
+          for attempt in $(seq 1 45); do
+            pid="$(cat /tmp/t03-priv-002-server.pid)"
+            if ! kill -0 "$pid" 2>/dev/null; then cat /tmp/t03-priv-002-server.log; exit 1; fi
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null; then echo "T03_PRIV_002_SERVER_READY=true"; exit 0; fi
+            sleep 1
+          done
+          cat /tmp/t03-priv-002-server.log
+          exit 1
+
+      - name: Prove rendered lifetime and report privacy copy in Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/t03-priv-002-browser.mjs <<'EOF'
+          import assert from "node:assert/strict"
+          import {chromium} from "playwright"
+
+          const base = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const localCopy = "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary."
+          const safetySchedule = "Limited safety evidence is minimized or deleted on its own safety-retention schedule."
+          const safetySeparation = "Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
+
+          async function boot(browser, label) {
+            const context = await browser.newContext({viewport: {width: 768, height: 1024}})
+            const page = await context.newPage()
+            const participantResponse = page.waitForResponse(response => {
+              try { return new URL(response.url()).pathname === "/api/participants" } catch { return false }
+            })
+            const response = await page.goto(base, {waitUntil: "domcontentloaded"})
+            assert.ok(response?.ok(), `${label}: root loads`)
+            const issued = await participantResponse
+            assert.equal(issued.status(), 201, `${label}: participant issuance is 201`)
+            await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: 20000})
+            await page.locator("#conversation-language").selectOption("en")
+            return {context, page}
+          }
+
+          const browser = await chromium.launch({headless: true})
+          const a = await boot(browser, "A")
+          const b = await boot(browser, "B")
+          try {
+            await a.page.locator('button.door:has-text("Advice")').click()
+            await a.page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: 20000})
+            await b.page.locator('button.door:has-text("Advice")').click()
+            await Promise.all([
+              a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 20000}),
+              b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 20000})
+            ])
+
+            await a.page.locator("#message-input").waitFor({state: "visible", timeout: 20000})
+            await a.page.waitForTimeout(300)
+            assert.equal(await a.page.evaluate(() => document.activeElement?.id), "message-input", "Conversation focus remains on composer")
+
+            await a.page.locator('section[data-screen="conversation"] [data-lifetime-details]').click()
+            const lifetime = a.page.locator("#lifetime-details-dialog")
+            await lifetime.waitFor({state: "visible", timeout: 10000})
+            const lifetimeText = await lifetime.innerText()
+            assert.match(lifetimeText, /temporary Conversation, not a permanent chat-history thread/i)
+            assert.ok(lifetimeText.includes(localCopy), "rendered lifetime dialog distinguishes participant-local retention")
+            assert.ok(lifetimeText.includes(safetySchedule), "rendered lifetime dialog describes bounded safety cleanup")
+            assert.ok(lifetimeText.includes(safetySeparation), "rendered lifetime dialog separates Unsend/Fade from safety authority")
+            assert.doesNotMatch(lifetimeText, /no automatic expiry|no automatic cleanup/i)
+            await a.page.locator("#lifetime-details-close").click()
+
+            await a.page.locator("#report-open").click()
+            const report = a.page.locator("#report-form")
+            await report.waitFor({state: "visible", timeout: 10000})
+            const reportText = await report.innerText()
+            assert.match(reportText, /does not automatically save the ordinary Conversation transcript/i)
+            assert.ok(reportText.includes(safetySchedule), "rendered report form describes bounded safety cleanup")
+            assert.ok(reportText.includes(safetySeparation), "rendered report form separates participant disappearance from safety authority")
+            assert.match(reportText, /stored separately as limited safety evidence/i)
+            assert.doesNotMatch(reportText, /no automatic expiry|no automatic cleanup/i)
+            assert.doesNotMatch(reportText, /fully compliant|legally required for|we never retain anything|deletion is immediate everywhere/i)
+
+            console.log("T03_PRIV_002_RENDERED_LIFETIME=PASS")
+            console.log("T03_PRIV_002_RENDERED_REPORT=PASS")
+            console.log("T03_PRIV_002_FOCUS_PRESERVED=PASS")
+          } finally {
+            await a.context.close()
+            await b.context.close()
+            await browser.close()
+          }
+          EOF
+          node /tmp/t03-priv-002-browser.mjs
+
+      - name: Restart Phoenix and prove historical-delete regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          pid="$(cat /tmp/t03-priv-002-server.pid)"
+          kill "$pid" 2>/dev/null || true
+          for attempt in $(seq 1 20); do
+            if ! kill -0 "$pid" 2>/dev/null; then break; fi
+            sleep 0.25
+          done
+          if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/t03-priv-002-history-server.log 2>&1 &
+          echo $! > /tmp/t03-priv-002-server.pid
+          for attempt in $(seq 1 45); do
+            pid="$(cat /tmp/t03-priv-002-server.pid)"
+            if ! kill -0 "$pid" 2>/dev/null; then cat /tmp/t03-priv-002-history-server.log; exit 1; fi
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null; then break; fi
+            sleep 1
+          done
+          node --test test/js/t03_history_route_browser_test.mjs
+          echo "T03_PRIV_002_HISTORICAL_DELETE_REGRESSION=PASS"
+
+      - name: Enforce diff hygiene and commit product successor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add \
+            priv/static/index.html \
+            priv/static/assets/app.js \
+            test/js/ephemeral_conversation_ux_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/t03_privacy_retention_copy_test.mjs
+
+          expected="$(printf '%s\n' \
+            priv/static/assets/app.js \
+            priv/static/index.html \
+            test/js/ephemeral_conversation_ux_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/t03_privacy_retention_copy_test.mjs | sort)"
+          actual="$(git diff --cached --name-only | sort)"
+          printf 'T03_PRIV_002_EXPECTED_DIFF=\n%s\n' "$expected"
+          printf 'T03_PRIV_002_ACTUAL_DIFF=\n%s\n' "$actual"
+          test "$actual" = "$expected"
+          git diff --cached --check
+
+          git config user.name "StrangerTalks Construction Command"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -m "fix(t03): align retention privacy copy with T04"
+          final_sha="$(git rev-parse HEAD)"
+          final_tree="$(git rev-parse HEAD^{tree})"
+          echo "T03_PRIV_002_FINAL_SHA=$final_sha"
+          echo "T03_PRIV_002_FINAL_TREE=$final_tree"
+          git push origin "HEAD:$PRODUCT_BRANCH"
+          test -z "$(git status --porcelain)"
+          echo "T03_PRIV_002_CLEAN_TREE=PASS"
+
+      - name: Stop Phoenix
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/t03-priv-002-server.pid ]; then
+            pid="$(cat /tmp/t03-priv-002-server.pid)"
+            kill "$pid" 2>/dev/null || true
+          fi
