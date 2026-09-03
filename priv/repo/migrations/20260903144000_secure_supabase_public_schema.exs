@@ -33,7 +33,7 @@ defmodule StrangertalksNew.Repo.Migrations.SecureSupabasePublicSchema do
 
   def up do
     Enum.each(@protected_tables, fn table ->
-      execute("ALTER TABLE public.#{table} ENABLE ROW LEVEL SECURITY")
+      execute("ALTER TABLE IF EXISTS public.#{table} ENABLE ROW LEVEL SECURITY")
       revoke_table_api_access(table)
     end)
 
@@ -49,8 +49,9 @@ defmodule StrangertalksNew.Repo.Migrations.SecureSupabasePublicSchema do
       execute("""
       DO $$
       BEGIN
-        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '#{role}') THEN
-          REVOKE ALL PRIVILEGES ON TABLE public.#{table} FROM #{role};
+        IF to_regclass('public.#{table}') IS NOT NULL
+           AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '#{role}') THEN
+          EXECUTE 'REVOKE ALL PRIVILEGES ON TABLE public.#{table} FROM #{role}';
         END IF;
       END
       $$;
