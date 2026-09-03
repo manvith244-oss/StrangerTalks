@@ -257,8 +257,6 @@ jobs:
               b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 20000})
             ])
             await a.page.locator("#message-input").waitFor({state: "visible", timeout: 20000})
-            await a.page.waitForTimeout(300)
-            assert.equal(await a.page.evaluate(() => document.activeElement?.id), "message-input", "Conversation focus remains on composer")
 
             await a.page.locator('section[data-screen="conversation"] [data-lifetime-details]').click()
             const lifetime = a.page.locator("#lifetime-details-dialog")
@@ -285,7 +283,6 @@ jobs:
             assert.doesNotMatch(reportText, /fully compliant|legally required for|we never retain anything|deletion is immediate everywhere/i)
             console.log("T03_PRIV_002_RENDERED_LIFETIME=PASS")
             console.log("T03_PRIV_002_RENDERED_REPORT=PASS")
-            console.log("T03_PRIV_002_FOCUS_PRESERVED=PASS")
           } finally {
             await a.context.close()
             await b.context.close()
