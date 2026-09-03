@@ -38,10 +38,12 @@ jobs:
         run: |
           git worktree add --detach /tmp/t07-candidate "$EXPECTED_SHA"
           git worktree add --detach /tmp/t07-base "$CANONICAL_BASE"
-          ln -s "$GITHUB_WORKSPACE/deps" /tmp/t07-candidate/deps
-          ln -s "$GITHUB_WORKSPACE/deps" /tmp/t07-base/deps
+          echo "CANDIDATE_PREWIRE_STATUS=$(git -C /tmp/t07-candidate status --porcelain)"
+          echo "BASE_PREWIRE_STATUS=$(git -C /tmp/t07-base status --porcelain)"
           test -z "$(git -C /tmp/t07-candidate status --porcelain)"
           test -z "$(git -C /tmp/t07-base status --porcelain)"
+          ln -s "$GITHUB_WORKSPACE/deps" /tmp/t07-candidate/deps
+          ln -s "$GITHUB_WORKSPACE/deps" /tmp/t07-base/deps
 
       - name: Format exact candidate in isolation
         run: |
