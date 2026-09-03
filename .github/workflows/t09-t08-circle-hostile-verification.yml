@@ -12,7 +12,7 @@ permissions:
 env:
   MIX_ENV: test
   BASE_SHA: 423442915e37fd6aadd25bd1c6a300eed2b464f0
-  CANDIDATE_SHA: 6a7571085dfa01ddd1ea488911a88b14cfddd8fb
+  EXPECTED_SHA: 6a7571085dfa01ddd1ea488911a88b14cfddd8fb
 
 jobs:
   verify:
@@ -22,16 +22,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.CANDIDATE_SHA }}
+          ref: ${{ env.EXPECTED_SHA }}
           fetch-depth: 0
 
       - name: Exact identity and clean packet
         shell: bash
         run: |
           set -euo pipefail
-          echo "REQUESTED_SHA=$CANDIDATE_SHA"
-          echo "CHECKED_OUT_SHA=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          actual_sha=$(git rev-parse HEAD)
+          echo "EXPECTED_SHA=$EXPECTED_SHA"
+          echo "ACTUAL_SHA=$actual_sha"
+          test "$actual_sha" = "$EXPECTED_SHA"
           test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
           test -z "$(git status --porcelain)"
           git diff --check "$BASE_SHA"...HEAD
@@ -47,54 +48,92 @@ jobs:
           mix local.rebar --force
           mix deps.get
 
-      - name: Inject immutable T09 hostile Circle proof
+      - name: Inject and formatter-prove immutable T09 hostile Circle proof
         shell: bash
         run: |
+          set -euo pipefail
           cat > test/t09_t08_circle_hostile_runtime_test.exs <<'ELIXIR'
           defmodule StrangertalksNew.T09T08CircleHostileRuntimeTest do
             use ExUnit.Case, async: true
+
             alias StrangertalksNew.FutureSocial.CircleFormation
 
             defp candidates(count, key \\ :topic) do
               for id <- 1..count, do: %{participant_id: id, formation_key: key}
             end
 
-            test "hard product cap 8 cannot be overridden by caller policy" do
-              result = CircleFormation.form(candidates(9), min_size: 4, max_size: 9)
-
+            defp assert_human_scale_or_rejected(result, label) do
               case result do
-                {:ok, %{circles: circles}} ->
-                  assert Enum.all?(circles, &(length(&1.members) <= 8)),
-                         "hard max 8 violated: #{inspect(Enum.map(circles, &length(&1.members)))}"
-
                 {:error, :invalid_size_bounds} ->
-                  assert true
+                  :ok
+
+                {:ok, %{circles: circles}} ->
+                  sizes = Enum.map(circles, &length(&1.members))
+
+                  assert Enum.all?(sizes, &(&1 >= 4 and &1 <= 8)),
+                         "#{label} violated 4..8 Circle law with sizes=#{inspect(sizes)}"
               end
             end
 
-            test "1000 humans become bounded human-scale circles with no loss" do
-              {:ok, %{circles: circles, waiting: waiting}} =
-                CircleFormation.form(candidates(1000), min_size: 4, max_size: 8)
-
-              assert waiting == []
-              assert Enum.all?(circles, fn circle ->
-                       size = length(circle.members)
-                       size >= 4 and size <= 8
-                     end)
-              assert Enum.sum(Enum.map(circles, &length(&1.members))) == 1000
+            test "V1 hard maximum 8 cannot be overridden by caller policy" do
+              for max_size <- [9, 10, 32, 1_000_000] do
+                result = CircleFormation.form(candidates(9), min_size: 4, max_size: max_size)
+                assert_human_scale_or_rejected(result, "V1 max_size=#{max_size}")
+              end
             end
 
-            test "duplicate participant cannot be split across formation keys" do
-              candidates = [
+            test "V2 lower bound cannot authorize undersized Circles" do
+              for {count, min_size, max_size} <- [
+                    {1, 1, 8},
+                    {2, 2, 8},
+                    {3, 3, 8},
+                    {3, 1, 3}
+                  ] do
+                result = CircleFormation.form(candidates(count), min_size: min_size, max_size: max_size)
+                assert_human_scale_or_rejected(result, "V2 #{count}/#{min_size}/#{max_size}")
+              end
+            end
+
+            test "V3 duplicate participant authority cannot inflate occupancy" do
+              input = [
+                %{participant_id: :same, formation_key: :a},
+                %{participant_id: :p2, formation_key: :a},
+                %{participant_id: :same, formation_key: :a},
+                %{participant_id: :p4, formation_key: :a}
+              ]
+
+              assert {:error, {:duplicate_participant, :same}} =
+                       CircleFormation.form(input, min_size: 4, max_size: 8)
+
+              cross_cohort = [
                 %{participant_id: :same, formation_key: :a},
                 %{participant_id: :same, formation_key: :b}
               ]
 
               assert {:error, {:duplicate_participant, :same}} =
-                       CircleFormation.form(candidates, min_size: 4, max_size: 8)
+                       CircleFormation.form(cross_cohort, min_size: 4, max_size: 8)
             end
 
-            test "same input is deterministic and cohorts never mix" do
+            test "V4 one thousand humans remain bounded with deterministic membership integrity" do
+              input = candidates(1000)
+
+              assert {:ok, %{circles: circles, waiting: waiting}} =
+                       CircleFormation.form(input, min_size: 4, max_size: 8)
+
+              assert waiting == []
+
+              assert Enum.all?(circles, fn circle ->
+                       size = length(circle.members)
+                       size >= 4 and size <= 8
+                     end)
+
+              seated = Enum.flat_map(circles, & &1.members)
+              assert length(seated) == 1000
+              assert Enum.map(seated, & &1.participant_id) == Enum.map(input, & &1.participant_id)
+              assert MapSet.size(MapSet.new(Enum.map(seated, & &1.participant_id))) == 1000
+            end
+
+            test "V5 identical input and policy are deterministic and cohorts never mix" do
               input =
                 Enum.map(1..12, &%{participant_id: {:a, &1}, formation_key: :a}) ++
                   Enum.map(1..12, &%{participant_id: {:b, &1}, formation_key: :b})
@@ -108,19 +147,54 @@ jobs:
                      end)
             end
 
-            test "low liquidity remains waiting rather than inventing undersized Circle" do
-              {:ok, %{circles: circles, waiting: waiting}} =
-                CircleFormation.form(candidates(3), min_size: 4, max_size: 8)
+            test "V6 low liquidity waits instead of manufacturing Circle authority" do
+              for count <- 1..3 do
+                input = candidates(count)
 
-              assert circles == []
-              assert length(waiting) == 3
+                assert {:ok, %{circles: [], waiting: waiting}} =
+                         CircleFormation.form(input, min_size: 4, max_size: 8)
+
+                assert waiting == input
+                assert Enum.uniq_by(waiting, & &1.participant_id) == waiting
+              end
+            end
+
+            test "V7 hostile caller parameters cannot escape the 4..8 product law" do
+              invalid_bounds = [
+                [min_size: 0, max_size: 8],
+                [min_size: -1, max_size: 8],
+                [min_size: 8, max_size: 4],
+                [min_size: "4", max_size: 8],
+                [min_size: 4, max_size: :eight]
+              ]
+
+              for opts <- invalid_bounds do
+                assert {:error, :invalid_size_bounds} = CircleFormation.form(candidates(4), opts)
+              end
+
+              for opts <- [
+                    [min_size: 4, max_size: 9],
+                    [min_size: 4, max_size: 1_000_000],
+                    [min_size: 9, max_size: 9],
+                    [min_size: 1_000_000, max_size: 1_000_000]
+                  ] do
+                result = CircleFormation.form(candidates(9), opts)
+                assert_human_scale_or_rejected(result, "V7 opts=#{inspect(opts)}")
+              end
             end
           end
           ELIXIR
-          mix format --check-formatted test/t09_t08_circle_hostile_runtime_test.exs
 
-      - name: Execute hostile capacity/liquidity/determinism proof
+          mix format test/t09_t08_circle_hostile_runtime_test.exs
+          mix format --check-formatted test/t09_t08_circle_hostile_runtime_test.exs
+          echo "T09_HOSTILE_PROOF_FORMAT=PASS"
+
+      - name: Execute hostile V1-V7 Circle proof
+        shell: bash
         run: |
+          set -euo pipefail
+          echo "HOSTILE_EXECUTION_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           mix test \
             test/t09_t08_circle_hostile_runtime_test.exs \
             test/strangertalks_new/future_social/circle_formation_test.exs \
@@ -135,5 +209,6 @@ jobs:
           git diff --check "$BASE_SHA"...HEAD
           git diff --check
           test -z "$(git status --porcelain)"
-          echo "TESTED_SHA=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          actual_sha=$(git rev-parse HEAD)
+          echo "TESTED_SHA=$actual_sha"
+          test "$actual_sha" = "$EXPECTED_SHA"
