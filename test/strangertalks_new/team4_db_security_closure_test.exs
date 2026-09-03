@@ -3,7 +3,7 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
 
   alias StrangertalksNew.{Participants, Repo}
 
-  @protected_tables ~w(
+  @application_tables ~w(
     account_sessions
     account_sync_states
     analytics_records
@@ -28,14 +28,15 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     reports
     safety_events
     safety_reviews
-    schema_migrations
   )
 
+  @migration_metadata_table "schema_migrations"
   @api_roles ~w(anon authenticated service_role)
+  @untrusted_roles ~w(anon authenticated)
   @table_privileges ~w(SELECT INSERT UPDATE DELETE TRUNCATE REFERENCES TRIGGER)
 
-  test "every affected public table present in this composition has RLS enabled" do
-    rows = existing_protected_tables()
+  test "every affected application table present in this composition has RLS enabled" do
+    rows = existing_application_tables()
 
     assert rows != []
 
@@ -45,24 +46,39 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     end
   end
 
-  test "Supabase API roles have no table privileges on present product tables" do
-    existing_roles =
-      Repo.query!("SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])", [@api_roles]).rows
-      |> List.flatten()
-
-    existing_tables = Enum.map(existing_protected_tables(), &hd/1)
+  test "Supabase API roles have no table privileges on present application tables" do
+    existing_roles = existing_roles(@api_roles)
+    existing_tables = Enum.map(existing_application_tables(), &hd/1)
 
     for role <- existing_roles,
         table <- existing_tables,
         privilege <- @table_privileges do
-      [[allowed]] =
-        Repo.query!(
-          "SELECT has_table_privilege($1, $2, $3)",
-          [role, "public.#{table}", privilege]
-        ).rows
-
-      refute allowed,
+      refute has_table_privilege?(role, table, privilege),
              "expected #{role} to lack #{privilege} on public.#{table}; the product uses direct Postgres, not the Data API"
+    end
+  end
+
+  test "Ecto migration metadata is denied to untrusted API roles without changing migration ownership" do
+    assert table_exists?(@migration_metadata_table)
+
+    for role <- existing_roles(@untrusted_roles), privilege <- @table_privileges do
+      refute has_table_privilege?(role, @migration_metadata_table, privilege),
+             "expected #{role} to lack #{privilege} on public.schema_migrations"
+    end
+
+    current_role = Repo.query!("SELECT current_user").rows |> hd() |> hd()
+
+    for privilege <- ~w(SELECT INSERT UPDATE DELETE) do
+      assert has_table_privilege?(current_role, @migration_metadata_table, privilege),
+             "migration/application owner lost #{privilege} on public.schema_migrations"
+    end
+  end
+
+  test "service_role does not become a substitute application authority" do
+    if "service_role" in existing_roles(["service_role"]) do
+      for privilege <- @table_privileges do
+        refute has_table_privilege?("service_role", @migration_metadata_table, privilege)
+      end
     end
   end
 
@@ -107,7 +123,7 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     assert Repo.get!(StrangertalksNew.Participant, participant.participant_id)
   end
 
-  defp existing_protected_tables do
+  defp existing_application_tables do
     Repo.query!("""
     SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
     FROM pg_class c
@@ -116,6 +132,26 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
       AND c.relname = ANY($1::text[])
       AND c.relkind IN ('r', 'p')
     ORDER BY c.relname
-    """, [@protected_tables]).rows
+    """, [@application_tables]).rows
+  end
+
+  defp existing_roles(roles) do
+    Repo.query!("SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])", [roles]).rows
+    |> List.flatten()
+  end
+
+  defp table_exists?(table) do
+    [[exists]] = Repo.query!("SELECT to_regclass($1) IS NOT NULL", ["public.#{table}"]).rows
+    exists
+  end
+
+  defp has_table_privilege?(role, table, privilege) do
+    [[allowed]] =
+      Repo.query!(
+        "SELECT has_table_privilege($1, $2, $3)",
+        [role, "public.#{table}", privilege]
+      ).rows
+
+    allowed
   end
 end
