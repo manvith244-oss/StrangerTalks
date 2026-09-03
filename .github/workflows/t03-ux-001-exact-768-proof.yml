@@ -198,6 +198,7 @@ jobs:
 
               await a.page.locator('button.door:has-text("Advice")').click()
               await a.page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: WAIT})
+              await a.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: WAIT})
               await assertViewport(a.page, "Queue")
               await assertUsable(a.page, "#leave-queue", "Queue Leave control")
               await a.page.screenshot({path: path.join(ARTIFACTS, "02-queue-768x1024.png"), fullPage: true})
