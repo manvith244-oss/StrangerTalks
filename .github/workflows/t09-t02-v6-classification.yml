@@ -1,0 +1,179 @@
+name: T09 T02 V6 Link Classification
+
+on:
+  push:
+    branches:
+      - team9/verification-baseline-gate
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  BASE_SHA: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+  CANDIDATE_SHA: b972a91e253989376b23abd6d603efca259fe3fc
+
+jobs:
+  classify_v6:
+    name: T09-T02-V6 monitored sibling-channel proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Exact candidate identity and clean starting tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "REQUESTED_SHA=$CANDIDATE_SHA"
+          echo "CHECKED_OUT_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          git diff --check "$BASE_SHA"...HEAD
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Prepare database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Build monitored non-linked V6 proof
+        shell: bash
+        run: |
+          cat > test/t09_t02_v6_monitored_runtime_test.exs <<'ELIXIR'
+          defmodule StrangertalksNew.T09T02V6MonitoredRuntimeTest do
+            use StrangertalksNew.DataCase, async: false
+            import Phoenix.ChannelTest
+
+            @endpoint StrangertalksNewWeb.Endpoint
+
+            alias StrangertalksNew.QueueEngine.QueueState
+            alias StrangertalksNewWeb.{ParticipantToken, UserSocket}
+
+            setup do
+              Agent.update(QueueState, fn _state -> %{} end)
+              :ok
+            end
+
+            test "V6 monitored sibling close preserves queue until the final sibling closes" do
+              participant = participant_fixture()
+              socket_a1 = joined_socket(participant)
+              socket_a2 = joined_socket(participant)
+
+              Process.unlink(socket_a1.channel_pid)
+              Process.unlink(socket_a2.channel_pid)
+              monitor_a1 = Process.monitor(socket_a1.channel_pid)
+              monitor_a2 = Process.monitor(socket_a2.channel_pid)
+
+              ref = push(socket_a1, "queue:join", queue_params("KEEP_IT_LIGHT", "en"))
+              assert_reply ref, :ok, %{status: "queued", queue_attempt_id: attempt_id}
+              assert queue_entry(participant.participant_id).queue_attempt_id == attempt_id
+
+              leave_ref = leave(socket_a1)
+              assert_reply leave_ref, :ok
+              assert_receive {:DOWN, ^monitor_a1, :process, _, _reason}, 1_000
+
+              assert queue_entry(participant.participant_id).queue_attempt_id == attempt_id
+              assert map_size(queue_state()) == 1
+
+              ref = push(socket_a2, "queue:join", queue_params("KEEP_IT_LIGHT", "en"))
+              assert_reply ref, :ok, %{status: "queued", queue_attempt_id: ^attempt_id}
+              assert queue_entry(participant.participant_id).queue_attempt_id == attempt_id
+
+              leave_ref = leave(socket_a2)
+              assert_reply leave_ref, :ok
+              assert_receive {:DOWN, ^monitor_a2, :process, _, _reason}, 1_000
+              eventually(fn -> refute queue_entry(participant.participant_id) end)
+            end
+
+            defp participant_fixture do
+              {:ok, participant} =
+                StrangertalksNew.Participants.create_participant(%{created_at: DateTime.utc_now()})
+
+              participant
+            end
+
+            defp joined_socket(participant) do
+              token = ParticipantToken.sign(participant.participant_id)
+              assert {:ok, socket} = connect(UserSocket, %{}, connect_info: %{auth_token: token})
+
+              assert {:ok, _payload, socket} =
+                       subscribe_and_join(
+                         socket,
+                         StrangertalksNewWeb.ParticipantChannel,
+                         "participant:#{participant.participant_id}"
+                       )
+
+              socket
+            end
+
+            defp queue_params(door, language) do
+              %{"door_type" => door, "conversation_language" => language}
+            end
+
+            defp queue_state, do: Agent.get(QueueState, & &1)
+            defp queue_entry(participant_id), do: Map.get(queue_state(), participant_id)
+
+            defp eventually(assertion, attempts \\ 40)
+            defp eventually(assertion, 0), do: assertion.()
+
+            defp eventually(assertion, attempts) do
+              assertion.()
+            rescue
+              ExUnit.AssertionError ->
+                Process.sleep(10)
+                eventually(assertion, attempts - 1)
+            end
+          end
+          ELIXIR
+          mix format --check-formatted test/t09_t02_v6_monitored_runtime_test.exs
+
+      - name: Execute monitored V6 and candidate sibling convergence proof
+        run: |
+          mix test \
+            test/t09_t02_v6_monitored_runtime_test.exs \
+            test/strangertalks_new_web/channels/participant_multitab_authority_test.exs \
+            --trace --seed 0
+
+      - name: Remove ephemeral proof and confirm exact tested SHA
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f test/t09_t02_v6_monitored_runtime_test.exs
+          git diff --check "$BASE_SHA"...HEAD
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          echo "TESTED_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          echo T09_T02_V6_CLASSIFICATION=MONITORED_PROOF_COMPLETE
