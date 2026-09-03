@@ -1,4 +1,4 @@
-name: T07 AI-003 Isolated Format Ownership Audit
+name: T07 AI-003 Formatter Successor Staging
 
 on:
   push:
@@ -7,20 +7,25 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  isolated-format-audit:
+  stage-successor:
     runs-on: ubuntu-latest
     env:
-      EXPECTED_SHA: f04aa0ffd746aab4c56f07873d2766a9117510f6
-      CANONICAL_BASE: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+      PARENT_SHA: f04aa0ffd746aab4c56f07873d2766a9117510f6
+      STAGING_BRANCH: team7/ai-003-format-successor-stage
     steps:
-      - name: Checkout history carrier
+      - name: Checkout exact parent
         uses: actions/checkout@v4
         with:
           ref: f04aa0ffd746aab4c56f07873d2766a9117510f6
           fetch-depth: 0
+
+      - name: Prove parent and clean input
+        run: |
+          test "$(git rev-parse HEAD)" = "$PARENT_SHA"
+          test -z "$(git status --porcelain)"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -28,78 +33,54 @@ jobs:
           elixir-version: "1.18.4"
           otp-version: "27.3.4"
 
-      - name: Install shared dependencies
+      - name: Install dependencies
         run: |
           mix local.hex --force
           mix local.rebar --force
           mix deps.get
 
-      - name: Create independent clean worktrees
+      - name: Format only T07-owned AI-003 files
         run: |
-          git worktree add --detach /tmp/t07-candidate "$EXPECTED_SHA"
-          git worktree add --detach /tmp/t07-base "$CANONICAL_BASE"
-          echo "CANDIDATE_PREWIRE_STATUS=$(git -C /tmp/t07-candidate status --porcelain)"
-          echo "BASE_PREWIRE_STATUS=$(git -C /tmp/t07-base status --porcelain)"
-          test -z "$(git -C /tmp/t07-candidate status --porcelain)"
-          test -z "$(git -C /tmp/t07-base status --porcelain)"
-          ln -s "$GITHUB_WORKSPACE/deps" /tmp/t07-candidate/deps
-          ln -s "$GITHUB_WORKSPACE/deps" /tmp/t07-base/deps
-
-      - name: Format exact candidate in isolation
-        run: |
-          cd /tmp/t07-candidate
-          mix format
-          echo "=== ISOLATED CANDIDATE STATUS ==="
-          git status --short
-          echo "=== ISOLATED CANDIDATE PATCH BEGIN ==="
-          git diff --no-ext-diff --unified=20 -- \
+          mix format \
             lib/strangertalks_new/agent_systems/learning_advisor.ex \
             lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
-            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
-            lib/strangertalks_new/reflections.ex \
             test/strangertalks_new/agent_systems_break_test.exs \
             test/strangertalks_new/companion_open_ai_provider_test.exs \
             test/strangertalks_new/t07_provider_failure_matrix_test.exs
-          echo "=== ISOLATED CANDIDATE PATCH END ==="
-          for p in \
-            lib/strangertalks_new/agent_systems/learning_advisor.ex \
-            lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
-            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
-            lib/strangertalks_new/reflections.ex \
-            test/strangertalks_new/agent_systems_break_test.exs \
-            test/strangertalks_new/companion_open_ai_provider_test.exs \
-            test/strangertalks_new/t07_provider_failure_matrix_test.exs; do
-            echo "CANDIDATE_FORMATTED_BLOB $p $(git hash-object "$p")"
-          done
 
-      - name: Format canonical base in isolation
+      - name: Prove exact formatter-only scope
         run: |
-          cd /tmp/t07-base
-          mix format
-          echo "=== ISOLATED BASE STATUS ==="
-          git status --short
-          echo "=== ISOLATED BASE PATCH BEGIN ==="
-          git diff --no-ext-diff --unified=20 -- \
-            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
-            lib/strangertalks_new/reflections.ex
-          echo "=== ISOLATED BASE PATCH END ==="
-          for p in \
-            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
-            lib/strangertalks_new/reflections.ex; do
-            echo "BASE_FORMATTED_BLOB $p $(git hash-object "$p")"
-          done
-
-      - name: Export exact formatted T07-owned contents
-        run: |
-          cd /tmp/t07-candidate
-          for p in \
+          printf '%s\n' \
             lib/strangertalks_new/agent_systems/learning_advisor.ex \
             lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
             test/strangertalks_new/agent_systems_break_test.exs \
             test/strangertalks_new/companion_open_ai_provider_test.exs \
-            test/strangertalks_new/t07_provider_failure_matrix_test.exs; do
-            echo "=== BASE64 $p BEGIN ==="
-            base64 -w0 "$p"
-            echo
-            echo "=== BASE64 $p END ==="
-          done
+            test/strangertalks_new/t07_provider_failure_matrix_test.exs \
+            > /tmp/expected
+          git diff --name-only | sort > /tmp/actual
+          sort -o /tmp/expected /tmp/expected
+          echo '=== EXPECTED ==='
+          cat /tmp/expected
+          echo '=== ACTUAL ==='
+          cat /tmp/actual
+          diff -u /tmp/expected /tmp/actual
+          git diff --check
+          echo '=== FORMATTER PATCH ==='
+          git diff --no-ext-diff --unified=20
+
+      - name: Create one formatter successor commit on staging ref
+        run: |
+          git config user.name 'Manvith'
+          git config user.email 'manvithh24@gmail.com'
+          git switch -c "$STAGING_BRANCH"
+          git add \
+            lib/strangertalks_new/agent_systems/learning_advisor.ex \
+            lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
+            test/strangertalks_new/agent_systems_break_test.exs \
+            test/strangertalks_new/companion_open_ai_provider_test.exs \
+            test/strangertalks_new/t07_provider_failure_matrix_test.exs
+          git commit -m 'style(t07): format AI-003 owned files'
+          test "$(git rev-parse HEAD^)" = "$PARENT_SHA"
+          test -z "$(git status --porcelain)"
+          echo "STAGED_SUCCESSOR=$(git rev-parse HEAD)"
+          git push origin "$STAGING_BRANCH"
