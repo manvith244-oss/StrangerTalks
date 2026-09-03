@@ -220,6 +220,7 @@ jobs:
         run: node --test --test-concurrency=1 tmp/t03_focus_ab.mjs
 
       - name: Prove tested SHA again and clean exit tree
+        if: always()
         run: |
           set -euo pipefail
           actual="$(git rev-parse HEAD)"
