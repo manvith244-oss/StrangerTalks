@@ -32,7 +32,7 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
   )
 
   @api_roles ~w(anon authenticated service_role)
-  @dml_privileges ~w(SELECT INSERT UPDATE DELETE)
+  @table_privileges ~w(SELECT INSERT UPDATE DELETE TRUNCATE REFERENCES TRIGGER)
 
   test "every affected public table present in this composition has RLS enabled" do
     rows = existing_protected_tables()
@@ -45,7 +45,7 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     end
   end
 
-  test "Supabase API roles have no read write or delete privileges on present product tables" do
+  test "Supabase API roles have no table privileges on present product tables" do
     existing_roles =
       Repo.query!("SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])", [@api_roles]).rows
       |> List.flatten()
@@ -54,7 +54,7 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
 
     for role <- existing_roles,
         table <- existing_tables,
-        privilege <- @dml_privileges do
+        privilege <- @table_privileges do
       [[allowed]] =
         Repo.query!(
           "SELECT has_table_privilege($1, $2, $3)",
@@ -66,7 +66,7 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     end
   end
 
-  test "future public tables created by the migration role do not inherit Data API DML grants" do
+  test "future public tables created by the migration role do not inherit Data API table grants" do
     current_role = Repo.query!("SELECT current_user").rows |> hd() |> hd()
 
     acl =
@@ -88,6 +88,9 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
       refute String.contains?(acl, "#{role}=r")
       refute String.contains?(acl, "#{role}=w")
       refute String.contains?(acl, "#{role}=d")
+      refute String.contains?(acl, "#{role}=D")
+      refute String.contains?(acl, "#{role}=x")
+      refute String.contains?(acl, "#{role}=t")
     end
   end
 
