@@ -45,12 +45,13 @@ jobs:
         with:
           elixir-version: "1.18.4"
           otp-version: "27.3.4"
-      - name: Install dependencies
+      - name: Install and compile before migration timeout
         run: |
           set -euo pipefail
           mix local.hex --force
           mix local.rebar --force
           mix deps.get
+          mix compile
       - name: Create Supabase-like roles and permissive defaults
         run: |
           set -euo pipefail
