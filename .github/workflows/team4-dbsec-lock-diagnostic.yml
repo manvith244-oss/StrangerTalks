@@ -1,0 +1,209 @@
+name: T04 DBSEC Migration Lock Diagnostic
+
+on:
+  push:
+    branches:
+      - team4/dbsec-lock-diagnostic
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      PGPASSWORD: strangertalks_test
+      EXACT_T04_SHA: 2a8f6cc18ce77d5aa41bbd074ef3cf25fe861fac
+
+    steps:
+      - name: Checkout exact failed candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXACT_T04_SHA }}
+
+      - name: Prove exact identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXACT_T04_SHA"
+          echo "DIAGNOSTIC_BASE_SHA=$(git rev-parse HEAD)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install and compile once
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          mix compile
+
+      - name: Create Supabase-like roles
+        run: |
+          set -euo pipefail
+          psql -h localhost -U strangertalks_local -d postgres <<'SQL'
+          DO $$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+          DO $$ BEGIN CREATE ROLE authenticated NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+          DO $$ BEGIN CREATE ROLE service_role NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+          SQL
+
+      - name: Run lock-visible A/B/C matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          create_case_db() {
+            local suffix="$1"
+            local db="strangertalks_new_test${suffix}"
+            psql -h localhost -U strangertalks_local -d postgres -v ON_ERROR_STOP=1 \
+              -c "CREATE DATABASE ${db} OWNER strangertalks_local"
+            psql -h localhost -U strangertalks_local -d "$db" -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public
+            GRANT ALL PRIVILEGES ON TABLES TO anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public
+            GRANT ALL PRIVILEGES ON SEQUENCES TO anon, authenticated, service_role;
+          SQL
+            psql -h localhost -U strangertalks_local -d postgres -v ON_ERROR_STOP=1 \
+              -c "ALTER DATABASE ${db} SET lock_timeout = '5s'"
+          }
+
+          snapshot() {
+            local label="$1"
+            local db="$2"
+            echo "===== ${label} pg_stat_activity ====="
+            psql -h localhost -U strangertalks_local -d "$db" -P pager=off -x -c "
+              SELECT pid,
+                     usename,
+                     application_name,
+                     state,
+                     wait_event_type,
+                     wait_event,
+                     pg_blocking_pids(pid) AS blocking_pids,
+                     backend_xid,
+                     backend_xmin,
+                     xact_start,
+                     query_start,
+                     left(query, 1000) AS query
+              FROM pg_stat_activity
+              WHERE datname = '${db}'
+              ORDER BY pid;"
+
+            echo "===== ${label} pg_locks ====="
+            psql -h localhost -U strangertalks_local -d "$db" -P pager=off -x -c "
+              SELECT l.pid,
+                     l.locktype,
+                     CASE WHEN c.oid IS NULL THEN NULL ELSE n.nspname || '.' || c.relname END AS relation,
+                     l.mode,
+                     l.granted,
+                     l.fastpath,
+                     l.virtualxid,
+                     l.transactionid,
+                     l.classid,
+                     l.objid,
+                     l.objsubid
+              FROM pg_locks l
+              LEFT JOIN pg_class c ON c.oid = l.relation
+              LEFT JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE l.pid IN (SELECT pid FROM pg_stat_activity WHERE datname = '${db}')
+              ORDER BY l.pid, l.granted, l.locktype, relation, l.mode;"
+
+            echo "===== ${label} OS process state ====="
+            ps -eo pid,ppid,stat,etime,cmd | grep -E '[b]eam.smp|[m]ix ecto.migrate' || true
+          }
+
+          run_case() {
+            local label="$1"
+            local suffix="$2"
+            local pool="$3"
+            local db="strangertalks_new_test${suffix}"
+            local log="/tmp/${label}.log"
+            local status="/tmp/${label}.status"
+
+            create_case_db "$suffix"
+            echo "===== START ${label}: db=${db} pool=${pool} ====="
+
+            set +e
+            if [[ "$pool" == "sandbox" ]]; then
+              (
+                env -u STRANGERTALKS_PERSISTENT_TEST_SERVER \
+                  MIX_TEST_PARTITION="$suffix" \
+                  timeout --signal=TERM 25s mix ecto.migrate --quiet >"$log" 2>&1
+                echo "$?" >"$status"
+              ) &
+            else
+              (
+                STRANGERTALKS_PERSISTENT_TEST_SERVER=1 \
+                  MIX_TEST_PARTITION="$suffix" \
+                  timeout --signal=TERM 25s mix ecto.migrate --quiet >"$log" 2>&1
+                echo "$?" >"$status"
+              ) &
+            fi
+            local wrapper_pid=$!
+            set -e
+
+            for i in 1 2 3 4 5 6; do
+              sleep 2
+              snapshot "${label}/sample-${i}" "$db"
+              if ! kill -0 "$wrapper_pid" 2>/dev/null; then
+                break
+              fi
+            done
+
+            set +e
+            wait "$wrapper_pid"
+            local wait_rc=$?
+            set -e
+            echo "===== ${label} wrapper_rc=${wait_rc} command_rc=$(cat "$status" 2>/dev/null || echo missing) ====="
+            cat "$log" || true
+            echo "===== END ${label} ====="
+          }
+
+          # A: exact failed candidate under the exact Sandbox pool semantics.
+          run_case "A_exact_sandbox" "_dbsec_a" "sandbox"
+
+          # B: disposable-only single-variable test. Do not commit this migration variant.
+          cp priv/repo/migrations/20260903144000_secure_supabase_public_schema.exs /tmp/t04_security_migration.exs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('priv/repo/migrations/20260903144000_secure_supabase_public_schema.exs')
+          s = p.read_text()
+          needle = '    schema_migrations\n'
+          assert needle in s, 'schema_migrations list entry not found'
+          p.write_text(s.replace(needle, '', 1))
+          PY
+          run_case "B_no_schema_migrations_sandbox" "_dbsec_b" "sandbox"
+          mv /tmp/t04_security_migration.exs priv/repo/migrations/20260903144000_secure_supabase_public_schema.exs
+
+          # C: exact migration, but with the repository's non-Sandbox ConnectionPool switch.
+          run_case "C_exact_connection_pool" "_dbsec_c" "connection_pool"
+
+          git diff --check
+          test -z "$(git status --porcelain)"
+
+      - name: Record diagnostic authority
+        if: ${{ always() }}
+        run: |
+          echo "T04_DBSEC_DIAGNOSTIC_BASE=$(git rev-parse HEAD)"
+          git status --short --branch
