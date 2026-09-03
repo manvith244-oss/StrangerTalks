@@ -31,7 +31,7 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      EXPECTED_SHA: 492fae85c54d91f9c88d0574900aef3479e0a2fe
+      EXPECTED_SHA: 53759a00cac4a19c6dca9ad2cadf7f713a324218
       CANONICAL_BASE: 423442915e37fd6aadd25bd1c6a300eed2b464f0
       BASE_FORMATTED_CONVERSATION_SERVER: 2b2807fb1dc0d403219439010247891180fe4d02
       BASE_FORMATTED_REFLECTIONS: 46388127b8616e56a8a929ab0b7b0f4d1c216c80
@@ -40,7 +40,7 @@ jobs:
       - name: Checkout exact T07 successor
         uses: actions/checkout@v4
         with:
-          ref: 492fae85c54d91f9c88d0574900aef3479e0a2fe
+          ref: 53759a00cac4a19c6dca9ad2cadf7f713a324218
           fetch-depth: 0
 
       - name: Prove exact SHA and clean input
@@ -196,6 +196,7 @@ jobs:
             lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
             test/strangertalks_new/agent_systems_break_test.exs \
             test/strangertalks_new/companion_open_ai_provider_test.exs \
+            test/strangertalks_new/t07_ai_003_privacy_boundary_test.exs \
             test/strangertalks_new/t07_provider_failure_matrix_test.exs
           test -z "$(git status --porcelain)"
 
