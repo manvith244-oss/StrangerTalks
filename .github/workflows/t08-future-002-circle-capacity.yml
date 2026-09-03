@@ -36,7 +36,7 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      EXPECTED_SHA: 055bc46f7a14d26ca7e6b634196e63bd8542a270
+      EXPECTED_SHA: 6937f3c71e04ad006ae0b543f536179c5996d5f4
 
     steps:
       - name: Checkout exact T08 hostile RED snapshot
