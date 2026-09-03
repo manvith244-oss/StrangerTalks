@@ -1,0 +1,116 @@
+name: T08 Future 002 Circle Capacity Hostile Gate
+
+on:
+  push:
+    branches:
+      - t08/future-002-circle-capacity-liquidity
+    paths:
+      - "lib/strangertalks_new/future_social/**"
+      - "test/strangertalks_new/future_social/**"
+      - ".github/workflows/t08-future-002-circle-capacity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hostile-proof:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      EXPECTED_SHA: 06bd6cb779d16a9daf9778ed6bc90f00223be9b8
+
+    steps:
+      - name: Checkout exact T08 hostile RED snapshot
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+
+      - name: Prove checkout identity
+        id: identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "EXPECTED_SHA=$EXPECTED_SHA"
+          echo "CHECKED_OUT_SHA=$actual"
+          test "$actual" = "$EXPECTED_SHA"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Hostile proof formatting
+        run: mix format --check-formatted test/strangertalks_new/future_social/circle_formation_hostile_capacity_test.exs
+
+      - name: Frozen FUTURE-001 contract
+        id: original
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix test test/strangertalks_new/future_social/circle_formation_test.exs 2>&1 | tee /tmp/t08-future-001.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t08-future-001.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: FUTURE-002 hostile capacity and liquidity contract
+        id: hostile
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix test test/strangertalks_new/future_social/circle_formation_hostile_capacity_test.exs 2>&1 | tee /tmp/t08-future-002.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t08-future-002.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Diff hygiene
+        run: git diff --check
+
+      - name: Prove RED contract
+        if: always()
+        shell: bash
+        env:
+          ORIGINAL_EXIT: ${{ steps.original.outputs.exit_code }}
+          ORIGINAL_SUMMARY: ${{ steps.original.outputs.summary }}
+          HOSTILE_EXIT: ${{ steps.hostile.outputs.exit_code }}
+          HOSTILE_SUMMARY: ${{ steps.hostile.outputs.summary }}
+        run: |
+          echo "FUTURE_001=$ORIGINAL_SUMMARY exit=$ORIGINAL_EXIT"
+          echo "FUTURE_002=$HOSTILE_SUMMARY exit=$HOSTILE_EXIT"
+          test "$ORIGINAL_EXIT" = "0"
+          test "$HOSTILE_EXIT" != "0"
+          echo "RED_PROOF_SHA=$EXPECTED_SHA"
