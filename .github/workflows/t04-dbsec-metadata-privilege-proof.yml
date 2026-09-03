@@ -1,0 +1,118 @@
+name: T04 DBSEC Metadata Privilege Proof
+
+on:
+  push:
+    branches:
+      - team4/dbsec-003-metadata-privilege-proof
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      PGPASSWORD: strangertalks_test
+      FAILED_PARENT: 2a8f6cc18ce77d5aa41bbd074ef3cf25fe861fac
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove diagnostic lineage
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$FAILED_PARENT" HEAD
+          git diff --name-only "$FAILED_PARENT"..HEAD
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Create Supabase-like roles and permissive defaults
+        run: |
+          set -euo pipefail
+          psql -h localhost -U strangertalks_local -d strangertalks_new_test <<'SQL'
+          DO $$ BEGIN CREATE ROLE anon NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+          DO $$ BEGIN CREATE ROLE authenticated NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+          DO $$ BEGIN CREATE ROLE service_role NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public
+            GRANT ALL PRIVILEGES ON TABLES TO anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public
+            GRANT ALL PRIVILEGES ON SEQUENCES TO anon, authenticated, service_role;
+          SQL
+          psql -h localhost -U strangertalks_local -d postgres -v ON_ERROR_STOP=1 \
+            -c "ALTER DATABASE strangertalks_new_test SET lock_timeout = '5s'"
+
+      - name: Migration must complete without schema_migrations RLS lock
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM 30s mix ecto.migrate --quiet
+
+      - name: Prove schema_migrations privilege boundary
+        run: |
+          set -euo pipefail
+          for role in anon authenticated; do
+            for privilege in SELECT INSERT UPDATE DELETE TRUNCATE REFERENCES TRIGGER; do
+              allowed=$(psql -h localhost -U strangertalks_local -d strangertalks_new_test -Atc "SELECT has_table_privilege('${role}', 'public.schema_migrations', '${privilege}')")
+              test "$allowed" = "f"
+            done
+          done
+
+          owner=$(psql -h localhost -U strangertalks_local -d strangertalks_new_test -Atc "SELECT current_user")
+          for privilege in SELECT INSERT UPDATE DELETE; do
+            allowed=$(psql -h localhost -U strangertalks_local -d strangertalks_new_test -Atc "SELECT has_table_privilege('${owner}', 'public.schema_migrations', '${privilege}')")
+            test "$allowed" = "t"
+          done
+
+          for role in anon authenticated; do
+            if psql -h localhost -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 -c "SET ROLE ${role}; SELECT version FROM public.schema_migrations LIMIT 1"; then
+              echo "unexpected schema_migrations read success for ${role}"
+              exit 1
+            fi
+          done
+
+      - name: Prove application tables remain RLS protected
+        run: |
+          set -euo pipefail
+          psql -h localhost -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 -Atc "
+            SELECT count(*) = 0
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public'
+              AND c.relname IN ('participants','matches','conversations','reports','boundary_blocks')
+              AND c.relkind IN ('r','p')
+              AND NOT c.relrowsecurity;" | grep -qx t
+
+      - name: Record proof identity
+        if: always()
+        run: |
+          echo "T04_DBSEC_METADATA_PROOF_SHA=$(git rev-parse HEAD)"
+          git status --short --branch
