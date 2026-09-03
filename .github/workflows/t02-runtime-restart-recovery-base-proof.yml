@@ -1,0 +1,86 @@
+name: T02 Runtime Restart Recovery Base Proof
+
+on:
+  push:
+    branches:
+      - team2/runtime-restart-recovery-base-proof
+  workflow_dispatch:
+
+concurrency:
+  group: t02-runtime-restart-recovery-base-proof-${{ github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-base-comparison:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact base proof commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 3
+
+      - name: Prove canonical base production code untouched
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CANONICAL_BASE=423442915e37fd6aadd25bd1c6a300eed2b464f0"
+          echo "PROOF_HEAD=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD^^)" = "423442915e37fd6aadd25bd1c6a300eed2b464f0"
+          git diff --exit-code 423442915e37fd6aadd25bd1c6a300eed2b464f0..HEAD -- lib/
+          changed="$(git diff --name-only 423442915e37fd6aadd25bd1c6a300eed2b464f0..HEAD | sort)"
+          expected="$(printf '%s\n' \
+            '.github/workflows/t02-runtime-restart-recovery-base-proof.yml' \
+            'test/strangertalks_new/t02_recovery_convergence_hostile_test.exs' | sort)"
+          printf 'CHANGED_FILES:\n%s\n' "$changed"
+          test "$changed" = "$expected"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Format proof-only test
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix format --check-formatted test/strangertalks_new/t02_recovery_convergence_hostile_test.exs
+          git diff --check
+
+      - name: Hostile concurrent recovery proof on canonical base
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/t02_recovery_convergence_hostile_test.exs --seed 0 --trace
