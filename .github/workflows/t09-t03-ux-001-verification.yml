@@ -1,0 +1,514 @@
+name: T09 T03 UX-001 Independent Browser Verification
+
+on:
+  push:
+    branches:
+      - team9/verification-baseline-gate
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  PORT: "4000"
+  EXPECTED_SHA: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+  EXPECTED_TREE: d16afe6b2b05472d012ac6113203e91c492d06ba
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+
+jobs:
+  verify:
+    name: T09-T03-UX-001 exact historical-delete verification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout exact frozen T03 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          fetch-depth: 0
+
+      - name: Prove exact requested identity and semantic fix
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          tree="$(git rev-parse HEAD^{tree})"
+          echo "REQUESTED_SHA=$EXPECTED_SHA"
+          echo "CHECKED_OUT_SHA=$sha"
+          echo "REQUESTED_TREE=$EXPECTED_TREE"
+          echo "CHECKED_OUT_TREE=$tree"
+          test "$sha" = "$EXPECTED_SHA"
+          test "$tree" = "$EXPECTED_TREE"
+          test -z "$(git status --porcelain)"
+          git diff --check HEAD^
+          grep -F 'await navigation.replace("/chats")' priv/static/assets/app.js
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies and Chromium
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare pristine hostile database
+        run: |
+          set -euo pipefail
+          mix ecto.drop --force || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Build independent T09 hostile browser oracle outside worktree
+        run: |
+          cat > /tmp/t09_t03_ux_001_hostile.mjs <<'JAVASCRIPT'
+          import assert from "node:assert/strict"
+          import test from "node:test"
+          import {chromium} from "playwright"
+
+          const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const WAIT = 20_000
+          const VIEWPORT = {width: 768, height: 1024}
+
+          function active(page, screen) {
+            return page.locator(`section[data-screen="${screen}"].active`)
+          }
+
+          async function waitPath(page, pathname, label) {
+            await page.waitForFunction(expected => location.pathname === expected, pathname, {timeout: WAIT})
+            assert.equal(new URL(page.url()).pathname, pathname, label)
+          }
+
+          async function boot(browser, label) {
+            const context = await browser.newContext({viewport: VIEWPORT})
+            const page = await context.newPage()
+            const errors = []
+            const failedRequests = []
+            page.on("pageerror", error => errors.push(`pageerror:${error.message}`))
+            page.on("console", message => {
+              if (message.type() === "error") errors.push(`console:${message.text()}`)
+            })
+            page.on("requestfailed", request => failedRequests.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || "failed"}`))
+
+            const issuancePromise = page.waitForResponse(response => {
+              try { return new URL(response.url()).pathname === "/api/participants" } catch { return false }
+            })
+            const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
+            assert.ok(response?.ok(), `${label}: root loads`)
+            const issuance = await issuancePromise
+            console.log(`T09_${label}_PARTICIPANT_ISSUANCE=${issuance.status()}`)
+            assert.equal(issuance.status(), 201, `${label}: fresh participant issuance succeeds without rate-limit contamination`)
+            await active(page, "doors").waitFor({state: "visible", timeout: WAIT})
+            await page.locator("#conversation-language").selectOption("en")
+            return {context, page, errors, failedRequests}
+          }
+
+          async function snapshot(page, label) {
+            const value = await page.evaluate(() => ({
+              pathname: location.pathname,
+              innerWidth,
+              innerHeight,
+              documentWidth: document.documentElement.scrollWidth,
+              bodyWidth: document.body.scrollWidth,
+              activeScreen: document.querySelector("section.screen.active")?.dataset?.screen || null
+            }))
+            console.log(`T09_SNAPSHOT_${label}=${JSON.stringify(value)}`)
+            return value
+          }
+
+          async function assertSettledWidth(page, label) {
+            const immediate = await snapshot(page, `${label}_IMMEDIATE`)
+            if (immediate.documentWidth > immediate.innerWidth || immediate.bodyWidth > immediate.innerWidth) {
+              console.log(`T09_RESPONSIVE_TRANSIENT_${label}=observed`)
+            }
+            await page.waitForFunction(() => {
+              return document.documentElement.scrollWidth <= innerWidth && document.body.scrollWidth <= innerWidth
+            }, null, {timeout: 5_000})
+            const settled = await snapshot(page, `${label}_SETTLED`)
+            assert.equal(settled.innerWidth, 768, `${label}: exact viewport width`)
+            assert.equal(settled.innerHeight, 1024, `${label}: exact viewport height`)
+            assert.ok(settled.documentWidth <= settled.innerWidth, `${label}: settled document width fits`)
+            assert.ok(settled.bodyWidth <= settled.innerWidth, `${label}: settled body width fits`)
+          }
+
+          async function assertUsable(locator, label) {
+            await locator.waitFor({state: "visible", timeout: WAIT})
+            assert.equal(await locator.isEnabled(), true, `${label}: enabled`)
+            const box = await locator.boundingBox()
+            assert.ok(box, `${label}: geometry exists`)
+            console.log(`T09_CONTROL_${label}=${JSON.stringify(box)}`)
+            assert.ok(box.x >= 0 && box.x + box.width <= VIEWPORT.width + 1, `${label}: horizontally inside viewport`)
+            assert.ok(box.y >= 0, `${label}: begins in reachable vertical space`)
+          }
+
+          async function matchPair(browser) {
+            const a = await boot(browser, "A")
+            const b = await boot(browser, "B")
+            await a.page.getByRole("button", {name: /Advice/}).click()
+            await active(a.page, "queue").waitFor({state: "visible", timeout: WAIT})
+            await waitPath(a.page, "/matchmaking", "queue owns /matchmaking")
+            await b.page.getByRole("button", {name: /Advice/}).click()
+            await Promise.all([
+              active(a.page, "conversation").waitFor({state: "visible", timeout: WAIT}),
+              active(b.page, "conversation").waitFor({state: "visible", timeout: WAIT})
+            ])
+            await Promise.all([
+              waitPath(a.page, "/conversation", "A reaches canonical active Conversation route"),
+              waitPath(b.page, "/conversation", "B reaches canonical active Conversation route")
+            ])
+            return {a, b}
+          }
+
+          async function endConversation(page) {
+            const actions = page.locator("details.overflow")
+            if ((await actions.getAttribute("open")) === null) await actions.locator("summary").click()
+            await page.locator("#end-conversation").click()
+            await page.locator("#end-confirmation-dialog").waitFor({state: "visible", timeout: WAIT})
+            await page.locator("#end-confirm").click()
+          }
+
+          async function localRecords(page) {
+            return page.evaluate(async () => (await import("/assets/local_data.mjs")).listRecords())
+          }
+
+          test("T09 hostile retained-history delete authority at exact 768x1024", {timeout: 180_000}, async () => {
+            const browser = await chromium.launch({headless: true})
+            let pair
+            try {
+              pair = await matchPair(browser)
+              const {a, b} = pair
+              const composer = a.page.getByRole("textbox", {name: "Message"})
+              const send = a.page.getByRole("button", {name: "Send message", exact: true})
+
+              assert.equal(await composer.count(), 1, "one composer authority")
+              assert.equal(await send.count(), 1, "one Send authority")
+              assert.equal(await composer.isVisible(), true, "composer visible in active Conversation")
+              assert.equal(await composer.isEnabled(), true, "composer enabled in active Conversation")
+
+              // The accepted T03 focus contract is focusability plus focus retention across
+              // the arrival/layout transition, not an invented automatic-focus-on-match law.
+              await composer.focus()
+              await a.page.waitForFunction(() => document.activeElement?.id === "message-input", null, {timeout: WAIT})
+              await a.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+              const focused = await a.page.evaluate(() => ({id: document.activeElement?.id || "", tag: document.activeElement?.tagName || ""}))
+              console.log(`T09_FOCUS_ACTIVE_ELEMENT=${JSON.stringify(focused)}`)
+              assert.deepEqual(focused, {id: "message-input", tag: "TEXTAREA"}, "TEXTAREA#message-input retains focus through settled active-Conversation presentation")
+
+              await assertSettledWidth(a.page, "CONVERSATION")
+              await assertUsable(composer, "COMPOSER")
+              await assertUsable(send, "SEND")
+
+              await composer.fill("t09 historical delete authority")
+              await send.click()
+              await b.page.locator("#messages li", {hasText: "t09 historical delete authority"}).waitFor({state: "visible", timeout: WAIT})
+
+              await endConversation(a.page)
+              await Promise.all([
+                active(a.page, "ended").waitFor({state: "visible", timeout: WAIT}),
+                active(b.page, "ended").waitFor({state: "visible", timeout: WAIT})
+              ])
+              await waitPath(a.page, "/conversation/ended", "terminal owns canonical terminal route")
+              await assertSettledWidth(a.page, "TERMINAL")
+
+              const keep = a.page.locator("#keep-conversation")
+              await assertUsable(keep, "KEEP")
+              await keep.click()
+              await active(a.page, "chats").waitFor({state: "visible", timeout: WAIT})
+              await waitPath(a.page, "/chats", "Keep returns to Chats")
+              await assertSettledWidth(a.page, "CHATS_AFTER_KEEP")
+
+              const keptRecords = await localRecords(a.page)
+              const retained = keptRecords.find(record => record.type === "local_conversation" && record.value?.status === "kept")
+              assert.ok(retained, "Keep creates participant-owned retained local Conversation")
+              const conversationId = retained.value.conversation_id
+              assert.ok(
+                keptRecords.some(record => record.type === "local_message" && record.value?.conversation_id === conversationId && record.value?.content === "t09 historical delete authority"),
+                "participant-owned retained transcript contains the sent control message"
+              )
+
+              const openLocal = a.page.getByRole("button", {name: /Open local copy/})
+              assert.equal(await openLocal.count(), 1, "one accessible retained-history open control")
+              await assertUsable(openLocal, "OPEN_LOCAL_COPY")
+              await openLocal.click()
+              await active(a.page, "history").waitFor({state: "visible", timeout: WAIT})
+              await waitPath(a.page, `/chats/${conversationId}`, "historical retained copy owns /chats/:id before Delete")
+              await assertSettledWidth(a.page, "HISTORICAL_COPY")
+
+              assert.equal(await active(a.page, "conversation").count(), 0, "historical copy never regains active live Conversation screen")
+              assert.equal(await a.page.locator("#message-input").isVisible(), false, "historical copy exposes no live composer")
+              assert.equal(await send.isVisible(), false, "historical copy exposes no live Send")
+              assert.equal(await a.page.locator("#end-conversation").isVisible(), false, "historical copy exposes no live End mutation")
+              assert.equal(await a.page.locator("#block").isVisible(), false, "historical copy exposes no live Block mutation")
+              const visibleCallControls = await a.page.locator('button:visible').evaluateAll(buttons => buttons.map(button => button.textContent?.trim() || "").filter(text => /call/i.test(text)))
+              console.log(`T09_HISTORICAL_VISIBLE_CALL_CONTROLS=${JSON.stringify(visibleCallControls)}`)
+              assert.deepEqual(visibleCallControls, [], "historical copy exposes no visible call control")
+
+              const deleteButton = a.page.locator("#history-delete")
+              assert.equal(await deleteButton.count(), 1, "Delete control authority is unique")
+              await assertUsable(deleteButton, "HISTORY_DELETE")
+              a.page.once("dialog", dialog => dialog.accept())
+              await deleteButton.click()
+              await active(a.page, "chats").waitFor({state: "visible", timeout: WAIT})
+              await waitPath(a.page, "/chats", "Delete replaces stale /chats/:id with exact /chats")
+              await assertSettledWidth(a.page, "CHATS_AFTER_DELETE")
+
+              const deletedRecords = await localRecords(a.page)
+              assert.equal(deletedRecords.some(record => record.type === "local_conversation" && record.id === `conversation:${conversationId}`), false, "deleted participant-owned Conversation is gone")
+              assert.equal(deletedRecords.some(record => record.type === "local_message" && record.value?.conversation_id === conversationId), false, "deleted participant-owned local transcript is gone")
+              assert.equal(deletedRecords.find(record => record.id === `conversation:${conversationId}`)?.type, "sync_tombstone", "only deletion/sync authority remains for the Conversation record")
+
+              await a.page.goBack({waitUntil: "domcontentloaded"})
+              await active(a.page, "chats").waitFor({state: "visible", timeout: WAIT})
+              await waitPath(a.page, "/chats", "Back cannot resurrect deleted retained detail")
+              assert.equal(await active(a.page, "history").count(), 0, "Back has no active historical detail")
+
+              await a.page.goForward({waitUntil: "domcontentloaded"})
+              await active(a.page, "chats").waitFor({state: "visible", timeout: WAIT})
+              await waitPath(a.page, "/chats", "Forward cannot resurrect deleted retained detail")
+              assert.equal(await active(a.page, "history").count(), 0, "Forward has no active historical detail")
+
+              const staleResponse = await a.page.goto(`${BASE_URL}/chats/${conversationId}`, {waitUntil: "domcontentloaded"})
+              assert.ok(staleResponse?.ok(), "direct stale history URL loads app shell")
+              await a.page.locator("#status").filter({hasText: "This saved Conversation is not available on this device."}).waitFor({state: "visible", timeout: WAIT})
+              const directStalePath = new URL(a.page.url()).pathname
+              console.log(`T09_DIRECT_STALE_PATH=${directStalePath}`)
+              assert.equal(await active(a.page, "history").count(), 0, "direct stale URL cannot render deleted historical detail")
+              assert.equal(await a.page.locator("#history-delete").isVisible(), false, "direct stale URL has no usable historical Delete surface")
+              assert.equal(await a.page.locator("#message-input").isVisible(), false, "direct stale URL has no live composer authority")
+              const afterDirect = await localRecords(a.page)
+              assert.equal(afterDirect.some(record => record.type === "local_conversation" && record.id === `conversation:${conversationId}`), false, "direct stale URL cannot resurrect deleted local state")
+
+              assert.deepEqual(a.errors, [], `A browser/console errors: ${JSON.stringify(a.errors)}`)
+              assert.deepEqual(b.errors, [], `B browser/console errors: ${JSON.stringify(b.errors)}`)
+              assert.deepEqual(a.failedRequests, [], `A failed requests: ${JSON.stringify(a.failedRequests)}`)
+              assert.deepEqual(b.failedRequests, [], `B failed requests: ${JSON.stringify(b.failedRequests)}`)
+            } finally {
+              await pair?.a.context.close().catch(() => {})
+              await pair?.b.context.close().catch(() => {})
+              await browser.close().catch(() => {})
+            }
+          })
+          JAVASCRIPT
+          node --check /tmp/t09_t03_ux_001_hostile.mjs
+          test -z "$(git status --porcelain)"
+
+      - name: Start exact-SHA Phoenix for hostile proof
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, endpoint |> Keyword.put(:server, true) |> Keyword.put(:http, [ip: {127, 0, 0, 1}, port: 4000]))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/t09-t03-hostile-server.log 2>&1 &
+          echo $! > /tmp/t09-t03-hostile-server.pid
+          for attempt in $(seq 1 45); do
+            pid="$(cat /tmp/t09-t03-hostile-server.pid)"
+            if ! kill -0 "$pid" 2>/dev/null; then cat /tmp/t09-t03-hostile-server.log; exit 1; fi
+            if curl -fsS http://localhost:4000/ >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/t09-t03-hostile-server.log
+          exit 1
+
+      - name: Execute independent exact-SHA hostile Chromium proof
+        run: |
+          set -euo pipefail
+          echo "HOSTILE_EXECUTION_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          node --test --test-concurrency=1 /tmp/t09_t03_ux_001_hostile.mjs
+
+      - name: Stop hostile server
+        if: always()
+        run: |
+          if [ -f /tmp/t09-t03-hostile-server.pid ]; then
+            pid="$(cat /tmp/t09-t03-hostile-server.pid)"
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+          fi
+
+      - name: Isolated current F03 browser route regressions
+        run: |
+          set -euo pipefail
+
+          reset_db() {
+            mix ecto.drop --force >/dev/null 2>&1 || true
+            mix ecto.create --quiet
+            mix ecto.migrate --quiet
+          }
+
+          start_server() {
+            local log="$1"
+            mix run --no-start -e '
+              repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+              Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
+              endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+              Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, endpoint |> Keyword.put(:server, true) |> Keyword.put(:http, [ip: {127, 0, 0, 1}, port: 4000]))
+              {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+              Process.sleep(:infinity)
+            ' > "$log" 2>&1 &
+            SERVER_PID=$!
+            for attempt in $(seq 1 45); do
+              if ! kill -0 "$SERVER_PID" 2>/dev/null; then cat "$log"; return 1; fi
+              if curl -fsS http://localhost:4000/ >/dev/null; then return 0; fi
+              sleep 1
+            done
+            cat "$log"
+            return 1
+          }
+
+          stop_server() {
+            if [ -n "${SERVER_PID:-}" ]; then
+              kill "$SERVER_PID" 2>/dev/null || true
+              wait "$SERVER_PID" 2>/dev/null || true
+              SERVER_PID=""
+            fi
+          }
+
+          run_case() {
+            local slug="$1"
+            local pattern="$2"
+            local log="/tmp/t09-f03-${slug}.log"
+            echo "T09_F03_CASE=$pattern"
+            reset_db
+            start_server "$log"
+            set +e
+            node --test --test-concurrency=1 --test-name-pattern="$pattern" test/js/navigation_history_browser_test.mjs
+            code=$?
+            set -e
+            stop_server
+            if [ "$code" -ne 0 ]; then cat "$log"; return "$code"; fi
+          }
+
+          trap stop_server EXIT
+          run_case primary "primary navigation writes canonical URLs"
+          run_case queued "QUEUED navigation away and Back/Forward preserve queue"
+          run_case active "match_found replaces transient matchmaking and active Conversation Back"
+          run_case terminal "terminal route replaces active Conversation and stale history cannot resurrect ACTIVE"
+          run_case unavailable "direct unavailable Conversation canonicalizes with replace"
+          trap - EXIT
+
+      - name: Isolated retained-delete continuity regression
+        run: |
+          set -euo pipefail
+          mix ecto.drop --force >/dev/null 2>&1 || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, endpoint |> Keyword.put(:server, true) |> Keyword.put(:http, [ip: {127, 0, 0, 1}, port: 4000]))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/t09-continuity.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$pid" 2>/dev/null; then cat /tmp/t09-continuity.log; exit 1; fi
+            if curl -fsS http://localhost:4000/ >/dev/null; then break; fi
+            sleep 1
+          done
+          curl -fsS http://localhost:4000/ >/dev/null
+          node --test --test-concurrency=1 --test-name-pattern="real browser Keep -> encrypted restore -> Delete tombstone -> hostile stale device -> convergence" test/js/team5_continuity_browser_attack_test.mjs
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          trap - EXIT
+
+      - name: Route contract and history unit regressions
+        run: |
+          set -euo pipefail
+          node --test test/js/route_contract_test.mjs test/js/navigation_history_test.mjs
+
+      - name: Candidate-owned hygiene
+        run: |
+          set -euo pipefail
+          node --check priv/static/assets/app.js
+          git diff --check HEAD^
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Full precommit with formatter ownership classification
+        run: |
+          set -euo pipefail
+          mix ecto.drop --force >/dev/null 2>&1 || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          mix precommit
+
+          echo "POST_PRECOMMIT_STATUS_BEGIN"
+          git status --porcelain || true
+          echo "POST_PRECOMMIT_STATUS_END"
+
+          unexpected=0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            path="${line:3}"
+            case "$path" in
+              lib/strangertalks_new/conversation_lifecycle/conversation_server.ex|lib/strangertalks_new/reflections.ex)
+                echo "T09_CLASSIFICATION=INHERITED_FORMATTER_DRIFT:$path"
+                ;;
+              *)
+                echo "T09_UNEXPECTED_PRECOMMIT_MUTATION=$path"
+                unexpected=1
+                ;;
+            esac
+          done < <(git status --porcelain)
+          test "$unexpected" -eq 0
+
+          git reset --hard "$EXPECTED_SHA"
+          git clean -fd
+
+      - name: Final exact SHA tree and clean worktree proof
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          tree="$(git rev-parse HEAD^{tree})"
+          status="$(git status --porcelain)"
+          echo "FINAL_TESTED_SHA=$sha"
+          echo "FINAL_TREE=$tree"
+          printf 'FINAL_STATUS=%q\n' "$status"
+          test "$sha" = "$EXPECTED_SHA"
+          test "$tree" = "$EXPECTED_TREE"
+          test -z "$status"
+
+      - name: Terminal evidence marker
+        run: |
+          echo "REQUESTED_SHA=$EXPECTED_SHA"
+          echo "CHECKED_OUT_SHA=$EXPECTED_SHA"
+          echo "HOSTILE_EXECUTION_SHA=$EXPECTED_SHA"
+          echo "FINAL_TESTED_SHA=$EXPECTED_SHA"
+          echo "TREE=$EXPECTED_TREE"
+          echo "T09_T03_UX_001_OWNED_GATES=GREEN"
