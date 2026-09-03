@@ -1,0 +1,148 @@
+name: T09 T06 Scheduled Ops Verification
+
+on:
+  push:
+    branches:
+      - team9/verification-baseline-gate
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  BASE_SHA: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+  CANDIDATE_SHA: 40004cfaae2ec6426fdf43c949b0b1ef87e52567
+
+jobs:
+  verify:
+    name: T09-T06-001 scheduled operations hostile proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: V1 exact candidate identity and clean source
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "REQUESTED_SHA=$CANDIDATE_SHA"
+          echo "CHECKED_OUT_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          test -z "$(git status --porcelain)"
+          git diff --check "$BASE_SHA"...HEAD
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Prepare database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: V2 wrong SHA cannot execute isolated precommit
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          output=$(EXPECTED_SHA="$BASE_SHA" bash ops/run_precommit_isolated.sh 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -ne 0
+          printf '%s\n' "$output" | grep -F "PRECOMMIT_SOURCE_SHA=$CANDIDATE_SHA"
+          echo T09_T06_WRONG_SHA=REJECTED
+
+      - name: V3 dirty source blocks isolated precommit and recovery restores authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '\n' >> README.md
+          set +e
+          output=$(EXPECTED_SHA="$CANDIDATE_SHA" bash ops/run_precommit_isolated.sh 2>&1)
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          test "$status" -eq 2
+          printf '%s\n' "$output" | grep -F 'ISOLATED_PRECOMMIT_RESULT=BLOCKED_DIRTY_SOURCE'
+          git checkout -- README.md
+          test -z "$(git status --porcelain)"
+          echo T09_T06_DIRTY_SOURCE=REJECTED_AND_RECOVERED
+
+      - name: V4-V8 exact lineage and operational regression surface
+        run: |
+          mix test \
+            test/strangertalks_new/t06_scheduled_ops_lineage_test.exs \
+            test/strangertalks_new/t06_candidate_diff_integrity_test.exs \
+            test/strangertalks_new/retention_cleanup_test.exs \
+            test/strangertalks_new/retention_cleanup_db_test.exs \
+            test/strangertalks_new/retention_closure_db_test.exs \
+            test/strangertalks_new/retention_safety_media_closure_test.exs \
+            --trace --seed 0
+
+      - name: V9 retention execution is retry-safe across consecutive passes
+        shell: bash
+        env:
+          DATABASE_URL: postgresql://strangertalks_local:strangertalks_test@127.0.0.1:5432/strangertalks_new_test
+        run: |
+          set -euo pipefail
+          first=$(bash ops/run_retention.sh 2>&1)
+          printf '%s\n' "$first"
+          printf '%s\n' "$first" | grep -F 'RETENTION_RESULT=PASS'
+          second=$(bash ops/run_retention.sh 2>&1)
+          printf '%s\n' "$second"
+          printf '%s\n' "$second" | grep -F 'RETENTION_RESULT=PASS'
+          echo T09_T06_RETENTION_RETRY=PASS
+
+      - name: V10 shell and read-only preflight contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n \
+            ops/postgres_backup.sh \
+            ops/postgres_restore.sh \
+            ops/run_retention.sh \
+            ops/run_precommit_isolated.sh \
+            ops/check_candidate_diff.sh \
+            ops/preflight_distinct_relationship_participants.sh
+          grep -F 'BEGIN TRANSACTION READ ONLY' ops/preflight_distinct_relationship_participants.sh
+          grep -F 'ROLLBACK' ops/preflight_distinct_relationship_participants.sh
+          ! grep -Eq 'DELETE FROM|UPDATE relationships' ops/preflight_distinct_relationship_participants.sh
+          echo T09_T06_PREFLIGHT_CONTRACT=PASS
+
+      - name: V11 final exact-SHA clean-tree proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check "$BASE_SHA"...HEAD
+          git diff --check
+          test -z "$(git status --porcelain)"
+          echo "TESTED_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          echo T09_T06_GATE=VERIFIED
