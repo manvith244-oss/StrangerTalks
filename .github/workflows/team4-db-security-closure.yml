@@ -104,7 +104,7 @@ jobs:
           set -euo pipefail
           mix test \
             test/strangertalks_new/security_adversarial_test.exs \
-            test/strangertalks_new/reports_test.exs \
+            test/strangertalks_new/team4_safety_boundary_test.exs \
             test/strangertalks_new/matching_rules_test.exs \
             test/strangertalks_new/relationship_consent_safety_review_test.exs
 
