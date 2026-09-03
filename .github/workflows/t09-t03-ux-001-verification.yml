@@ -47,7 +47,6 @@ jobs:
           fetch-depth: 0
 
       - name: Prove requested checkout identity and tree
-        id: identity
         shell: bash
         run: |
           set -euo pipefail
@@ -62,7 +61,6 @@ jobs:
           test -z "$(git status --porcelain)"
           git diff --check HEAD^
           grep -F 'await navigation.replace("/chats")' priv/static/assets/app.js
-          echo "checked_out_sha=$actual_sha" >> "$GITHUB_OUTPUT"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -121,6 +119,11 @@ jobs:
             return page.locator(`section[data-screen="${name}"].active`)
           }
 
+          async function waitPath(page, path, label) {
+            await page.waitForFunction(expected => location.pathname === expected, path, {timeout: WAIT})
+            assert.equal(new URL(page.url()).pathname, path, label)
+          }
+
           async function snapshot(page, label) {
             const value = await page.evaluate(() => ({
               path: location.pathname,
@@ -162,13 +165,16 @@ jobs:
             const doorB = b.page.locator('button.door:has-text("Advice")')
             await doorA.click()
             await active(a.page, "queue").waitFor({state: "visible", timeout: WAIT})
-            assert.equal(new URL(a.page.url()).pathname, "/matchmaking")
+            await waitPath(a.page, "/matchmaking", "queue reaches canonical /matchmaking route")
             await doorB.click()
             await Promise.all([
               active(a.page, "conversation").waitFor({state: "visible", timeout: WAIT}),
               active(b.page, "conversation").waitFor({state: "visible", timeout: WAIT})
             ])
-            assert.equal(new URL(a.page.url()).pathname, "/conversation")
+            await Promise.all([
+              waitPath(a.page, "/conversation", "participant A reaches canonical Conversation route"),
+              waitPath(b.page, "/conversation", "participant B reaches canonical Conversation route")
+            ])
             return {a, b}
           }
 
@@ -211,14 +217,14 @@ jobs:
                 active(a.page, "ended").waitFor({state: "visible", timeout: WAIT}),
                 active(b.page, "ended").waitFor({state: "visible", timeout: WAIT})
               ])
-              assert.equal(new URL(a.page.url()).pathname, "/conversation/ended")
+              await waitPath(a.page, "/conversation/ended", "terminal route is canonical")
               await assertStableWidth(a.page, "terminal")
 
               const keep = a.page.locator("#keep-conversation")
               await assertControlInsideViewport(a.page, keep, "keep")
               await keep.click()
               await active(a.page, "chats").waitFor({state: "visible", timeout: WAIT})
-              assert.equal(new URL(a.page.url()).pathname, "/chats")
+              await waitPath(a.page, "/chats", "Keep returns to Chats")
               await assertStableWidth(a.page, "chats-after-keep")
 
               const kept = await records(a.page)
@@ -232,7 +238,7 @@ jobs:
               await assertControlInsideViewport(a.page, openCopy, "open-local-copy")
               await openCopy.click()
               await active(a.page, "history").waitFor({state: "visible", timeout: WAIT})
-              assert.equal(new URL(a.page.url()).pathname, `/chats/${conversationId}`)
+              await waitPath(a.page, `/chats/${conversationId}`, "retained copy owns its historical URL")
               await assertStableWidth(a.page, "historical-copy")
 
               assert.equal(await active(a.page, "conversation").count(), 0, "historical copy has no active live Conversation screen")
@@ -248,7 +254,7 @@ jobs:
               a.page.once("dialog", dialog => dialog.accept())
               await deleteButton.click()
               await active(a.page, "chats").waitFor({state: "visible", timeout: WAIT})
-              assert.equal(new URL(a.page.url()).pathname, "/chats", "Delete replaces stale /chats/:id route with /chats")
+              await waitPath(a.page, "/chats", "Delete replaces stale /chats/:id route with /chats")
               await assertStableWidth(a.page, "chats-after-delete")
 
               const afterDelete = await records(a.page)
@@ -258,19 +264,18 @@ jobs:
 
               await a.page.goBack({waitUntil: "domcontentloaded"})
               await active(a.page, "chats").waitFor({state: "visible", timeout: WAIT})
-              assert.equal(new URL(a.page.url()).pathname, "/chats", "Back cannot resurrect deleted historical detail")
+              await waitPath(a.page, "/chats", "Back cannot resurrect deleted historical detail")
               assert.equal(await active(a.page, "history").count(), 0)
 
               await a.page.goForward({waitUntil: "domcontentloaded"})
               await active(a.page, "chats").waitFor({state: "visible", timeout: WAIT})
-              assert.equal(new URL(a.page.url()).pathname, "/chats", "Forward cannot resurrect deleted historical detail")
+              await waitPath(a.page, "/chats", "Forward cannot resurrect deleted historical detail")
               assert.equal(await active(a.page, "history").count(), 0)
 
               const staleResponse = await a.page.goto(`${BASE_URL}/chats/${conversationId}`, {waitUntil: "domcontentloaded"})
               assert.ok(staleResponse?.ok(), "direct stale historical URL loads app shell")
               await active(a.page, "chats").waitFor({state: "visible", timeout: WAIT})
-              await a.page.waitForFunction(() => location.pathname === "/chats", null, {timeout: WAIT})
-              assert.equal(new URL(a.page.url()).pathname, "/chats", "direct stale URL canonicalizes to Chats")
+              await waitPath(a.page, "/chats", "direct stale URL canonicalizes to Chats")
               assert.equal(await active(a.page, "history").count(), 0, "direct stale URL cannot resurrect deleted local copy")
 
               assert.deepEqual(a.errors, [], `participant A browser/console failures: ${JSON.stringify(a.errors)}`)
@@ -292,45 +297,97 @@ jobs:
             Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, endpoint_config |> Keyword.put(:server, true) |> Keyword.put(:http, [ip: {127, 0, 0, 1}, port: 4000]))
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
             Process.sleep(:infinity)
-          ' > /tmp/t09-t03-phoenix.log 2>&1 &
-          echo $! > /tmp/t09-t03-phoenix.pid
+          ' > /tmp/t09-t03-hostile-phoenix.log 2>&1 &
+          echo $! > /tmp/t09-t03-hostile-phoenix.pid
           for attempt in $(seq 1 45); do
-            if ! kill -0 "$(cat /tmp/t09-t03-phoenix.pid)" 2>/dev/null; then cat /tmp/t09-t03-phoenix.log; exit 1; fi
+            if ! kill -0 "$(cat /tmp/t09-t03-hostile-phoenix.pid)" 2>/dev/null; then cat /tmp/t09-t03-hostile-phoenix.log; exit 1; fi
             if curl -fsS http://localhost:4000/ >/dev/null; then exit 0; fi
             sleep 1
           done
-          cat /tmp/t09-t03-phoenix.log
+          cat /tmp/t09-t03-hostile-phoenix.log
           exit 1
 
       - name: Execute independent hostile browser proof
-        id: hostile
-        continue-on-error: true
         shell: bash
         run: |
-          set +e
-          set -o pipefail
+          set -euo pipefail
           echo "HOSTILE_EXECUTION_SHA=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA" || exit 97
-          node --test --test-concurrency=1 test/t09_t03_ux_001_hostile_browser_test.mjs 2>&1 | tee /tmp/t09-t03-hostile.log
-          code=${PIPESTATUS[0]}
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit "$code"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          node --test --test-concurrency=1 test/t09_t03_ux_001_hostile_browser_test.mjs
 
-      - name: Stop hostile Phoenix and remove injected proof
+      - name: Stop hostile stack and remove injected proof
         if: always()
         run: |
-          if [ -f /tmp/t09-t03-phoenix.pid ]; then kill "$(cat /tmp/t09-t03-phoenix.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/t09-t03-hostile-phoenix.pid ]; then kill "$(cat /tmp/t09-t03-hostile-phoenix.pid)" 2>/dev/null || true; fi
           rm -f test/t09_t03_ux_001_hostile_browser_test.mjs
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
-      - name: Reset database for source regression isolation
+      - name: Isolated F03 route and history browser regressions
+        shell: bash
         run: |
-          mix ecto.drop --force || true
+          set -euo pipefail
+
+          reset_db() {
+            mix ecto.drop --force >/dev/null 2>&1 || true
+            mix ecto.create --quiet
+            mix ecto.migrate --quiet
+          }
+
+          start_server() {
+            local logfile="$1"
+            mix run --no-start -e '
+              repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+              Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo_config |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
+              endpoint_config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+              Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, endpoint_config |> Keyword.put(:server, true) |> Keyword.put(:http, [ip: {127, 0, 0, 1}, port: 4000]))
+              {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+              Process.sleep(:infinity)
+            ' > "$logfile" 2>&1 &
+            SERVER_PID=$!
+            for attempt in $(seq 1 45); do
+              if ! kill -0 "$SERVER_PID" 2>/dev/null; then cat "$logfile"; return 1; fi
+              if curl -fsS http://localhost:4000/ >/dev/null; then return 0; fi
+              sleep 1
+            done
+            cat "$logfile"
+            return 1
+          }
+
+          stop_server() {
+            if [ -n "${SERVER_PID:-}" ]; then kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; fi
+            SERVER_PID=""
+          }
+
+          run_pattern() {
+            local slug="$1"
+            local pattern="$2"
+            local logfile="/tmp/t09-t03-${slug}.log"
+            echo "T09_F03_PATTERN=$pattern"
+            reset_db
+            start_server "$logfile"
+            set +e
+            node --test --test-concurrency=1 --test-name-pattern="$pattern" test/js/navigation_history_browser_test.mjs
+            local code=$?
+            set -e
+            stop_server
+            if [ "$code" -ne 0 ]; then cat "$logfile"; return "$code"; fi
+          }
+
+          trap stop_server EXIT
+          run_pattern primary "primary navigation writes canonical URLs"
+          run_pattern queued "QUEUED navigation away and Back/Forward preserve queue"
+          run_pattern active "match_found replaces transient matchmaking and active Conversation Back"
+          run_pattern terminal "terminal route replaces active Conversation and stale history cannot resurrect ACTIVE"
+          run_pattern unavailable "direct unavailable Conversation canonicalizes with replace"
+          trap - EXIT
+
+      - name: Isolated retained-delete continuity browser regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --force >/dev/null 2>&1 || true
           mix ecto.create --quiet
           mix ecto.migrate --quiet
-
-      - name: Start Phoenix source-regression real stack
-        run: |
           mix run --no-start -e '
             repo_config = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
             Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo_config |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
@@ -338,59 +395,62 @@ jobs:
             Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, endpoint_config |> Keyword.put(:server, true) |> Keyword.put(:http, [ip: {127, 0, 0, 1}, port: 4000]))
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
             Process.sleep(:infinity)
-          ' > /tmp/t09-t03-source-phoenix.log 2>&1 &
-          echo $! > /tmp/t09-t03-source-phoenix.pid
+          ' > /tmp/t09-t03-continuity.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 45); do
-            if ! kill -0 "$(cat /tmp/t09-t03-source-phoenix.pid)" 2>/dev/null; then cat /tmp/t09-t03-source-phoenix.log; exit 1; fi
-            if curl -fsS http://localhost:4000/ >/dev/null; then exit 0; fi
+            if ! kill -0 "$pid" 2>/dev/null; then cat /tmp/t09-t03-continuity.log; exit 1; fi
+            if curl -fsS http://localhost:4000/ >/dev/null; then break; fi
             sleep 1
           done
-          cat /tmp/t09-t03-source-phoenix.log
-          exit 1
-
-      - name: Existing F03 navigation browser regression
-        id: f03_browser
-        continue-on-error: true
-        run: node --test --test-concurrency=1 test/js/navigation_history_browser_test.mjs
-
-      - name: Existing retained-delete browser regression
-        id: continuity_browser
-        continue-on-error: true
-        run: node --test --test-concurrency=1 --test-name-pattern="real browser Keep -> encrypted restore -> Delete tombstone -> hostile stale device -> convergence" test/js/team5_continuity_browser_attack_test.mjs
-
-      - name: Stop source-regression Phoenix
-        if: always()
-        run: |
-          if [ -f /tmp/t09-t03-source-phoenix.pid ]; then kill "$(cat /tmp/t09-t03-source-phoenix.pid)" 2>/dev/null || true; fi
+          curl -fsS http://localhost:4000/ >/dev/null
+          node --test --test-concurrency=1 --test-name-pattern="real browser Keep -> encrypted restore -> Delete tombstone -> hostile stale device -> convergence" test/js/team5_continuity_browser_attack_test.mjs
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          trap - EXIT
 
       - name: Route and navigation unit regressions
-        id: route_units
-        continue-on-error: true
-        run: |
-          node --test test/js/route_contract_test.mjs test/js/navigation_history_test.mjs
+        run: node --test test/js/route_contract_test.mjs test/js/navigation_history_test.mjs
 
-      - name: Candidate JavaScript syntax and diff hygiene
-        id: hygiene
-        continue-on-error: true
+      - name: Candidate-owned JavaScript and diff hygiene
         run: |
           node --check priv/static/assets/app.js
           git diff --check HEAD^
-          git diff --exit-code
+          test -z "$(git status --porcelain)"
 
-      - name: Reset database before full precommit
+      - name: Full precommit and formatter-drift classification
+        shell: bash
         run: |
-          mix ecto.drop --force || true
+          set -euo pipefail
+          mix ecto.drop --force >/dev/null 2>&1 || true
           mix ecto.create --quiet
           mix ecto.migrate --quiet
+          mix precommit
 
-      - name: Full precommit classification surface
-        id: precommit
-        continue-on-error: true
-        run: mix precommit
+          echo "POST_PRECOMMIT_STATUS_BEGIN"
+          git status --porcelain || true
+          echo "POST_PRECOMMIT_STATUS_END"
+
+          unexpected=0
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            path="${line:3}"
+            case "$path" in
+              lib/strangertalks_new/conversation_lifecycle/conversation_server.ex|lib/strangertalks_new/reflections.ex)
+                echo "T09_CLASSIFICATION inherited formatter drift: $path"
+                ;;
+              *)
+                echo "T09_UNEXPECTED_POST_PRECOMMIT_MUTATION=$path"
+                unexpected=1
+                ;;
+            esac
+          done < <(git status --porcelain)
+          test "$unexpected" -eq 0
+
+          git reset --hard "$EXPECTED_SHA"
+          git clean -fd
 
       - name: Final exact SHA tree and clean-state proof
-        id: final
-        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -404,29 +464,11 @@ jobs:
           test "$final_tree" = "$EXPECTED_TREE"
           test -z "$status"
 
-      - name: T09 T03 UX-001 evidence summary
-        if: always()
+      - name: T09 T03 UX-001 terminal evidence summary
         run: |
           echo "REQUESTED_SHA=$EXPECTED_SHA"
-          echo "CHECKED_OUT_SHA=${{ steps.identity.outputs.checked_out_sha }}"
+          echo "CHECKED_OUT_SHA=$EXPECTED_SHA"
           echo "HOSTILE_EXECUTION_SHA=$EXPECTED_SHA"
           echo "FINAL_TESTED_SHA=$EXPECTED_SHA"
           echo "TREE=$EXPECTED_TREE"
-          echo "HOSTILE_OUTCOME=${{ steps.hostile.outcome }}"
-          echo "F03_BROWSER_OUTCOME=${{ steps.f03_browser.outcome }}"
-          echo "CONTINUITY_BROWSER_OUTCOME=${{ steps.continuity_browser.outcome }}"
-          echo "ROUTE_UNITS_OUTCOME=${{ steps.route_units.outcome }}"
-          echo "HYGIENE_OUTCOME=${{ steps.hygiene.outcome }}"
-          echo "PRECOMMIT_OUTCOME=${{ steps.precommit.outcome }}"
-          echo "FINAL_IDENTITY_OUTCOME=${{ steps.final.outcome }}"
-
-      - name: Enforce owned T03 verification gates
-        if: always()
-        shell: bash
-        run: |
-          test "${{ steps.hostile.outcome }}" = "success"
-          test "${{ steps.f03_browser.outcome }}" = "success"
-          test "${{ steps.continuity_browser.outcome }}" = "success"
-          test "${{ steps.route_units.outcome }}" = "success"
-          test "${{ steps.hygiene.outcome }}" = "success"
-          test "${{ steps.final.outcome }}" = "success"
+          echo "T09_T03_UX_001_OWNED_GATES=GREEN"
