@@ -1,6 +1,7 @@
 defmodule StrangertalksNew.T04AIReview001HostileProofTest do
   use ExUnit.Case, async: false
 
+  # Diagnostic-only hostile proof. T07 production source remains untouched.
   alias StrangertalksNew.AgentSystems.LearningAdvisor
 
   defmodule ProbeProvider do
