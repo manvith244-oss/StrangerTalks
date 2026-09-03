@@ -195,14 +195,14 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
     Enum.reduce_while(entries, :safe, fn
       {key, nested}, :safe ->
         cond do
-          key in @forbidden_personal_keys ->
-            {:halt, :forbidden}
-
-          key in @personal_data_markers and nested == true ->
-            {:halt, :forbidden}
-
           not (is_atom(key) or is_binary(key)) ->
             {:halt, :unsupported}
+
+          privacy_key_member?(key, @forbidden_personal_keys) ->
+            {:halt, :forbidden}
+
+          privacy_key_member?(key, @personal_data_markers) and nested == true ->
+            {:halt, :forbidden}
 
           true ->
             case inspect_privacy(nested) do
@@ -211,6 +211,24 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
             end
         end
     end)
+  end
+
+  defp privacy_key_member?(key, candidates) do
+    canonical_key = canonical_privacy_key(key)
+    Enum.any?(candidates, &(canonical_privacy_key(&1) == canonical_key))
+  end
+
+  defp canonical_privacy_key(key) when is_atom(key) do
+    key
+    |> Atom.to_string()
+    |> canonical_privacy_key()
+  end
+
+  defp canonical_privacy_key(key) when is_binary(key) do
+    for <<byte <- key>>, into: <<>> do
+      lowered = if byte in ?A..?Z, do: byte + 32, else: byte
+      <<lowered>>
+    end
   end
 
   defp inspect_sequence(values) do
