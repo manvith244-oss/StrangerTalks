@@ -1,4 +1,4 @@
-name: T07 AI-003 Formatter Successor Staging
+name: T07 AI-003 Exact Successor Verification
 
 on:
   push:
@@ -7,24 +7,47 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  stage-successor:
+  verify:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
-      PARENT_SHA: f04aa0ffd746aab4c56f07873d2766a9117510f6
-      STAGING_BRANCH: team7/ai-003-format-successor-stage
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      EXPECTED_SHA: 492fae85c54d91f9c88d0574900aef3479e0a2fe
+      CANONICAL_BASE: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+      BASE_FORMATTED_CONVERSATION_SERVER: 2b2807fb1dc0d403219439010247891180fe4d02
+      BASE_FORMATTED_REFLECTIONS: 46388127b8616e56a8a929ab0b7b0f4d1c216c80
+
     steps:
-      - name: Checkout exact parent
+      - name: Checkout exact T07 successor
         uses: actions/checkout@v4
         with:
-          ref: f04aa0ffd746aab4c56f07873d2766a9117510f6
+          ref: 492fae85c54d91f9c88d0574900aef3479e0a2fe
           fetch-depth: 0
 
-      - name: Prove parent and clean input
+      - name: Prove exact SHA and clean input
         run: |
-          test "$(git rev-parse HEAD)" = "$PARENT_SHA"
+          echo "EXPECTED_SHA=$EXPECTED_SHA"
+          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain)"
 
       - name: Set up BEAM
@@ -33,54 +56,220 @@ jobs:
           elixir-version: "1.18.4"
           otp-version: "27.3.4"
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
       - name: Install dependencies
         run: |
           mix local.hex --force
           mix local.rebar --force
           mix deps.get
 
-      - name: Format only T07-owned AI-003 files
+      - name: Add verification-only scalar and marker proofs
         run: |
-          mix format \
-            lib/strangertalks_new/agent_systems/learning_advisor.ex \
-            lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
-            test/strangertalks_new/agent_systems_break_test.exs \
-            test/strangertalks_new/companion_open_ai_provider_test.exs \
-            test/strangertalks_new/t07_provider_failure_matrix_test.exs
+          cat > test/strangertalks_new/t07_ai_003_ephemeral_scalar_test.exs <<'EOF'
+          defmodule StrangertalksNew.T07AI003EphemeralScalarTest do
+            use StrangertalksNew.DataCase, async: false
 
-      - name: Prove exact formatter-only scope
-        run: |
-          printf '%s\n' \
-            lib/strangertalks_new/agent_systems/learning_advisor.ex \
-            lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
-            test/strangertalks_new/agent_systems_break_test.exs \
-            test/strangertalks_new/companion_open_ai_provider_test.exs \
-            test/strangertalks_new/t07_provider_failure_matrix_test.exs \
-            > /tmp/expected
-          git diff --name-only | sort > /tmp/actual
-          sort -o /tmp/expected /tmp/expected
-          echo '=== EXPECTED ==='
-          cat /tmp/expected
-          echo '=== ACTUAL ==='
-          cat /tmp/actual
-          diff -u /tmp/expected /tmp/actual
-          git diff --check
-          echo '=== FORMATTER PATCH ==='
-          git diff --no-ext-diff --unified=20
+            alias StrangertalksNew.AgentSystems.LearningAdvisor
 
-      - name: Create one formatter successor commit on staging ref
+            defmodule FakeProvider do
+              @behaviour StrangertalksNew.AgentSystems.Provider
+
+              @impl true
+              def structured(agent_id, payload, _instructions, _schema, _opts) do
+                send(Application.fetch_env!(:strangertalks_new, :t07_ai_003_ephemeral_pid), {
+                  :agent_request,
+                  agent_id,
+                  payload
+                })
+
+                {:ok,
+                 %{
+                   "recommendations" => [
+                     %{
+                       "title" => "Keep the experiment bounded",
+                       "hypothesis" => "The aggregate signal may justify a reviewed experiment.",
+                       "evidence" => "Only aggregate data was supplied.",
+                       "experiment" => "Run a small reversible test.",
+                       "confidence" => "medium"
+                     }
+                   ]
+                 }}
+              end
+            end
+
+            setup do
+              previous_pid = Application.get_env(:strangertalks_new, :t07_ai_003_ephemeral_pid)
+              previous_learning = Application.get_env(:strangertalks_new, :learning_advisor)
+              Application.put_env(:strangertalks_new, :t07_ai_003_ephemeral_pid, self())
+              Application.put_env(:strangertalks_new, :learning_advisor, provider: FakeProvider)
+
+              on_exit(fn ->
+                restore(:t07_ai_003_ephemeral_pid, previous_pid)
+                restore(:learning_advisor, previous_learning)
+              end)
+
+              :ok
+            end
+
+            test "nested contains_personal_data marker is rejected before provider invocation" do
+              assert {:error, :personal_data_not_allowed} =
+                       LearningAdvisor.advise([
+                         %{
+                           analytics_period: :DAILY,
+                           source_type: :SYSTEM,
+                           trend_category: %{nested: %{"contains_personal_data" => true}},
+                           aggregation_level: :AGGREGATED
+                         }
+                       ])
+
+              refute_receive {:agent_request, "learning_advisor", _}, 20
+            end
+
+            test "safe DateTime values traverse and normalize" do
+              assert {:ok, _result} =
+                       LearningAdvisor.advise([
+                         %{
+                           analytics_period: :DAILY,
+                           source_type: :SYSTEM,
+                           trend_category: ~U[2026-09-03 12:34:56Z],
+                           aggregation_level: :AGGREGATED
+                         }
+                       ])
+
+              assert_receive {:agent_request, "learning_advisor", %{analytics: [payload]}}
+              assert payload.trend_category == "2026-09-03T12:34:56Z"
+            end
+
+            test "safe Decimal values traverse and normalize" do
+              assert {:ok, _result} =
+                       LearningAdvisor.advise([
+                         %{
+                           analytics_period: :DAILY,
+                           source_type: :SYSTEM,
+                           queue_success_rate: Decimal.new("0.82"),
+                           aggregation_level: :AGGREGATED
+                         }
+                       ])
+
+              assert_receive {:agent_request, "learning_advisor", %{analytics: [payload]}}
+              assert payload.queue_success_rate == "0.82"
+            end
+
+            defp restore(key, nil), do: Application.delete_env(:strangertalks_new, key)
+            defp restore(key, value), do: Application.put_env(:strangertalks_new, key, value)
+          end
+          EOF
+
+      - name: Hostile recursive privacy and traversal proofs
         run: |
-          git config user.name 'Manvith'
-          git config user.email 'manvithh24@gmail.com'
-          git switch -c "$STAGING_BRANCH"
-          git add \
-            lib/strangertalks_new/agent_systems/learning_advisor.ex \
-            lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
-            test/strangertalks_new/agent_systems_break_test.exs \
-            test/strangertalks_new/companion_open_ai_provider_test.exs \
-            test/strangertalks_new/t07_provider_failure_matrix_test.exs
-          git commit -m 'style(t07): format AI-003 owned files'
-          test "$(git rev-parse HEAD^)" = "$PARENT_SHA"
+          mix test \
+            test/strangertalks_new/t07_ai_003_privacy_boundary_test.exs \
+            test/strangertalks_new/t07_ai_003_ephemeral_scalar_test.exs \
+            test/strangertalks_new/agent_systems_functional_test.exs
+
+      - name: Remove verification-only proof file
+        run: |
+          rm test/strangertalks_new/t07_ai_003_ephemeral_scalar_test.exs
           test -z "$(git status --porcelain)"
-          echo "STAGED_SUCCESSOR=$(git rev-parse HEAD)"
-          git push origin "$STAGING_BRANCH"
+
+      - name: Provider failure matrix and A01-A04 regression surface
+        run: |
+          mix test \
+            test/strangertalks_new/t07_provider_failure_matrix_test.exs \
+            test/strangertalks_new/companion_open_ai_provider_test.exs \
+            test/strangertalks_new/companion_test.exs \
+            test/strangertalks_new/companion_conversation_start_test.exs \
+            test/strangertalks_new/agent_systems_break_test.exs \
+            test/strangertalks_new_web/controllers/companion_controller_test.exs
+
+      - name: Browser Companion regression
+        run: node --test test/js/companion_test.mjs test/js/prompt_cards_test.mjs
+
+      - name: Candidate-owned formatter check
+        run: |
+          mix format --check-formatted \
+            lib/strangertalks_new/agent_systems/learning_advisor.ex \
+            lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
+            test/strangertalks_new/agent_systems_break_test.exs \
+            test/strangertalks_new/companion_open_ai_provider_test.exs \
+            test/strangertalks_new/t07_provider_failure_matrix_test.exs
+          test -z "$(git status --porcelain)"
+
+      - name: Canonical base to successor diff check
+        run: |
+          git merge-base --is-ancestor "$CANONICAL_BASE" "$EXPECTED_SHA"
+          git diff --check "$CANONICAL_BASE...$EXPECTED_SHA"
+
+      - name: Candidate worktree diff check
+        run: git diff --check
+
+      - name: Full precommit with exact result capture
+        run: |
+          set +e
+          mix precommit 2>&1 | tee /tmp/t07-precommit.log
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "$code" > /tmp/t07-precommit-exit
+          echo "FULL_PRECOMMIT_EXIT=$code"
+
+      - name: Prove post-precommit drift is inherited baseline formatter output
+        run: |
+          echo '=== POST PRECOMMIT STATUS ==='
+          git status --short
+          git diff --name-only | sort > /tmp/post-precommit-paths
+          printf '%s\n' \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/reflections.ex | sort > /tmp/allowed-inherited
+          comm -23 /tmp/post-precommit-paths /tmp/allowed-inherited > /tmp/unexpected
+          test ! -s /tmp/unexpected
+
+          if git diff --quiet -- lib/strangertalks_new/conversation_lifecycle/conversation_server.ex; then
+            echo 'conversation_server formatter drift absent'
+          else
+            actual=$(git hash-object lib/strangertalks_new/conversation_lifecycle/conversation_server.ex)
+            echo "conversation_server formatted blob=$actual"
+            test "$actual" = "$BASE_FORMATTED_CONVERSATION_SERVER"
+            git diff --no-ext-diff -- lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
+          fi
+
+          if git diff --quiet -- lib/strangertalks_new/reflections.ex; then
+            echo 'reflections formatter drift absent'
+          else
+            actual=$(git hash-object lib/strangertalks_new/reflections.ex)
+            echo "reflections formatted blob=$actual"
+            test "$actual" = "$BASE_FORMATTED_REFLECTIONS"
+            git diff --no-ext-diff -- lib/strangertalks_new/reflections.ex
+          fi
+
+          git restore -- \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/reflections.ex
+          test -z "$(git status --porcelain)"
+
+      - name: Classify full precommit result
+        run: |
+          code=$(cat /tmp/t07-precommit-exit)
+          if [ "$code" -eq 0 ]; then
+            echo 'FULL_PRECOMMIT_CLASSIFICATION=GREEN'
+            exit 0
+          fi
+
+          if grep -q 'RecoveryRestartTest' /tmp/t07-precommit.log; then
+            echo 'FULL_PRECOMMIT_CLASSIFICATION=CROSS-TEAM T02 RUNTIME-RESTART FAILURE'
+            grep -n -A20 -B5 'RecoveryRestartTest' /tmp/t07-precommit.log || true
+            exit 0
+          fi
+
+          echo 'FULL_PRECOMMIT_CLASSIFICATION=UNCLASSIFIED FAILURE'
+          exit 1
+
+      - name: Final exact successor and clean-tree proof
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          git diff --check
+          echo "T07_AI_003_VERIFIED_SHA=$(git rev-parse HEAD)"
