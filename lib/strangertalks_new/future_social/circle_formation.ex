@@ -14,8 +14,11 @@ defmodule StrangertalksNew.FutureSocial.CircleFormation do
 
   This module forms candidate groups only. It does not create durable Circles,
   authorize membership, run realtime lifecycle, apply safety policy, or persist
-  anything. Those authorities belong to later packets and their owning teams.
+  anything. Active Circle members must not be re-presented as formation candidates;
+  continuity and durable membership authority belong to later lifecycle packets.
   """
+
+  @target_circle_size 6
 
   @type candidate :: %{
           required(:participant_id) => term(),
@@ -47,10 +50,11 @@ defmodule StrangertalksNew.FutureSocial.CircleFormation do
     * `:max_size` - largest permitted Circle size, greater than or equal to `:min_size`
 
   The kernel maximizes the number of seated candidates without ever emitting a
-  Circle outside the supplied bounds. When all candidates in a cohort can be
-  seated, Circle sizes are balanced as evenly as possible. When a cohort falls
-  into an unavoidable capacity gap, the largest valid prefix is seated and the
-  remainder stays waiting.
+  Circle outside the supplied bounds. For the candidates that can be seated, it
+  chooses the feasible Circle count whose average size is closest to the
+  human-scale target of #{@target_circle_size}, then balances member counts as
+  evenly as possible. When a cohort falls into an unavoidable capacity gap, the
+  largest valid prefix is seated and the remainder stays waiting.
   """
   @spec form([candidate()], keyword()) :: {:ok, result()} | {:error, formation_error()}
   def form(candidates, opts) when is_list(candidates) and is_list(opts) do
@@ -154,7 +158,8 @@ defmodule StrangertalksNew.FutureSocial.CircleFormation do
 
   defp form_cohort(indexed_candidates, formation_key, min_size, max_size) do
     candidate_count = length(indexed_candidates)
-    {circle_count, seated_count} = allocation(candidate_count, min_size, max_size)
+    {_packing_circle_count, seated_count} = allocation(candidate_count, min_size, max_size)
+    circle_count = preferred_circle_count(seated_count, min_size, max_size)
     {seated, waiting} = Enum.split(indexed_candidates, seated_count)
     sizes = circle_sizes(seated_count, circle_count)
 
@@ -185,6 +190,38 @@ defmodule StrangertalksNew.FutureSocial.CircleFormation do
       circle_count = required_circle_count - 1
       {circle_count, circle_count * max_size}
     end
+  end
+
+  defp preferred_circle_count(0, _min_size, _max_size), do: 0
+
+  defp preferred_circle_count(seated_count, min_size, max_size) do
+    target_size = min(max(@target_circle_size, min_size), max_size)
+    min_circle_count = ceil_div(seated_count, max_size)
+    max_circle_count = div(seated_count, min_size)
+    ideal_floor = div(seated_count, target_size)
+
+    [min_circle_count, max_circle_count, ideal_floor, ideal_floor + 1]
+    |> Enum.filter(&(&1 >= min_circle_count and &1 <= max_circle_count))
+    |> Enum.uniq()
+    |> Enum.reduce(nil, fn circle_count, best_count ->
+      if closer_to_target?(seated_count, target_size, circle_count, best_count) do
+        circle_count
+      else
+        best_count
+      end
+    end)
+  end
+
+  defp closer_to_target?(_seated_count, _target_size, _circle_count, nil), do: true
+
+  defp closer_to_target?(seated_count, target_size, circle_count, best_count) do
+    candidate_error = abs(seated_count - target_size * circle_count)
+    best_error = abs(seated_count - target_size * best_count)
+    candidate_scaled_error = candidate_error * best_count
+    best_scaled_error = best_error * circle_count
+
+    candidate_scaled_error < best_scaled_error or
+      (candidate_scaled_error == best_scaled_error and circle_count < best_count)
   end
 
   defp circle_sizes(0, 0), do: []
