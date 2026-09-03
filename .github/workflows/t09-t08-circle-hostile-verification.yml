@@ -13,12 +13,30 @@ env:
   MIX_ENV: test
   BASE_SHA: 423442915e37fd6aadd25bd1c6a300eed2b464f0
   EXPECTED_SHA: 6a7571085dfa01ddd1ea488911a88b14cfddd8fb
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
 
 jobs:
   verify:
     name: T09-T08-001 Circle capacity and determinism hostile proof
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
         with:
