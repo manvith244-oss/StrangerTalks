@@ -332,7 +332,7 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
               hypothesis: %{type: "string"},
               evidence: %{type: "string"},
               experiment: %{type: "string"},
-              confidence: %{type: "string", enum: ["low", "medium", "high"]
+              confidence: %{type: "string", enum: ["low", "medium", "high"]}
             },
             required: ["title", "hypothesis", "evidence", "experiment", "confidence"]
           }
