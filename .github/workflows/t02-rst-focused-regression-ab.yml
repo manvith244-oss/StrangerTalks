@@ -69,7 +69,7 @@ jobs:
           test "$actual" = "$T02_SOURCE_CANDIDATE"
           test -z "$(git status --porcelain)"
 
-      - name: Apply V2 single-authority fix ephemerally
+      - name: Apply exact V2 single-authority fix ephemerally
         if: matrix.mode == 'experiment'
         shell: bash
         run: |
@@ -78,10 +78,28 @@ jobs:
           from pathlib import Path
           path = Path("lib/strangertalks_new/conversation_lifecycle/conversation_server.ex")
           text = path.read_text()
-          old = "{__MODULE__, %{conversation_id: conversation_id}}\n             ) do"
-          new = "Supervisor.child_spec(\n                 {__MODULE__, %{conversation_id: conversation_id}},\n                 restart: :temporary\n               )\n             ) do"
+
+          old = """        case DynamicSupervisor.start_child(
+                 StrangertalksNew.ConversationDynamicSupervisor,
+                 {__MODULE__, %{conversation_id: conversation_id}}
+               ) do
+          """
+
+          new = """        child_spec =
+            Supervisor.child_spec(
+              {__MODULE__, %{conversation_id: conversation_id}},
+              restart: :temporary
+            )
+
+          case DynamicSupervisor.start_child(
+                 StrangertalksNew.ConversationDynamicSupervisor,
+                 child_spec
+               ) do
+          """
+
           if old not in text:
-              raise SystemExit("ensure_started child-spec anchor not found")
+              raise SystemExit("ensure_started start_child anchor not found")
+
           path.write_text(text.replace(old, new, 1))
           PY
           git diff --check
