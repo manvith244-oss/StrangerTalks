@@ -18,11 +18,7 @@ defmodule StrangertalksNew.FutureSocial.CircleFormationHostileCapacityTest do
   end
 
   defp form(input) do
-    CircleFormation.form(input,
-      min_size: @min_size,
-      target_size: @target_size,
-      max_size: @max_size
-    )
+    CircleFormation.form(input, min_size: @min_size, max_size: @max_size)
   end
 
   defp member_ids(circles) do
@@ -60,7 +56,7 @@ defmodule StrangertalksNew.FutureSocial.CircleFormationHostileCapacityTest do
     end
   end
 
-  test "when everyone can be seated, the chosen Circle count is closest to target size six" do
+  test "when everyone can be seated, Circle count stays as close as feasible to target size six" do
     for count <- [20, 100, 1_000] do
       input = candidates(count, {:topic, "high-demand", "en"})
       assert {:ok, %{circles: circles, waiting: []}} = form(input)
@@ -182,13 +178,13 @@ defmodule StrangertalksNew.FutureSocial.CircleFormationHostileCapacityTest do
     assert {:error, {:duplicate_participant, "dup-1"}} = form(input ++ [duplicate])
   end
 
-  test "target size must stay inside the healthy min/max range" do
-    input = candidates(8)
+  test "approved healthy envelope cannot be bypassed by caller-provided bounds" do
+    input = candidates(9)
 
-    assert {:error, :invalid_target_size} =
-             CircleFormation.form(input, min_size: 4, target_size: 3, max_size: 8)
+    assert {:error, :invalid_size_bounds} =
+             CircleFormation.form(input, min_size: 3, max_size: 8)
 
-    assert {:error, :invalid_target_size} =
-             CircleFormation.form(input, min_size: 4, target_size: 9, max_size: 8)
+    assert {:error, :invalid_size_bounds} =
+             CircleFormation.form(input, min_size: 4, max_size: 9)
   end
 end
