@@ -41,16 +41,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 3
+          fetch-depth: 0
 
-      - name: Prove lab starts from exact T02 semantic candidate
+      - name: Prove lab descends from exact T02 semantic candidate
         shell: bash
         run: |
           set -euo pipefail
+          source_candidate="e3e86c736ca6ef911bd0023c4877ac68642a48b9"
           echo "LAB_HEAD=$(git rev-parse HEAD)"
-          echo "SOURCE_CANDIDATE=e3e86c736ca6ef911bd0023c4877ac68642a48b9"
-          test "$(git rev-parse HEAD^^)" = "e3e86c736ca6ef911bd0023c4877ac68642a48b9"
-          git diff --exit-code e3e86c736ca6ef911bd0023c4877ac68642a48b9..HEAD -- lib/
+          echo "SOURCE_CANDIDATE=$source_candidate"
+          git merge-base --is-ancestor "$source_candidate" HEAD
+          git diff --exit-code "$source_candidate"..HEAD -- lib/
 
       - name: Apply candidate fix ephemerally
         shell: bash
@@ -68,24 +69,14 @@ jobs:
               raise SystemExit("mailbox constants anchor not found")
           text = text.replace(constants_old, constants_new, 1)
 
-          old = '''  def ensure_started(conversation_id) when is_binary(conversation_id) do
-            case lookup(conversation_id) do
-              {:ok, pid} ->
-                {:ok, pid}
-
-              {:error, :not_started} ->
-                case DynamicSupervisor.start_child(
-                       StrangertalksNew.ConversationDynamicSupervisor,
-                       {__MODULE__, %{conversation_id: conversation_id}}
-                     ) do
-                  {:ok, pid} -> {:ok, pid}
-                  {:error, {:already_started, pid}} -> {:ok, pid}
-                  {:error, :already_present} -> lookup(conversation_id)
-                  {:error, reason} -> {:error, reason}
-                end
-            end
-          end
-          '''
+          start_marker = "  def ensure_started(conversation_id) when is_binary(conversation_id) do\n"
+          end_marker = "\n  def lookup(conversation_id) do\n"
+          start = text.find(start_marker)
+          if start < 0:
+              raise SystemExit("ensure_started start anchor not found")
+          end = text.find(end_marker, start)
+          if end < 0:
+              raise SystemExit("lookup boundary anchor not found")
 
           new = '''  def ensure_started(conversation_id) when is_binary(conversation_id) do
             case lookup(conversation_id) do
@@ -138,9 +129,7 @@ jobs:
           end
           '''
 
-          if old not in text:
-              raise SystemExit("ensure_started block anchor not found")
-          text = text.replace(old, new, 1)
+          text = text[:start] + new + text[end:]
           path.write_text(text)
           PY
 
