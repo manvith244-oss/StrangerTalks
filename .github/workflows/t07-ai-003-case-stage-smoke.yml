@@ -31,13 +31,13 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      EXPECTED_STAGE_SHA: ede7204afe3049327aff1660c04542c92cda0d05
+      EXPECTED_STAGE_SHA: 0311a23f319107c69ddfd9701825e0eb378abc55
 
     steps:
       - name: Checkout exact staged tree
         uses: actions/checkout@v4
         with:
-          ref: ede7204afe3049327aff1660c04542c92cda0d05
+          ref: 0311a23f319107c69ddfd9701825e0eb378abc55
           fetch-depth: 0
 
       - name: Prove staged identity
