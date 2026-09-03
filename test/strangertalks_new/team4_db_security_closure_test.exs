@@ -108,6 +108,6 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
                last_active_at: now
              })
 
-    assert Repo.get!(StrangertalksNew.MatchingRules.Participant, participant.participant_id)
+    assert Repo.get!(StrangertalksNew.Participant, participant.participant_id)
   end
 end
