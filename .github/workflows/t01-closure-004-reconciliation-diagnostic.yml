@@ -1,0 +1,180 @@
+name: T01 Closure 004 Reconciliation Diagnostic
+
+on:
+  push:
+    branches:
+      - validation/t01-closure-004-20260903
+
+permissions:
+  contents: read
+
+jobs:
+  exact-terminal-comparison:
+    name: exact-terminal-${{ matrix.case }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: main
+            sha: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+          - case: life-002
+            sha: 9ccf29a024355e178070155222b70e5c59a529a2
+          - case: recovery-001
+            sha: 4d1631e4e1c7a72108939f94ce4b9fa365426170
+          - case: pair-003
+            sha: 1ad566d77975c8b6e24fbfb8636feea15a704582
+          - case: t02-rst-002
+            sha: e3e86c736ca6ef911bd0023c4877ac68642a48b9
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+    steps:
+      - name: Checkout exact comparison SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.sha }}
+          fetch-depth: 0
+
+      - name: Prove exact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CASE=${{ matrix.case }}"
+          echo "REQUESTED=${{ matrix.sha }}"
+          echo "CHECKED_OUT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ matrix.sha }}"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Reset database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Run exact Team2 durable-End restart probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          path=test/strangertalks_new_web/controllers/team2_normal_media_terminal_test.exs
+          if test -f "$path"; then
+            echo "PROBE_PRESENT=yes"
+            mix test "$path" --trace
+          else
+            echo "PROBE_PRESENT=no"
+            echo "RESULT=UNAVAILABLE_ON_THIS_HISTORICAL_TREE"
+          fi
+
+  pair-life-composition:
+    name: scratch-pair-003-plus-life-002
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      PAIR_SHA: 1ad566d77975c8b6e24fbfb8636feea15a704582
+    steps:
+      - name: Checkout exact PAIR-003
+        uses: actions/checkout@v4
+        with:
+          ref: 1ad566d77975c8b6e24fbfb8636feea15a704582
+          fetch-depth: 0
+
+      - name: Prove PAIR identity and compose frozen LIFE semantic lineage
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PAIR_SHA"
+          git config user.name "t01-diagnostic"
+          git config user.email "t01-diagnostic@example.invalid"
+          git cherry-pick \
+            0c132f19de58a796be4799acf95eb5ae181cab94 \
+            ef5f286d6b1b056017ec9a09eea26c587c325485 \
+            625409ddefbff05866510296816c3cf1556d6983 \
+            f5ded85cc93f91259aa9862f77b65e6fe1e89977 \
+            3e3dfef4de166f129eabc951a3f359205b1ff44a \
+            05a2a7e66747ed0c894878850e191369c0143062 \
+            236c7c8e38117f4f290a029800a017f25e47c7fc \
+            9ccf29a024355e178070155222b70e5c59a529a2
+          echo "PAIR_SOURCE=$PAIR_SHA"
+          echo "LIFE_SOURCE=9ccf29a024355e178070155222b70e5c59a529a2"
+          echo "SCRATCH_COMPOSED_HEAD=$(git rev-parse HEAD)"
+          git diff --check 423442915e37fd6aadd25bd1c6a300eed2b464f0...HEAD
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Reset database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Prove PAIR domain surface remains green under LIFE composition
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/pair_distinctness_authority_test.exs --trace
+
+      - name: Re-run durable-End restart probe under composition
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new_web/controllers/team2_normal_media_terminal_test.exs --trace
