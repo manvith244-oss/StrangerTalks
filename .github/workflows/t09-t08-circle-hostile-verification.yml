@@ -271,7 +271,7 @@ jobs:
             test "V10 minimal opaque identity is sufficient without public social graph metadata" do
               input =
                 for id <- 1..6 do
-                  %{participant_id: {:opaque, id}, formation_key: {:context, <<id>>}}
+                  %{participant_id: {:opaque, id}, formation_key: {:context, :opaque}}
                 end
 
               assert {:ok, %{circles: [circle], waiting: []}} = form(input)
