@@ -1,0 +1,102 @@
+name: T07 AI-003 T02 Baseline Diagnostic
+
+on:
+  push:
+    branches:
+      - team7/ai-003-exact-verification
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: rejected-parent
+            ref: 492fae85c54d91f9c88d0574900aef3479e0a2fe
+          - label: privacy-successor
+            ref: 53759a00cac4a19c6dca9ad2cadf7f713a324218
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+    steps:
+      - name: Checkout exact comparison ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.ref }}
+          fetch-depth: 0
+
+      - name: Prove identity
+        run: |
+          echo "LABEL=${{ matrix.label }}"
+          echo "EXPECTED=${{ matrix.ref }}"
+          echo "ACTUAL=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${{ matrix.ref }}"
+          test -z "$(git status --porcelain)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Repeat focused Team2 terminal test
+        run: |
+          set +e
+          failures=0
+          for seed in 157934 935171 1 7 13 23 42 73 101 211 509 997; do
+            echo "=== ${{ matrix.label }} focused seed=$seed ==="
+            mix test test/strangertalks_new_web/controllers/team2_normal_media_terminal_test.exs --seed "$seed" 2>&1 | tee "/tmp/focused-$seed.log"
+            code=${PIPESTATUS[0]}
+            if [ "$code" -ne 0 ]; then
+              failures=$((failures + 1))
+              echo "FOCUSED_T02_FAILURE label=${{ matrix.label }} seed=$seed exit=$code"
+            fi
+          done
+          set -e
+          echo "FOCUSED_T02_FAILURE_COUNT label=${{ matrix.label }} count=$failures"
+
+      - name: Run full precommit for baseline comparison
+        run: |
+          set +e
+          mix precommit 2>&1 | tee /tmp/precommit.log
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "BASELINE_FULL_PRECOMMIT_EXIT label=${{ matrix.label }} code=$code"
+          if grep -q 'Team2NormalMediaTerminalTest' /tmp/precommit.log; then
+            echo "BASELINE_T02_TERMINAL_FAILURE_PRESENT label=${{ matrix.label }} yes"
+            grep -n -A12 -B4 'Team2NormalMediaTerminalTest' /tmp/precommit.log || true
+          else
+            echo "BASELINE_T02_TERMINAL_FAILURE_PRESENT label=${{ matrix.label }} no"
+          fi
+
+      - name: Final diagnostic cleanliness
+        run: |
+          git restore --worktree --staged .
+          test -z "$(git status --porcelain)"
+          echo "DIAGNOSTIC_DONE label=${{ matrix.label }} sha=$(git rev-parse HEAD)"
