@@ -1,4 +1,4 @@
-name: T09 T08 Circle Hostile Verification
+name: T09 T08 FUTURE-002 Hostile Verification
 
 on:
   push:
@@ -12,15 +12,16 @@ permissions:
 env:
   MIX_ENV: test
   BASE_SHA: 423442915e37fd6aadd25bd1c6a300eed2b464f0
-  EXPECTED_SHA: 6a7571085dfa01ddd1ea488911a88b14cfddd8fb
+  PREDECESSOR_SHA: 6a7571085dfa01ddd1ea488911a88b14cfddd8fb
+  EXPECTED_SHA: c604f82794bba66f07027535370e68e6bc1d219e
   STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
   STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
 
 jobs:
   verify:
-    name: T09-T08-001 Circle capacity and determinism hostile proof
+    name: T09-T08-FUTURE-002 independent Circle capacity/liquidity proof
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     services:
       postgres:
@@ -38,24 +39,41 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact FUTURE-002 candidate
+        uses: actions/checkout@v4
         with:
           ref: ${{ env.EXPECTED_SHA }}
           fetch-depth: 0
 
-      - name: Exact identity and clean packet
+      - name: Exact identity, lineage, and Fifth Door isolation
+        id: identity
         shell: bash
         run: |
           set -euo pipefail
-          actual_sha=$(git rev-parse HEAD)
+          actual_sha="$(git rev-parse HEAD)"
           echo "EXPECTED_SHA=$EXPECTED_SHA"
           echo "ACTUAL_SHA=$actual_sha"
           test "$actual_sha" = "$EXPECTED_SHA"
           test "$(git merge-base "$BASE_SHA" HEAD)" = "$BASE_SHA"
+          test "$(git merge-base "$PREDECESSOR_SHA" HEAD)" = "$PREDECESSOR_SHA"
           test -z "$(git status --porcelain)"
           git diff --check "$BASE_SHA"...HEAD
 
-      - uses: erlef/setup-beam@v1
+          actual_files="$(git diff --name-only "$PREDECESSOR_SHA"...HEAD | sort)"
+          expected_files="$(printf '%s\n' \
+            '.github/workflows/t08-future-002-circle-capacity.yml' \
+            'lib/strangertalks_new/future_social/circle_formation.ex' \
+            'test/strangertalks_new/future_social/circle_formation_hostile_capacity_test.exs' | sort)"
+          printf 'FUTURE_002_DIFF_SCOPE:\n%s\n' "$actual_files"
+          test "$actual_files" = "$expected_files"
+
+          ! grep -Eq 'StrangertalksNew\.(Matching|Conversation|Relationship|Repo)|Phoenix\.|Ecto\.|GenServer\.|Endpoint\.' \
+            lib/strangertalks_new/future_social/circle_formation.ex
+
+          echo "checked_out_sha=$actual_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
         with:
           elixir-version: '1.18.4'
           otp-version: '27.3.4'
@@ -66,167 +84,392 @@ jobs:
           mix local.rebar --force
           mix deps.get
 
-      - name: Inject and formatter-prove immutable T09 hostile Circle proof
+      - name: Inject independent T09 FUTURE-002 hostile proof
         shell: bash
         run: |
           set -euo pipefail
-          cat > test/t09_t08_circle_hostile_runtime_test.exs <<'ELIXIR'
-          defmodule StrangertalksNew.T09T08CircleHostileRuntimeTest do
-            use ExUnit.Case, async: true
+          cat > test/t09_t08_future_002_hostile_runtime_test.exs <<'ELIXIR'
+          defmodule StrangertalksNew.T09T08Future002HostileRuntimeTest do
+            use ExUnit.Case, async: false
 
             alias StrangertalksNew.FutureSocial.CircleFormation
 
-            defp candidates(count, key \\ :topic) do
-              for id <- 1..count, do: %{participant_id: id, formation_key: key}
-            end
+            @min_size 4
+            @target_size 6
+            @max_size 8
 
-            defp assert_human_scale_or_rejected(result, label) do
-              case result do
-                {:error, :invalid_size_bounds} ->
-                  :ok
+            defp candidates(count, key \\ {:opaque, :topic}, prefix \\ "candidate")
+            defp candidates(0, _key, _prefix), do: []
 
-                {:ok, %{circles: circles}} ->
-                  sizes = Enum.map(circles, &length(&1.members))
-
-                  assert Enum.all?(sizes, &(&1 >= 4 and &1 <= 8)),
-                         "#{label} violated 4..8 Circle law with sizes=#{inspect(sizes)}"
+            defp candidates(count, key, prefix) when is_integer(count) and count > 0 do
+              for id <- 1..count do
+                %{participant_id: "#{prefix}-#{id}", formation_key: key}
               end
             end
 
-            test "V1 hard maximum 8 cannot be overridden by caller policy" do
-              for max_size <- [9, 10, 32, 1_000_000] do
-                result = CircleFormation.form(candidates(9), min_size: 4, max_size: max_size)
-                assert_human_scale_or_rejected(result, "V1 max_size=#{max_size}")
+            defp form(input) do
+              CircleFormation.form(input, min_size: @min_size, max_size: @max_size)
+            end
+
+            defp output_ids(circles, waiting) do
+              Enum.flat_map(circles, & &1.members)
+              |> Kernel.++(waiting)
+              |> Enum.map(& &1.participant_id)
+            end
+
+            defp assert_bounded_accounting(input, circles, waiting) do
+              assert Enum.all?(circles, fn circle ->
+                       length(circle.members) in @min_size..@max_size
+                     end)
+
+              input_ids = Enum.map(input, & &1.participant_id)
+              output_ids = output_ids(circles, waiting)
+
+              assert length(output_ids) == length(input_ids)
+              assert MapSet.new(output_ids) == MapSet.new(input_ids)
+              assert length(output_ids) == MapSet.size(MapSet.new(output_ids))
+            end
+
+            defp best_target_distance(count) do
+              1..count
+              |> Enum.filter(fn circle_count ->
+                count >= @min_size * circle_count and count <= @max_size * circle_count
+              end)
+              |> Enum.map(fn circle_count -> abs(count / circle_count - @target_size) end)
+              |> Enum.min()
+            end
+
+            test "V1 caller cannot raise hard maximum above eight" do
+              input = candidates(100)
+
+              for max_size <- [9, 10, 100, 1_000_000] do
+                assert {:error, :invalid_size_bounds} =
+                         CircleFormation.form(input, min_size: 4, max_size: max_size)
               end
             end
 
-            test "V2 lower bound cannot authorize undersized Circles" do
-              for {count, min_size, max_size} <- [
-                    {1, 1, 8},
-                    {2, 2, 8},
-                    {3, 3, 8},
-                    {3, 1, 3}
-                  ] do
-                result = CircleFormation.form(candidates(count), min_size: min_size, max_size: max_size)
-                assert_human_scale_or_rejected(result, "V2 #{count}/#{min_size}/#{max_size}")
+            test "V2 caller cannot weaken healthy minimum below four or invert bounds" do
+              input = candidates(12)
+
+              for min_size <- [0, -10, 1, 2, 3] do
+                assert {:error, :invalid_size_bounds} =
+                         CircleFormation.form(input, min_size: min_size, max_size: 8)
+              end
+
+              assert {:error, :invalid_size_bounds} =
+                       CircleFormation.form(input, min_size: 8, max_size: 4)
+            end
+
+            test "V3 feasible packing independently minimizes average distance from six" do
+              for count <- [12, 18, 20, 24, 30, 32, 36, 48, 50, 100] do
+                input = candidates(count, {:target, count}, "target-#{count}")
+                assert {:ok, %{circles: circles, waiting: []}} = form(input)
+
+                actual_distance = abs(count / length(circles) - @target_size)
+                assert_in_delta actual_distance, best_target_distance(count), 1.0e-12
+                assert_bounded_accounting(input, circles, [])
               end
             end
 
-            test "V3 duplicate participant authority cannot inflate occupancy" do
-              input = [
+            test "V4 high demand stays many bounded Circles with exact accounting" do
+              for count <- [20, 100, 1_000] do
+                input = candidates(count, {:high_demand, count}, "demand-#{count}")
+                assert {:ok, %{circles: circles, waiting: waiting}} = form(input)
+                assert_bounded_accounting(input, circles, waiting)
+                assert Enum.all?(circles, &(length(&1.members) <= 8))
+
+                if count == 1_000 do
+                  assert length(circles) > 100
+                end
+              end
+            end
+
+            test "V5 broad 1..2000 matrix never loses duplicates or overfills humans" do
+              for count <- 1..2_000 do
+                input = candidates(count, {:sweep, count}, "sweep-#{count}")
+                assert {:ok, %{circles: circles, waiting: waiting}} = form(input)
+                assert_bounded_accounting(input, circles, waiting)
+              end
+            end
+
+            test "V6 repeated identity cannot inflate occupancy within or across cohorts" do
+              same_cohort = [
                 %{participant_id: :same, formation_key: :a},
                 %{participant_id: :p2, formation_key: :a},
-                %{participant_id: :same, formation_key: :a},
-                %{participant_id: :p4, formation_key: :a}
+                %{participant_id: :p3, formation_key: :a},
+                %{participant_id: :same, formation_key: :a}
               ]
 
-              assert {:error, {:duplicate_participant, :same}} =
-                       CircleFormation.form(input, min_size: 4, max_size: 8)
+              assert {:error, {:duplicate_participant, :same}} = form(same_cohort)
 
               cross_cohort = [
                 %{participant_id: :same, formation_key: :a},
+                %{participant_id: :p2, formation_key: :a},
+                %{participant_id: :p3, formation_key: :a},
+                %{participant_id: :p4, formation_key: :a},
                 %{participant_id: :same, formation_key: :b}
               ]
 
-              assert {:error, {:duplicate_participant, :same}} =
-                       CircleFormation.form(cross_cohort, min_size: 4, max_size: 8)
+              assert {:error, {:duplicate_participant, :same}} = form(cross_cohort)
             end
 
-            test "V4 one thousand humans remain bounded with deterministic membership integrity" do
-              input = candidates(1000)
-
-              assert {:ok, %{circles: circles, waiting: waiting}} =
-                       CircleFormation.form(input, min_size: 4, max_size: 8)
-
-              assert waiting == []
-
-              assert Enum.all?(circles, fn circle ->
-                       size = length(circle.members)
-                       size >= 4 and size <= 8
-                     end)
-
-              seated = Enum.flat_map(circles, & &1.members)
-              assert length(seated) == 1000
-              assert Enum.map(seated, & &1.participant_id) == Enum.map(input, & &1.participant_id)
-              assert MapSet.size(MapSet.new(Enum.map(seated, & &1.participant_id))) == 1000
-            end
-
-            test "V5 identical input and policy are deterministic and cohorts never mix" do
+            test "V7 repeated and concurrent identical invocations are deterministic" do
               input =
-                Enum.map(1..12, &%{participant_id: {:a, &1}, formation_key: :a}) ++
-                  Enum.map(1..12, &%{participant_id: {:b, &1}, formation_key: :b})
+                candidates(73, {:deterministic, :a}, "det-a") ++
+                  candidates(64, {:deterministic, :b}, "det-b")
 
-              assert {:ok, first} = CircleFormation.form(input, min_size: 4, max_size: 8)
-              assert {:ok, second} = CircleFormation.form(input, min_size: 4, max_size: 8)
-              assert first == second
+              expected = form(input)
 
-              assert Enum.all?(first.circles, fn circle ->
-                       Enum.all?(circle.members, &(&1.formation_key == circle.formation_key))
-                     end)
+              for _ <- 1..20 do
+                assert form(input) == expected
+              end
+
+              results =
+                1..64
+                |> Task.async_stream(fn _ -> form(input) end,
+                  max_concurrency: 16,
+                  ordered: false,
+                  timeout: 10_000
+                )
+                |> Enum.map(fn {:ok, result} -> result end)
+
+              assert length(results) == 64
+              assert Enum.all?(results, &(&1 == expected))
             end
 
-            test "V6 low liquidity waits instead of manufacturing Circle authority" do
-              for count <- 1..3 do
-                input = candidates(count)
+            test "V8 low liquidity waits instead of faking members or mixing cohorts" do
+              for count <- 0..3 do
+                input = candidates(count, {:low, count}, "low-#{count}")
+                assert {:ok, %{circles: [], waiting: ^input}} = form(input)
+              end
 
-                assert {:ok, %{circles: [], waiting: waiting}} =
-                         CircleFormation.form(input, min_size: 4, max_size: 8)
+              split =
+                candidates(3, :left, "left") ++ candidates(3, :right, "right")
 
-                assert waiting == input
-                assert Enum.uniq_by(waiting, & &1.participant_id) == waiting
+              assert {:ok, %{circles: [], waiting: waiting}} = form(split)
+              assert MapSet.new(Enum.map(waiting, & &1.participant_id)) ==
+                       MapSet.new(Enum.map(split, & &1.participant_id))
+            end
+
+            test "V9 active Circle snapshot is not re-packed when caller presents only pending humans" do
+              active_input = candidates(6, :active, "active")
+              assert {:ok, %{circles: [active_circle], waiting: []}} = form(active_input)
+              active_snapshot = active_circle
+
+              pending = candidates(3, :pending, "pending")
+              arrival = %{participant_id: "pending-4", formation_key: :pending}
+
+              assert {:ok, %{circles: [new_circle], waiting: []}} = form(pending ++ [arrival])
+              assert active_circle == active_snapshot
+
+              active_ids = MapSet.new(Enum.map(active_circle.members, & &1.participant_id))
+              new_ids = MapSet.new(Enum.map(new_circle.members, & &1.participant_id))
+              assert MapSet.disjoint?(active_ids, new_ids)
+            end
+
+            test "V10 minimal opaque identity is sufficient without public social graph metadata" do
+              input =
+                for id <- 1..6 do
+                  %{participant_id: {:opaque, id}, formation_key: {:context, <<id>>}}
+                end
+
+              assert {:ok, %{circles: [circle], waiting: []}} = form(input)
+              assert circle.members == input
+
+              for member <- circle.members do
+                refute Map.has_key?(member, :public_profile)
+                refute Map.has_key?(member, :follower_count)
+                refute Map.has_key?(member, :global_reputation)
+                refute Map.has_key?(member, :public_bond_graph)
               end
             end
 
-            test "V7 hostile caller parameters cannot escape the 4..8 product law" do
-              invalid_bounds = [
-                [min_size: 0, max_size: 8],
-                [min_size: -1, max_size: 8],
-                [min_size: 8, max_size: 4],
-                [min_size: "4", max_size: 8],
-                [min_size: 4, max_size: :eight]
-              ]
-
-              for opts <- invalid_bounds do
-                assert {:error, :invalid_size_bounds} = CircleFormation.form(candidates(4), opts)
-              end
+            test "V11 malformed caller types fail explicitly rather than widening authority" do
+              input = candidates(8)
 
               for opts <- [
-                    [min_size: 4, max_size: 9],
-                    [min_size: 4, max_size: 1_000_000],
-                    [min_size: 9, max_size: 9],
-                    [min_size: 1_000_000, max_size: 1_000_000]
+                    [min_size: "4", max_size: 8],
+                    [min_size: 4, max_size: "8"],
+                    [min_size: nil, max_size: 8],
+                    [min_size: 4, max_size: nil],
+                    [min_size: 4.0, max_size: 8],
+                    [min_size: 4, max_size: 8.0]
                   ] do
-                result = CircleFormation.form(candidates(9), opts)
-                assert_human_scale_or_rejected(result, "V7 opts=#{inspect(opts)}")
+                assert {:error, :invalid_size_bounds} = CircleFormation.form(input, opts)
               end
             end
           end
           ELIXIR
 
-          mix format test/t09_t08_circle_hostile_runtime_test.exs
-          mix format --check-formatted test/t09_t08_circle_hostile_runtime_test.exs
-          echo "T09_HOSTILE_PROOF_FORMAT=PASS"
+          mix format --check-formatted test/t09_t08_future_002_hostile_runtime_test.exs
+          echo "T09_PROOF_FORMAT=PASS"
 
-      - name: Execute hostile V1-V7 Circle proof
+      - name: Execute independent hostile V1-V11 proof
+        id: hostile
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
+          set -o pipefail
           echo "HOSTILE_EXECUTION_SHA=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          mix test \
-            test/t09_t08_circle_hostile_runtime_test.exs \
-            test/strangertalks_new/future_social/circle_formation_test.exs \
-            --trace --seed 0
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA" || exit 97
+          mix test test/t09_t08_future_002_hostile_runtime_test.exs --trace --seed 0 \
+            2>&1 | tee /tmp/t09-t08-future-002-hostile.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t09-t08-future-002-hostile.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
 
-      - name: Remove proof and preserve exact candidate
+      - name: Remove injected T09 proof before source comparisons
+        if: always()
+        shell: bash
+        run: |
+          rm -f test/t09_t08_future_002_hostile_runtime_test.exs
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Candidate formatter check
+        id: format
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          mix format --check-formatted \
+            lib/strangertalks_new/future_social/circle_formation.ex \
+            test/strangertalks_new/future_social/circle_formation_test.exs \
+            test/strangertalks_new/future_social/circle_formation_hostile_capacity_test.exs
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Original FUTURE-001 kernel regression
+        id: original
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix test test/strangertalks_new/future_social/circle_formation_test.exs \
+            2>&1 | tee /tmp/t09-t08-original.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t09-t08-original.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: T08 source hostile tests as comparison only
+        id: source_hostile
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix test test/strangertalks_new/future_social/circle_formation_hostile_capacity_test.exs \
+            2>&1 | tee /tmp/t09-t08-source-hostile.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t09-t08-source-hostile.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Current one-to-one matchmaking non-interference
+        id: matchmaking
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix test test/strangertalks_new/matchmaking_engine_test.exs \
+            2>&1 | tee /tmp/t09-t08-matchmaking.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t09-t08-matchmaking.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Full repository precommit
+        id: precommit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix precommit 2>&1 | tee /tmp/t09-t08-precommit.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t09-t08-precommit.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Diff hygiene and candidate-owned clean classification
+        id: hygiene
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          git diff --check
+          diff_code=$?
+
+          git diff --exit-code -- \
+            lib/strangertalks_new/future_social \
+            test/strangertalks_new/future_social \
+            .github/workflows/t08-future-002-circle-capacity.yml
+          owned_code=$?
+
+          echo "POST_PRECOMMIT_STATUS:"
+          git status --porcelain
+          echo "diff_code=$diff_code" >> "$GITHUB_OUTPUT"
+          echo "owned_code=$owned_code" >> "$GITHUB_OUTPUT"
+
+          test "$diff_code" = "0" && test "$owned_code" = "0"
+
+      - name: Restore exact candidate and prove clean T09 cleanup
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          rm -f test/t09_t08_circle_hostile_runtime_test.exs
-          git diff --check "$BASE_SHA"...HEAD
-          git diff --check
+          git reset --hard "$EXPECTED_SHA"
+          git clean -fd
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test -z "$(git status --porcelain)"
-          actual_sha=$(git rev-parse HEAD)
-          echo "TESTED_SHA=$actual_sha"
-          test "$actual_sha" = "$EXPECTED_SHA"
+          git diff --check "$BASE_SHA"...HEAD
+          echo "TESTED_SHA=$(git rev-parse HEAD)"
+          echo "T09_PROOF_CLEANUP=PASS"
+
+      - name: Enforce independent FUTURE-002 closure
+        if: always()
+        shell: bash
+        env:
+          CHECKED_OUT_SHA: ${{ steps.identity.outputs.checked_out_sha }}
+          HOSTILE_EXIT: ${{ steps.hostile.outputs.exit_code }}
+          HOSTILE_SUMMARY: ${{ steps.hostile.outputs.summary }}
+          FORMAT_EXIT: ${{ steps.format.outputs.exit_code }}
+          ORIGINAL_EXIT: ${{ steps.original.outputs.exit_code }}
+          ORIGINAL_SUMMARY: ${{ steps.original.outputs.summary }}
+          SOURCE_HOSTILE_EXIT: ${{ steps.source_hostile.outputs.exit_code }}
+          SOURCE_HOSTILE_SUMMARY: ${{ steps.source_hostile.outputs.summary }}
+          MATCH_EXIT: ${{ steps.matchmaking.outputs.exit_code }}
+          MATCH_SUMMARY: ${{ steps.matchmaking.outputs.summary }}
+          FULL_EXIT: ${{ steps.precommit.outputs.exit_code }}
+          FULL_SUMMARY: ${{ steps.precommit.outputs.summary }}
+          DIFF_EXIT: ${{ steps.hygiene.outputs.diff_code }}
+          OWNED_CLEAN_EXIT: ${{ steps.hygiene.outputs.owned_code }}
+        run: |
+          set -euo pipefail
+          test "$CHECKED_OUT_SHA" = "$EXPECTED_SHA"
+          test "$HOSTILE_EXIT" = "0"
+          test "$HOSTILE_SUMMARY" = "11 tests, 0 failures"
+          test "$FORMAT_EXIT" = "0"
+          test "$ORIGINAL_EXIT" = "0"
+          test "$ORIGINAL_SUMMARY" = "9 tests, 0 failures"
+          test "$SOURCE_HOSTILE_EXIT" = "0"
+          test "$SOURCE_HOSTILE_SUMMARY" = "9 tests, 0 failures"
+          test "$MATCH_EXIT" = "0"
+          test "$MATCH_SUMMARY" = "43 tests, 0 failures"
+          test "$FULL_EXIT" = "0"
+          test "$FULL_SUMMARY" = "880 tests, 0 failures"
+          test "$DIFF_EXIT" = "0"
+          test "$OWNED_CLEAN_EXIT" = "0"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+          echo "T08_FUTURE_002_INDEPENDENT_VERDICT=GREEN"
