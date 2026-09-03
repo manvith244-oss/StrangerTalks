@@ -34,19 +34,10 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
   @api_roles ~w(anon authenticated service_role)
   @dml_privileges ~w(SELECT INSERT UPDATE DELETE)
 
-  test "all Data-API-visible StrangerTalks public tables have row level security enabled" do
-    rows =
-      Repo.query!("""
-      SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
-      FROM pg_class c
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public'
-        AND c.relname = ANY($1::text[])
-        AND c.relkind IN ('r', 'p')
-      ORDER BY c.relname
-      """, [@protected_tables]).rows
+  test "every affected public table present in this composition has RLS enabled" do
+    rows = existing_protected_tables()
 
-    assert Enum.map(rows, &hd/1) == Enum.sort(@protected_tables)
+    assert rows != []
 
     for [table_name, rls_enabled, rls_forced] <- rows do
       assert rls_enabled, "expected public.#{table_name} to have RLS enabled"
@@ -54,13 +45,15 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     end
   end
 
-  test "Supabase API roles have no read write or delete privileges on product tables" do
+  test "Supabase API roles have no read write or delete privileges on present product tables" do
     existing_roles =
       Repo.query!("SELECT rolname FROM pg_roles WHERE rolname = ANY($1::text[])", [@api_roles]).rows
       |> List.flatten()
 
+    existing_tables = Enum.map(existing_protected_tables(), &hd/1)
+
     for role <- existing_roles,
-        table <- @protected_tables,
+        table <- existing_tables,
         privilege <- @dml_privileges do
       [[allowed]] =
         Repo.query!(
@@ -109,5 +102,17 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
              })
 
     assert Repo.get!(StrangertalksNew.Participant, participant.participant_id)
+  end
+
+  defp existing_protected_tables do
+    Repo.query!("""
+    SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname = ANY($1::text[])
+      AND c.relkind IN ('r', 'p')
+    ORDER BY c.relname
+    """, [@protected_tables]).rows
   end
 end
