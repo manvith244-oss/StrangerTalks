@@ -26,9 +26,9 @@ defmodule StrangertalksNew.Repo.Migrations.SecureSupabasePublicSchema do
     reports
     safety_events
     safety_reviews
-    schema_migrations
   )
 
+  @migration_metadata_tables ~w(schema_migrations)
   @api_roles ~w(anon authenticated service_role)
 
   def up do
@@ -36,6 +36,8 @@ defmodule StrangertalksNew.Repo.Migrations.SecureSupabasePublicSchema do
       execute("ALTER TABLE IF EXISTS public.#{table} ENABLE ROW LEVEL SECURITY")
       revoke_table_api_access(table)
     end)
+
+    Enum.each(@migration_metadata_tables, &revoke_table_api_access/1)
 
     revoke_future_api_defaults()
   end
