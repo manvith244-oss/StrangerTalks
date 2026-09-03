@@ -200,7 +200,12 @@ defmodule StrangertalksNew.T07AI003PrivacyBoundaryTest do
 
     assert result.status == "ready"
     assert_receive {:agent_request, "learning_advisor", %{analytics: [payload]}}
-    assert payload.trend_category == trend_category
+
+    assert payload.trend_category == %{
+             "participant_id_count" => 12,
+             "NOT_PARTICIPANT_ID" => "aggregate-label",
+             "CONTAINS_PERSONAL_DATA_SUMMARY" => "true"
+           }
   end
 
   defp restore(key, nil), do: Application.delete_env(:strangertalks_new, key)
