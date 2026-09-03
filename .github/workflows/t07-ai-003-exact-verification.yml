@@ -1,4 +1,4 @@
-name: T07 AI-003 Format Ownership Audit
+name: T07 AI-003 Isolated Format Ownership Audit
 
 on:
   push:
@@ -10,13 +10,13 @@ permissions:
   contents: read
 
 jobs:
-  format-audit:
+  isolated-format-audit:
     runs-on: ubuntu-latest
     env:
       EXPECTED_SHA: f04aa0ffd746aab4c56f07873d2766a9117510f6
       CANONICAL_BASE: 423442915e37fd6aadd25bd1c6a300eed2b464f0
     steps:
-      - name: Checkout full history
+      - name: Checkout history carrier
         uses: actions/checkout@v4
         with:
           ref: f04aa0ffd746aab4c56f07873d2766a9117510f6
@@ -28,42 +28,28 @@ jobs:
           elixir-version: "1.18.4"
           otp-version: "27.3.4"
 
-      - name: Install dependencies
+      - name: Install shared dependencies
         run: |
           mix local.hex --force
           mix local.rebar --force
           mix deps.get
 
-      - name: Prove ownership inputs
+      - name: Create independent clean worktrees
         run: |
-          paths=(
-            lib/strangertalks_new/agent_systems/learning_advisor.ex
-            lib/strangertalks_new/agent_systems/trend_bridge_research.ex
-            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
-            lib/strangertalks_new/reflections.ex
-            test/strangertalks_new/agent_systems_break_test.exs
-            test/strangertalks_new/companion_open_ai_provider_test.exs
-            test/strangertalks_new/t07_provider_failure_matrix_test.exs
-          )
-          echo "CANDIDATE=$EXPECTED_SHA"
-          echo "CANONICAL_BASE=$CANONICAL_BASE"
-          for p in "${paths[@]}"; do
-            echo "=== OWNERSHIP $p ==="
-            echo "BASE_BLOB=$(git rev-parse "$CANONICAL_BASE:$p" 2>/dev/null || echo ABSENT)"
-            echo "CANDIDATE_BLOB=$(git rev-parse "$EXPECTED_SHA:$p" 2>/dev/null || echo ABSENT)"
-            if git diff --quiet "$CANONICAL_BASE...$EXPECTED_SHA" -- "$p"; then
-              echo "AI003_MODIFIED=no"
-            else
-              echo "AI003_MODIFIED=yes"
-            fi
-          done
+          git worktree add --detach /tmp/t07-candidate "$EXPECTED_SHA"
+          git worktree add --detach /tmp/t07-base "$CANONICAL_BASE"
+          ln -s "$GITHUB_WORKSPACE/deps" /tmp/t07-candidate/deps
+          ln -s "$GITHUB_WORKSPACE/deps" /tmp/t07-base/deps
+          test -z "$(git -C /tmp/t07-candidate status --porcelain)"
+          test -z "$(git -C /tmp/t07-base status --porcelain)"
 
-      - name: Candidate formatter audit
+      - name: Format exact candidate in isolation
         run: |
+          cd /tmp/t07-candidate
           mix format
-          echo "=== CANDIDATE FORMAT STATUS ==="
+          echo "=== ISOLATED CANDIDATE STATUS ==="
           git status --short
-          echo "=== CANDIDATE FORMAT PATCH BEGIN ==="
+          echo "=== ISOLATED CANDIDATE PATCH BEGIN ==="
           git diff --no-ext-diff --unified=20 -- \
             lib/strangertalks_new/agent_systems/learning_advisor.ex \
             lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
@@ -72,7 +58,7 @@ jobs:
             test/strangertalks_new/agent_systems_break_test.exs \
             test/strangertalks_new/companion_open_ai_provider_test.exs \
             test/strangertalks_new/t07_provider_failure_matrix_test.exs
-          echo "=== CANDIDATE FORMAT PATCH END ==="
+          echo "=== ISOLATED CANDIDATE PATCH END ==="
           for p in \
             lib/strangertalks_new/agent_systems/learning_advisor.ex \
             lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
@@ -81,22 +67,37 @@ jobs:
             test/strangertalks_new/agent_systems_break_test.exs \
             test/strangertalks_new/companion_open_ai_provider_test.exs \
             test/strangertalks_new/t07_provider_failure_matrix_test.exs; do
-            echo "FORMATTED_BLOB $p $(git hash-object "$p")"
+            echo "CANDIDATE_FORMATTED_BLOB $p $(git hash-object "$p")"
           done
 
-      - name: Canonical baseline formatter audit
+      - name: Format canonical base in isolation
         run: |
-          git reset --hard "$CANONICAL_BASE"
+          cd /tmp/t07-base
           mix format
-          echo "=== BASE FORMAT STATUS ==="
+          echo "=== ISOLATED BASE STATUS ==="
           git status --short
-          echo "=== BASE FORMAT PATCH BEGIN ==="
+          echo "=== ISOLATED BASE PATCH BEGIN ==="
           git diff --no-ext-diff --unified=20 -- \
             lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
             lib/strangertalks_new/reflections.ex
-          echo "=== BASE FORMAT PATCH END ==="
+          echo "=== ISOLATED BASE PATCH END ==="
           for p in \
             lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
             lib/strangertalks_new/reflections.ex; do
             echo "BASE_FORMATTED_BLOB $p $(git hash-object "$p")"
+          done
+
+      - name: Export exact formatted T07-owned contents
+        run: |
+          cd /tmp/t07-candidate
+          for p in \
+            lib/strangertalks_new/agent_systems/learning_advisor.ex \
+            lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
+            test/strangertalks_new/agent_systems_break_test.exs \
+            test/strangertalks_new/companion_open_ai_provider_test.exs \
+            test/strangertalks_new/t07_provider_failure_matrix_test.exs; do
+            echo "=== BASE64 $p BEGIN ==="
+            base64 -w0 "$p"
+            echo
+            echo "=== BASE64 $p END ==="
           done
