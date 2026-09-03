@@ -91,30 +91,20 @@ jobs:
 
           const html = readFileSync(new URL("../../priv/static/index.html", import.meta.url), "utf8")
           const app = readFileSync(new URL("../../priv/static/assets/app.js", import.meta.url), "utf8")
-
           const ordinaryCopy = "This is a temporary Conversation, not a permanent chat-history thread."
           const localCopy = "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary."
           const safetyScheduleCopy = "Limited safety evidence is minimized or deleted on its own safety-retention schedule."
           const safetySeparationCopy = "Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
           const mediaSafetyCopy = "If you report a View-Once photo while StrangerTalks still has its server-owned safety copy, the photo may be stored separately as limited safety evidence. That sensitive evidence is minimized or deleted on its own safety-retention schedule."
 
-          function lifetimeReportsCopy() {
-            return html.match(/<section aria-labelledby="lifetime-reports-title">[\s\S]*?<\/section>/)?.[0] || ""
-          }
-
-          function staticReportCopy() {
-            return html.match(/<form id="report-form"[\s\S]*?<\/form>/)?.[0] || ""
-          }
-
-          function dynamicReportCopy() {
-            return app.match(/reportForm\.insertAdjacentHTML\("afterbegin",[\s\S]*?\)\n/)?.[0] || ""
-          }
+          const lifetimeReportsCopy = () => html.match(/<section aria-labelledby="lifetime-reports-title">[\s\S]*?<\/section>/)?.[0] || ""
+          const staticReportCopy = () => html.match(/<form id="report-form"[\s\S]*?<\/form>/)?.[0] || ""
+          const dynamicReportCopy = () => app.match(/reportForm\.insertAdjacentHTML\("afterbegin",[\s\S]*?\)\n/)?.[0] || ""
 
           test("T03 PRIV-002 distinguishes ordinary, participant-local, and separately authorized safety retention", () => {
             const lifetime = lifetimeReportsCopy()
             const staticReport = staticReportCopy()
             const dynamicReport = dynamicReportCopy()
-
             assert.ok(html.includes(ordinaryCopy), "ordinary live Conversation is not described as permanent history")
             assert.ok(html.includes(localCopy), "participant-retained local copy has its own local lifetime and Fade boundary")
             assert.ok(lifetime.includes(safetyScheduleCopy), "lifetime dialog describes bounded safety-evidence cleanup")
@@ -149,54 +139,25 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-
           replacements = {
               Path("priv/static/index.html"): [
-                  (
-                      "Some information already stored on a participant's own device can have a separate local lifetime.",
-                      "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary."
-                  ),
-                  (
-                      "If you report a View-Once photo while StrangerTalks still has its server-owned safety copy, the photo may be stored separately as safety evidence. Safety reports currently have no automatic expiry or cleanup.",
-                      "If you report a View-Once photo while StrangerTalks still has its server-owned safety copy, the photo may be stored separately as limited safety evidence. That sensitive evidence is minimized or deleted on its own safety-retention schedule."
-                  ),
-                  (
-                      "StrangerTalks currently has no automatic expiry or cleanup for stored report and safety-review records.",
-                      "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
-                  ),
+                  ("Some information already stored on a participant's own device can have a separate local lifetime.", "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary."),
+                  ("If you report a View-Once photo while StrangerTalks still has its server-owned safety copy, the photo may be stored separately as safety evidence. Safety reports currently have no automatic expiry or cleanup.", "If you report a View-Once photo while StrangerTalks still has its server-owned safety copy, the photo may be stored separately as limited safety evidence. That sensitive evidence is minimized or deleted on its own safety-retention schedule."),
+                  ("StrangerTalks currently has no automatic expiry or cleanup for stored report and safety-review records.", "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."),
               ],
               Path("priv/static/assets/app.js"): [
-                  (
-                      "Stored report and safety-review records currently have no automatic expiry or cleanup.",
-                      "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
-                  ),
+                  ("Stored report and safety-review records currently have no automatic expiry or cleanup.", "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."),
               ],
               Path("test/js/ephemeral_conversation_ux_test.mjs"): [
-                  (
-                      "Some information already stored on a participant's own device can have a separate local lifetime.",
-                      "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary."
-                  ),
-                  (
-                      "StrangerTalks currently has no automatic expiry or cleanup for stored report and safety-review records.",
-                      "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
-                  ),
-                  (
-                      "Stored report and safety-review records currently have no automatic expiry or cleanup.",
-                      "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
-                  ),
+                  ("Some information already stored on a participant's own device can have a separate local lifetime.", "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary."),
+                  ("StrangerTalks currently has no automatic expiry or cleanup for stored report and safety-review records.", "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."),
+                  ("Stored report and safety-review records currently have no automatic expiry or cleanup.", "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."),
               ],
               Path("test/js/message_unsend_test.mjs"): [
-                  (
-                      "narrow 1L amendment locks the approved safety disclosure and existing no-expiry truth",
-                      "T03 PRIV-002 keeps the approved Unsend disclosure and bounded safety-retention truth"
-                  ),
-                  (
-                      "Stored report and safety-review records currently have no automatic expiry or cleanup.",
-                      "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
-                  ),
+                  ("narrow 1L amendment locks the approved safety disclosure and existing no-expiry truth", "T03 PRIV-002 keeps the approved Unsend disclosure and bounded safety-retention truth"),
+                  ("Stored report and safety-review records currently have no automatic expiry or cleanup.", "Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."),
               ],
           }
-
           for path, pairs in replacements.items():
               text = path.read_text()
               for old, new in pairs:
@@ -206,7 +167,6 @@ jobs:
                   text = text.replace(old, new)
               path.write_text(text)
           PY
-
           echo "T03_PRIV_002_CHANGED_PATHS_PRETEST:"
           git status --short
 
@@ -260,7 +220,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat > /tmp/t03-priv-002-browser.mjs <<'EOF'
+          mkdir -p tmp
+          cat > tmp/t03-priv-002-browser.mjs <<'EOF'
           import assert from "node:assert/strict"
           import {chromium} from "playwright"
 
@@ -295,7 +256,6 @@ jobs:
               a.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 20000}),
               b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 20000})
             ])
-
             await a.page.locator("#message-input").waitFor({state: "visible", timeout: 20000})
             await a.page.waitForTimeout(300)
             assert.equal(await a.page.evaluate(() => document.activeElement?.id), "message-input", "Conversation focus remains on composer")
@@ -311,6 +271,8 @@ jobs:
             assert.doesNotMatch(lifetimeText, /no automatic expiry|no automatic cleanup/i)
             await a.page.locator("#lifetime-details-close").click()
 
+            const actions = a.page.locator("details.overflow")
+            if ((await actions.getAttribute("open")) === null) await actions.locator("summary").click()
             await a.page.locator("#report-open").click()
             const report = a.page.locator("#report-form")
             await report.waitFor({state: "visible", timeout: 10000})
@@ -321,7 +283,6 @@ jobs:
             assert.match(reportText, /stored separately as limited safety evidence/i)
             assert.doesNotMatch(reportText, /no automatic expiry|no automatic cleanup/i)
             assert.doesNotMatch(reportText, /fully compliant|legally required for|we never retain anything|deletion is immediate everywhere/i)
-
             console.log("T03_PRIV_002_RENDERED_LIFETIME=PASS")
             console.log("T03_PRIV_002_RENDERED_REPORT=PASS")
             console.log("T03_PRIV_002_FOCUS_PRESERVED=PASS")
@@ -331,7 +292,7 @@ jobs:
             await browser.close()
           }
           EOF
-          node /tmp/t03-priv-002-browser.mjs
+          node tmp/t03-priv-002-browser.mjs
 
       - name: Restart Phoenix and prove historical-delete regression
         shell: bash
@@ -374,7 +335,6 @@ jobs:
             test/js/ephemeral_conversation_ux_test.mjs \
             test/js/message_unsend_test.mjs \
             test/js/t03_privacy_retention_copy_test.mjs
-
           expected="$(printf '%s\n' \
             priv/static/assets/app.js \
             priv/static/index.html \
@@ -386,7 +346,6 @@ jobs:
           printf 'T03_PRIV_002_ACTUAL_DIFF=\n%s\n' "$actual"
           test "$actual" = "$expected"
           git diff --cached --check
-
           git config user.name "StrangerTalks Construction Command"
           git config user.email "actions@users.noreply.github.com"
           git commit -m "fix(t03): align retention privacy copy with T04"
