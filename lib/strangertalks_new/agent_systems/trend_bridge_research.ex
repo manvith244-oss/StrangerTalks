@@ -105,11 +105,13 @@ defmodule StrangertalksNew.AgentSystems.TrendBridgeResearch do
     end
   end
 
-  defp normalize_candidate(%{
-         "tier" => tier,
-         "bridge" => bridge,
-         "rationale" => rationale
-       } = candidate)
+  defp normalize_candidate(
+         %{
+           "tier" => tier,
+           "bridge" => bridge,
+           "rationale" => rationale
+         } = candidate
+       )
        when tier in @tiers and is_binary(bridge) and is_binary(rationale) do
     bridge = String.trim(bridge)
     rationale = String.trim(rationale)

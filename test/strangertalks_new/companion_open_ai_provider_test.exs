@@ -285,8 +285,7 @@ defmodule StrangertalksNew.CompanionOpenAIProviderTest do
     valid_suggestions = valid_suggestions()
 
     cases = [
-      {"missing required reason",
-       %{"decision" => "assist", "suggestions" => valid_suggestions}},
+      {"missing required reason", %{"decision" => "assist", "suggestions" => valid_suggestions}},
       {"missing required suggestions", %{"decision" => "decline", "reason" => "No."}},
       {"wrong reason type",
        %{"decision" => "assist", "reason" => 123, "suggestions" => valid_suggestions}},
@@ -359,8 +358,7 @@ defmodule StrangertalksNew.CompanionOpenAIProviderTest do
 
     cases = [
       {"empty results", {:ok, %{status: 200, body: %{"results" => []}}}},
-      {"missing flagged",
-       {:ok, %{status: 200, body: %{"results" => [%{}, %{}]}}}},
+      {"missing flagged", {:ok, %{status: 200, body: %{"results" => [%{}, %{}]}}}},
       {"wrong flagged type",
        {:ok,
         %{
@@ -420,7 +418,12 @@ defmodule StrangertalksNew.CompanionOpenAIProviderTest do
     assert {:error, :companion_provider_failure} = OpenAIProvider.generate(companion_context())
 
     configure_scripted_provider()
-    Application.put_env(:strangertalks_new, :provider_test_generation_response, {:error, :timeout})
+
+    Application.put_env(
+      :strangertalks_new,
+      :provider_test_generation_response,
+      {:error, :timeout}
+    )
 
     assert {:error, :companion_unavailable} = OpenAIProvider.generate(companion_context())
   end

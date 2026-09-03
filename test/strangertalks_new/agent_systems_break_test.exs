@@ -194,7 +194,7 @@ defmodule StrangertalksNew.AgentSystemsBreakTest do
     cases = [
       {"extra top-level field", %{"recommendations" => [valid], "apply" => true}},
       {"extra recommendation field",
-       %{"recommendations" => [Map.put(valid, "configuration_key", "match_threshold")] }},
+       %{"recommendations" => [Map.put(valid, "configuration_key", "match_threshold")]}},
       {"mixed valid and malformed recommendations",
        %{"recommendations" => [valid, %{"title" => "incomplete"}]}},
       {"too many recommendations",

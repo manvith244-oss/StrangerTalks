@@ -271,18 +271,23 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
     end
   end
 
-  defp normalize_recommendation(%{
-         "title" => title,
-         "hypothesis" => hypothesis,
-         "evidence" => evidence,
-         "experiment" => experiment,
-         "confidence" => confidence
-       } = item)
+  defp normalize_recommendation(
+         %{
+           "title" => title,
+           "hypothesis" => hypothesis,
+           "evidence" => evidence,
+           "experiment" => experiment,
+           "confidence" => confidence
+         } = item
+       )
        when confidence in ["low", "medium", "high"] do
     values = [title, hypothesis, evidence, experiment]
 
     if exact_keys?(item, ["title", "hypothesis", "evidence", "experiment", "confidence"]) and
-         Enum.all?(values, &(is_binary(&1) and String.trim(&1) != "" and String.length(&1) <= 600)) do
+         Enum.all?(
+           values,
+           &(is_binary(&1) and String.trim(&1) != "" and String.length(&1) <= 600)
+         ) do
       {:ok,
        %{
          title: String.trim(title),
