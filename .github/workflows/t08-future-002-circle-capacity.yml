@@ -1,4 +1,4 @@
-name: T08 Future 002 Circle Capacity Hostile Gate
+name: T08 Future 002 Circle Capacity Closure Gate
 
 on:
   push:
@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 jobs:
-  hostile-proof:
+  closure:
     runs-on: ubuntu-latest
 
     services:
@@ -36,15 +36,16 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      EXPECTED_SHA: 3a8c9fbee6e919d2986e67d86a7c2ee140936df4
+      EXPECTED_SHA: ${{ github.sha }}
 
     steps:
-      - name: Checkout exact T08 target-fix snapshot
+      - name: Checkout exact T08 FUTURE-002 candidate
         uses: actions/checkout@v4
         with:
           ref: ${{ env.EXPECTED_SHA }}
 
       - name: Prove checkout identity
+        id: identity
         shell: bash
         run: |
           set -euo pipefail
@@ -52,6 +53,15 @@ jobs:
           echo "EXPECTED_SHA=$EXPECTED_SHA"
           echo "CHECKED_OUT_SHA=$actual"
           test "$actual" = "$EXPECTED_SHA"
+          echo "checked_out_sha=$actual" >> "$GITHUB_OUTPUT"
+
+      - name: Prove committed tree starts clean
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(git status --porcelain)"
+          printf '%s\n' "$status"
+          test -z "$status"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -65,11 +75,19 @@ jobs:
           mix local.rebar --force
           mix deps.get
 
-      - name: T08 formatting
+      - name: T08 owned formatting
+        id: format
+        continue-on-error: true
+        shell: bash
         run: |
+          set +e
           mix format --check-formatted \
             lib/strangertalks_new/future_social/circle_formation.ex \
+            test/strangertalks_new/future_social/circle_formation_test.exs \
             test/strangertalks_new/future_social/circle_formation_hostile_capacity_test.exs
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
 
       - name: Frozen FUTURE-001 contract
         id: original
@@ -78,7 +96,8 @@ jobs:
         run: |
           set +e
           set -o pipefail
-          mix test test/strangertalks_new/future_social/circle_formation_test.exs 2>&1 | tee /tmp/t08-future-001.log
+          mix test test/strangertalks_new/future_social/circle_formation_test.exs \
+            2>&1 | tee /tmp/t08-future-001.log
           code=${PIPESTATUS[0]}
           summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t08-future-001.log | tail -1 || true)
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
@@ -92,28 +111,118 @@ jobs:
         run: |
           set +e
           set -o pipefail
-          mix test test/strangertalks_new/future_social/circle_formation_hostile_capacity_test.exs 2>&1 | tee /tmp/t08-future-002.log
+          mix test test/strangertalks_new/future_social/circle_formation_hostile_capacity_test.exs \
+            2>&1 | tee /tmp/t08-future-002.log
           code=${PIPESTATUS[0]}
           summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t08-future-002.log | tail -1 || true)
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
           exit "$code"
 
-      - name: Diff hygiene
-        run: git diff --check
+      - name: Existing one-to-one matchmaking smoke
+        id: matchmaking
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix test test/strangertalks_new/matchmaking_engine_test.exs \
+            2>&1 | tee /tmp/t08-matchmaking.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t08-matchmaking.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
 
-      - name: Prove target fix and isolate remaining envelope RED
+      - name: Full repository precommit
+        id: precommit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          mix precommit 2>&1 | tee /tmp/t08-precommit.log
+          code=${PIPESTATUS[0]}
+          summary=$(grep -Eo '[0-9]+ tests?, [0-9]+ failures?' /tmp/t08-precommit.log | tail -1 || true)
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "summary=${summary:-missing}" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Diff hygiene
+        id: diffcheck
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          git diff --check
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Prove T08 owned paths remain unchanged after precommit
+        id: t08_clean
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          git diff --exit-code -- \
+            lib/strangertalks_new/future_social \
+            test/strangertalks_new/future_social \
+            .github/workflows/t08-future-002-circle-capacity.yml
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: Report repository-wide post-precommit status
+        if: always()
+        shell: bash
+        run: |
+          echo "STATUS_PORCELAIN_AFTER_PRECOMMIT:"
+          git status --porcelain
+
+      - name: Enforce T08 closure and classify only accepted external T02 blocker
         if: always()
         shell: bash
         env:
+          CHECKED_OUT_SHA: ${{ steps.identity.outputs.checked_out_sha }}
+          FORMAT_EXIT: ${{ steps.format.outputs.exit_code }}
           ORIGINAL_EXIT: ${{ steps.original.outputs.exit_code }}
           ORIGINAL_SUMMARY: ${{ steps.original.outputs.summary }}
           HOSTILE_EXIT: ${{ steps.hostile.outputs.exit_code }}
           HOSTILE_SUMMARY: ${{ steps.hostile.outputs.summary }}
+          MATCH_EXIT: ${{ steps.matchmaking.outputs.exit_code }}
+          MATCH_SUMMARY: ${{ steps.matchmaking.outputs.summary }}
+          FULL_EXIT: ${{ steps.precommit.outputs.exit_code }}
+          FULL_SUMMARY: ${{ steps.precommit.outputs.summary }}
+          DIFF_EXIT: ${{ steps.diffcheck.outputs.exit_code }}
+          T08_CLEAN_EXIT: ${{ steps.t08_clean.outputs.exit_code }}
         run: |
-          echo "FUTURE_001=$ORIGINAL_SUMMARY exit=$ORIGINAL_EXIT"
-          echo "FUTURE_002=$HOSTILE_SUMMARY exit=$HOSTILE_EXIT"
+          set -euo pipefail
+
+          test "$CHECKED_OUT_SHA" = "$EXPECTED_SHA"
+          test "$FORMAT_EXIT" = "0"
           test "$ORIGINAL_EXIT" = "0"
-          test "$HOSTILE_EXIT" != "0"
-          test "$HOSTILE_SUMMARY" = "9 tests, 1 failure"
-          echo "TARGET_FIX_SHA=$EXPECTED_SHA"
+          test "$ORIGINAL_SUMMARY" = "9 tests, 0 failures"
+          test "$HOSTILE_EXIT" = "0"
+          test "$HOSTILE_SUMMARY" = "9 tests, 0 failures"
+          test "$MATCH_EXIT" = "0"
+          test "$MATCH_SUMMARY" = "43 tests, 0 failures"
+          test "$DIFF_EXIT" = "0"
+          test "$T08_CLEAN_EXIT" = "0"
+
+          if [ "$FULL_EXIT" = "0" ]; then
+            echo "FULL_PRECOMMIT=GREEN $FULL_SUMMARY"
+          else
+            echo "FULL_PRECOMMIT=RED $FULL_SUMMARY"
+            case "$FULL_SUMMARY" in
+              *"1 failure") ;;
+              *) echo "Unexpected full-suite failure count"; exit 1 ;;
+            esac
+
+            grep -q "StrangertalksNewWeb.Team2NormalMediaTerminalTest" /tmp/t08-precommit.log
+            grep -q "normal-media upload loses authority after durable End" /tmp/t08-precommit.log
+            grep -q "terminal_conversation" /tmp/t08-precommit.log
+            echo "FULL_PRECOMMIT_BLOCKER=KNOWN_EXTERNAL_T02_TERMINAL_RESTART"
+          fi
+
+          echo "T08_FUTURE_002_TESTED_SHA=$CHECKED_OUT_SHA"
