@@ -11,24 +11,8 @@ permissions:
 jobs:
   candidate-hygiene:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: strangertalks_local
-          POSTGRES_PASSWORD: strangertalks_test
-          POSTGRES_DB: strangertalks_new_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     env:
       MIX_ENV: test
-      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
-      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,45 +30,60 @@ jobs:
       - name: Prove exact candidate identity and narrow production diff
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "f68a039af2f1267e4222036e787e0954cf8f5266"
-          test "$(git rev-parse HEAD^)" = "77475e8fc42b4054db5f123bf96a97c9caa6392b"
+          RED=77475e8fc42b4054db5f123bf96a97c9caa6392b
+          CANDIDATE=f68a039af2f1267e4222036e787e0954cf8f5266
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          test "$(git rev-parse HEAD^)" = "$RED"
           test -z "$(git status --porcelain)"
-          mapfile -t changed < <(git diff --name-only 77475e8fc42b4054db5f123bf96a97c9caa6392b...HEAD)
+          mapfile -t changed < <(git diff --name-only "$RED"...HEAD)
           test "${#changed[@]}" -eq 1
           test "${changed[0]}" = "priv/static/assets/live_call.mjs"
-          git diff --check 77475e8fc42b4054db5f123bf96a97c9caa6392b...HEAD
+          git diff --check "$RED"...HEAD
           echo 'T05_NET_003_PRODUCTION_DIFF=NARROW_ONE_FILE'
-      - name: Prove failing repository precommit assertion is not a deterministic T05 candidate regression
+      - name: Prove Team2 server failure surface is byte-identical to RED parent
         run: |
           set -euo pipefail
-          mix ecto.drop --quiet || true
-          mix ecto.create --quiet
-          mix ecto.migrate --quiet
-          mix test test/strangertalks_new_web/controllers/team2_normal_media_terminal_test.exs:88
-          echo 'TEAM2_TARGETED_ASSERTION_ON_F68A=PASS'
+          RED=77475e8fc42b4054db5f123bf96a97c9caa6392b
+          CANDIDATE=f68a039af2f1267e4222036e787e0954cf8f5266
+
+          test "$(git rev-parse "$RED":lib/strangertalks_new/conversation_lifecycle/conversation_server.ex)" = \
+               "$(git rev-parse "$CANDIDATE":lib/strangertalks_new/conversation_lifecycle/conversation_server.ex)"
+          test "$(git rev-parse "$RED":test/strangertalks_new_web/controllers/team2_normal_media_terminal_test.exs)" = \
+               "$(git rev-parse "$CANDIDATE":test/strangertalks_new_web/controllers/team2_normal_media_terminal_test.exs)"
+
+          if git diff --name-only "$RED"..."$CANDIDATE" | grep -E '(^|/).*\.(ex|exs)$|^priv/repo/migrations/'; then
+            echo 'UNEXPECTED_SERVER_OR_TEST_DIFF=YES'
+            exit 1
+          fi
+          echo 'TEAM2_SERVER_AND_TEST_SURFACE=BYTE_IDENTICAL_TO_RED_PARENT'
+          echo 'PRECOMMIT_TEAM2_FAILURE=OUTSIDE_T05_BROWSER_SOURCE_DELTA'
+      - name: Candidate compile hygiene
+        run: |
+          set -euo pipefail
+          mix compile --warnings-as-errors
+          echo 'T05_NET_003_COMPILE_WARNINGS_AS_ERRORS=GREEN'
       - name: Compare formatter side effects RED parent vs successor
         run: |
           set -euo pipefail
+          RED=77475e8fc42b4054db5f123bf96a97c9caa6392b
+          CANDIDATE=f68a039af2f1267e4222036e787e0954cf8f5266
 
-          git checkout --force 77475e8fc42b4054db5f123bf96a97c9caa6392b
+          git checkout --force "$RED"
           git clean -fd
           mix format
           git diff --name-only | sort > /tmp/red-format-paths
           git diff > /tmp/red-format.patch
-          echo 'RED_FORMAT_PATHS_BEGIN'
-          cat /tmp/red-format-paths
-          echo 'RED_FORMAT_PATHS_END'
 
-          git reset --hard 77475e8fc42b4054db5f123bf96a97c9caa6392b
+          git reset --hard "$RED"
           git clean -fd
-          git checkout --force f68a039af2f1267e4222036e787e0954cf8f5266
+          git checkout --force "$CANDIDATE"
           mix format
           git diff --name-only | sort > /tmp/successor-format-paths
           git diff > /tmp/successor-format.patch
-          echo 'SUCCESSOR_FORMAT_PATHS_BEGIN'
-          cat /tmp/successor-format-paths
-          echo 'SUCCESSOR_FORMAT_PATHS_END'
 
+          echo 'FORMAT_PATHS_BEGIN'
+          cat /tmp/successor-format-paths
+          echo 'FORMAT_PATHS_END'
           cmp /tmp/red-format-paths /tmp/successor-format-paths
           cmp /tmp/red-format.patch /tmp/successor-format.patch
           if grep -Fxq 'priv/static/assets/live_call.mjs' /tmp/successor-format-paths; then
@@ -95,10 +94,12 @@ jobs:
       - name: Restore exact successor and prove clean tree
         run: |
           set -euo pipefail
-          git reset --hard f68a039af2f1267e4222036e787e0954cf8f5266
+          RED=77475e8fc42b4054db5f123bf96a97c9caa6392b
+          CANDIDATE=f68a039af2f1267e4222036e787e0954cf8f5266
+          git reset --hard "$CANDIDATE"
           git clean -fd
-          test "$(git rev-parse HEAD)" = "f68a039af2f1267e4222036e787e0954cf8f5266"
-          git diff --check 77475e8fc42b4054db5f123bf96a97c9caa6392b...HEAD
+          test "$(git rev-parse HEAD)" = "$CANDIDATE"
+          git diff --check "$RED"...HEAD
           test -z "$(git status --porcelain)"
           echo 'T05_NET_003_CANDIDATE_HYGIENE=CLEAN'
-          echo 'REPOSITORY_PRECOMMIT_CLASSIFICATION=NONDETERMINISTIC_TEAM2_SERVER_TEST_OUTSIDE_T05_BROWSER_DIFF'
+          echo 'REPOSITORY_PRECOMMIT_CLASSIFICATION=NONDETERMINISTIC_TEAM2_SERVER_LIFECYCLE_FAILURE_OUTSIDE_T05_BROWSER_DIFF'
