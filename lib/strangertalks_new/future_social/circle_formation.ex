@@ -18,7 +18,9 @@ defmodule StrangertalksNew.FutureSocial.CircleFormation do
   continuity and durable membership authority belong to later lifecycle packets.
   """
 
+  @minimum_healthy_circle_size 4
   @target_circle_size 6
+  @hard_max_circle_size 8
 
   @type candidate :: %{
           required(:participant_id) => term(),
@@ -46,8 +48,9 @@ defmodule StrangertalksNew.FutureSocial.CircleFormation do
 
   Required options:
 
-    * `:min_size` - smallest permitted Circle size, greater than zero
-    * `:max_size` - largest permitted Circle size, greater than or equal to `:min_size`
+    * `:min_size` - smallest permitted Circle size, at least #{@minimum_healthy_circle_size}
+    * `:max_size` - largest permitted Circle size, at most #{@hard_max_circle_size} and
+      greater than or equal to `:min_size`
 
   The kernel maximizes the number of seated candidates without ever emitting a
   Circle outside the supplied bounds. For the candidates that can be seated, it
@@ -93,8 +96,9 @@ defmodule StrangertalksNew.FutureSocial.CircleFormation do
   def form(_candidates, _opts), do: {:error, :invalid_size_bounds}
 
   defp validate_size_bounds(min_size, max_size)
-       when is_integer(min_size) and is_integer(max_size) and min_size > 0 and
-              max_size >= min_size,
+       when is_integer(min_size) and is_integer(max_size) and
+              min_size >= @minimum_healthy_circle_size and max_size >= min_size and
+              max_size <= @hard_max_circle_size,
        do: :ok
 
   defp validate_size_bounds(_min_size, _max_size), do: {:error, :invalid_size_bounds}
