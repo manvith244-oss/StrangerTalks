@@ -1,0 +1,399 @@
+name: T02 Runtime Restart A/B Classification
+
+on:
+  push:
+    branches:
+      - team2/runtime-restart-reconciliation-fix-lab
+    paths:
+      - .github/workflows/t02-runtime-restart-ab-classification.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  PRODUCT_SHA: e3e86c736ca6ef911bd0023c4877ac68642a48b9
+  OLD_FIX_LAB_SHA: 06724eb3068df69efdbfd065940f2de011b4a57a
+  OLD_DIAGNOSTIC_BLOB: cc717de18b6341d86ff834e86ae790ca910a7dfa
+
+jobs:
+  proof:
+    name: ${{ matrix.lane }} exact-product A/B proof
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        lane:
+          - control
+          - experiment
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: strangertalks_test
+        options: >-
+          --health-cmd "pg_isready -U postgres -d strangertalks_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout exact product candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PRODUCT_SHA }}
+          fetch-depth: 0
+
+      - name: Prove exact product identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PRODUCT_SHA"
+          test -z "$(git status --porcelain=v1)"
+          echo "T02_AB_IDENTITY lane=${{ matrix.lane }} product_sha=$(git rev-parse HEAD) tree=$(git rev-parse HEAD^{tree})"
+
+      - name: Restore inherited proof-only PID diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$OLD_FIX_LAB_SHA"
+          git show "$OLD_FIX_LAB_SHA:test/strangertalks_new/t02_recovery_convergence_hostile_test.exs" \
+            > test/strangertalks_new/t02_recovery_convergence_hostile_test.exs
+          test "$(git hash-object test/strangertalks_new/t02_recovery_convergence_hostile_test.exs)" = "$OLD_DIAGNOSTIC_BLOB"
+          git diff --check -- test/strangertalks_new/t02_recovery_convergence_hostile_test.exs
+          echo "T02_AB_DIAGNOSTIC blob=$(git hash-object test/strangertalks_new/t02_recovery_convergence_hostile_test.exs)"
+
+      - name: Apply V2 ephemeral production patch
+        if: matrix.lane == 'experiment'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("lib/strangertalks_new/chat/conversation_supervisor.ex")
+          source = path.read_text()
+
+          old = """    case DynamicSupervisor.start_child(
+                         __MODULE__,
+                         {ConversationServer, conversation_id}
+                       ) do
+          """
+
+          new = """    child_spec =
+              Supervisor.child_spec(
+                {ConversationServer, conversation_id},
+                restart: :temporary
+              )
+
+            case DynamicSupervisor.start_child(__MODULE__, child_spec) do
+          """
+
+          if source.count(old) != 1:
+              raise SystemExit(
+                  f"expected exactly one ConversationServer DynamicSupervisor child block, found {source.count(old)}"
+              )
+
+          path.write_text(source.replace(old, new))
+          PY
+
+          git diff --check -- lib/strangertalks_new/chat/conversation_supervisor.ex
+          git diff -- lib/strangertalks_new/chat/conversation_supervisor.ex
+
+      - name: Prove lane delta before validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object test/strangertalks_new/t02_recovery_convergence_hostile_test.exs)" = "$OLD_DIAGNOSTIC_BLOB"
+
+          if [ "${{ matrix.lane }}" = "control" ]; then
+            git diff --exit-code -- \
+              . ':(exclude)test/strangertalks_new/t02_recovery_convergence_hostile_test.exs'
+          else
+            git diff --exit-code -- \
+              . \
+              ':(exclude)test/strangertalks_new/t02_recovery_convergence_hostile_test.exs' \
+              ':(exclude)lib/strangertalks_new/chat/conversation_supervisor.ex'
+            test -n "$(git diff -- lib/strangertalks_new/chat/conversation_supervisor.ex)"
+          fi
+
+      - name: Record deliberate V2 environment differences
+        shell: bash
+        run: |
+          cat <<'EOF'
+          T02_AB_ENVIRONMENT
+          inherited_from_v2:
+            runner: ubuntu-latest
+            postgres: 16
+            elixir: 1.18.4
+            otp: 27.3.4.2
+            database_lifecycle: drop/create/migrate
+            mix_env: test
+            regression_seed: 0
+            regression_max_failures: 1
+            experiment_patch: exact V2 runtime replacement bytes
+          deliberate_differences:
+            - checkout is frozen product SHA e3e86c736ca6ef911bd0023c4877ac68642a48b9 instead of old proof SHA
+            - inherited PID diagnostic blob from 06724eb3068df69efdbfd065940f2de011b4a57a is restored identically in both lanes
+            - control lane has no production restart override
+            - experiment lane has only the V2 restart-temporary production override
+            - five bundled regressions execute as five separate mix test processes first
+            - prior bundle executes only when all five individual files pass
+            - nanosecond wall-clock timing markers are added around proof invocations
+          EOF
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4.2"
+
+      - name: Cache Mix
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Reset test database
+        env:
+          DATABASE_URL: ecto://postgres:postgres@localhost/strangertalks_test
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate
+
+      - name: Compile exact lane source
+        env:
+          DATABASE_URL: ecto://postgres:postgres@localhost/strangertalks_test
+        run: mix compile --warnings-as-errors
+
+      - name: Run inherited PID-generation diagnostic
+        id: pid_diag
+        continue-on-error: true
+        env:
+          DATABASE_URL: ecto://postgres:postgres@localhost/strangertalks_test
+        shell: bash
+        run: |
+          set -uo pipefail
+          start_ns="$(date +%s%N)"
+          set +e
+          mix test test/strangertalks_new/t02_recovery_convergence_hostile_test.exs \
+            --seed 0 --max-failures 1
+          rc=$?
+          set -e
+          end_ns="$(date +%s%N)"
+          echo "T02_AB_TIMING lane=${{ matrix.lane }} proof=pid_generation elapsed_ns=$((end_ns-start_ns))"
+          exit "$rc"
+
+      - name: Run existing RecoveryRestart hostile stress
+        id: recovery_stress
+        continue-on-error: true
+        env:
+          DATABASE_URL: ecto://postgres:postgres@localhost/strangertalks_test
+        shell: bash
+        run: |
+          set -uo pipefail
+          start_ns="$(date +%s%N)"
+          set +e
+          mix test \
+            test/strangertalks_new/runtime_restart_reconciliation_test.exs:172 \
+            test/strangertalks_new/runtime_restart_reconciliation_test.exs:130 \
+            --seed 0
+          rc=$?
+          set -e
+          end_ns="$(date +%s%N)"
+          echo "T02_AB_TIMING lane=${{ matrix.lane }} proof=recovery_stress elapsed_ns=$((end_ns-start_ns))"
+          exit "$rc"
+
+      - name: Run runtime_restart_reconciliation_test.exs
+        id: f1
+        continue-on-error: true
+        env:
+          DATABASE_URL: ecto://postgres:postgres@localhost/strangertalks_test
+        shell: bash
+        run: |
+          set -uo pipefail
+          start_ns="$(date +%s%N)"
+          set +e
+          mix test test/strangertalks_new/runtime_restart_reconciliation_test.exs \
+            --seed 0 --max-failures 1
+          rc=$?
+          set -e
+          end_ns="$(date +%s%N)"
+          echo "T02_AB_TIMING lane=${{ matrix.lane }} file=runtime_restart_reconciliation_test.exs elapsed_ns=$((end_ns-start_ns))"
+          exit "$rc"
+
+      - name: Run runtime_terminal_contract_test.exs
+        id: f2
+        continue-on-error: true
+        env:
+          DATABASE_URL: ecto://postgres:postgres@localhost/strangertalks_test
+        shell: bash
+        run: |
+          set -uo pipefail
+          start_ns="$(date +%s%N)"
+          set +e
+          mix test test/strangertalks_new/runtime_terminal_contract_test.exs \
+            --seed 0 --max-failures 1
+          rc=$?
+          set -e
+          end_ns="$(date +%s%N)"
+          echo "T02_AB_TIMING lane=${{ matrix.lane }} file=runtime_terminal_contract_test.exs elapsed_ns=$((end_ns-start_ns))"
+          exit "$rc"
+
+      - name: Run f_x07_canonical_terminal_truth_test.exs
+        id: f3
+        continue-on-error: true
+        env:
+          DATABASE_URL: ecto://postgres:postgres@localhost/strangertalks_test
+        shell: bash
+        run: |
+          set -uo pipefail
+          start_ns="$(date +%s%N)"
+          set +e
+          mix test test/strangertalks_new/f_x07_canonical_terminal_truth_test.exs \
+            --seed 0 --max-failures 1
+          rc=$?
+          set -e
+          end_ns="$(date +%s%N)"
+          echo "T02_AB_TIMING lane=${{ matrix.lane }} file=f_x07_canonical_terminal_truth_test.exs elapsed_ns=$((end_ns-start_ns))"
+          exit "$rc"
+
+      - name: Run team3_recovery_coordination_test.exs
+        id: f4
+        continue-on-error: true
+        env:
+          DATABASE_URL: ecto://postgres:postgres@localhost/strangertalks_test
+        shell: bash
+        run: |
+          set -uo pipefail
+          start_ns="$(date +%s%N)"
+          set +e
+          mix test test/strangertalks_new/team3_recovery_coordination_test.exs \
+            --seed 0 --max-failures 1
+          rc=$?
+          set -e
+          end_ns="$(date +%s%N)"
+          echo "T02_AB_TIMING lane=${{ matrix.lane }} file=team3_recovery_coordination_test.exs elapsed_ns=$((end_ns-start_ns))"
+          exit "$rc"
+
+      - name: Run team4_safety_boundary_test.exs
+        id: f5
+        continue-on-error: true
+        env:
+          DATABASE_URL: ecto://postgres:postgres@localhost/strangertalks_test
+        shell: bash
+        run: |
+          set -uo pipefail
+          start_ns="$(date +%s%N)"
+          set +e
+          mix test test/strangertalks_new/team4_safety_boundary_test.exs \
+            --seed 0 --max-failures 1
+          rc=$?
+          set -e
+          end_ns="$(date +%s%N)"
+          echo "T02_AB_TIMING lane=${{ matrix.lane }} file=team4_safety_boundary_test.exs elapsed_ns=$((end_ns-start_ns))"
+          exit "$rc"
+
+      - name: Run prior bundled combination for order contamination
+        id: combined
+        if: >-
+          steps.f1.outcome == 'success' &&
+          steps.f2.outcome == 'success' &&
+          steps.f3.outcome == 'success' &&
+          steps.f4.outcome == 'success' &&
+          steps.f5.outcome == 'success'
+        continue-on-error: true
+        env:
+          DATABASE_URL: ecto://postgres:postgres@localhost/strangertalks_test
+        shell: bash
+        run: |
+          set -uo pipefail
+          start_ns="$(date +%s%N)"
+          set +e
+          mix test \
+            test/strangertalks_new/runtime_restart_reconciliation_test.exs \
+            test/strangertalks_new/runtime_terminal_contract_test.exs \
+            test/strangertalks_new/f_x07_canonical_terminal_truth_test.exs \
+            test/strangertalks_new/team3_recovery_coordination_test.exs \
+            test/strangertalks_new/team4_safety_boundary_test.exs \
+            --seed 0 --max-failures 1
+          rc=$?
+          set -e
+          end_ns="$(date +%s%N)"
+          echo "T02_AB_TIMING lane=${{ matrix.lane }} proof=prior_bundle elapsed_ns=$((end_ns-start_ns))"
+          exit "$rc"
+
+      - name: Prove validation delta remained proof-only
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test "$(git hash-object test/strangertalks_new/t02_recovery_convergence_hostile_test.exs)" = "$OLD_DIAGNOSTIC_BLOB"
+
+          if [ "${{ matrix.lane }}" = "control" ]; then
+            git diff --exit-code -- \
+              . ':(exclude)test/strangertalks_new/t02_recovery_convergence_hostile_test.exs'
+          else
+            git diff --exit-code -- \
+              . \
+              ':(exclude)test/strangertalks_new/t02_recovery_convergence_hostile_test.exs' \
+              ':(exclude)lib/strangertalks_new/chat/conversation_supervisor.ex'
+          fi
+
+      - name: Record lane outcomes
+        if: always()
+        shell: bash
+        env:
+          PID_DIAG: ${{ steps.pid_diag.outcome }}
+          RECOVERY_STRESS: ${{ steps.recovery_stress.outcome }}
+          F1: ${{ steps.f1.outcome }}
+          F2: ${{ steps.f2.outcome }}
+          F3: ${{ steps.f3.outcome }}
+          F4: ${{ steps.f4.outcome }}
+          F5: ${{ steps.f5.outcome }}
+          COMBINED: ${{ steps.combined.outcome }}
+        run: |
+          echo "T02_AB_OUTCOMES lane=${{ matrix.lane }} pid_diag=$PID_DIAG recovery_stress=$RECOVERY_STRESS f1=$F1 f2=$F2 f3=$F3 f4=$F4 f5=$F5 combined=$COMBINED"
+
+      - name: Preserve red proof status
+        if: always()
+        shell: bash
+        env:
+          PID_DIAG: ${{ steps.pid_diag.outcome }}
+          RECOVERY_STRESS: ${{ steps.recovery_stress.outcome }}
+          F1: ${{ steps.f1.outcome }}
+          F2: ${{ steps.f2.outcome }}
+          F3: ${{ steps.f3.outcome }}
+          F4: ${{ steps.f4.outcome }}
+          F5: ${{ steps.f5.outcome }}
+          COMBINED: ${{ steps.combined.outcome }}
+        run: |
+          set -euo pipefail
+          status=0
+
+          for result in "$PID_DIAG" "$RECOVERY_STRESS" "$F1" "$F2" "$F3" "$F4" "$F5"; do
+            if [ "$result" != "success" ]; then
+              status=1
+            fi
+          done
+
+          if [ "$COMBINED" = "failure" ]; then
+            status=1
+          fi
+
+          exit "$status"
