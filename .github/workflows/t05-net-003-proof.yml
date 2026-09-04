@@ -1,0 +1,160 @@
+name: T05 NET 003 Proof
+
+on:
+  push:
+    branches:
+      - team5/net-003-real-webrtc-proof
+
+permissions:
+  contents: read
+
+jobs:
+  adverse-network-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Prove successor ancestry and frozen candidate preservation
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor 3f433a8e83ace4415664ce48cc025588bb5d838d HEAD
+          test "$(git diff --name-only 3f433a8e83ace4415664ce48cc025588bb5d838d...HEAD | grep -Ec '^priv/static/assets/live_call\.mjs$' || true)" -le 1
+      - name: Run NET-003 hard-failure and authority regressions
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/t05_net_003_credential_timeout_test.mjs \
+            test/js/t05_net_003_ice_failure_test.mjs \
+            test/js/t05_call_end_aba_closure_test.mjs \
+            test/js/team6_media_gate_test.mjs \
+            test/js/team4_media_authority_test.mjs \
+            test/js/team4_call_operation_race_test.mjs \
+            test/js/live_call_signal_queue_regression_test.mjs
+      - name: Diff integrity
+        run: git diff --check 3f433a8e83ace4415664ce48cc025588bb5d838d...HEAD
+
+  local-relay-browser:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      PORT: 4000
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install application and browser dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Install and start isolated coturn relay
+        run: |
+          set -euo pipefail
+          if ss -lntu | grep -Eq ':3478[[:space:]]'; then
+            echo 'TURN_BASELINE_LISTENER=unexpected'
+            exit 1
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y coturn
+          sudo systemctl stop coturn 2>/dev/null || true
+          sudo pkill -x turnserver 2>/dev/null || true
+          cat > /tmp/turnserver.conf <<'EOF'
+          listening-ip=127.0.0.1
+          relay-ip=127.0.0.1
+          listening-port=3478
+          min-port=49160
+          max-port=49200
+          fingerprint
+          use-auth-secret
+          static-auth-secret=team6-test-only-coturn-secret
+          realm=strangertalks.test
+          allow-loopback-peers
+          no-multicast-peers
+          no-cli
+          no-tls
+          no-dtls
+          EOF
+          sudo turnserver -c /tmp/turnserver.conf > /tmp/t05-net-coturn.log 2>&1 &
+          echo $! > /tmp/t05-net-coturn.pid
+          for attempt in $(seq 1 30); do
+            if sudo ss -lunp | grep ':3478' | grep -Fq 'turnserver'; then
+              echo 'LOCAL_TURN_LISTENER=ready'
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/t05-net-coturn.log
+          exit 1
+      - name: Prepare browser database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start Phoenix
+        run: |
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/t05-net-phoenix.log 2>&1 &
+          echo $! > /tmp/t05-net-phoenix.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/t05-net-phoenix.pid)" 2>/dev/null; then
+              cat /tmp/t05-net-phoenix.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/t05-net-phoenix.log
+          exit 1
+      - name: Run real Chromium through isolated TURN relay
+        run: |
+          node --test --test-concurrency=1 \
+            --test-name-pattern='Feature 1Q E2E-(RTV|REACTION|RING)' \
+            test/js/browser_e2e_test.mjs
+      - name: Prove provider shaping and relay-only client policy
+        run: |
+          mix test test/strangertalks_new/team6_turn_provider_test.exs test/strangertalks_new/c11_policy_test.exs
+          node --test --test-concurrency=1 test/js/team6_media_gate_test.mjs
+      - name: Cleanup runtimes
+        if: always()
+        run: |
+          if [ -f /tmp/t05-net-phoenix.pid ]; then kill "$(cat /tmp/t05-net-phoenix.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/t05-net-coturn.pid ]; then sudo kill "$(cat /tmp/t05-net-coturn.pid)" 2>/dev/null || true; fi
