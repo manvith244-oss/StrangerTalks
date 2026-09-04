@@ -1,10 +1,12 @@
 name: T02 Runtime Generation Causal Trace
 
 on:
-  workflow_dispatch:
   push:
-    branches: [team2/runtime-restart-reconciliation-fix-lab]
-    paths: [.github/workflows/t02-runtime-generation-causal-trace.yml]
+    branches:
+      - team2/runtime-restart-reconciliation-fix-lab
+    paths:
+      - .github/workflows/t02-runtime-generation-causal-trace.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -25,7 +27,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [CONTROL, TEMPORARY]
+        lane:
+          - CONTROL
+          - TEMPORARY
+
     services:
       postgres:
         image: postgres:16
@@ -33,18 +38,22 @@ jobs:
           POSTGRES_USER: strangertalks_local
           POSTGRES_PASSWORD: strangertalks_test
           POSTGRES_DB: strangertalks_new_test
-        ports: [5432:5432]
+        ports:
+          - "5432:5432"
         options: >-
           --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s --health-timeout 5s --health-retries 10
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout exact product
+        uses: actions/checkout@v4
         with:
           ref: ${{ env.PRODUCT_SHA }}
           fetch-depth: 0
 
-      - name: Exact product + diagnostic preflight
+      - name: Preflight identity and hostile blob
         shell: bash
         run: |
           set -euo pipefail
@@ -59,20 +68,20 @@ jobs:
             test -f "test/strangertalks_new/$f"
           done
 
-      - name: Exact V2 temporary experiment
+      - name: Apply exact V2 temporary override
         if: matrix.lane == 'TEMPORARY'
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          p=Path('lib/strangertalks_new/conversation_lifecycle/conversation_server.ex')
-          s=p.read_text()
-          old='''        case DynamicSupervisor.start_child(
+          p = Path('lib/strangertalks_new/conversation_lifecycle/conversation_server.ex')
+          s = p.read_text()
+          old = '''        case DynamicSupervisor.start_child(
                  StrangertalksNew.ConversationDynamicSupervisor,
                  {__MODULE__, %{conversation_id: conversation_id}}
                ) do'''
-          new='''        child_spec =
+          new = '''        child_spec =
           Supervisor.child_spec(
             {__MODULE__, %{conversation_id: conversation_id}},
             restart: :temporary
@@ -82,25 +91,32 @@ jobs:
                StrangertalksNew.ConversationDynamicSupervisor,
                child_spec
              ) do'''
-          assert s.count(old)==1
-          p.write_text(s.replace(old,new,1))
+          if s.count(old) != 1:
+              raise SystemExit('V2 patch anchor mismatch')
+          p.write_text(s.replace(old, new, 1))
           PY
           git diff --check
 
-      - name: Semantic delta gate
+      - name: Prove lane delta
         shell: bash
         run: |
           set -euo pipefail
           delta="$(git diff --name-only -- lib config mix.exs mix.lock | sort)"
-          echo "LANE=${{ matrix.lane }} SEMANTIC_DELTA=$delta"
-          if [ "${{ matrix.lane }}" = CONTROL ]; then test -z "$delta"; else test "$delta" = lib/strangertalks_new/conversation_lifecycle/conversation_server.ex; fi
+          echo "SEMANTIC_DELTA=$delta"
+          if [ "${{ matrix.lane }}" = "CONTROL" ]; then
+            test -z "$delta"
+          else
+            test "$delta" = "lib/strangertalks_new/conversation_lifecycle/conversation_server.ex"
+            grep -Fq 'restart: :temporary' lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
+          fi
 
-      - uses: erlef/setup-beam@v1
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
         with:
-          elixir-version: '1.18.4'
-          otp-version: '27.3.4'
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
 
-      - name: DB + compile preflight
+      - name: Database and compile preflight
         shell: bash
         run: |
           set -euo pipefail
@@ -112,7 +128,7 @@ jobs:
           mix compile --warnings-as-errors
           echo "DB_MIGRATE_COMPILE=PASS"
 
-      - name: Write proof-only timeline probe
+      - name: Write proof-only generation timeline probe
         shell: bash
         run: |
           cat > test/strangertalks_new/t02_generation_timeline_probe_test.exs <<'ELIXIR'
@@ -126,96 +142,139 @@ jobs:
             @parallel 32
             @rounds 8
 
-            test "generation timeline" do
-              IO.puts("TRACE lane=#{System.get_env("TRACE_LANE")} parallel=#{@parallel} rounds=#{@rounds}")
+            test "proof timeline" do
+              IO.puts("TRACE lane=#{System.get_env("TRACE_LANE")}")
               for round <- 1..@rounds do
-                c=conversation_fixture(%{status: "PENDING"}); cid=c.id
-                snap("before_initial",round,cid,nil)
-                {:ok,g1}=ConversationServer.ensure_started(cid)
-                ds1=Process.whereis(@ds); dsref=Process.monitor(ds1); g1ref=Process.monitor(g1)
-                Process.sleep(5); snap("after_initial",round,cid,g1)
-                IO.puts("GEN round=#{round} seq=1 pid=#{inspect(g1)} path=explicit_ensure_started supervisor=#{inspect(ds1)} ts=#{System.monotonic_time()}")
+                c = conversation_fixture(%{status: "PENDING"})
+                cid = c.id
+                snap("before_initial", round, cid, nil)
+                {:ok, g1} = ConversationServer.ensure_started(cid)
+                ds1 = Process.whereis(@ds)
+                ds_ref = Process.monitor(ds1)
+                g1_ref = Process.monitor(g1)
+                Process.sleep(5)
+                snap("after_initial", round, cid, g1)
+                IO.puts("GEN round=#{round} seq=1 pid=#{inspect(g1)} path=explicit_ensure_started ds=#{inspect(ds1)} ts=#{System.monotonic_time()}")
 
-                parent=self()
-                tasks=for i <- 1..@parallel do
-                  Task.async(fn -> send(parent,{:ready,self(),i}); receive do {:go,^cid}->:ok end; {i,self(),ConversationServer.ensure_started(cid)} end)
+                parent = self()
+                tasks = for i <- 1..@parallel do
+                  Task.async(fn ->
+                    send(parent, {:ready, self(), i})
+                    receive do {:go, ^cid} -> :ok end
+                    {i, self(), ConversationServer.ensure_started(cid)}
+                  end)
                 end
-                for _ <- 1..@parallel, do: assert_receive({:ready,_,_},5000)
+                Enum.each(1..@parallel, fn _ -> assert_receive {:ready, _, _}, 5_000 end)
                 IO.puts("CALLERS_BLOCKED round=#{round} count=#{@parallel} ts=#{System.monotonic_time()}")
-                snap("before_kill",round,cid,g1)
-                IO.puts("KILL round=#{round} pid=#{inspect(g1)} reason=:kill ts=#{System.monotonic_time()}")
-                Process.exit(g1,:kill)
-                receive do {:DOWN,^g1ref,:process,^g1,reason}->IO.puts("DOWN round=#{round} seq=1 pid=#{inspect(g1)} reason=#{inspect(reason)} ts=#{System.monotonic_time()}") after 5000->flunk("g1 down timeout") end
-                snap("after_g1_down_callers_blocked",round,cid,g1)
+                snap("before_kill", round, cid, g1)
+                IO.puts("KILL round=#{round} pid=#{inspect(g1)} ts=#{System.monotonic_time()}")
+                Process.exit(g1, :kill)
+                receive do
+                  {:DOWN, ^g1_ref, :process, ^g1, reason} -> IO.puts("DOWN round=#{round} pid=#{inspect(g1)} reason=#{inspect(reason)} ts=#{System.monotonic_time()}")
+                after
+                  5_000 -> flunk("g1 down timeout")
+                end
+
+                snap("after_g1_down_callers_blocked", round, cid, g1)
                 Process.sleep(20)
-                {ds_pre,reg_pre,kids_pre,state_pre}=snap("pre_release_20ms",round,cid,g1)
-                pre=one_pid(reg_pre,kids_pre)
-                IO.puts("PRE_RELEASE round=#{round} pid=#{inspect(pre)} prior_alive=#{Process.alive?(g1)} supervisor=#{inspect(ds_pre)} state=#{inspect(state_pre,limit: :infinity)} ts=#{System.monotonic_time()}")
+                {ds_pre, reg_pre, kids_pre, state_pre} = snap("pre_release_20ms", round, cid, g1)
+                pre = one_pid(reg_pre, kids_pre)
+                IO.puts("PRE_RELEASE round=#{round} pid=#{inspect(pre)} prior_alive=#{Process.alive?(g1)} ds=#{inspect(ds_pre)} state=#{inspect(state_pre, limit: :infinity)} ts=#{System.monotonic_time()}")
 
-                Enum.each(tasks,fn t->send(t.pid,{:go,cid}) end)
+                Enum.each(tasks, fn t -> send(t.pid, {:go, cid}) end)
                 IO.puts("CALLERS_RELEASED round=#{round} ts=#{System.monotonic_time()}")
-                results=Enum.map(tasks,&Task.await(&1,10000))
-                pids=Enum.map(results,fn {_,_,{:ok,p}}->p; other->flunk("bad ensure result #{inspect(other)}") end)|>Enum.uniq()
-                IO.puts("RESULTS round=#{round} pids=#{inspect(pids)} count=#{length(pids)} ts=#{System.monotonic_time()}")
-                assert length(pids)==1
-                [g2]=pids
-                {ds2,reg2,kids2,state2}=snap("after_release",round,cid,g1)
-                IO.puts("GEN round=#{round} seq=2 pid=#{inspect(g2)} path=#{if pre==g2, do: "supervisor_auto_restart_before_release", else: "explicit_ensure_after_release"} prior_alive=#{Process.alive?(g1)} supervisor_before=#{inspect(ds1)} supervisor_after=#{inspect(ds2)} registry=#{inspect(reg2)} children=#{inspect(kids2)} state=#{inspect(state2,limit: :infinity)} ts=#{System.monotonic_time()}")
-                receive do {:DOWN,^dsref,:process,^ds1,r}->IO.puts("DS_DOWN round=#{round} pid=#{inspect(ds1)} reason=#{inspect(r)} replacement=#{inspect(Process.whereis(@ds))} ts=#{System.monotonic_time()}") after 0->IO.puts("DS_STABLE round=#{round} pid=#{inspect(ds1)} current=#{inspect(Process.whereis(@ds))} ts=#{System.monotonic_time()}") end
+                results = Enum.map(tasks, &Task.await(&1, 10_000))
+                pids = results |> Enum.map(fn {_, _, {:ok, p}} -> p; other -> flunk("bad result #{inspect(other)}") end) |> Enum.uniq()
+                assert length(pids) == 1
+                [g2] = pids
+                {ds2, reg2, kids2, state2} = snap("after_release", round, cid, g1)
+                path = if pre == g2, do: "supervisor_auto_restart_before_release", else: "explicit_ensure_after_release"
+                IO.puts("GEN round=#{round} seq=2 pid=#{inspect(g2)} path=#{path} prior_alive=#{Process.alive?(g1)} ds_before=#{inspect(ds1)} ds_after=#{inspect(ds2)} registry=#{inspect(reg2)} kids=#{inspect(kids2)} state=#{inspect(state2, limit: :infinity)} ts=#{System.monotonic_time()}")
 
-                ref=Process.monitor(g2); :ok=DynamicSupervisor.terminate_child(Process.whereis(@ds),g2)
-                receive do {:DOWN,^ref,:process,^g2,r}->IO.puts("G2_TERMINATED round=#{round} pid=#{inspect(g2)} reason=#{inspect(r)} ts=#{System.monotonic_time()}") after 5000->flunk("g2 down timeout") end
-                Process.sleep(10); snap("round_end",round,cid,g2)
+                receive do
+                  {:DOWN, ^ds_ref, :process, ^ds1, reason} -> IO.puts("DS_DOWN round=#{round} pid=#{inspect(ds1)} reason=#{inspect(reason)} replacement=#{inspect(Process.whereis(@ds))} ts=#{System.monotonic_time()}")
+                after
+                  0 -> IO.puts("DS_STABLE round=#{round} pid=#{inspect(ds1)} current=#{inspect(Process.whereis(@ds))} ts=#{System.monotonic_time()}")
+                end
+
+                g2_ref = Process.monitor(g2)
+                :ok = DynamicSupervisor.terminate_child(Process.whereis(@ds), g2)
+                receive do
+                  {:DOWN, ^g2_ref, :process, ^g2, reason} -> IO.puts("G2_TERMINATED round=#{round} pid=#{inspect(g2)} reason=#{inspect(reason)} ts=#{System.monotonic_time()}")
+                after
+                  5_000 -> flunk("g2 down timeout")
+                end
+                Process.sleep(10)
+                snap("round_end", round, cid, g2)
               end
             end
 
-            defp snap(label,round,cid,prior) do
-              ds=Process.whereis(@ds); reg=Registry.lookup(@reg,{:conversation,cid}); kids=kids(ds,cid); state=state(ds); status=Repo.get!(Conversation,cid).status
-              IO.puts("SNAP label=#{label} round=#{round} cid=#{cid} status=#{inspect(status)} prior=#{inspect(prior)} prior_alive=#{if is_pid(prior), do: Process.alive?(prior), else: nil} ds=#{inspect(ds)} registry=#{inspect(reg)} kids=#{inspect(kids)} state=#{inspect(state,limit: :infinity)} ts=#{System.monotonic_time()}")
-              {ds,reg,kids,state}
+            defp snap(label, round, cid, prior) do
+              ds = Process.whereis(@ds)
+              reg = Registry.lookup(@reg, {:conversation, cid})
+              kids = safe_kids(ds, cid)
+              state = safe_state(ds)
+              status = Repo.get!(Conversation, cid).status
+              IO.puts("SNAP label=#{label} round=#{round} cid=#{cid} status=#{inspect(status)} prior=#{inspect(prior)} prior_alive=#{if is_pid(prior), do: Process.alive?(prior), else: nil} ds=#{inspect(ds)} registry=#{inspect(reg)} kids=#{inspect(kids)} state=#{inspect(state, limit: :infinity)} ts=#{System.monotonic_time()}")
+              {ds, reg, kids, state}
             end
-            defp kids(nil,_), do: :unavailable
-            defp kids(ds,cid) do
+
+            defp safe_kids(nil, _cid), do: :unavailable
+            defp safe_kids(ds, cid) do
               try do
-                DynamicSupervisor.which_children(ds)|>Enum.flat_map(fn {_,p,_,mods}->if is_pid(p) and Enum.any?(Registry.lookup(@reg,{:conversation,cid}),fn {rp,_}->rp==p end), do: [{p,mods}], else: [] end)
-              catch :exit,r->{:unavailable,r} end
+                registered = Registry.lookup(@reg, {:conversation, cid}) |> Enum.map(&elem(&1, 0))
+                DynamicSupervisor.which_children(ds)
+                |> Enum.flat_map(fn {_, pid, _, mods} -> if is_pid(pid) and pid in registered, do: [{pid, mods}], else: [] end)
+              catch
+                :exit, reason -> {:unavailable, reason}
+              end
             end
-            defp state(nil), do: :unavailable
-            defp state(ds) do try do :sys.get_state(ds) catch :exit,r->{:unavailable,r} end end
-            defp one_pid(reg,kids) when is_list(reg) and is_list(kids) do
-              case Enum.uniq(Enum.map(reg,&elem(&1,0))++Enum.map(kids,&elem(&1,0))) do [p]->p; _->nil end
+
+            defp safe_state(nil), do: :unavailable
+            defp safe_state(ds) do
+              try do :sys.get_state(ds) catch :exit, reason -> {:unavailable, reason} end
             end
-            defp one_pid(_,_), do: nil
+
+            defp one_pid(reg, kids) when is_list(reg) and is_list(kids) do
+              case Enum.uniq(Enum.map(reg, &elem(&1, 0)) ++ Enum.map(kids, &elem(&1, 0))) do
+                [pid] -> pid
+                _ -> nil
+              end
+            end
+            defp one_pid(_, _), do: nil
           end
           ELIXIR
 
-      - name: Run proof-only timeline
+      - name: Run proof-only generation timeline
         env:
           TRACE_LANE: ${{ matrix.lane }}
         shell: bash
         run: |
           set -o pipefail
-          mix test test/strangertalks_new/t02_generation_timeline_probe_test.exs --seed 0 --trace 2>&1 | tee timeline.log
+          mix test test/strangertalks_new/t02_generation_timeline_probe_test.exs --seed 0 --trace
 
-      - name: Run exact accepted hostile diagnostic
+      - name: Run exact hostile diagnostic unchanged
         id: hostile
         continue-on-error: true
         shell: bash
         run: |
           set -uo pipefail
-          start=$(date +%s%N); set +e
+          start_ns="$(date +%s%N)"
+          set +e
           mix test test/strangertalks_new/t02_recovery_convergence_hostile_test.exs --seed 0 --trace
-          rc=$?; set -e; end=$(date +%s%N)
-          echo "HOSTILE lane=${{ matrix.lane }} rc=$rc elapsed_ns=$((end-start)) seed=0"
-          exit $rc
+          rc=$?
+          set -e
+          end_ns="$(date +%s%N)"
+          echo "HOSTILE_RESULT lane=${{ matrix.lane }} rc=$rc elapsed_ns=$((end_ns-start_ns)) seed=0"
+          exit "$rc"
 
-      - name: Record hostile outcome + final source delta
+      - name: Final proof-only gate
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          echo "HOSTILE_STEP_OUTCOME=${{ steps.hostile.outcome }}"
-          echo "FINAL_DELTA_BEGIN"
+          echo "HOSTILE_STEP=${{ steps.hostile.outcome }}"
+          echo "FINAL_SOURCE_DELTA_BEGIN"
           git diff --name-only -- lib config mix.exs mix.lock | sort
-          echo "FINAL_DELTA_END"
+          echo "FINAL_SOURCE_DELTA_END"
           test "$(git hash-object test/strangertalks_new/t02_recovery_convergence_hostile_test.exs)" = "$OLD_DIAGNOSTIC_BLOB"
