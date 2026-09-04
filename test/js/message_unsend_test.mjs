@@ -132,9 +132,9 @@ test("browser synchronization and action source lock terminal, absence, media-ne
   assert.doesNotMatch(app, /safety_snapshot/)
 })
 
-test("narrow 1L amendment locks the approved safety disclosure and existing no-expiry truth", () => {
+test("T03 PRIV-002 keeps the approved Unsend disclosure and bounded safety-retention truth", () => {
   const approved = "An unsent text message may be kept temporarily inside the active Conversation for safety reporting. If that unsent message is reported while the safety copy is still available, the specific message text may be stored with the report."
   assert.ok(app.includes(approved))
-  assert.ok(app.includes("Stored report and safety-review records currently have no automatic expiry or cleanup."))
+  assert.ok(app.includes("Limited safety evidence is minimized or deleted on its own safety-retention schedule. Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."))
   assert.match(app, /reportTargetMessageId \? null/)
 })
