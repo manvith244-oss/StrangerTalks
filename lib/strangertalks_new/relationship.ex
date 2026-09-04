@@ -174,6 +174,11 @@ defmodule StrangertalksNew.Relationship do
       :shared_memory_count,
       :private_note_count
     ])
+    |> validate_distinct_participants()
+    |> check_constraint(:participant_b_id,
+      name: :relationships_distinct_participants_check,
+      message: "must identify two different participants"
+    )
   end
 
   defp backfill_origin_doors(attrs) do
@@ -185,6 +190,17 @@ defmodule StrangertalksNew.Relationship do
       |> Map.put_new(:origin_participant_b_door_type, door)
     else
       attrs
+    end
+  end
+
+  defp validate_distinct_participants(changeset) do
+    participant_a_id = get_field(changeset, :participant_a_id)
+    participant_b_id = get_field(changeset, :participant_b_id)
+
+    if is_binary(participant_a_id) and participant_a_id == participant_b_id do
+      add_error(changeset, :participant_b_id, "must identify two different participants")
+    else
+      changeset
     end
   end
 end
