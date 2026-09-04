@@ -104,7 +104,7 @@ defmodule StrangertalksNew.AgentSystems.SafetyReviewAssistant do
            "recommendation" => recommendation,
            "rationale" => rationale,
            "needs_human_review" => needs_human_review
-         },
+         } = decoded,
          payload
        )
        when severity in @severities and recommendation in @recommendations and
@@ -112,6 +112,14 @@ defmodule StrangertalksNew.AgentSystems.SafetyReviewAssistant do
     rationale = String.trim(rationale)
 
     cond do
+      not exact_keys?(decoded, [
+        "severity",
+        "recommendation",
+        "rationale",
+        "needs_human_review"
+      ]) ->
+        {:error, :invalid_safety_review_output}
+
       rationale == "" or String.length(rationale) > 1_000 ->
         {:error, :invalid_safety_review_output}
 
@@ -131,6 +139,12 @@ defmodule StrangertalksNew.AgentSystems.SafetyReviewAssistant do
   end
 
   defp validate_output(_decoded, _payload), do: {:error, :invalid_safety_review_output}
+
+  defp exact_keys?(map, expected) when is_map(map) do
+    map
+    |> Map.keys()
+    |> Enum.sort() == Enum.sort(expected)
+  end
 
   defp bounded_context(nil), do: nil
 
