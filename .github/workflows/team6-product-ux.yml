@@ -125,6 +125,10 @@ jobs:
           cat /tmp/team6-product-ux-browser.log
           exit 1
 
+      - name: T03 historical return route regression
+        run: |
+          node --test --test-concurrency=1 test/js/t03_history_route_browser_test.mjs
+
       - name: Real Arrival and accessibility browser proof
         run: |
           node --test --test-concurrency=1 \
