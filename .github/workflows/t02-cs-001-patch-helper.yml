@@ -26,6 +26,7 @@ jobs:
 
           path = Path("lib/strangertalks_new/conversation_lifecycle/conversation_server.ex")
           text = path.read_text()
+          block = lambda lines: "\n".join(lines)
 
           replacements = [
               (
@@ -33,40 +34,48 @@ jobs:
                   "icebreaker: initial_icebreaker(conversation),",
               ),
               (
-                  '''  defp retire_icebreaker(%{icebreaker: {:active, _identity}} = state) do
-    state
-    |> Map.put(:icebreaker, :retired)
-    |> notify_all_participants({:conversation_icebreaker, %{status: "retired"}})
-  end''',
-                  '''  defp retire_icebreaker(%{icebreaker: {:active, _identity}} = state) do
-    conversation =
-      state.conversation
-      |> Ecto.Changeset.change(first_message_timestamp: DateTime.utc_now())
-      |> Repo.update!()
-
-    state
-    |> Map.put(:conversation, conversation)
-    |> Map.put(:icebreaker, :retired)
-    |> notify_all_participants({:conversation_icebreaker, %{status: "retired"}})
-  end''',
+                  block([
+                      "  defp retire_icebreaker(%{icebreaker: {:active, _identity}} = state) do",
+                      "    state",
+                      "    |> Map.put(:icebreaker, :retired)",
+                      "    |> notify_all_participants({:conversation_icebreaker, %{status: \"retired\"}})",
+                      "  end",
+                  ]),
+                  block([
+                      "  defp retire_icebreaker(%{icebreaker: {:active, _identity}} = state) do",
+                      "    conversation =",
+                      "      state.conversation",
+                      "      |> Ecto.Changeset.change(first_message_timestamp: DateTime.utc_now())",
+                      "      |> Repo.update!()",
+                      "",
+                      "    state",
+                      "    |> Map.put(:conversation, conversation)",
+                      "    |> Map.put(:icebreaker, :retired)",
+                      "    |> notify_all_participants({:conversation_icebreaker, %{status: \"retired\"}})",
+                      "  end",
+                  ]),
               ),
               (
-                  '''  defp initial_icebreaker(conversation_id) do
-    identity = IcebreakerCatalog.identity_for(conversation_id)
-    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired
-  rescue
-    _error -> :retired
-  end''',
-                  '''  defp initial_icebreaker(%Conversation{first_message_timestamp: timestamp})
-       when not is_nil(timestamp),
-       do: :retired
-
-  defp initial_icebreaker(%Conversation{conversation_id: conversation_id}) do
-    identity = IcebreakerCatalog.identity_for(conversation_id)
-    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired
-  rescue
-    _error -> :retired
-  end''',
+                  block([
+                      "  defp initial_icebreaker(conversation_id) do",
+                      "    identity = IcebreakerCatalog.identity_for(conversation_id)",
+                      "    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired",
+                      "  rescue",
+                      "    _error -> :retired",
+                      "  end",
+                  ]),
+                  block([
+                      "  defp initial_icebreaker(%Conversation{first_message_timestamp: timestamp})",
+                      "       when not is_nil(timestamp),",
+                      "       do: :retired",
+                      "",
+                      "  defp initial_icebreaker(%Conversation{conversation_id: conversation_id}) do",
+                      "    identity = IcebreakerCatalog.identity_for(conversation_id)",
+                      "    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired",
+                      "  rescue",
+                      "    _error -> :retired",
+                      "  end",
+                  ]),
               ),
           ]
 
