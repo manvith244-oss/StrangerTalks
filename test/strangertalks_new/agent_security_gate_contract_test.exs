@@ -7,17 +7,24 @@ defmodule StrangertalksNew.AgentSecurityGateContractTest do
     {:ok, workflow: File.read!(@workflow_path)}
   end
 
-  test "Agent Systems closure gate follows current canonical and release authority", %{workflow: workflow} do
+  test "Agent Systems closure gate follows current canonical and release authority", %{
+    workflow: workflow
+  } do
     assert workflow =~ "name: Agent Systems Closure Gate"
     assert workflow =~ "jobs:\n  agents:"
-    assert workflow =~ "pull_request:\n    branches:\n      - main\n      - release/prep-2026-08-22"
+
+    assert workflow =~
+             "pull_request:\n    branches:\n      - main\n      - release/prep-2026-08-22"
+
     assert workflow =~ "push:\n    branches:\n      - main\n      - release/prep-2026-08-22"
     assert workflow =~ "workflow_dispatch:"
     refute workflow =~ "feature/a01-conversation-companion"
     refute workflow =~ "release/integration-2026-08-28"
   end
 
-  test "Agent Systems closure gate preserves exact-head and least-privilege proof", %{workflow: workflow} do
+  test "Agent Systems closure gate preserves exact-head and least-privilege proof", %{
+    workflow: workflow
+  } do
     assert workflow =~ "target_sha:"
     assert workflow =~ "permissions:\n  contents: read"
     assert workflow =~ "TARGET_SHA: ${{"
