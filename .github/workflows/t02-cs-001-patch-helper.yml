@@ -1,0 +1,91 @@
+name: T02 CS 001 Patch Helper
+
+on:
+  push:
+    branches:
+      - team2/conversation-start-retirement-patch-helper-001
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout deterministic candidate
+        uses: actions/checkout@v4
+        with:
+          ref: team2/conversation-start-retirement-repair-001
+          fetch-depth: 0
+
+      - name: Apply exact minimal Conversation Start retirement repair
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("lib/strangertalks_new/conversation_lifecycle/conversation_server.ex")
+          text = path.read_text()
+
+          replacements = [
+              (
+                  "icebreaker: initial_icebreaker(conversation_id),",
+                  "icebreaker: initial_icebreaker(conversation),",
+              ),
+              (
+                  '''  defp retire_icebreaker(%{icebreaker: {:active, _identity}} = state) do
+    state
+    |> Map.put(:icebreaker, :retired)
+    |> notify_all_participants({:conversation_icebreaker, %{status: "retired"}})
+  end''',
+                  '''  defp retire_icebreaker(%{icebreaker: {:active, _identity}} = state) do
+    conversation =
+      state.conversation
+      |> Ecto.Changeset.change(first_message_timestamp: DateTime.utc_now())
+      |> Repo.update!()
+
+    state
+    |> Map.put(:conversation, conversation)
+    |> Map.put(:icebreaker, :retired)
+    |> notify_all_participants({:conversation_icebreaker, %{status: "retired"}})
+  end''',
+              ),
+              (
+                  '''  defp initial_icebreaker(conversation_id) do
+    identity = IcebreakerCatalog.identity_for(conversation_id)
+    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired
+  rescue
+    _error -> :retired
+  end''',
+                  '''  defp initial_icebreaker(%Conversation{first_message_timestamp: timestamp})
+       when not is_nil(timestamp),
+       do: :retired
+
+  defp initial_icebreaker(%Conversation{conversation_id: conversation_id}) do
+    identity = IcebreakerCatalog.identity_for(conversation_id)
+    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired
+  rescue
+    _error -> :retired
+  end''',
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              assert count == 1, f"expected exactly one match, got {count}: {old[:80]!r}"
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+
+          git diff --check
+          git diff -- lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
+
+      - name: Commit exact candidate delta
+        shell: bash
+        run: |
+          git config user.name "StrangerTalks T02 Proof Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
+          git commit -m "fix(t02): persist Conversation Start retirement"
+          git push origin HEAD:team2/conversation-start-retirement-repair-001
