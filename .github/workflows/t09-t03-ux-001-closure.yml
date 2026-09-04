@@ -1,0 +1,391 @@
+name: T09 T03 UX-001 Terminal Closure
+
+on:
+  push:
+    branches: [team9/t03-ux-001-terminal-closure]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  EXPECTED_SHA: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+  EXPECTED_TREE: d16afe6b2b05472d012ac6113203e91c492d06ba
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+
+jobs:
+  closure:
+    name: T09-T03-UX-001 exact-SHA terminal closure
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - name: Record T09 proof identity
+        run: |
+          echo "T09_PROOF_BRANCH=$GITHUB_REF_NAME"
+          echo "T09_PROOF_SHA=$GITHUB_SHA"
+          echo "T09_RUN_ID=$GITHUB_RUN_ID"
+
+      - name: Checkout exact frozen T03 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          fetch-depth: 0
+
+      - name: Exact candidate identity and hygiene
+        run: |
+          set -euo pipefail
+          echo "TESTED_SHA=$(git rev-parse HEAD)"
+          echo "TESTED_TREE=$(git rev-parse HEAD^{tree})"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test -z "$(git status --porcelain)"
+          git diff --check HEAD^
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install exact test stack
+        run: |
+          set -euo pipefail
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare pristine browser database
+        run: |
+          set -euo pipefail
+          mix ecto.drop --force || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Inject T09-only closure oracle
+        run: |
+          cat > test/t09_t03_ux_001_closure_test.mjs <<'JAVASCRIPT'
+          import assert from "node:assert/strict"
+          import test from "node:test"
+          import {chromium} from "playwright"
+
+          const BASE = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const WAIT = 20_000
+          const active = (page, screen) => page.locator(`section[data-screen="${screen}"].active`)
+
+          function observe(page) {
+            const pageErrors = []
+            const consoleErrors = []
+            const requestFailures = []
+            const serverErrors = []
+            page.on("pageerror", e => pageErrors.push(String(e)))
+            page.on("console", m => { if (m.type() === "error") consoleErrors.push(m.text()) })
+            page.on("requestfailed", r => requestFailures.push(`${r.method()} ${r.url()} ${r.failure()?.errorText || "failed"}`))
+            page.on("response", r => { if (r.status() >= 500) serverErrors.push(`${r.status()} ${r.request().method()} ${r.url()}`) })
+            return {pageErrors, consoleErrors, requestFailures, serverErrors}
+          }
+
+          async function waitPath(page, expected, label) {
+            await page.waitForFunction(path => location.pathname === path, expected, {timeout: WAIT})
+            assert.equal(new URL(page.url()).pathname, expected, label)
+          }
+
+          async function assertSettledWidth(page, width, height, label) {
+            const immediate = await page.evaluate(() => ({
+              innerWidth, innerHeight,
+              documentWidth: document.documentElement.scrollWidth,
+              bodyWidth: document.body.scrollWidth
+            }))
+            console.log(`T09_${label}_WIDTH_IMMEDIATE=${JSON.stringify(immediate)}`)
+            if (immediate.documentWidth > immediate.innerWidth || immediate.bodyWidth > immediate.innerWidth) {
+              console.log(`T09_${label}_TRANSIENT_OVERFLOW=OBSERVED`)
+            }
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+            const settled = await page.evaluate(() => ({
+              innerWidth, innerHeight,
+              documentWidth: document.documentElement.scrollWidth,
+              bodyWidth: document.body.scrollWidth
+            }))
+            console.log(`T09_${label}_WIDTH_SETTLED=${JSON.stringify(settled)}`)
+            assert.deepEqual([settled.innerWidth, settled.innerHeight], [width, height], `${label}: exact viewport`)
+            assert.ok(settled.documentWidth <= width + 1, `${label}: no persistent document overflow`)
+            assert.ok(settled.bodyWidth <= width + 1, `${label}: no persistent body overflow`)
+          }
+
+          async function assertUsable(locator, width, label) {
+            await locator.scrollIntoViewIfNeeded()
+            await locator.waitFor({state: "visible", timeout: WAIT})
+            assert.equal(await locator.isEnabled(), true, `${label}: enabled`)
+            const box = await locator.boundingBox()
+            console.log(`T09_${label}_BOX=${JSON.stringify(box)}`)
+            assert.ok(box && box.x >= -1 && box.x + box.width <= width + 1 && box.y >= -1, `${label}: reachable geometry`)
+          }
+
+          async function boot(browser, viewport, label) {
+            const context = await browser.newContext({viewport})
+            const page = await context.newPage()
+            const diagnostics = observe(page)
+            const issuanceWait = page.waitForResponse(r => {
+              try { return new URL(r.url()).pathname === "/api/participants" } catch { return false }
+            })
+            const root = await page.goto(BASE, {waitUntil: "domcontentloaded"})
+            assert.ok(root?.ok(), `${label}: root loads`)
+            const issuance = await issuanceWait
+            console.log(`T09_${label}_PARTICIPANT_ISSUANCE=${issuance.status()}`)
+            assert.equal(issuance.status(), 201, `${label}: participant issuance`)
+            await active(page, "doors").waitFor({state: "visible", timeout: WAIT})
+            return {context, page, diagnostics}
+          }
+
+          async function chooseAdvice(side, width, label) {
+            const language = side.page.locator("#conversation-language")
+            await assertUsable(language, width, `${label}_LANGUAGE`)
+            await language.selectOption("en")
+            assert.equal(await language.inputValue(), "en")
+            const advice = side.page.getByRole("button", {name: /Advice/}).first()
+            await assertUsable(advice, width, `${label}_ADVICE_DOOR`)
+            await advice.click()
+            await active(side.page, "queue").waitFor({state: "visible", timeout: WAIT})
+            await waitPath(side.page, "/matchmaking", `${label}: queue route`)
+            const leave = side.page.locator("#leave-queue")
+            assert.equal(await leave.count(), 1, `${label}: one queue leave control`)
+            await leave.waitFor({state: "visible", timeout: WAIT})
+            console.log(`T09_${label}_QUEUE_LEAVE_DISABLED=${await leave.isDisabled()}`)
+          }
+
+          async function pair(browser, viewport, prefix) {
+            const a = await boot(browser, viewport, `${prefix}_A`)
+            const b = await boot(browser, viewport, `${prefix}_B`)
+            await chooseAdvice(a, viewport.width, `${prefix}_A`)
+            await b.page.locator("#conversation-language").selectOption("en")
+            await b.page.getByRole("button", {name: /Advice/}).first().click()
+            await Promise.all([
+              active(a.page, "conversation").waitFor({state: "visible", timeout: WAIT}),
+              active(b.page, "conversation").waitFor({state: "visible", timeout: WAIT})
+            ])
+            await Promise.all([
+              waitPath(a.page, "/conversation", `${prefix}_A: Conversation route`),
+              waitPath(b.page, "/conversation", `${prefix}_B: Conversation route`)
+            ])
+            return {a, b}
+          }
+
+          async function endConversation(page) {
+            const actions = page.locator("details.overflow")
+            if ((await actions.getAttribute("open")) === null) await actions.locator("summary").click()
+            await page.locator("#end-conversation").click()
+            await page.locator("#end-confirmation-dialog").waitFor({state: "visible", timeout: WAIT})
+            await page.locator("#end-confirm").click()
+          }
+
+          async function localRecords(page) {
+            return page.evaluate(async () => (await import("/assets/local_data.mjs")).listRecords())
+          }
+
+          function assertClean(side, label) {
+            console.log(`T09_${label}_CONSOLE_ERRORS=${JSON.stringify(side.diagnostics.consoleErrors)}`)
+            assert.deepEqual(side.diagnostics.pageErrors, [], `${label} page errors`)
+            assert.deepEqual(side.diagnostics.requestFailures, [], `${label} failed requests`)
+            assert.deepEqual(side.diagnostics.serverErrors, [], `${label} 5xx responses`)
+          }
+
+          test("T09 768x1024 core journey Keep/Fade retained-history closure", {timeout: 180_000}, async () => {
+            const browser = await chromium.launch({headless: true})
+            let pairState
+            try {
+              pairState = await pair(browser, {width: 768, height: 1024}, "MOBILE")
+              const {a, b} = pairState
+              await assertSettledWidth(a.page, 768, 1024, "MOBILE_CONVERSATION")
+
+              const form = a.page.locator("#message-form")
+              const composer = form.locator("#message-input")
+              const semanticSubmit = form.locator('button:not([type]), button[type="submit"], input[type="submit"]')
+              const structuralSend = form.locator(".compose > button.primary")
+              assert.equal(await composer.count(), 1, "one composer")
+              assert.equal(await semanticSubmit.count(), 1, "one message submit authority")
+              assert.equal(await structuralSend.evaluate(button => button.type), "submit", "canonical Send is submit authority")
+              await assertUsable(composer, 768, "MOBILE_COMPOSER")
+
+              await composer.focus()
+              assert.equal(await a.page.evaluate(() => document.activeElement?.id), "message-input")
+              const text = "t09 ux001 exact delivery"
+              await composer.fill(text)
+              const send = form.locator(".compose > button.primary")
+              assert.equal(await send.count(), 1, "one canonical Send control after draft")
+              assert.equal(await send.evaluate(button => button.type), "submit", "canonical Send remains submit authority")
+              assert.equal((await send.textContent()).trim(), "Send")
+              await assertUsable(send, 768, "MOBILE_SEND_AFTER_DRAFT")
+              assert.equal(await send.evaluate(button => button === document.querySelector("#message-form .compose > button.primary")), true)
+              await send.click()
+              const aMessage = a.page.locator("#messages li.message", {hasText: text})
+              const bMessage = b.page.locator("#messages li.message", {hasText: text})
+              await Promise.all([
+                aMessage.first().waitFor({state: "visible", timeout: WAIT}),
+                bMessage.first().waitFor({state: "visible", timeout: WAIT})
+              ])
+              await a.page.waitForTimeout(200)
+              assert.equal(await aMessage.count(), 1, "sender has one intended message")
+              assert.equal(await bMessage.count(), 1, "recipient has one intended message")
+
+              await endConversation(a.page)
+              await Promise.all([
+                active(a.page, "ended").waitFor({state: "visible", timeout: WAIT}),
+                active(b.page, "ended").waitFor({state: "visible", timeout: WAIT})
+              ])
+              await waitPath(a.page, "/conversation/ended", "A terminal route")
+              await assertSettledWidth(a.page, 768, 1024, "MOBILE_TERMINAL")
+              await assertUsable(a.page.locator("#keep-conversation"), 768, "MOBILE_KEEP")
+              await assertUsable(a.page.locator("#fade-conversation"), 768, "MOBILE_FADE_A")
+              await assertUsable(b.page.locator("#fade-conversation"), 768, "MOBILE_FADE_B")
+
+              await a.page.locator("#keep-conversation").click()
+              await active(a.page, "chats").waitFor({state: "visible", timeout: WAIT})
+              await waitPath(a.page, "/chats", "Keep returns Chats")
+              const kept = await localRecords(a.page)
+              const local = kept.find(r => r.type === "local_conversation" && r.value?.status === "kept")
+              assert.ok(local, "retained Conversation exists")
+              const id = local.value.conversation_id
+              assert.ok(kept.some(r => r.type === "local_message" && r.value?.conversation_id === id && r.value?.content === text), "retained transcript exists")
+
+              const open = a.page.getByRole("button", {name: /Open local copy/})
+              assert.equal(await open.count(), 1, "one retained-history open control")
+              await open.click()
+              await active(a.page, "history").waitFor({state: "visible", timeout: WAIT})
+              await waitPath(a.page, `/chats/${id}`, "retained history route")
+              assert.equal(await active(a.page, "conversation").count(), 0, "history is non-live")
+              assert.equal(await a.page.locator("#message-input").isVisible(), false, "no composer on history")
+              assert.equal(await a.page.locator("#end-conversation").isVisible(), false, "no live End on history")
+              assert.equal(await a.page.locator("#block").isVisible(), false, "no live Block on history")
+
+              const del = a.page.locator("#history-delete")
+              await assertUsable(del, 768, "MOBILE_HISTORY_DELETE")
+              const dialogHandler = dialog => dialog.accept()
+              a.page.on("dialog", dialogHandler)
+              await del.click()
+              a.page.off("dialog", dialogHandler)
+              await active(a.page, "chats").waitFor({state: "visible", timeout: WAIT})
+              await waitPath(a.page, "/chats", "Delete invalid retained route returns Chats")
+              assert.equal((await localRecords(a.page)).some(r => r.type === "local_conversation" && r.value?.conversation_id === id), false)
+
+              await b.page.locator("#fade-conversation").click()
+              await active(b.page, "doors").waitFor({state: "visible", timeout: WAIT})
+              await waitPath(b.page, "/", "Fade returns Talk")
+              assertClean(a, "MOBILE_A")
+              assertClean(b, "MOBILE_B")
+            } finally {
+              await pairState?.a.context.close().catch(() => {})
+              await pairState?.b.context.close().catch(() => {})
+              await browser.close().catch(() => {})
+            }
+          })
+
+          test("T09 1280x800 composer focus survives draft presentation transition without persistent overflow", {timeout: 120_000}, async () => {
+            const browser = await chromium.launch({headless: true})
+            let pairState
+            try {
+              pairState = await pair(browser, {width: 1280, height: 800}, "DESKTOP")
+              const {a, b} = pairState
+              const form = a.page.locator("#message-form")
+              const composer = form.locator("#message-input")
+              await assertUsable(composer, 1280, "DESKTOP_COMPOSER")
+              await composer.focus()
+              assert.equal(await a.page.evaluate(() => document.activeElement?.id), "message-input")
+
+              await composer.fill("focus transition")
+              await a.page.waitForFunction(() => document.querySelector("#message-form")?.classList.contains("has-text"), null, {timeout: WAIT})
+              await a.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+              assert.equal(await a.page.evaluate(() => document.activeElement?.id), "message-input", "focus preserved entering has-text state")
+              const send = form.locator(".compose > button.primary")
+              assert.equal(await send.count(), 1, "one canonical desktop Send control after draft")
+              assert.equal(await send.evaluate(button => button.type), "submit", "desktop Send remains submit authority")
+              assert.equal((await send.textContent()).trim(), "Send")
+              await assertUsable(send, 1280, "DESKTOP_SEND")
+              await assertSettledWidth(a.page, 1280, 800, "DESKTOP_HAS_TEXT")
+
+              await composer.fill("")
+              await a.page.waitForFunction(() => !document.querySelector("#message-form")?.classList.contains("has-text"), null, {timeout: WAIT})
+              await a.page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+              assert.equal(await a.page.evaluate(() => document.activeElement?.id), "message-input", "focus preserved leaving has-text state")
+              await assertSettledWidth(a.page, 1280, 800, "DESKTOP_EMPTY_DRAFT")
+              assertClean(a, "DESKTOP_A")
+              assertClean(b, "DESKTOP_B")
+            } finally {
+              await pairState?.a.context.close().catch(() => {})
+              await pairState?.b.context.close().catch(() => {})
+              await browser.close().catch(() => {})
+            }
+          })
+          JAVASCRIPT
+          node --check test/t09_t03_ux_001_closure_test.mjs
+
+      - name: Start exact-SHA Phoenix
+        run: |
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, endpoint |> Keyword.put(:server, true) |> Keyword.put(:http, [ip: {127,0,0,1}, port: 4000]))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' >/tmp/t09-ux001-server.log 2>&1 & echo $! >/tmp/t09-ux001-server.pid
+          for i in $(seq 1 45); do
+            kill -0 "$(cat /tmp/t09-ux001-server.pid)" 2>/dev/null || { cat /tmp/t09-ux001-server.log; exit 1; }
+            curl -fsS http://localhost:4000/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/t09-ux001-server.log; exit 1
+
+      - name: Exact-SHA independent Chromium closure
+        run: |
+          set -euo pipefail
+          echo "CHROMIUM_TESTED_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          node --test --test-concurrency=1 test/t09_t03_ux_001_closure_test.mjs
+
+      - name: Cleanup T09 oracle and server
+        if: always()
+        run: |
+          rm -f test/t09_t03_ux_001_closure_test.mjs
+          if [ -f /tmp/t09-ux001-server.pid ]; then kill "$(cat /tmp/t09-ux001-server.pid)" 2>/dev/null || true; fi
+
+      - name: Consumed UX source regressions
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 \
+            test/js/door_click_flow_test.mjs \
+            test/js/f09_mobile_flow_test.mjs \
+            test/js/ephemeral_conversation_ux_test.mjs \
+            test/js/instagram_chat_test.mjs \
+            test/js/route_contract_test.mjs \
+            test/js/navigation_history_test.mjs \
+            test/js/f11_retained_cleanup_guard_test.mjs
+
+      - name: Final exact identity and clean worktree
+        run: |
+          set -euo pipefail
+          echo "FINAL_TESTED_SHA=$(git rev-parse HEAD)"
+          echo "FINAL_TREE=$(git rev-parse HEAD^{tree})"
+          printf 'FINAL_STATUS=%q\n' "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test -z "$(git status --porcelain)"
+          echo "T09_T03_UX_001_OWNED_GATES=GREEN"
