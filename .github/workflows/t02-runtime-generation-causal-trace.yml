@@ -3,10 +3,8 @@ name: T02 Runtime Generation Causal Trace
 on:
   workflow_dispatch:
   push:
-    branches:
-      - team2/runtime-restart-reconciliation-fix-lab
-    paths:
-      - .github/workflows/t02-runtime-generation-causal-trace.yml
+    branches: [team2/runtime-restart-reconciliation-fix-lab]
+    paths: [.github/workflows/t02-runtime-generation-causal-trace.yml]
 
 permissions:
   contents: read
@@ -23,6 +21,7 @@ jobs:
   trace:
     name: trace-${{ matrix.lane }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -34,62 +33,46 @@ jobs:
           POSTGRES_USER: strangertalks_local
           POSTGRES_PASSWORD: strangertalks_test
           POSTGRES_DB: strangertalks_new_test
-        ports:
-          - 5432:5432
+        ports: [5432:5432]
         options: >-
           --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
+          --health-interval 10s --health-timeout 5s --health-retries 10
 
     steps:
-      - name: Checkout proof branch
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
+          ref: ${{ env.PRODUCT_SHA }}
           fetch-depth: 0
 
-      - name: Checkout exact frozen product and restore accepted hostile diagnostic
+      - name: Exact product + diagnostic preflight
         shell: bash
         run: |
           set -euo pipefail
-          git checkout --detach "$PRODUCT_SHA"
-          git fetch origin "$OLD_FIX_LAB_SHA" --no-tags
-          git cat-file blob "$OLD_DIAGNOSTIC_BLOB" > test/strangertalks_new/t02_recovery_convergence_hostile_test.exs
           test "$(git rev-parse HEAD)" = "$PRODUCT_SHA"
+          git fetch --no-tags origin "$OLD_FIX_LAB_SHA"
+          git show "$OLD_FIX_LAB_SHA:test/strangertalks_new/t02_recovery_convergence_hostile_test.exs" > test/strangertalks_new/t02_recovery_convergence_hostile_test.exs
           test "$(git hash-object test/strangertalks_new/t02_recovery_convergence_hostile_test.exs)" = "$OLD_DIAGNOSTIC_BLOB"
-          echo "CHECKOUT_SHA=$(git rev-parse HEAD)"
+          echo "PRODUCT_SHA=$(git rev-parse HEAD)"
           echo "PRODUCT_TREE=$(git rev-parse HEAD^{tree})"
           echo "DIAGNOSTIC_BLOB=$(git hash-object test/strangertalks_new/t02_recovery_convergence_hostile_test.exs)"
-
-      - name: Verify requested regression files exist
-        shell: bash
-        run: |
-          set -euo pipefail
-          for f in \
-            test/strangertalks_new/runtime_restart_reconciliation_test.exs \
-            test/strangertalks_new/runtime_terminal_contract_test.exs \
-            test/strangertalks_new/f_x07_canonical_terminal_truth_test.exs \
-            test/strangertalks_new/team3_recovery_coordination_test.exs \
-            test/strangertalks_new/team4_safety_boundary_test.exs
-          do
-            test -f "$f"
-            echo "PRESENT $f"
+          for f in runtime_restart_reconciliation_test.exs runtime_terminal_contract_test.exs f_x07_canonical_terminal_truth_test.exs team3_recovery_coordination_test.exs team4_safety_boundary_test.exs; do
+            test -f "test/strangertalks_new/$f"
           done
 
-      - name: Apply exact V2 restart experiment only in TEMPORARY lane
+      - name: Exact V2 temporary experiment
         if: matrix.lane == 'TEMPORARY'
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('lib/strangertalks_new/conversation_lifecycle/conversation_server.ex')
-          s = p.read_text()
-          old = '''        case DynamicSupervisor.start_child(
+          p=Path('lib/strangertalks_new/conversation_lifecycle/conversation_server.ex')
+          s=p.read_text()
+          old='''        case DynamicSupervisor.start_child(
                  StrangertalksNew.ConversationDynamicSupervisor,
                  {__MODULE__, %{conversation_id: conversation_id}}
                ) do'''
-          new = '''        child_spec =
+          new='''        child_spec =
           Supervisor.child_spec(
             {__MODULE__, %{conversation_id: conversation_id}},
             restart: :temporary
@@ -99,320 +82,140 @@ jobs:
                StrangertalksNew.ConversationDynamicSupervisor,
                child_spec
              ) do'''
-          if s.count(old) != 1:
-              raise SystemExit(f'V2 patch anchor count={s.count(old)}')
-          p.write_text(s.replace(old, new, 1))
+          assert s.count(old)==1
+          p.write_text(s.replace(old,new,1))
           PY
           git diff --check
-          git diff -- lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
 
-      - name: Prove semantic lane delta
+      - name: Semantic delta gate
         shell: bash
         run: |
           set -euo pipefail
-          changed="$(git diff --name-only -- lib config mix.exs mix.lock | sort)"
-          echo "SEMANTIC_DELTA_BEGIN"
-          printf '%s\n' "$changed"
-          echo "SEMANTIC_DELTA_END"
-          if [ "${{ matrix.lane }}" = "CONTROL" ]; then
-            test -z "$changed"
-          else
-            test "$changed" = "lib/strangertalks_new/conversation_lifecycle/conversation_server.ex"
-            grep -F 'restart: :temporary' lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
-          fi
+          delta="$(git diff --name-only -- lib config mix.exs mix.lock | sort)"
+          echo "LANE=${{ matrix.lane }} SEMANTIC_DELTA=$delta"
+          if [ "${{ matrix.lane }}" = CONTROL ]; then test -z "$delta"; else test "$delta" = lib/strangertalks_new/conversation_lifecycle/conversation_server.ex; fi
 
-      - name: Setup BEAM
-        uses: erlef/setup-beam@v1
+      - uses: erlef/setup-beam@v1
         with:
           elixir-version: '1.18.4'
           otp-version: '27.3.4'
 
-      - name: Restore dependencies
+      - name: DB + compile preflight
         shell: bash
         run: |
           set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
           mix deps.get
-
-      - name: Database create and migrate
-        shell: bash
-        run: |
-          set -euo pipefail
-          mix ecto.create
+          mix ecto.create --quiet
           mix ecto.migrate
-
-      - name: Compile
-        shell: bash
-        run: |
-          set -euo pipefail
           mix compile --warnings-as-errors
+          echo "DB_MIGRATE_COMPILE=PASS"
 
-      - name: Write proof-only generation tracer
+      - name: Write proof-only timeline probe
         shell: bash
         run: |
-          cat > test/strangertalks_new/t02_generation_causal_trace_probe_test.exs <<'ELIXIR'
-          defmodule StrangertalksNew.T02GenerationCausalTraceProbeTest do
+          cat > test/strangertalks_new/t02_generation_timeline_probe_test.exs <<'ELIXIR'
+          defmodule StrangertalksNew.T02GenerationTimelineProbeTest do
             use StrangertalksNew.DataCase, async: false
-
             alias StrangertalksNew.ConversationLifecycle.ConversationServer
             alias StrangertalksNew.Conversations.Conversation
             alias StrangertalksNew.Repo
-
             @ds StrangertalksNew.ConversationDynamicSupervisor
-            @registry StrangertalksNew.ConversationRegistry
+            @reg StrangertalksNew.ConversationRegistry
+            @parallel 32
             @rounds 8
-            @parallelism 32
 
-            test "proof-only generation provenance and supervisor churn timeline" do
-              IO.puts("TRACE_PROBE lane=#{System.get_env("TRACE_LANE") || "unknown"} rounds=#{@rounds} parallelism=#{@parallelism}")
-
+            test "generation timeline" do
+              IO.puts("TRACE lane=#{System.get_env("TRACE_LANE")} parallel=#{@parallel} rounds=#{@rounds}")
               for round <- 1..@rounds do
-                conversation = conversation_fixture(%{status: "PENDING"})
-                cid = conversation.id
-                tracer = start_trace(cid)
+                c=conversation_fixture(%{status: "PENDING"}); cid=c.id
+                snap("before_initial",round,cid,nil)
+                {:ok,g1}=ConversationServer.ensure_started(cid)
+                ds1=Process.whereis(@ds); dsref=Process.monitor(ds1); g1ref=Process.monitor(g1)
+                Process.sleep(5); snap("after_initial",round,cid,g1)
+                IO.puts("GEN round=#{round} seq=1 pid=#{inspect(g1)} path=explicit_ensure_started supervisor=#{inspect(ds1)} ts=#{System.monotonic_time()}")
 
-                IO.puts("ROUND_BEGIN round=#{round} cid=#{cid} ts=#{now()}")
-                snapshot("before_initial_ensure", round, cid, nil)
-
-                {:ok, old_pid} = ConversationServer.ensure_started(cid)
-                send(tracer, {:watch, old_pid, "round#{round}_g1"})
-                old_ref = Process.monitor(old_pid)
-                ds_before = Process.whereis(@ds)
-                ds_ref = Process.monitor(ds_before)
-                Process.sleep(5)
-                snapshot("after_initial_ensure", round, cid, old_pid)
-                IO.puts("GENERATION round=#{round} seq=1 pid=#{inspect(old_pid)} initiator=explicit_initial_ensure ds=#{inspect(ds_before)} ts=#{now()}")
-
-                parent = self()
-                tasks =
-                  for idx <- 1..@parallelism do
-                    Task.async(fn ->
-                      send(parent, {:ready, self(), idx})
-                      receive do
-                        {:release, ^cid} -> :ok
-                      end
-                      result = ConversationServer.ensure_started(cid)
-                      {idx, self(), result}
-                    end)
-                  end
-
-                for _ <- 1..@parallelism do
-                  assert_receive {:ready, _pid, _idx}, 5_000
+                parent=self()
+                tasks=for i <- 1..@parallel do
+                  Task.async(fn -> send(parent,{:ready,self(),i}); receive do {:go,^cid}->:ok end; {i,self(),ConversationServer.ensure_started(cid)} end)
                 end
-
-                IO.puts("CALLERS_BLOCKED round=#{round} count=#{@parallelism} old_alive=#{Process.alive?(old_pid)} ds=#{inspect(Process.whereis(@ds))} ts=#{now()}")
-                snapshot("before_kill", round, cid, old_pid)
-
-                IO.puts("KILL_SENT round=#{round} pid=#{inspect(old_pid)} reason=:kill ts=#{now()}")
-                Process.exit(old_pid, :kill)
-
-                receive do
-                  {:DOWN, ^old_ref, :process, ^old_pid, reason} ->
-                    IO.puts("SERVER_DOWN round=#{round} seq=1 pid=#{inspect(old_pid)} reason=#{inspect(reason)} ts=#{now()}")
-                after
-                  5_000 -> flunk("old ConversationServer did not terminate")
-                end
-
-                snapshot("immediate_after_g1_down_callers_still_blocked", round, cid, old_pid)
+                for _ <- 1..@parallel, do: assert_receive({:ready,_,_},5000)
+                IO.puts("CALLERS_BLOCKED round=#{round} count=#{@parallel} ts=#{System.monotonic_time()}")
+                snap("before_kill",round,cid,g1)
+                IO.puts("KILL round=#{round} pid=#{inspect(g1)} reason=:kill ts=#{System.monotonic_time()}")
+                Process.exit(g1,:kill)
+                receive do {:DOWN,^g1ref,:process,^g1,reason}->IO.puts("DOWN round=#{round} seq=1 pid=#{inspect(g1)} reason=#{inspect(reason)} ts=#{System.monotonic_time()}") after 5000->flunk("g1 down timeout") end
+                snap("after_g1_down_callers_blocked",round,cid,g1)
                 Process.sleep(20)
-                {ds_pre_release, registry_pre_release, children_pre_release} =
-                  snapshot("20ms_after_g1_down_callers_still_blocked", round, cid, old_pid)
+                {ds_pre,reg_pre,kids_pre,state_pre}=snap("pre_release_20ms",round,cid,g1)
+                pre=one_pid(reg_pre,kids_pre)
+                IO.puts("PRE_RELEASE round=#{round} pid=#{inspect(pre)} prior_alive=#{Process.alive?(g1)} supervisor=#{inspect(ds_pre)} state=#{inspect(state_pre,limit: :infinity)} ts=#{System.monotonic_time()}")
 
-                pre_release_pid = single_live_pid(registry_pre_release, children_pre_release)
-                if is_pid(pre_release_pid) do
-                  send(tracer, {:watch, pre_release_pid, "round#{round}_pre_release_replacement"})
-                  IO.puts("GENERATION round=#{round} seq=2 pid=#{inspect(pre_release_pid)} initiator=before_explicit_callers_released ds=#{inspect(ds_pre_release)} prior_alive=#{Process.alive?(old_pid)} ts=#{now()}")
-                else
-                  IO.puts("NO_PRE_RELEASE_GENERATION round=#{round} prior_alive=#{Process.alive?(old_pid)} ds=#{inspect(ds_pre_release)} ts=#{now()}")
-                end
+                Enum.each(tasks,fn t->send(t.pid,{:go,cid}) end)
+                IO.puts("CALLERS_RELEASED round=#{round} ts=#{System.monotonic_time()}")
+                results=Enum.map(tasks,&Task.await(&1,10000))
+                pids=Enum.map(results,fn {_,_,{:ok,p}}->p; other->flunk("bad ensure result #{inspect(other)}") end)|>Enum.uniq()
+                IO.puts("RESULTS round=#{round} pids=#{inspect(pids)} count=#{length(pids)} ts=#{System.monotonic_time()}")
+                assert length(pids)==1
+                [g2]=pids
+                {ds2,reg2,kids2,state2}=snap("after_release",round,cid,g1)
+                IO.puts("GEN round=#{round} seq=2 pid=#{inspect(g2)} path=#{if pre==g2, do: "supervisor_auto_restart_before_release", else: "explicit_ensure_after_release"} prior_alive=#{Process.alive?(g1)} supervisor_before=#{inspect(ds1)} supervisor_after=#{inspect(ds2)} registry=#{inspect(reg2)} children=#{inspect(kids2)} state=#{inspect(state2,limit: :infinity)} ts=#{System.monotonic_time()}")
+                receive do {:DOWN,^dsref,:process,^ds1,r}->IO.puts("DS_DOWN round=#{round} pid=#{inspect(ds1)} reason=#{inspect(r)} replacement=#{inspect(Process.whereis(@ds))} ts=#{System.monotonic_time()}") after 0->IO.puts("DS_STABLE round=#{round} pid=#{inspect(ds1)} current=#{inspect(Process.whereis(@ds))} ts=#{System.monotonic_time()}") end
 
-                Enum.each(tasks, fn task -> send(task.pid, {:release, cid}) end)
-                IO.puts("CALLERS_RELEASED round=#{round} ts=#{now()}")
-
-                results = Enum.map(tasks, &Task.await(&1, 10_000))
-                result_pids =
-                  results
-                  |> Enum.map(fn
-                    {_idx, _caller, {:ok, pid}} -> pid
-                    {_idx, _caller, other} -> flunk("unexpected ensure_started result #{inspect(other)}")
-                  end)
-
-                unique_result_pids = Enum.uniq(result_pids)
-                IO.puts("ENSURE_RESULTS round=#{round} unique_pids=#{inspect(unique_result_pids)} count=#{length(unique_result_pids)} ts=#{now()}")
-                assert length(unique_result_pids) == 1
-                [replacement_pid] = unique_result_pids
-                send(tracer, {:watch, replacement_pid, "round#{round}_result_generation"})
-
-                {ds_after_release, registry_after_release, children_after_release} =
-                  snapshot("after_callers_complete", round, cid, old_pid)
-
-                IO.puts("GENERATION_RESULT round=#{round} replacement=#{inspect(replacement_pid)} pre_release=#{inspect(pre_release_pid)} prior_alive=#{Process.alive?(old_pid)} ds_before=#{inspect(ds_before)} ds_after=#{inspect(ds_after_release)} registry=#{inspect(registry_after_release)} children=#{inspect(children_after_release)} ts=#{now()}")
-
-                receive do
-                  {:DOWN, ^ds_ref, :process, ^ds_before, reason} ->
-                    IO.puts("SUPERVISOR_DOWN round=#{round} pid=#{inspect(ds_before)} reason=#{inspect(reason)} replacement_ds=#{inspect(Process.whereis(@ds))} ts=#{now()}")
-                after
-                  0 ->
-                    IO.puts("SUPERVISOR_STABLE round=#{round} pid=#{inspect(ds_before)} current=#{inspect(Process.whereis(@ds))} alive=#{Process.alive?(ds_before)} ts=#{now()}")
-                end
-
-                replacement_ref = Process.monitor(replacement_pid)
-                current_ds = Process.whereis(@ds)
-                assert is_pid(current_ds)
-                assert :ok = DynamicSupervisor.terminate_child(current_ds, replacement_pid)
-                receive do
-                  {:DOWN, ^replacement_ref, :process, ^replacement_pid, reason} ->
-                    IO.puts("REPLACEMENT_TERMINATED round=#{round} pid=#{inspect(replacement_pid)} reason=#{inspect(reason)} ts=#{now()}")
-                after
-                  5_000 -> flunk("replacement did not terminate")
-                end
-
-                Process.sleep(10)
-                snapshot("after_explicit_replacement_termination", round, cid, replacement_pid)
-                stop_trace(tracer)
-                IO.puts("ROUND_END round=#{round} cid=#{cid} ts=#{now()}")
+                ref=Process.monitor(g2); :ok=DynamicSupervisor.terminate_child(Process.whereis(@ds),g2)
+                receive do {:DOWN,^ref,:process,^g2,r}->IO.puts("G2_TERMINATED round=#{round} pid=#{inspect(g2)} reason=#{inspect(r)} ts=#{System.monotonic_time()}") after 5000->flunk("g2 down timeout") end
+                Process.sleep(10); snap("round_end",round,cid,g2)
               end
             end
 
-            defp start_trace(cid) do
-              owner = self()
-              tracer = spawn_link(fn -> trace_loop(owner, cid, %{}) end)
-              flags = [:call, :monotonic_timestamp, {:tracer, tracer}]
-              :erlang.trace(:all, true, flags)
-              :erlang.trace(:new, true, flags)
-              :erlang.trace_pattern({ConversationServer, :ensure_started, 1}, true, [:local])
-              :erlang.trace_pattern({ConversationServer, :start_link, 1}, true, [:local])
-              :erlang.trace_pattern({DynamicSupervisor, :start_child, 2}, true, [:local])
-              tracer
+            defp snap(label,round,cid,prior) do
+              ds=Process.whereis(@ds); reg=Registry.lookup(@reg,{:conversation,cid}); kids=kids(ds,cid); state=state(ds); status=Repo.get!(Conversation,cid).status
+              IO.puts("SNAP label=#{label} round=#{round} cid=#{cid} status=#{inspect(status)} prior=#{inspect(prior)} prior_alive=#{if is_pid(prior), do: Process.alive?(prior), else: nil} ds=#{inspect(ds)} registry=#{inspect(reg)} kids=#{inspect(kids)} state=#{inspect(state,limit: :infinity)} ts=#{System.monotonic_time()}")
+              {ds,reg,kids,state}
             end
-
-            defp stop_trace(tracer) do
-              Process.sleep(10)
-              :erlang.trace_pattern({ConversationServer, :ensure_started, 1}, false, [:local])
-              :erlang.trace_pattern({ConversationServer, :start_link, 1}, false, [:local])
-              :erlang.trace_pattern({DynamicSupervisor, :start_child, 2}, false, [:local])
-              :erlang.trace(:all, false, [:call])
-              :erlang.trace(:new, false, [:call])
-              send(tracer, :stop)
-            end
-
-            defp trace_loop(owner, cid, watched) do
-              receive do
-                {:watch, pid, label} ->
-                  trace_loop(owner, cid, Map.put(watched, pid, label))
-
-                {:trace_ts, caller, :call, {ConversationServer, :ensure_started, [^cid]}, ts} ->
-                  IO.puts("CALL_TRACE kind=ensure_started caller=#{inspect(caller)} cid=#{cid} ts=#{inspect(ts)}")
-                  trace_loop(owner, cid, watched)
-
-                {:trace_ts, caller, :call, {ConversationServer, :start_link, [arg]}, ts} ->
-                  if is_map(arg) and Map.get(arg, :conversation_id) == cid do
-                    IO.puts("CALL_TRACE kind=conversation_start_link caller=#{inspect(caller)} cid=#{cid} arg=#{inspect(arg)} ts=#{inspect(ts)}")
-                  end
-                  trace_loop(owner, cid, watched)
-
-                {:trace_ts, caller, :call, {DynamicSupervisor, :start_child, [supervisor, spec]}, ts} ->
-                  if relevant_spec?(spec, cid) do
-                    IO.puts("CALL_TRACE kind=dynamic_start_child caller=#{inspect(caller)} supervisor=#{inspect(supervisor)} cid=#{cid} spec=#{inspect(spec, limit: :infinity)} ts=#{inspect(ts)}")
-                  end
-                  trace_loop(owner, cid, watched)
-
-                _other ->
-                  trace_loop(owner, cid, watched)
-              end
-            end
-
-            defp relevant_spec?({ConversationServer, %{conversation_id: cid}}, cid), do: true
-            defp relevant_spec?(%{start: {ConversationServer, :start_link, [%{conversation_id: cid}]}}, cid), do: true
-            defp relevant_spec?(_, _), do: false
-
-            defp snapshot(label, round, cid, prior_pid) do
-              ds = Process.whereis(@ds)
-              registry = Registry.lookup(@registry, {:conversation, cid})
-              children = safe_children(ds, cid)
-              status = Repo.get!(Conversation, cid).status
-              ds_state = safe_ds_state(ds)
-
-              IO.puts(
-                "SNAPSHOT label=#{label} round=#{round} ts=#{now()} cid=#{cid} durable_status=#{inspect(status)} " <>
-                  "prior_pid=#{inspect(prior_pid)} prior_alive=#{if(is_pid(prior_pid), do: Process.alive?(prior_pid), else: nil)} " <>
-                  "ds=#{inspect(ds)} ds_alive=#{if(is_pid(ds), do: Process.alive?(ds), else: false)} " <>
-                  "registry=#{inspect(registry)} children=#{inspect(children)} ds_state=#{inspect(ds_state, limit: :infinity, printable_limit: :infinity)}"
-              )
-
-              {ds, registry, children}
-            end
-
-            defp safe_children(nil, _cid), do: :supervisor_unavailable
-            defp safe_children(ds, cid) do
+            defp kids(nil,_), do: :unavailable
+            defp kids(ds,cid) do
               try do
-                DynamicSupervisor.which_children(ds)
-                |> Enum.flat_map(fn
-                  {_id, pid, _type, modules} when is_pid(pid) ->
-                    if Registry.lookup(@registry, {:conversation, cid}) |> Enum.any?(fn {reg_pid, _} -> reg_pid == pid end) do
-                      [{pid, modules}]
-                    else
-                      []
-                    end
-                  _ -> []
-                end)
-              catch
-                :exit, reason -> {:supervisor_unavailable, reason}
-              end
+                DynamicSupervisor.which_children(ds)|>Enum.flat_map(fn {_,p,_,mods}->if is_pid(p) and Enum.any?(Registry.lookup(@reg,{:conversation,cid}),fn {rp,_}->rp==p end), do: [{p,mods}], else: [] end)
+              catch :exit,r->{:unavailable,r} end
             end
-
-            defp safe_ds_state(nil), do: :supervisor_unavailable
-            defp safe_ds_state(ds) do
-              try do
-                :sys.get_state(ds)
-              catch
-                :exit, reason -> {:supervisor_unavailable, reason}
-              end
+            defp state(nil), do: :unavailable
+            defp state(ds) do try do :sys.get_state(ds) catch :exit,r->{:unavailable,r} end end
+            defp one_pid(reg,kids) when is_list(reg) and is_list(kids) do
+              case Enum.uniq(Enum.map(reg,&elem(&1,0))++Enum.map(kids,&elem(&1,0))) do [p]->p; _->nil end
             end
-
-            defp single_live_pid(registry, children) when is_list(registry) and is_list(children) do
-              registry_pids = Enum.map(registry, &elem(&1, 0))
-              child_pids = Enum.map(children, &elem(&1, 0))
-              case Enum.uniq(registry_pids ++ child_pids) do
-                [pid] -> pid
-                _ -> nil
-              end
-            end
-            defp single_live_pid(_, _), do: nil
-
-            defp now, do: System.monotonic_time()
+            defp one_pid(_,_), do: nil
           end
           ELIXIR
-          git hash-object test/strangertalks_new/t02_generation_causal_trace_probe_test.exs
 
-      - name: Run causal trace probe
+      - name: Run proof-only timeline
         env:
           TRACE_LANE: ${{ matrix.lane }}
         shell: bash
         run: |
           set -o pipefail
-          mix test test/strangertalks_new/t02_generation_causal_trace_probe_test.exs --seed 0 --trace 2>&1 | tee "trace-${{ matrix.lane }}.log"
+          mix test test/strangertalks_new/t02_generation_timeline_probe_test.exs --seed 0 --trace 2>&1 | tee timeline.log
 
-      - name: Run exact accepted hostile diagnostic unchanged
+      - name: Run exact accepted hostile diagnostic
         id: hostile
-        env:
-          TRACE_LANE: ${{ matrix.lane }}
+        continue-on-error: true
         shell: bash
         run: |
-          set +e
-          set -o pipefail
-          START=$(date +%s%N)
-          mix test test/strangertalks_new/t02_recovery_convergence_hostile_test.exs --seed 0 --trace 2>&1 | tee "hostile-${{ matrix.lane }}.log"
-          RC=${PIPESTATUS[0]}
-          END=$(date +%s%N)
-          echo "HOSTILE_RESULT lane=${{ matrix.lane }} rc=$RC duration_ns=$((END-START)) seed=0"
-          exit $RC
+          set -uo pipefail
+          start=$(date +%s%N); set +e
+          mix test test/strangertalks_new/t02_recovery_convergence_hostile_test.exs --seed 0 --trace
+          rc=$?; set -e; end=$(date +%s%N)
+          echo "HOSTILE lane=${{ matrix.lane }} rc=$rc elapsed_ns=$((end-start)) seed=0"
+          exit $rc
 
-      - name: Final proof-only source delta
+      - name: Record hostile outcome + final source delta
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          echo "FINAL_PRODUCT_SOURCE_DELTA_BEGIN"
+          echo "HOSTILE_STEP_OUTCOME=${{ steps.hostile.outcome }}"
+          echo "FINAL_DELTA_BEGIN"
           git diff --name-only -- lib config mix.exs mix.lock | sort
-          echo "FINAL_PRODUCT_SOURCE_DELTA_END"
+          echo "FINAL_DELTA_END"
           test "$(git hash-object test/strangertalks_new/t02_recovery_convergence_hostile_test.exs)" = "$OLD_DIAGNOSTIC_BLOB"
