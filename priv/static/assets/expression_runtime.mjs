@@ -60,8 +60,18 @@ function patchExpressiveRetry(channel, conversationId, generation) {
   channel.__team10ExpressiveRetryPatched = true
   const originalPush = channel.push.bind(channel)
   const originalJoin = channel.join.bind(channel)
+  const originalLeave = channel.leave.bind(channel)
+  let terminalRef = null
 
-  channel.on("conversation:ended", () => {
+  const releaseTerminalBinding = () => {
+    if (terminalRef === null) return
+    const ref = terminalRef
+    terminalRef = null
+    try { channel.off("conversation:ended", ref) } catch (_) {}
+  }
+
+  terminalRef = channel.on("conversation:ended", () => {
+    releaseTerminalBinding()
     if (currentAuthority(channel, generation, conversationId)) terminateExpressionAuthority()
   })
 
@@ -88,6 +98,12 @@ function patchExpressiveRetry(channel, conversationId, generation) {
       retryAmbiguousExpressiveRecords(channel, conversationId, generation).catch(() => {})
     })
     return push
+  }
+
+  channel.leave = function(timeout) {
+    releaseTerminalBinding()
+    if (currentAuthority(channel, generation, conversationId)) terminateExpressionAuthority()
+    return originalLeave(timeout)
   }
 }
 

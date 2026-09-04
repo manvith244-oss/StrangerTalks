@@ -1259,14 +1259,36 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngineTest do
 
     conversation = Repo.one!(StrangertalksNew.Conversation)
 
-    conversation
-    |> StrangertalksNew.Conversation.changeset(%{
-      conversation_status: :ENDED,
-      conversation_completed: true,
-      ending_type: :NATURAL_END,
-      ended_at: DateTime.utc_now()
-    })
-    |> Repo.update!()
+    assert {:ok, _pid} =
+             StrangertalksNew.ConversationLifecycle.ConversationServer.ensure_started(
+               conversation.conversation_id
+             )
+
+    assert :ok =
+             StrangertalksNew.ConversationLifecycle.ConversationServer.register_channel(
+               conversation.conversation_id,
+               a.participant_id,
+               self()
+             )
+
+    assert :ok =
+             StrangertalksNew.ConversationLifecycle.ConversationServer.register_channel(
+               conversation.conversation_id,
+               b.participant_id,
+               self()
+             )
+
+    assert {:ok, %{status: "ended"}} =
+             StrangertalksNew.ConversationLifecycle.ConversationServer.complete_conversation(
+               conversation.conversation_id,
+               a.participant_id
+             )
+
+    assert %{rows: [[0]]} =
+             Repo.query!(
+               "SELECT count(*) FROM participant_pairing_reservations WHERE match_id::text = $1 AND released_at IS NULL",
+               [conversation.match_id]
+             )
 
     assert {:ok, _} =
              StrangertalksNew.Relationships.consent_to_relationship(

@@ -23,14 +23,7 @@ defmodule StrangertalksNewWeb.ParticipantControllerTest do
     assert {:ok, ^participant_id} = Ecto.UUID.cast(participant_id)
     refute participant_id == supplied_id
     assert Repo.aggregate(Participant, :count, :participant_id) == 1
-
-    assert {:ok, ^participant_id} =
-             Phoenix.Token.verify(
-               StrangertalksNewWeb.Endpoint,
-               ParticipantToken.salt(),
-               token,
-               max_age: ParticipantToken.max_age()
-             )
+    assert {:ok, ^participant_id} = ParticipantToken.verify(token)
 
     assert {:ok, socket} =
              Phoenix.ChannelTest.connect(StrangertalksNewWeb.UserSocket, %{},

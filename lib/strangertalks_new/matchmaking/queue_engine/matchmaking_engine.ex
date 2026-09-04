@@ -504,6 +504,14 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
       Multi.new()
       |> Multi.insert(:match, Matching.changeset(%Matching{}, match_attrs))
+      |> Multi.run(:pairing_reservations, fn repo, %{match: match} ->
+        acquire_pairing_reservations(
+          repo,
+          match.match_id,
+          [p1.participant_id, p2.participant_id],
+          match_found_time
+        )
+      end)
       |> Multi.insert(:conversation, fn %{match: match} ->
         Conversation.changeset(%Conversation{}, %{
           match_id: match.match_id,
@@ -577,6 +585,41 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
       )
 
       {:invalid_participants, missing_participant_ids}
+    end
+  end
+
+  defp acquire_pairing_reservations(repo, match_id, participant_ids, acquired_at) do
+    ordered_participant_ids = participant_ids |> Enum.map(&canonical_uuid!/1) |> Enum.sort()
+
+    case Enum.reduce_while(ordered_participant_ids, :ok, fn participant_id, :ok ->
+           case repo.query(
+                  "INSERT INTO participant_pairing_reservations (match_id, participant_id, acquired_at) VALUES ($1, $2, $3)",
+                  [
+                    dump_uuid!(match_id),
+                    dump_uuid!(participant_id),
+                    DateTime.to_naive(acquired_at)
+                  ]
+                ) do
+             {:ok, _result} -> {:cont, :ok}
+             {:error, reason} -> {:halt, {:error, reason}}
+           end
+         end) do
+      :ok -> {:ok, ordered_participant_ids}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp canonical_uuid!(uuid) do
+    case Ecto.UUID.cast(uuid) do
+      {:ok, canonical_uuid} -> canonical_uuid
+      :error -> raise ArgumentError, "invalid participant UUID"
+    end
+  end
+
+  defp dump_uuid!(uuid) do
+    case Ecto.UUID.dump(uuid) do
+      {:ok, dumped_uuid} -> dumped_uuid
+      :error -> raise ArgumentError, "invalid UUID"
     end
   end
 

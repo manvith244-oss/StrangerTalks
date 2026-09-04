@@ -311,4 +311,5 @@ document.addEventListener("click", (event) => {
 }, true)
 
 installBootWatchers()
+await import("./session_reconciliation_browser_bootstrap.mjs")
 await import(APP_ENTRY)
