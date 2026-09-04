@@ -15,6 +15,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   alias StrangertalksNew.ExpressiveMediaCatalog
   alias StrangertalksNew.IcebreakerCatalog
   alias StrangertalksNew.C11Policy
+  alias StrangertalksNew.Matches
   alias StrangertalksNew.Repo
 
   require Logger
@@ -34,8 +35,12 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   @typing_expiry_ms 5_000
   @mailbox_soft_limit 100
   @mailbox_hard_limit 500
+  @release_terminal_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]
 
   def max_message_bytes, do: @max_message_bytes
+
+  @doc false
+  def release_terminal_status?(status), do: status in @release_terminal_statuses
 
   @impl true
   def format_status(_status), do: %{state: :redacted, message: :redacted}
@@ -709,61 +714,65 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
         {:stop, :terminal_conversation}
 
       conversation ->
-        :ok = VoiceNoteStore.register_owner(conversation_id, self())
-        :ok = ViewOnceMediaStore.register_owner(conversation_id, self())
+        with {:ok, icebreaker} <- initial_icebreaker(conversation) do
+          :ok = VoiceNoteStore.register_owner(conversation_id, self())
+          :ok = ViewOnceMediaStore.register_owner(conversation_id, self())
 
-        participant_channels = %{
-          conversation.participant_a_id => MapSet.new(),
-          conversation.participant_b_id => MapSet.new()
-        }
+          participant_channels = %{
+            conversation.participant_a_id => MapSet.new(),
+            conversation.participant_b_id => MapSet.new()
+          }
 
-        participant_pins = %{
-          conversation.participant_a_id => %{revision: 0, items: []},
-          conversation.participant_b_id => %{revision: 0, items: []}
-        }
+          participant_pins = %{
+            conversation.participant_a_id => %{revision: 0, items: []},
+            conversation.participant_b_id => %{revision: 0, items: []}
+          }
 
-        avatar_map =
-          AvatarCatalog.derive_pair(
-            conversation_id,
-            conversation.participant_a_id,
-            conversation.participant_b_id
-          )
+          avatar_map =
+            AvatarCatalog.derive_pair(
+              conversation_id,
+              conversation.participant_a_id,
+              conversation.participant_b_id
+            )
 
-        epoch_id = Ecto.UUID.generate()
+          epoch_id = Ecto.UUID.generate()
 
-        {:ok,
-         %{
-           conversation: conversation,
-           epoch_id: epoch_id,
-           avatar_map: avatar_map,
-           icebreaker: initial_icebreaker(conversation_id),
-           participant_channels: participant_channels,
-           session_visibility: %{},
-           channel_sync_floors: %{},
-           delivery_progress: %{
-             conversation.participant_a_id => 0,
-             conversation.participant_b_id => 0
-           },
-           pins: participant_pins,
-           monitor_refs: %{},
-           recovery_timers: %{},
-           typing_timers: %{},
-           pending: %{},
-           completed: %{},
-           recent_messages: [],
-           replay_bytes: 0,
-           pending_voice_notes: %{},
-           completed_voice_notes: %{},
-           pending_count: 0,
-           pending_bytes: 0,
-           next_sequence: 1,
-           lifecycle_status: :ACTIVE,
-           terminal_intent: nil,
-           call_state: nil,
-           terminal_c11_exposure: nil,
-           c11_state:
-             C11Policy.init_state(Application.get_env(:strangertalks_new, :c11_policy, []))
-         }}
+          {:ok,
+           %{
+             conversation: conversation,
+             epoch_id: epoch_id,
+             avatar_map: avatar_map,
+             icebreaker: icebreaker,
+             participant_channels: participant_channels,
+             session_visibility: %{},
+             channel_sync_floors: %{},
+             delivery_progress: %{
+               conversation.participant_a_id => 0,
+               conversation.participant_b_id => 0
+             },
+             pins: participant_pins,
+             monitor_refs: %{},
+             recovery_timers: %{},
+             typing_timers: %{},
+             pending: %{},
+             completed: %{},
+             recent_messages: [],
+             replay_bytes: 0,
+             pending_voice_notes: %{},
+             completed_voice_notes: %{},
+             pending_count: 0,
+             pending_bytes: 0,
+             next_sequence: 1,
+             lifecycle_status: :ACTIVE,
+             terminal_intent: nil,
+             call_state: nil,
+             terminal_c11_exposure: nil,
+             c11_state:
+               C11Policy.init_state(Application.get_env(:strangertalks_new, :c11_policy, []))
+           }}
+        else
+          {:error, reason} -> {:stop, reason}
+        end
     end
   end
 
@@ -3292,6 +3301,8 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       true ->
         with {:ok, reply_author_relation, reply_snippet} <-
                resolve_reply_context(state, sender_id, reply_to_client_message_id) do
+          :ok = Matches.mark_conversation_started!(state.conversation.match_id)
+
           recipient_id = other_participant(state, sender_id)
           sequence = state.next_sequence
           sent_at = DateTime.utc_now()
@@ -4277,6 +4288,8 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
 
         case VoiceNoteStore.put(stored_note) do
           {:ok, _metadata, storage_status} ->
+            :ok = Matches.mark_conversation_started!(state.conversation.match_id)
+
             accepted_monotonic = System.monotonic_time()
 
             expiry_ref =
@@ -5205,7 +5218,60 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       end
 
     attrs = if ended_at, do: Map.put(extra_attrs, :ended_at, ended_at), else: extra_attrs
-    StrangertalksNew.ConversationLifecycle.Transitions.transition(conversation, event, attrs)
+
+    Repo.transaction(fn ->
+      case StrangertalksNew.ConversationLifecycle.Transitions.transition(
+             conversation,
+             event,
+             attrs
+           ) do
+        {:ok, persisted_conversation} ->
+          case maybe_release_pairing_reservations(persisted_conversation, ended_at) do
+            :ok -> persisted_conversation
+            {:error, reason} -> Repo.rollback(reason)
+          end
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+    |> case do
+      {:ok, persisted_conversation} -> {:ok, persisted_conversation}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_release_pairing_reservations(
+         %Conversation{conversation_status: status} = conversation,
+         ended_at
+       ) do
+    if release_terminal_status?(status) do
+      release_pairing_reservations(
+        conversation.match_id,
+        ended_at || conversation.ended_at || DateTime.utc_now()
+      )
+    else
+      :ok
+    end
+  end
+
+  defp release_pairing_reservations(match_id, released_at) do
+    with {:ok, dumped_match_id} <- Ecto.UUID.dump(match_id),
+         {:ok, _result} <-
+           Repo.query(
+             """
+             UPDATE participant_pairing_reservations
+             SET released_at = $2
+             WHERE match_id = $1
+               AND released_at IS NULL
+             """,
+             [dumped_match_id, DateTime.to_naive(released_at)]
+           ) do
+      :ok
+    else
+      :error -> {:error, :invalid_match_id}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   defp prune_completed(state) do
@@ -5817,7 +5883,15 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     |> format_replay_for_participant(participant_id, state)
   end
 
-  defp initial_icebreaker(conversation_id) do
+  defp initial_icebreaker(%Conversation{match_id: match_id, conversation_id: conversation_id}) do
+    case Matches.get_match(match_id) do
+      %{conversation_started: true} -> {:ok, :retired}
+      %{conversation_started: false} -> {:ok, catalog_icebreaker(conversation_id)}
+      nil -> {:error, :unknown_match}
+    end
+  end
+
+  defp catalog_icebreaker(conversation_id) do
     identity = IcebreakerCatalog.identity_for(conversation_id)
     if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired
   rescue
@@ -6149,7 +6223,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
                :crypto.hash(:sha256, grant_secret) == grant.secret_verifier ||
                  {:error, :invalid_grant_secret},
              true <-
-               (is_nil(grant.source_epoch_id) or grant.source_epoch_id == state.epoch_id) ||
+               is_nil(grant.source_epoch_id) or grant.source_epoch_id == state.epoch_id ||
                  {:error, :epoch_mismatch},
              target when not is_nil(target) <-
                find_recent_message(state.recent_messages, grant.source_client_message_id),

@@ -1,5 +1,3 @@
-import "./normal_media_runtime.mjs"
-
 export const MAX_PHOTO_BYTES = 1_048_576
 export const MAX_PHOTO_DIMENSION = 2048
 export const APPROVED_PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp"])

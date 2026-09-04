@@ -79,6 +79,7 @@ defmodule StrangertalksNew.ConversationLifecycle.RecoverySweeper do
                 if DateTime.compare(created_at, cutoff_pending) == :lt and
                      ConversationServer.lookup(current.conversation_id) ==
                        {:error, :not_started} do
+                  emit_authority_disagreement(:PENDING, :not_started, :pending_orphan)
                   resolve_orphan(current, :pending_orphan)
                 else
                   :ok
@@ -106,6 +107,7 @@ defmodule StrangertalksNew.ConversationLifecycle.RecoverySweeper do
               when status in [:ACTIVE, :PAUSED] ->
                 if ConversationServer.lookup(current.conversation_id) ==
                      {:error, :not_started} do
+                  emit_authority_disagreement(status, :not_started, :runtime_orphan)
                   resolve_orphan(current, :runtime_orphan)
                 else
                   :ok
@@ -156,17 +158,31 @@ defmodule StrangertalksNew.ConversationLifecycle.RecoverySweeper do
   defp terminate_runtime_if_running(conversation_id) do
     case ConversationServer.lookup(conversation_id) do
       {:ok, pid} ->
+        emit_authority_disagreement(:terminal, :running, :post_terminal_race)
+
         case DynamicSupervisor.terminate_child(
                StrangertalksNew.ConversationDynamicSupervisor,
                pid
              ) do
           :ok ->
+            StrangertalksNew.Telemetry.execute(
+              [:terminal, :runtime_cleanup],
+              %{count: 1},
+              %{terminal_reason: :recovery_timeout, cleanup_path: :recovery_sweeper}
+            )
+
             :ok
 
           {:error, :not_found} ->
             :ok
 
           {:error, reason} ->
+            StrangertalksNew.Telemetry.failure(
+              [:terminal, :runtime_cleanup_failed],
+              reason,
+              %{cleanup_path: :recovery_sweeper}
+            )
+
             Logger.warning("RecoverySweeper could not terminate terminal runtime",
               recovery_kind: :terminal_runtime_cleanup,
               reason_code: StrangertalksNew.DomainError.from_error(reason).code
@@ -178,6 +194,18 @@ defmodule StrangertalksNew.ConversationLifecycle.RecoverySweeper do
       {:error, :not_started} ->
         :ok
     end
+  end
+
+  defp emit_authority_disagreement(durable_status, runtime_status, detection_path) do
+    StrangertalksNew.Telemetry.execute(
+      [:terminal, :authority_disagreement],
+      %{count: 1},
+      %{
+        durable_status: durable_status,
+        runtime_status: runtime_status,
+        detection_path: detection_path
+      }
+    )
   end
 
   defp schedule_sweep do

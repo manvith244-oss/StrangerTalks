@@ -91,6 +91,30 @@ defmodule StrangertalksNewWeb.Telemetry do
       sum("strangertalks_new.conversation.transitioned.count",
         tags: [:from_status, :to_status, :lifecycle_event]
       ),
+      sum("strangertalks_new.terminal.request_accepted.count",
+        tags: [:terminal_status, :lifecycle_event]
+      ),
+      sum("strangertalks_new.terminal.durable_commit.count",
+        tags: [:terminal_status, :lifecycle_event]
+      ),
+      sum("strangertalks_new.terminal.client_notification.count",
+        tags: [:terminal_reason, :notification_path]
+      ),
+      sum("strangertalks_new.terminal.runtime_cleanup.count",
+        tags: [:terminal_reason, :cleanup_path]
+      ),
+      sum("strangertalks_new.terminal.persistence_failed.count",
+        tags: [:terminal_status, :lifecycle_event, :reason_code]
+      ),
+      sum("strangertalks_new.terminal.authority_disagreement.count",
+        tags: [:durable_status, :runtime_status, :detection_path]
+      ),
+      sum("strangertalks_new.terminal.stale_action_rejected.count",
+        tags: [:terminal_action, :canonical_ending]
+      ),
+      sum("strangertalks_new.terminal.runtime_cleanup_failed.count",
+        tags: [:cleanup_path, :reason_code]
+      ),
       sum("strangertalks_new.message.accepted.count",
         tags: [:message_type, :delivery_status]
       ),

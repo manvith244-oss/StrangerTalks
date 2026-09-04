@@ -16,4 +16,23 @@ defmodule StrangertalksNew.Matches do
   def change_match(%Matching{} = matching, attrs \\ %{}) do
     Matching.changeset(matching, attrs)
   end
+
+  def conversation_started?(match_id) do
+    case Repo.get(Matching, match_id) do
+      %Matching{conversation_started: true} -> true
+      _ -> false
+    end
+  end
+
+  def mark_conversation_started!(match_id) do
+    matching = Repo.get!(Matching, match_id)
+
+    unless matching.conversation_started do
+      matching
+      |> Ecto.Changeset.change(conversation_started: true)
+      |> Repo.update!()
+    end
+
+    :ok
+  end
 end
