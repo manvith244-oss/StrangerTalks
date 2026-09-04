@@ -1,0 +1,213 @@
+name: T-A05-002 Privacy Differential Proof
+
+on:
+  push:
+    branches:
+      - team5/ta05-002-privacy-injection-proof
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  privacy-differential:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      CANONICAL_SHA: 423442915e37fd6aadd25bd1c6a300eed2b464f0
+      CANDIDATE_SHA: 53759a00cac4a19c6dca9ad2cadf7f713a324218
+
+    steps:
+      - name: Checkout exact Team 5 evaluation commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: proof
+
+      - name: Prove evaluation identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "TA05_EVALUATION_SHA=${{ github.sha }}"
+          echo "TA05_EVALUATION_ACTUAL=$(git -C proof rev-parse HEAD)"
+          test "$(git -C proof rev-parse HEAD)" = "${{ github.sha }}"
+          test -z "$(git -C proof status --porcelain)"
+
+      - name: Checkout exact privacy candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          path: candidate
+
+      - name: Checkout exact canonical main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CANONICAL_SHA }}
+          path: canonical
+
+      - name: Prove target identities and clean inputs
+        id: identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_actual=$(git -C candidate rev-parse HEAD)
+          canonical_actual=$(git -C canonical rev-parse HEAD)
+          candidate_tree=$(git -C candidate rev-parse HEAD^{tree})
+          canonical_tree=$(git -C canonical rev-parse HEAD^{tree})
+          echo "CANDIDATE_EXPECTED=$CANDIDATE_SHA"
+          echo "CANDIDATE_ACTUAL=$candidate_actual"
+          echo "CANDIDATE_TREE=$candidate_tree"
+          echo "CANONICAL_EXPECTED=$CANONICAL_SHA"
+          echo "CANONICAL_ACTUAL=$canonical_actual"
+          echo "CANONICAL_TREE=$canonical_tree"
+          test "$candidate_actual" = "$CANDIDATE_SHA"
+          test "$canonical_actual" = "$CANONICAL_SHA"
+          test -z "$(git -C candidate status --porcelain)"
+          test -z "$(git -C canonical status --porcelain)"
+          echo "candidate_tree=$candidate_tree" >> "$GITHUB_OUTPUT"
+          echo "canonical_tree=$canonical_tree" >> "$GITHUB_OUTPUT"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Prepare result directory
+        run: mkdir -p "$GITHUB_WORKSPACE/results"
+
+      - name: Candidate — install dependencies
+        working-directory: candidate
+        run: mix deps.get
+
+      - name: Candidate — inject proof-only privacy probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp proof/test/strangertalks_new/t_a05_002_privacy_differential_test.exs \
+            candidate/test/strangertalks_new/t_a05_002_privacy_differential_test.exs
+
+      - name: Candidate — hostile privacy corpus
+        id: candidate_privacy
+        continue-on-error: true
+        working-directory: candidate
+        env:
+          TA05_TARGET: candidate
+          TA05_PRODUCT_SHA: ${{ env.CANDIDATE_SHA }}
+          TA05_RESULT_FILE: ${{ github.workspace }}/results/candidate.jsonl
+        shell: bash
+        run: |
+          set -o pipefail
+          mix test test/strangertalks_new/t_a05_002_privacy_differential_test.exs --trace \
+            2>&1 | tee "$GITHUB_WORKSPACE/results/candidate-test.log"
+
+      - name: Canonical — install dependencies
+        if: steps.candidate_privacy.outcome == 'success'
+        working-directory: canonical
+        run: mix deps.get
+
+      - name: Canonical — inject proof-only privacy probe
+        if: steps.candidate_privacy.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp proof/test/strangertalks_new/t_a05_002_privacy_differential_test.exs \
+            canonical/test/strangertalks_new/t_a05_002_privacy_differential_test.exs
+
+      - name: Canonical — hostile privacy corpus with mandatory P0 stop
+        if: steps.candidate_privacy.outcome == 'success'
+        id: canonical_privacy
+        continue-on-error: true
+        working-directory: canonical
+        env:
+          TA05_TARGET: canonical
+          TA05_PRODUCT_SHA: ${{ env.CANONICAL_SHA }}
+          TA05_RESULT_FILE: ${{ github.workspace }}/results/canonical.jsonl
+        shell: bash
+        run: |
+          set -o pipefail
+          mix test test/strangertalks_new/t_a05_002_privacy_differential_test.exs --trace \
+            2>&1 | tee "$GITHUB_WORKSPACE/results/canonical-test.log"
+
+      - name: Build machine-readable differential matrix
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(results/*.jsonl)
+          if [ ${#files[@]} -gt 0 ]; then
+            jq -s '.' "${files[@]}" > results/privacy-differential-matrix.json
+          else
+            printf '[]\n' > results/privacy-differential-matrix.json
+          fi
+          cat > results/identities.json <<JSON
+          {
+            "evaluation_sha": "${{ github.sha }}",
+            "canonical_sha": "$CANONICAL_SHA",
+            "canonical_tree": "${{ steps.identities.outputs.canonical_tree }}",
+            "candidate_sha": "$CANDIDATE_SHA",
+            "candidate_tree": "${{ steps.identities.outputs.candidate_tree }}",
+            "candidate_test_outcome": "${{ steps.candidate_privacy.outcome }}",
+            "canonical_test_outcome": "${{ steps.canonical_privacy.outcome }}"
+          }
+          JSON
+          cat results/identities.json
+          cat results/privacy-differential-matrix.json
+
+      - name: Upload T-A05-002 privacy evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t-a05-002-privacy-differential-${{ github.sha }}
+          path: results/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce candidate and canonical result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if grep -R -q 'P0_PRIVACY_BOUNDARY_CROSSING' results/*.jsonl 2>/dev/null; then
+            echo "T_A05_002_VERDICT=P0_PRIVACY_BOUNDARY_CROSSING"
+            echo "Injection lane intentionally not executed: mandatory P0 stop condition reached."
+            exit 1
+          fi
+
+          if [ "${{ steps.candidate_privacy.outcome }}" != "success" ]; then
+            echo "T_A05_002_VERDICT=CANDIDATE_PRIVACY_PROOF_FAILED"
+            exit 1
+          fi
+
+          if [ "${{ steps.canonical_privacy.outcome }}" != "success" ]; then
+            echo "T_A05_002_VERDICT=CANONICAL_PRIVACY_PROOF_FAILED"
+            exit 1
+          fi
+
+          echo "T_A05_002_PRIVACY_VERDICT=PRIVACY_CONTAINMENT_PROVEN_FOR_TESTED_ATTACK_CORPUS"
+          echo "No P0 privacy stop was reached; injection-containment lane may proceed in the next proof commit."
