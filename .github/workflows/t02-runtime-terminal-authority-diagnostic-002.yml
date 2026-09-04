@@ -1,0 +1,158 @@
+name: T02 Runtime Terminal Authority Diagnostic 002
+
+on:
+  push:
+    branches:
+      - team2/runtime-terminal-authority-diagnostic-002
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  terminal-phase-a:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact diagnostic head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Prove exact CONTROL lineage and proof-only delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          control="e3e86c736ca6ef911bd0023c4877ac68642a48b9"
+          control_tree="b411356bc04c8ac9183bbc1b6e397321f784e4b4"
+          workflow_path=".github/workflows/t02-runtime-terminal-authority-diagnostic-002.yml"
+
+          git merge-base --is-ancestor "$control" HEAD
+          actual_control_tree="$(git rev-parse "$control^{tree}")"
+          test "$actual_control_tree" = "$control_tree"
+
+          changed="$(git diff --name-only "$control"..HEAD)"
+          printf 'CHANGED_FILES\n%s\n' "$changed"
+          test "$changed" = "$workflow_path"
+
+          git diff --exit-code "$control"..HEAD -- lib/ test/ priv/ config/ assets/
+
+          echo "CONTROL_SHA=$control"
+          echo "CONTROL_TREE=$control_tree"
+          echo "DIAGNOSTIC_HEAD=$(git rev-parse HEAD)"
+          echo "DIAGNOSTIC_TREE=$(git rev-parse HEAD^{tree})"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Phase A - isolate exact terminal RED
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p diagnostic-evidence
+          summary="diagnostic-evidence/phase-a-summary.txt"
+          failure_log="diagnostic-evidence/phase-a-failure.log"
+          current_log="diagnostic-evidence/phase-a-current.log"
+          terminal_test="test/strangertalks_new/runtime_terminal_contract_test.exs"
+          control="e3e86c736ca6ef911bd0023c4877ac68642a48b9"
+          control_tree="b411356bc04c8ac9183bbc1b6e397321f784e4b4"
+
+          {
+            echo "T02-RST-002 PHASE A"
+            echo "CONTROL_SHA=$control"
+            echo "CONTROL_TREE=$control_tree"
+            echo "DIAGNOSTIC_HEAD=$(git rev-parse HEAD)"
+            echo "DIAGNOSTIC_TREE=$(git rev-parse HEAD^{tree})"
+            echo "TERMINAL_TEST=$terminal_test"
+            echo "INITIAL_SEED=0"
+          } | tee "$summary"
+
+          echo "=== INITIAL EXACT RUN: seed 0, trace ==="
+          mix test "$terminal_test" --seed 0 --trace 2>&1 | tee "$current_log"
+          status=${PIPESTATUS[0]}
+
+          if [ "$status" -ne 0 ]; then
+            cp "$current_log" "$failure_log"
+            {
+              echo "PHASE_A_RESULT=RED"
+              echo "FAIL_ITERATION=INITIAL"
+              echo "FAIL_SEED=0"
+              echo "FAIL_EXIT_STATUS=$status"
+              echo "FAIL_LOG=$failure_log"
+            } | tee -a "$summary"
+            echo "=== VERBATIM FAILURE LOG ==="
+            cat "$failure_log"
+            echo "=== END VERBATIM FAILURE LOG ==="
+            exit "$status"
+          fi
+
+          echo "INITIAL_SEED_0_RESULT=PASS" | tee -a "$summary"
+          echo "=== BOUNDED SAME-RUNNER STRESS: 50 additional seeds ==="
+
+          for iteration in $(seq 1 50); do
+            seed="$iteration"
+            echo "T02_PHASE_A_ITERATION=$iteration T02_PHASE_A_SEED=$seed"
+            mix test "$terminal_test" --seed "$seed" --trace 2>&1 | tee "$current_log"
+            status=${PIPESTATUS[0]}
+
+            if [ "$status" -ne 0 ]; then
+              cp "$current_log" "$failure_log"
+              {
+                echo "PHASE_A_RESULT=RED"
+                echo "FAIL_ITERATION=$iteration"
+                echo "FAIL_SEED=$seed"
+                echo "FAIL_EXIT_STATUS=$status"
+                echo "FAIL_LOG=$failure_log"
+              } | tee -a "$summary"
+              echo "=== VERBATIM FAILURE LOG ==="
+              cat "$failure_log"
+              echo "=== END VERBATIM FAILURE LOG ==="
+              exit "$status"
+            fi
+          done
+
+          {
+            echo "PHASE_A_RESULT=TERMINAL_RED_NOT_REPRODUCED_IN_FOCUSED_LANE"
+            echo "TOTAL_INVOCATIONS=51"
+            echo "SEEDS=0_INITIAL,1..50_STRESS"
+          } | tee -a "$summary"
+
+      - name: Preserve Phase A evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t02-runtime-terminal-authority-phase-a-${{ github.run_id }}
+          path: diagnostic-evidence/
+          if-no-files-found: error
+          retention-days: 14
