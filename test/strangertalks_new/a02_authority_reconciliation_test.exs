@@ -24,18 +24,33 @@ defmodule StrangertalksNew.A02AuthorityReconciliationTest do
     assert boundaries =~ "mix strangertalks.intelligence [hours]"
     assert boundaries =~ "Current V1 A02 organizational learning uses no model provider."
 
-    operator_section = section(boundaries, "## Operational invocation", "## Deterministic authority retained from remediation")
-    refute operator_section =~ "mix strangertalks.agents learning [limit]"
+    operator_section =
+      section(
+        boundaries,
+        "## Operational invocation",
+        "## Deterministic authority retained from remediation"
+      )
+
+    assert operator_section =~ "Current operators use:"
+    assert operator_section =~ "mix strangertalks.intelligence [hours]"
+    assert operator_section =~
+             "Historical/superseded reference: `mix strangertalks.agents learning [limit]`"
+
+    refute operator_section =~
+             "Current operators use:\n\n```text\nmix strangertalks.agents learning [limit]"
 
     assert current_context =~ "**A02 — Organizational Learning Advisor:**"
     assert current_context =~ "`SUPERSEDED_FOR_CURRENT_V1`"
     assert current_context =~ "mix strangertalks.intelligence [hours]"
     assert current_context =~ "Current V1 A02 organizational learning uses no model provider."
-    refute current_context =~ "A02–A04 use the shared schema-constrained `AgentSystems.Provider.structured/5` boundary"
+
+    refute current_context =~
+             "A02–A04 use the shared schema-constrained `AgentSystems.Provider.structured/5` boundary"
 
     assert team8 =~ "Historical Team 8"
     assert team8 =~ "T-A08"
-    assert team8 =~ "historical model-based `mix strangertalks.agents learning` path is superseded"
+    assert team8 =~
+             "historical model-based `mix strangertalks.agents learning` path is superseded"
   end
 
   defp section(document, start_heading, end_heading) do
