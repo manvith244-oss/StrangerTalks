@@ -67,6 +67,75 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
     assert Matches.get_match(fixture.match.match_id).conversation_started == false
   end
 
+  test "authoritative supported languages remain active while durable start truth is false" do
+    for language <- ~w(en te hi) do
+      fixture = conversation_fixture(language)
+      conversation_id = fixture.conversation.conversation_id
+
+      {:ok, pid} = ConversationServer.ensure_started(conversation_id)
+      cleanup(conversation_id)
+
+      assert {:ok, %{icebreaker: {:active, identity}}} =
+               ConversationServer.inspect_state(conversation_id)
+
+      assert String.starts_with?(identity, language <> "/")
+      assert IcebreakerCatalog.approved?(identity)
+      assert Matches.get_match(fixture.match.match_id).conversation_started == false
+
+      DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, pid)
+    end
+  end
+
+  test "accepted expressive content establishes durable start truth before success" do
+    fixture = conversation_fixture("en")
+    conversation_id = fixture.conversation.conversation_id
+
+    {:ok, _pid} = ConversationServer.ensure_started(conversation_id)
+    cleanup(conversation_id)
+
+    assert Matches.get_match(fixture.match.match_id).conversation_started == false
+
+    assert {:ok, %{sequence: 1}} =
+             ConversationServer.append_expressive_message(
+               conversation_id,
+               fixture.a,
+               Ecto.UUID.generate(),
+               "warm-wave"
+             )
+
+    assert Matches.get_match(fixture.match.match_id).conversation_started == true
+    assert {:ok, %{icebreaker: :retired}} = ConversationServer.inspect_state(conversation_id)
+  end
+
+  test "accepted voice content establishes durable start truth before success" do
+    fixture = conversation_fixture("en")
+    conversation_id = fixture.conversation.conversation_id
+    binary = <<"RIFF", 0, 0, 0, 0, "WAVEfmt ">>
+    voice_note_id = Ecto.UUID.generate()
+
+    {:ok, _pid} = ConversationServer.ensure_started(conversation_id)
+    cleanup(conversation_id)
+
+    assert Matches.get_match(fixture.match.match_id).conversation_started == false
+
+    assert {:ok, %{voice_note_id: ^voice_note_id, status: "sent_to_server"}} =
+             ConversationServer.append_voice_note(
+               conversation_id,
+               fixture.a,
+               %{
+                 voice_note_id: voice_note_id,
+                 media_type: "audio/wav",
+                 duration_ms: 1_200,
+                 byte_size: byte_size(binary),
+                 content_hash: :crypto.hash(:sha256, binary)
+               },
+               binary
+             )
+
+    assert Matches.get_match(fixture.match.match_id).conversation_started == true
+    assert {:ok, %{icebreaker: :retired}} = ConversationServer.inspect_state(conversation_id)
+  end
+
   defp replace_runtime(conversation_id, old_pid) do
     monitor = Process.monitor(old_pid)
     Process.exit(old_pid, :kill)

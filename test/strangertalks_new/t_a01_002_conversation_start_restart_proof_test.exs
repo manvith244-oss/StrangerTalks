@@ -3,6 +3,7 @@ defmodule StrangertalksNew.TA01002ConversationStartRestartProofTest do
 
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNew.IcebreakerCatalog
+  alias StrangertalksNew.Matches
 
   test "retired Conversation Start remains retired after real ConversationServer replacement" do
     fixture = conversation_fixture("en")
@@ -24,6 +25,7 @@ defmodule StrangertalksNew.TA01002ConversationStartRestartProofTest do
     assert {:active, identity} = initial.icebreaker
     assert String.starts_with?(identity, "en/")
     assert IcebreakerCatalog.approved?(identity)
+    assert Matches.get_match(fixture.match.match_id).conversation_started == false
 
     IO.puts("T_A01_002_INITIAL_PID=#{inspect(old_pid)}")
     IO.puts("T_A01_002_INITIAL_EPOCH=#{initial.epoch_id}")
@@ -50,6 +52,7 @@ defmodule StrangertalksNew.TA01002ConversationStartRestartProofTest do
     assert {:ok, retired} = ConversationServer.inspect_state(conversation_id)
     assert retired.icebreaker == :retired
     assert retired.next_sequence == 2
+    assert Matches.get_match(fixture.match.match_id).conversation_started == true
 
     IO.puts("T_A01_002_PRE_RESTART_STATE=#{inspect(retired.icebreaker)}")
     IO.puts("T_A01_002_RETIREMENT_FANOUT=#{inspect(retirement_events)}")
@@ -76,6 +79,7 @@ defmodule StrangertalksNew.TA01002ConversationStartRestartProofTest do
 
     assert {:ok, replacement} = ConversationServer.inspect_state(conversation_id)
     refute replacement.epoch_id == retired.epoch_id
+    assert Matches.get_match(fixture.match.match_id).conversation_started == true
 
     assert {:ok, replacement_sync} =
              ConversationServer.sync_and_register_channel(
@@ -173,6 +177,6 @@ defmodule StrangertalksNew.TA01002ConversationStartRestartProofTest do
         duration_seconds: 0
       })
 
-    %{conversation: conversation, a: a.participant_id, b: b.participant_id}
+    %{conversation: conversation, match: matching, a: a.participant_id, b: b.participant_id}
   end
 end
