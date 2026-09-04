@@ -1,4 +1,4 @@
-name: T09 T03 PRIV-002 Send Selector Classification
+name: T09 T03 PRIV-002 DOM Initialization Classification
 
 on:
   push:
@@ -12,13 +12,14 @@ env:
   MIX_ENV: test
   CONTROL_SHA: cff1d080cfbe050164eaea96bfe7de33641a2fa1
   CANDIDATE_SHA: 99787f0b85e0cf9f6c3c001c3f0462f4d6fec89f
+  CANDIDATE_TREE: 31d156cfcdae30db2f49740033b4f454e1e7004c
   STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
   STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
   STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
 
 jobs:
   classify:
-    name: Exact CONTROL vs CANDIDATE pre-disclosure DOM classification
+    name: Exact CONTROL vs CANDIDATE DOM/runtime timeline
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     services:
@@ -35,16 +36,21 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
 
     steps:
-      - name: Record T09 proof lineage
-        run: |
-          echo "T09_PROOF_BRANCH=$GITHUB_REF_NAME"
-          echo "T09_PROOF_SHA=$GITHUB_SHA"
-          echo "T09_RUN_ID=$GITHUB_RUN_ID"
-
-      - name: Checkout T09 proof branch
+      - name: Checkout T09 diagnostic proof branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Record immutable T09 diagnostic lineage and probe
+        run: |
+          set -euo pipefail
+          echo "T09_DIAGNOSTIC_BRANCH=$GITHUB_REF_NAME"
+          echo "T09_DIAGNOSTIC_SHA=$GITHUB_SHA"
+          echo "T09_DIAGNOSTIC_TREE=$(git rev-parse HEAD^{tree})"
+          echo "T09_RUN_ID=$GITHUB_RUN_ID"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          cp test/t09_t03_priv_002_dom_matrix.mjs /tmp/t09_t03_priv_002_dom_matrix.mjs
+          sha256sum /tmp/t09_t03_priv_002_dom_matrix.mjs
 
       - uses: erlef/setup-beam@v1
         with:
@@ -56,273 +62,40 @@ jobs:
           node-version: "22"
           cache: npm
 
-      - name: Install shared test environment
+      - name: Install one shared browser/test environment
         run: |
           set -euo pipefail
           git checkout --force "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
           mix deps.get
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Write immutable T09 selector probe template
+      - name: Run exact CONTROL and CANDIDATE through identical instrumentation
         run: |
-          cat > /tmp/t09_selector_probe.mjs <<'JAVASCRIPT'
-          import assert from "node:assert/strict"
-          import {createHash} from "node:crypto"
-          import {readFileSync} from "node:fs"
-          import test from "node:test"
-          import {chromium} from "playwright"
-
-          const BASE = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
-          const LANE = process.env.T09_LANE
-          const EXPECTED_SHA = process.env.EXPECTED_PRODUCT_SHA
-          const WAIT = 20_000
-          const VP = {width: 390, height: 844}
-          const active = (page, screen) => page.locator(`section[data-screen="${screen}"].active`)
-          const sha256 = value => createHash("sha256").update(value).digest("hex")
-
-          const indexSource = readFileSync("priv/static/index.html", "utf8")
-          const companionSource = readFileSync("priv/static/assets/companion.mjs", "utf8")
-
-          function classifyOrigin(node) {
-            if (node.id && indexSource.includes(`id="${node.id}"`)) return "STATIC_INDEX"
-            if (node.id && companionSource.includes(`id=\"${node.id}\"`)) return "DYNAMIC_COMPANION_MODULE"
-            if (node.text === "Send" && indexSource.includes('<button class="primary">Send</button>')) return "STATIC_INDEX_SEND"
-            return "UNCLASSIFIED_SOURCE"
-          }
-
-          async function boot(browser, label) {
-            const context = await browser.newContext({viewport: VP})
-            await context.addInitScript(() => {
-              window.__t09MutationEvents = []
-              window.__t09CloneEvents = []
-
-              const describe = node => {
-                if (!(node instanceof Element)) return {nodeType: node?.nodeType ?? null}
-                return {
-                  tag: node.tagName.toLowerCase(),
-                  id: node.id || null,
-                  class: node.getAttribute("class"),
-                  text: (node.textContent || "").trim().replace(/\s+/g, " ").slice(0, 180),
-                  outerHTML: node.outerHTML
-                }
-              }
-
-              const primaryNodes = root => {
-                if (!(root instanceof Element)) return []
-                const result = []
-                if (root.matches("button.primary")) result.push(root)
-                result.push(...root.querySelectorAll("button.primary"))
-                return result
-              }
-
-              const observer = new MutationObserver(records => {
-                for (const record of records) {
-                  for (const node of record.addedNodes) {
-                    if (!(node instanceof Element)) continue
-                    const primaries = primaryNodes(node).filter(el => el.closest("#message-form"))
-                    const addsForm = node.id === "message-form" || !!node.querySelector?.("#message-form")
-                    if (primaries.length || addsForm) {
-                      window.__t09MutationEvents.push({
-                        kind: "added",
-                        readyState: document.readyState,
-                        target: describe(record.target),
-                        root: describe(node),
-                        primaries: primaries.map(describe)
-                      })
-                    }
-                  }
-                  for (const node of record.removedNodes) {
-                    if (!(node instanceof Element)) continue
-                    const primaries = primaryNodes(node)
-                    if (primaries.length || node.id === "message-form") {
-                      window.__t09MutationEvents.push({
-                        kind: "removed",
-                        readyState: document.readyState,
-                        target: describe(record.target),
-                        root: describe(node),
-                        primaries: primaries.map(describe)
-                      })
-                    }
-                  }
-                }
-              })
-              observer.observe(document, {childList: true, subtree: true})
-
-              const originalCloneNode = Node.prototype.cloneNode
-              Node.prototype.cloneNode = function(deep) {
-                const clone = originalCloneNode.call(this, deep)
-                if (this instanceof Element) {
-                  const primaries = primaryNodes(this)
-                  if (primaries.length || this.id === "message-form") {
-                    window.__t09CloneEvents.push({source: describe(this), deep: Boolean(deep), clone: describe(clone)})
-                  }
-                }
-                return clone
-              }
-            })
-
-            const page = await context.newPage()
-            const issuanceWait = page.waitForResponse(r => {
-              try { return new URL(r.url()).pathname === "/api/participants" } catch { return false }
-            })
-            const response = await page.goto(BASE, {waitUntil: "domcontentloaded"})
-            assert.ok(response?.ok(), `${label}: root loads`)
-            assert.ok((await issuanceWait).ok(), `${label}: participant issuance succeeds`)
-            await active(page, "doors").waitFor({state: "visible", timeout: WAIT})
-            await page.locator("#conversation-language").selectOption("en")
-            return {context, page}
-          }
-
-          async function pair(browser) {
-            const a = await boot(browser, `${LANE}-A`)
-            const b = await boot(browser, `${LANE}-B`)
-            await a.page.getByRole("button", {name: /Advice/}).click()
-            await active(a.page, "queue").waitFor({state: "visible", timeout: WAIT})
-            await b.page.getByRole("button", {name: /Advice/}).click()
-            await Promise.all([
-              active(a.page, "conversation").waitFor({state: "visible", timeout: WAIT}),
-              active(b.page, "conversation").waitFor({state: "visible", timeout: WAIT})
-            ])
-            await Promise.all([
-              a.page.waitForFunction(() => location.pathname === "/conversation", null, {timeout: WAIT}),
-              b.page.waitForFunction(() => location.pathname === "/conversation", null, {timeout: WAIT})
-            ])
-            return {a, b}
-          }
-
-          async function capture(page, point) {
-            const raw = await page.evaluate(({point}) => {
-              const form = document.querySelector("#message-form")
-              assertForm(form)
-
-              function assertForm(value) {
-                if (!(value instanceof HTMLFormElement)) throw new Error("message_form_missing")
-              }
-
-              function visible(el) {
-                const style = getComputedStyle(el)
-                const rect = el.getBoundingClientRect()
-                return style.display !== "none" && style.visibility !== "hidden" && style.visibility !== "collapse" && Number(style.opacity || "1") !== 0 && rect.width > 0 && rect.height > 0 && el.getClientRects().length > 0
-              }
-
-              function chain(el) {
-                const result = []
-                let node = el
-                while (node instanceof Element) {
-                  const classes = [...node.classList].map(cls => `.${cls}`).join("")
-                  result.push(`${node.tagName.toLowerCase()}${node.id ? `#${node.id}` : ""}${classes}`)
-                  node = node.parentElement
-                }
-                return result
-              }
-
-              function details(el) {
-                const style = getComputedStyle(el)
-                return {
-                  outerHTML: el.outerHTML,
-                  id: el.id || null,
-                  class: el.getAttribute("class"),
-                  attrType: el.getAttribute("type"),
-                  resolvedType: el instanceof HTMLButtonElement ? el.type : null,
-                  text: (el.textContent || "").trim(),
-                  visible: visible(el),
-                  display: style.display,
-                  visibility: style.visibility,
-                  opacity: style.opacity,
-                  insideCompose: Boolean(el.closest(".compose")),
-                  ancestorChain: chain(el)
-                }
-              }
-
-              const broad = [...document.querySelectorAll("#message-form button.primary")]
-              const narrow = [...document.querySelectorAll("#message-form .compose button.primary")]
-              const submitButtons = [...form.querySelectorAll("button")].filter(button => button.type === "submit")
-              const mutationEvents = Array.isArray(window.__t09MutationEvents) ? window.__t09MutationEvents : []
-              const cloneEvents = Array.isArray(window.__t09CloneEvents) ? window.__t09CloneEvents : []
-
-              return {
-                point,
-                url: location.href,
-                readyState: document.readyState,
-                activeConversationCount: document.querySelectorAll('section[data-screen="conversation"].active').length,
-                messageFormCount: document.querySelectorAll("#message-form").length,
-                formOuterHTML: form.outerHTML,
-                broadCount: broad.length,
-                broad: broad.map(details),
-                narrowCount: narrow.length,
-                narrow: narrow.map(details),
-                submitButtonCount: submitButtons.length,
-                submitButtons: submitButtons.map(details),
-                mutationEvents,
-                cloneEvents
-              }
-            }, {point})
-
-            raw.formOuterHTMLSha256 = sha256(raw.formOuterHTML)
-            raw.broad = raw.broad.map(node => ({...node, sourceOrigin: classifyOrigin(node)}))
-            raw.narrow = raw.narrow.map(node => ({...node, sourceOrigin: classifyOrigin(node)}))
-            raw.submitButtons = raw.submitButtons.map(node => ({...node, sourceOrigin: classifyOrigin(node)}))
-            return raw
-          }
-
-          test(`${LANE} exact pre-disclosure selector classification`, {timeout: 180_000}, async () => {
-            assert.ok(LANE === "CONTROL" || LANE === "CANDIDATE")
-            assert.equal(process.env.GITHUB_PRODUCT_SHA, EXPECTED_SHA)
-            const browser = await chromium.launch({headless: true})
-            let matched
-            try {
-              matched = await pair(browser)
-              const {a} = matched
-
-              const entry = await capture(a.page, "IMMEDIATELY_AFTER_CONVERSATION_ENTRY")
-              await a.page.waitForTimeout(0)
-              const pre = await capture(a.page, "IMMEDIATELY_BEFORE_PRIOR_FAILING_ASSERTION")
-
-              console.log(`T09_${LANE}_ENTRY=${JSON.stringify(entry)}`)
-              console.log(`T09_${LANE}_PREASSERT=${JSON.stringify(pre)}`)
-              console.log(`T09_${LANE}_ENTRY_FORM_OUTERHTML=${JSON.stringify(entry.formOuterHTML)}`)
-              console.log(`T09_${LANE}_PREASSERT_FORM_OUTERHTML=${JSON.stringify(pre.formOuterHTML)}`)
-              console.log(`T09_${LANE}_STABLE_FORM=${entry.formOuterHTML === pre.formOuterHTML}`)
-              console.log(`T09_${LANE}_STATIC_FORM_PRIMARY_SOURCE_COUNT=${(indexSource.match(/<form id="message-form"[\s\S]*?<\/form>/)?.[0].match(/button class="primary"/g) || []).length}`)
-              console.log(`T09_${LANE}_COMPANION_DYNAMIC_INSERT_SOURCE=${companionSource.includes('controls.parentElement.append(panel)')}`)
-              console.log(`T09_${LANE}_COMPANION_PRIMARY_SOURCE=${companionSource.includes('id="companion-generate" type="button" class="primary"')}`)
-
-              assert.equal(entry.messageFormCount, 1)
-              assert.equal(entry.activeConversationCount, 1)
-              assert.equal(pre.messageFormCount, 1)
-              assert.equal(pre.activeConversationCount, 1)
-              assert.equal(new URL(a.page.url()).pathname, "/conversation")
-            } finally {
-              await matched?.a.context.close().catch(() => {})
-              await matched?.b.context.close().catch(() => {})
-              await browser.close().catch(() => {})
-            }
-          })
-          JAVASCRIPT
-
-      - name: Exact CONTROL then CANDIDATE Chromium classification
-        run: |
-          set -euo pipefail
+          set -u
+          control_rc=0
+          candidate_rc=0
 
           run_lane() {
             lane="$1"
             sha="$2"
             echo "===== T09_${lane}_BEGIN ====="
-            git checkout --force "$sha"
-            rm -f test/t09_selector_probe.mjs
-            test "$(git rev-parse HEAD)" = "$sha"
-            test -z "$(git status --porcelain)"
+            git checkout --force "$sha" || return 91
+            rm -f test/t09_t03_priv_002_dom_matrix.mjs
+            if [ "$(git rev-parse HEAD)" != "$sha" ]; then return 92; fi
+            if [ -n "$(git status --porcelain)" ]; then git status --short; return 93; fi
+
             echo "T09_${lane}_REQUESTED_SHA=$sha"
             echo "T09_${lane}_CHECKED_OUT_SHA=$(git rev-parse HEAD)"
             echo "T09_${lane}_TREE=$(git rev-parse HEAD^{tree})"
 
-            mix ecto.drop --force || true
-            mix ecto.create --quiet
-            mix ecto.migrate --quiet
-            cp /tmp/t09_selector_probe.mjs test/t09_selector_probe.mjs
-            node --check test/t09_selector_probe.mjs
+            mix ecto.drop --force >/dev/null 2>&1 || true
+            mix ecto.create --quiet || return 94
+            mix ecto.migrate --quiet || return 95
+            cp /tmp/t09_t03_priv_002_dom_matrix.mjs test/t09_t03_priv_002_dom_matrix.mjs
+            node --check test/t09_t03_priv_002_dom_matrix.mjs || return 96
 
             log="/tmp/t09-${lane,,}-server.log"
             pidfile="/tmp/t09-${lane,,}-server.pid"
@@ -335,34 +108,60 @@ jobs:
               Process.sleep(:infinity)
             ' >"$log" 2>&1 & echo $! >"$pidfile"
 
+            ready=0
             for i in $(seq 1 45); do
               pid="$(cat "$pidfile")"
-              kill -0 "$pid" 2>/dev/null || { cat "$log"; exit 1; }
-              if curl -fsS http://localhost:4000/ >/dev/null; then break; fi
+              if ! kill -0 "$pid" 2>/dev/null; then cat "$log"; break; fi
+              if curl -fsS http://localhost:4000/ >/dev/null 2>&1; then ready=1; break; fi
               sleep 1
-              if [ "$i" -eq 45 ]; then cat "$log"; exit 1; fi
             done
 
-            T09_LANE="$lane" EXPECTED_PRODUCT_SHA="$sha" GITHUB_PRODUCT_SHA="$(git rev-parse HEAD)" \
-              node --test --test-concurrency=1 test/t09_selector_probe.mjs
+            rc=0
+            if [ "$ready" -ne 1 ]; then
+              echo "T09_${lane}_SERVER_READY=false"
+              rc=97
+            else
+              echo "T09_${lane}_SERVER_READY=true"
+              T09_LANE="$lane" EXPECTED_PRODUCT_SHA="$sha" CHECKED_PRODUCT_SHA="$(git rev-parse HEAD)" \
+                node --test --test-concurrency=1 test/t09_t03_priv_002_dom_matrix.mjs || rc=$?
+            fi
 
-            pid="$(cat "$pidfile")"
-            kill "$pid" 2>/dev/null || true
-            wait "$pid" 2>/dev/null || true
-            rm -f test/t09_selector_probe.mjs
-            test "$(git rev-parse HEAD)" = "$sha"
-            test -z "$(git status --porcelain)"
-            echo "T09_${lane}_FINAL_CLEAN=true"
+            if [ -f "$pidfile" ]; then
+              pid="$(cat "$pidfile")"
+              kill "$pid" 2>/dev/null || true
+              wait "$pid" 2>/dev/null || true
+            fi
+            rm -f test/t09_t03_priv_002_dom_matrix.mjs
+
+            echo "T09_${lane}_FINAL_TESTED_SHA=$(git rev-parse HEAD)"
+            if [ "$(git rev-parse HEAD)" != "$sha" ]; then rc=98; fi
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "T09_${lane}_FINAL_CLEAN=false"
+              git status --short
+              rc=99
+            else
+              echo "T09_${lane}_FINAL_CLEAN=true"
+            fi
+            echo "T09_${lane}_RC=$rc"
             echo "===== T09_${lane}_END ====="
+            return "$rc"
           }
 
-          run_lane CONTROL "$CONTROL_SHA"
-          run_lane CANDIDATE "$CANDIDATE_SHA"
+          run_lane CONTROL "$CONTROL_SHA" || control_rc=$?
+          run_lane CANDIDATE "$CANDIDATE_SHA" || candidate_rc=$?
 
-      - name: Final proof-branch-independent product cleanliness
+          echo "T09_CONTROL_RC=$control_rc"
+          echo "T09_CANDIDATE_RC=$candidate_rc"
+          test "$control_rc" -eq 0
+          test "$candidate_rc" -eq 0
+
+      - name: Final exact candidate identity child-diff and clean tree
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD^{tree})" = "$CANDIDATE_TREE"
           git diff --check "$CONTROL_SHA".."$CANDIDATE_SHA"
-          echo "T09_CLASSIFICATION_FINAL_WORKTREE=CLEAN"
+          test -z "$(git status --porcelain)"
+          echo "FINAL_TESTED_SHA=$(git rev-parse HEAD)"
+          echo "FINAL_TESTED_TREE=$(git rev-parse HEAD^{tree})"
+          echo "FINAL_WORKTREE=CLEAN"
