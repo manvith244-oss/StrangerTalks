@@ -6,6 +6,8 @@ on:
       - team2/runtime-restart-reconciliation-fix-lab
     paths:
       - .github/workflows/t02-runtime-generation-causal-trace.yml
+      - .github/proof/t02_generation_causal_runner.sh
+      - .github/proof/t02_generation_timeline_probe_test.exs
   workflow_dispatch:
 
 permissions:
