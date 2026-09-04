@@ -10,9 +10,14 @@ on:
       - main
       - release/prep-2026-08-22
   workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact source SHA to test; defaults to the workflow ref SHA
+        required: false
+        type: string
 
 concurrency:
-  group: agent-systems-${{ github.event.pull_request.head.sha || github.sha }}
+  group: agent-systems-${{ github.event_name == 'workflow_dispatch' && inputs.target_sha != '' && inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 permissions:
@@ -43,18 +48,22 @@ jobs:
       AGENT_SYSTEMS_PROVIDER_PROBE: "false"
       COMPANION_ENABLED: "false"
       AGENT_SYSTEMS_ENABLED: "false"
+      TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.target_sha != '' && inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - name: Checkout exact candidate commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ env.TARGET_SHA }}
 
       - name: Prove checkout identity
+        shell: bash
         run: |
-          echo "EXPECTED_AGENT_SYSTEMS_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
-          echo "ACTUAL_AGENT_SYSTEMS_COMMIT=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          set -euo pipefail
+          expected_sha="$TARGET_SHA"
+          actual_sha="$(git rev-parse HEAD)"
+          printf 'EXPECTED_SHA=%s\nACTUAL_SHA=%s\n' "$expected_sha" "$actual_sha"
+          test "$expected_sha" = "$actual_sha"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -113,8 +122,17 @@ jobs:
       - name: Full precommit
         run: mix precommit
 
-      - name: Prove precommit left checkout unchanged
-        run: git diff --exit-code -- .
+      - name: Final exact-SHA and clean-tree proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          printf 'TESTED_SHA=%s\n' "$actual_sha"
+          test "$actual_sha" = "$TARGET_SHA"
+          git diff --exit-code -- .
+          status="$(git status --porcelain)"
+          printf 'WORKTREE=%s\n' "${status:-CLEAN}"
+          test -z "$status"
 
       - name: Record exact commit
         run: echo "AGENT_SYSTEMS_TESTED_COMMIT=$(git rev-parse HEAD)"
