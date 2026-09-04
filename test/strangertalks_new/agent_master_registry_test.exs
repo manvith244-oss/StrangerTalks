@@ -12,9 +12,14 @@ defmodule StrangertalksNew.AgentMasterRegistryTest do
     registry = File.read!(@registry_path)
 
     a01 = current_section(registry, "A01")
-    assert a01 =~ "implementation_kind: `BOUNDED MODEL-ASSISTED PARTICIPANT CAPABILITY`"
+
+    assert a01 =~
+             "implementation_kind: `BOUNDED MODEL-ASSISTED PARTICIPANT CAPABILITY`"
+
     assert a01 =~ "positive_authority: `suggest/draft only`"
-    assert a01 =~ "forbidden_authority: `send, impersonate, Matchmaking mutation, Safety mutation, Relationship mutation, deployment`"
+
+    assert a01 =~
+             "forbidden_authority: `send, impersonate, Matchmaking mutation, Safety mutation, Relationship mutation, deployment`"
 
     a02 = current_section(registry, "A02")
     assert a02 =~ "organizational_status: `CURRENT`"
@@ -24,14 +29,21 @@ defmodule StrangertalksNew.AgentMasterRegistryTest do
     assert File.read!(@agent_task_path) =~ ":learning_advisor_superseded_by_team8_v1"
 
     a03 = current_section(registry, "A03")
-    assert a03 =~ "implementation_kind: `BOUNDED MODEL-ASSISTED SAFETY ADVISORY CAPABILITY`"
+
+    assert a03 =~
+             "implementation_kind: `BOUNDED MODEL-ASSISTED SAFETY ADVISORY CAPABILITY`"
+
     assert a03 =~ "positive_authority: `recommendation only`"
-    assert a03 =~ "forbidden_authority: `ban, Block, punish, terminalize, Matchmaking mutation, SafetyReview mutation, deployment`"
+
+    assert a03 =~
+             "forbidden_authority: `ban, Block, punish, terminalize, Matchmaking mutation, SafetyReview mutation, deployment`"
 
     a04 = current_section(registry, "A04")
     assert a04 =~ "implementation_kind: `BOUNDED RESEARCH CAPABILITY`"
     assert a04 =~ "positive_authority: `research/candidate generation only`"
-    assert a04 =~ "forbidden_authority: `autonomous publication, live Conversation injection, autonomous browsing unless separately authorized, catalog mutation, deployment`"
+
+    assert a04 =~
+             "forbidden_authority: `autonomous publication, live Conversation injection, autonomous browsing unless separately authorized, catalog mutation, deployment`"
 
     assert registry =~ "Python production Agent runtime: `NOT CANONICAL / HEALTH-ONLY FOUNDATION`"
 
