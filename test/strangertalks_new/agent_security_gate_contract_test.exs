@@ -30,6 +30,7 @@ defmodule StrangertalksNew.AgentSecurityGateContractTest do
   } do
     for required <- [
           "test/strangertalks_new/agent_systems_remediation_test.exs",
+          "test/strangertalks_new/intelligence_v1_hostile_test.exs",
           "test/strangertalks_new/privacy_persistence_guard_test.exs",
           "test/strangertalks_new/ai_service/boundary_contract_test.exs",
           "python -m pytest services/ai/tests -q -ra",
