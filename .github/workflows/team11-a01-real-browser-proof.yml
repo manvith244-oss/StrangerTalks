@@ -112,7 +112,19 @@ jobs:
           cat /tmp/team11-a01-browser.log
           exit 1
 
-      - name: Real Chromium A01 human-authorship and degradation proof
+      - name: CONTROL A — canonical desktop matching path
+        run: |
+          node --test --test-concurrency=1 \
+            --test-name-pattern='two participants match, exchange delivered messages, and restore the active Conversation after refresh' \
+            test/js/browser_e2e_test.mjs
+
+      - name: CONTROL A2 — established mobile matching path
+        run: |
+          node --test --test-concurrency=1 \
+            --test-name-pattern='Team 3: 320x568 dismisses tray from physically exposed Conversation header' \
+            test/js/team3_conversation_experience_gate_test.mjs
+
+      - name: EXPERIMENT B — Team 11 matching prerequisite and A01 proof
         run: node --test --test-concurrency=1 test/js/team11_a01_real_browser_proof_test.mjs
 
       - name: Upload Team 11 proof screenshots
