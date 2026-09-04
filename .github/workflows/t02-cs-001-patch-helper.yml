@@ -18,7 +18,7 @@ jobs:
           ref: team2/conversation-start-retirement-repair-001
           fetch-depth: 0
 
-      - name: Apply exact minimal Conversation Start retirement repair
+      - name: Apply privacy-minimal Conversation Start retirement repair
         shell: bash
         run: |
           python3 - <<'PY'
@@ -28,61 +28,116 @@ jobs:
           text = path.read_text()
           block = lambda lines: "\n".join(lines)
 
-          replacements = [
-              (
-                  "icebreaker: initial_icebreaker(conversation_id),",
-                  "icebreaker: initial_icebreaker(conversation),",
-              ),
-              (
-                  block([
-                      "  defp retire_icebreaker(%{icebreaker: {:active, _identity}} = state) do",
-                      "    state",
-                      "    |> Map.put(:icebreaker, :retired)",
-                      "    |> notify_all_participants({:conversation_icebreaker, %{status: \"retired\"}})",
-                      "  end",
-                  ]),
-                  block([
-                      "  defp retire_icebreaker(%{icebreaker: {:active, _identity}} = state) do",
-                      "    conversation =",
-                      "      state.conversation",
-                      "      |> Ecto.Changeset.change(first_message_timestamp: DateTime.utc_now())",
-                      "      |> Repo.update!()",
-                      "",
-                      "    state",
-                      "    |> Map.put(:conversation, conversation)",
-                      "    |> Map.put(:icebreaker, :retired)",
-                      "    |> notify_all_participants({:conversation_icebreaker, %{status: \"retired\"}})",
-                      "  end",
-                  ]),
-              ),
-              (
-                  block([
-                      "  defp initial_icebreaker(conversation_id) do",
-                      "    identity = IcebreakerCatalog.identity_for(conversation_id)",
-                      "    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired",
-                      "  rescue",
-                      "    _error -> :retired",
-                      "  end",
-                  ]),
-                  block([
-                      "  defp initial_icebreaker(%Conversation{first_message_timestamp: timestamp})",
-                      "       when not is_nil(timestamp),",
-                      "       do: :retired",
-                      "",
-                      "  defp initial_icebreaker(%Conversation{conversation_id: conversation_id}) do",
-                      "    identity = IcebreakerCatalog.identity_for(conversation_id)",
-                      "    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired",
-                      "  rescue",
-                      "    _error -> :retired",
-                      "  end",
-                  ]),
-              ),
-          ]
+          baseline_retire = block([
+              "  defp retire_icebreaker(%{icebreaker: {:active, _identity}} = state) do",
+              "    state",
+              "    |> Map.put(:icebreaker, :retired)",
+              "    |> notify_all_participants({:conversation_icebreaker, %{status: \"retired\"}})",
+              "  end",
+          ])
 
-          for old, new in replacements:
-              count = text.count(old)
-              assert count == 1, f"expected exactly one match, got {count}: {old[:80]!r}"
-              text = text.replace(old, new, 1)
+          legacy_retire = block([
+              "  defp retire_icebreaker(%{icebreaker: {:active, _identity}} = state) do",
+              "    conversation =",
+              "      state.conversation",
+              "      |> Ecto.Changeset.change(first_message_timestamp: DateTime.utc_now())",
+              "      |> Repo.update!()",
+              "",
+              "    state",
+              "    |> Map.put(:conversation, conversation)",
+              "    |> Map.put(:icebreaker, :retired)",
+              "    |> notify_all_participants({:conversation_icebreaker, %{status: \"retired\"}})",
+              "  end",
+          ])
+
+          baseline_initial = block([
+              "  defp initial_icebreaker(conversation_id) do",
+              "    identity = IcebreakerCatalog.identity_for(conversation_id)",
+              "    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired",
+              "  rescue",
+              "    _error -> :retired",
+              "  end",
+          ])
+
+          legacy_initial = block([
+              "  defp initial_icebreaker(%Conversation{first_message_timestamp: timestamp})",
+              "       when not is_nil(timestamp),",
+              "       do: :retired",
+              "",
+              "  defp initial_icebreaker(%Conversation{conversation_id: conversation_id}) do",
+              "    identity = IcebreakerCatalog.identity_for(conversation_id)",
+              "    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired",
+              "  rescue",
+              "    _error -> :retired",
+              "  end",
+          ])
+
+          desired_initial = block([
+              "  defp initial_icebreaker(%Conversation{match_id: match_id, conversation_id: conversation_id}) do",
+              "    if StrangertalksNew.Matches.conversation_started?(match_id) do",
+              "      :retired",
+              "    else",
+              "      identity = IcebreakerCatalog.identity_for(conversation_id)",
+              "      if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired",
+              "    end",
+              "  rescue",
+              "    _error -> :retired",
+              "  end",
+          ])
+
+          mark_helper = block([
+              "  defp mark_conversation_started(state) do",
+              "    :ok =",
+              "      StrangertalksNew.Matches.mark_conversation_started!(state.conversation.match_id)",
+              "",
+              "    state",
+              "  end",
+          ])
+
+          if legacy_retire in text:
+              text = text.replace(legacy_retire, baseline_retire, 1)
+
+          if legacy_initial in text:
+              text = text.replace(legacy_initial, baseline_initial, 1)
+
+          init_old = "icebreaker: initial_icebreaker(conversation_id),"
+          init_new = "icebreaker: initial_icebreaker(conversation),"
+          if init_old in text:
+              assert text.count(init_old) == 1
+              text = text.replace(init_old, init_new, 1)
+          else:
+              assert init_new in text
+
+          if baseline_initial in text:
+              assert text.count(baseline_initial) == 1
+              text = text.replace(baseline_initial, desired_initial, 1)
+          else:
+              assert desired_initial in text
+
+          if mark_helper not in text:
+              assert text.count(baseline_retire) == 1
+              text = text.replace(baseline_retire, mark_helper + "\n\n" + baseline_retire, 1)
+
+          for indent in ("          ", "            "):
+              old = block([
+                  indent + "state = append_recent_message(state, replay_entry)",
+                  indent + "state = retire_icebreaker(state)",
+              ])
+              new = block([
+                  indent + "state = append_recent_message(state, replay_entry)",
+                  indent + "state = mark_conversation_started(state)",
+                  indent + "state = retire_icebreaker(state)",
+              ])
+              if old in text:
+                  assert text.count(old) == 1
+                  text = text.replace(old, new, 1)
+              else:
+                  assert new in text
+
+          assert "first_message_timestamp: DateTime.utc_now()" not in text
+          assert "|> Repo.update!()" not in text[text.index("  defp retire_icebreaker"):text.index("  defp retire_icebreaker(state), do: state")]
+          assert text.count("state = mark_conversation_started(state)") == 2
+          assert text.count(desired_initial) == 1
 
           path.write_text(text)
           PY
@@ -93,8 +148,12 @@ jobs:
       - name: Commit exact candidate delta
         shell: bash
         run: |
+          if git diff --quiet; then
+            echo "Candidate already has the exact semantic delta"
+            exit 0
+          fi
           git config user.name "StrangerTalks T02 Proof Bot"
           git config user.email "actions@users.noreply.github.com"
           git add lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
-          git commit -m "fix(t02): persist Conversation Start retirement"
+          git commit -m "fix(t02): reconstruct retired start from durable conversation truth"
           git push origin HEAD:team2/conversation-start-retirement-repair-001
