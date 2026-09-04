@@ -4,33 +4,21 @@ import {createPreferenceSaveQueue, saveBooleanPreference} from "../../priv/stati
 import {ensureSecondaryEntries} from "../../priv/static/assets/secondary_flow.mjs"
 
 function secondarySurfaceFixture() {
-  let reflectionsEntry = null
-  const memoryEntry = {
-    insertAdjacentElement(position, element) {
-      assert.equal(position, "afterend")
-      reflectionsEntry = element
-    }
+  const reflectionsEntry = {
+    tagName: "BUTTON",
+    type: "button",
+    dataset: {go: "reflections"},
+    textContent: "Private Reflections"
   }
   const settings = {
     querySelector(selector) {
       if (selector === '[data-go="reflections"]') return reflectionsEntry
-      if (selector === '[data-go="memories"]') return memoryEntry
       return null
     }
   }
   const documentRef = {
     querySelector(selector) {
       return selector === 'section[data-screen="settings"]' ? settings : null
-    },
-    createElement(tagName) {
-      return {
-        tagName: tagName.toUpperCase(),
-        dataset: {},
-        attributes: {},
-        textContent: "",
-        type: "",
-        setAttribute(name, value) { this.attributes[name] = value }
-      }
     }
   }
   return {documentRef, currentEntry: () => reflectionsEntry}
@@ -44,7 +32,7 @@ test("F-06 You surface deliberately exposes the existing Private Reflections scr
   assert.equal(entry.tagName, "BUTTON")
   assert.equal(entry.type, "button")
   assert.equal(entry.dataset.go, "reflections")
-  assert.equal(entry.textContent, "Open Private Reflections")
+  assert.equal(entry.textContent, "Private Reflections")
   assert.equal(ensureSecondaryEntries(fixture.documentRef), entry, "entry is idempotent")
 })
 

@@ -734,6 +734,109 @@ test("browser-layer disconnect recovers and catches up exactly once", {timeout: 
   }
 })
 
+test("peer reconnect preserves intentional timeline position and follows when near bottom", {timeout: 150_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let pair
+
+  const timelinePosition = (page) => page.locator("#message-viewport").evaluate((viewport) => ({
+    scrollTop: viewport.scrollTop,
+    maxScrollTop: viewport.scrollHeight - viewport.clientHeight,
+    bottomDistance: viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+  }))
+
+  const setBottomDistance = async (page, distance) => {
+    await page.locator("#message-viewport").evaluate((viewport, requestedDistance) => {
+      const maxScrollTop = viewport.scrollHeight - viewport.clientHeight
+      viewport.scrollTop = Math.max(0, maxScrollTop - requestedDistance)
+    }, distance)
+    await page.evaluate(() => new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve))
+    }))
+  }
+
+  try {
+    pair = await matchPair(browser, "Advice", {controllableA: true})
+    await pair.a.page.emulateMedia({reducedMotion: "reduce"})
+    await pair.b.page.emulateMedia({reducedMotion: "reduce"})
+    await pair.b.page.setViewportSize({width: 390, height: 720})
+
+    for (let index = 0; index < 12; index += 1) {
+      const text = `Reconnect scroll seed ${index}: ${"A real Conversation timeline needs enough content to prove the viewport keeps its reader-selected anchor. ".repeat(3)}`.trim()
+      await sendAndReceive(pair.a, pair.b, text, pair.conversationTopic)
+    }
+
+    const seeded = await timelinePosition(pair.b.page)
+    assert.ok(seeded.maxScrollTop > 300, `seeded timeline must overflow substantially; maxScrollTop=${seeded.maxScrollTop}`)
+
+    const reconnectPeerAndWaitForPresence = async (label) => {
+      const disconnectMark = pair.b.journal.mark()
+      await pair.a.disconnectSocket()
+      await pair.a.page.locator("#presence").filter({hasText: /Reconnecting|Disconnected/}).waitFor({state: "visible"})
+      await pair.b.journal.waitFor(
+        event => event.type === "frame_received" &&
+          event.topic === pair.conversationTopic &&
+          event.event === "conversation:presence" &&
+          event.body?.status !== "connected",
+        `${label} peer disconnect presence`,
+        disconnectMark
+      )
+
+      const connectedMark = pair.b.journal.mark()
+      const joinMark = pair.a.journal.mark()
+      pair.a.reconnectSocket()
+
+      const connectedPresence = await pair.b.journal.waitFor(
+        event => event.type === "frame_received" &&
+          event.topic === pair.conversationTopic &&
+          event.event === "conversation:presence" &&
+          event.body?.status === "connected",
+        `${label} peer connected presence`,
+        connectedMark
+      )
+      await pair.a.journal.waitFor(
+        event => event.type === "frame_received" &&
+          event.topic === pair.conversationTopic &&
+          event.event === "phx_reply" &&
+          event.body?.status === "ok",
+        `${label} peer ConversationChannel rejoin`,
+        joinMark
+      )
+      assert.equal(connectedPresence.body.status, "connected", `${label} uses the real connected-presence handler`)
+      await pair.b.page.evaluate(() => new Promise((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve))
+      }))
+    }
+
+    await setBottomDistance(pair.b.page, 320)
+    const intentionallyScrolledUp = await timelinePosition(pair.b.page)
+    assert.ok(intentionallyScrolledUp.bottomDistance > 80, "the reader is intentionally outside the near-bottom threshold")
+
+    await reconnectPeerAndWaitForPresence("scrolled-up")
+    const afterScrolledUpReconnect = await timelinePosition(pair.b.page)
+    assert.ok(
+      Math.abs(afterScrolledUpReconnect.scrollTop - intentionallyScrolledUp.scrollTop) <= 1,
+      `peer reconnect must preserve the intentional scroll anchor; before=${intentionallyScrolledUp.scrollTop} after=${afterScrolledUpReconnect.scrollTop}`
+    )
+    assert.ok(afterScrolledUpReconnect.bottomDistance > 80, "the reconnect does not force the reader back to newest")
+
+    await setBottomDistance(pair.b.page, 40)
+    const nearBottom = await timelinePosition(pair.b.page)
+    assert.ok(nearBottom.bottomDistance > 10 && nearBottom.bottomDistance <= 80, `near-bottom setup must exercise the follow threshold; distance=${nearBottom.bottomDistance}`)
+
+    await reconnectPeerAndWaitForPresence("near-bottom")
+    const afterNearBottomReconnect = await timelinePosition(pair.b.page)
+    assert.ok(afterNearBottomReconnect.bottomDistance <= 1, `near-bottom reconnect must follow to newest; distance=${afterNearBottomReconnect.bottomDistance}`)
+    assert.ok(afterNearBottomReconnect.scrollTop > nearBottom.scrollTop, "near-bottom reconnect performs the existing bottom follow")
+
+    assertClean(pair.b)
+    assertClean(pair.a, {allowedFailedRequest: request => new URL(request.url).pathname === "/socket/websocket"})
+  } finally {
+    await pair?.a.context.close().catch(() => {})
+    await pair?.b.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
+
 test("same participant keeps the Conversation through first-tab close and recovers after final-tab close", {timeout: 60_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let pair

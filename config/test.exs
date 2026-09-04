@@ -5,12 +5,19 @@ import Config
 # The MIX_TEST_PARTITION environment variable can be used
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
+repo_pool =
+  if System.get_env("STRANGERTALKS_PERSISTENT_TEST_SERVER") == "1" do
+    DBConnection.ConnectionPool
+  else
+    Ecto.Adapters.SQL.Sandbox
+  end
+
 config :strangertalks_new, StrangertalksNew.Repo,
   username: System.get_env("STRANGERTALKS_LOCAL_DB_USER", "strangertalks_local"),
   password: System.get_env("STRANGERTALKS_LOCAL_DB_PASSWORD"),
   hostname: "localhost",
   database: "strangertalks_new_test#{System.get_env("MIX_TEST_PARTITION")}",
-  pool: Ecto.Adapters.SQL.Sandbox,
+  pool: repo_pool,
   pool_size: System.schedulers_online() * 2
 
 # We don't run a server during test. If one is required,

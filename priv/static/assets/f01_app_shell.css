@@ -1,3 +1,5 @@
+@import url("/assets/conversation_motion.css?v=20260829_v1");
+
 /* F-01 App Shell: one canonical primary navigation region, responsive presentation only. */
 
 #bottom-nav button[aria-current="page"] {
@@ -30,6 +32,11 @@ body:has(.screen.active:is(
 /* Conversation visual mode must not suppress the canonical F-01 primary nav. */
 body.st-chat-mode #bottom-nav.bottom-nav {
   display: flex !important;
+}
+
+/* The open Conversation actions menu must escape the live-call panel's stacking layer. */
+body.st-chat-mode .conversation-head:has(.overflow[open]) {
+  z-index: 90;
 }
 
 /* Active Conversation keeps its composer above the compact primary navigation. */

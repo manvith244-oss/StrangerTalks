@@ -1,3 +1,9 @@
+export {messageSendTimeoutDisposition} from "./message_retry_policy.mjs"
+
+if (typeof window !== "undefined") {
+  await import("./message_failed_retry.mjs")
+}
+
 export const FLOW_PHASE = Object.freeze({
   APP_BOOT: "app_boot",
   MATCHMAKING_ADMISSION: "matchmaking_admission",

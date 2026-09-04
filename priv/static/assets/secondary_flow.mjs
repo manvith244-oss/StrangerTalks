@@ -30,20 +30,7 @@ async function restorePreviousRecord(recordId, record) {
 export function ensureSecondaryEntries(documentRef = document) {
   const settings = documentRef.querySelector('section[data-screen="settings"]')
   if (!settings) return null
-
-  const existing = settings.querySelector('[data-go="reflections"]')
-  if (existing) return existing
-
-  const memoryEntry = settings.querySelector('[data-go="memories"]')
-  if (!memoryEntry) return null
-
-  const reflectionsEntry = documentRef.createElement("button")
-  reflectionsEntry.type = "button"
-  reflectionsEntry.dataset.go = "reflections"
-  reflectionsEntry.textContent = "Open Private Reflections"
-  reflectionsEntry.setAttribute("aria-label", "Open Private Reflections")
-  memoryEntry.insertAdjacentElement("afterend", reflectionsEntry)
-  return reflectionsEntry
+  return settings.querySelector('[data-go="reflections"]')
 }
 
 function markConfirmed(control) {

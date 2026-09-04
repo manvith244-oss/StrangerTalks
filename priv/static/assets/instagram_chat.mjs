@@ -5,6 +5,7 @@ const DOUBLE_TAP_MS = 320
 const DOUBLE_TAP_DISTANCE_PX = 26
 const TAP_MOVEMENT_PX = 12
 const MAX_COMPOSER_HEIGHT_PX = 120
+const EMPTY_CONVERSATION_CLASS = "ig-conversation-empty"
 
 const ICONS = Object.freeze({
   back: '<svg class="ig-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>',
@@ -383,8 +384,37 @@ function setupComposer() {
   updateState()
 }
 
+function syncConversationEmptyState(list, messages) {
+  const existing = list.querySelector(`:scope > .${EMPTY_CONVERSATION_CLASS}`)
+  if (messages.length > 0) {
+    existing?.remove()
+    return
+  }
+  if (existing) return
+
+  const empty = document.createElement("li")
+  empty.className = EMPTY_CONVERSATION_CLASS
+  empty.setAttribute("role", "status")
+  empty.setAttribute("aria-live", "polite")
+  empty.style.cssText = "align-self:center;max-width:22rem;margin:auto 1.5rem;padding:1rem 1.25rem;list-style:none;color:var(--ig-chat-muted,rgba(255,252,235,.62));text-align:center;line-height:1.45"
+
+  const title = document.createElement("strong")
+  title.textContent = "No messages yet"
+  title.style.cssText = "display:block;margin-bottom:.3rem;color:var(--ig-chat-text,#fffceb);font-size:.95rem;font-weight:650"
+
+  const copy = document.createElement("span")
+  copy.textContent = "Say hello when you're ready."
+  copy.style.cssText = "display:block;font-size:.82rem"
+
+  empty.append(title, copy)
+  list.append(empty)
+}
+
 function refreshMessageDecorations() {
-  const messages = Array.from(document.querySelectorAll("#messages > .message"))
+  const list = document.querySelector("#messages")
+  if (!list) return
+  const messages = Array.from(list.querySelectorAll(":scope > .message"))
+  syncConversationEmptyState(list, messages)
   if (!messages.length) return
 
   const ownership = messages.map((message) => message.classList.contains("mine"))

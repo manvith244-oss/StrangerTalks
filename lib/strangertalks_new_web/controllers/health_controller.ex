@@ -18,4 +18,9 @@ defmodule StrangertalksNewWeb.HealthController do
   catch
     :exit, _reason -> conn |> put_status(:service_unavailable) |> json(%{status: "not_ready"})
   end
+
+  def version(conn, _params) do
+    git_sha = System.get_env("RENDER_GIT_COMMIT") || "unknown"
+    json(conn, %{status: "ok", git_sha: git_sha})
+  end
 end

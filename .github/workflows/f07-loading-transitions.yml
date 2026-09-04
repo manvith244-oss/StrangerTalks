@@ -81,7 +81,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mix run --no-start -e '
+          STRANGERTALKS_PERSISTENT_TEST_SERVER=1 mix run --no-start -e '
             config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
             Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
@@ -96,6 +96,9 @@ jobs:
           done
           cat /tmp/f07-phoenix.log
           exit 1
+
+      - name: Failed-send retry browser proof on fresh F-07 state
+        run: node --test test/js/message_failed_retry_browser_test.mjs
 
       - name: F-07 real-browser continuity proof
         run: node --test test/js/f07_loading_transitions_browser_test.mjs
