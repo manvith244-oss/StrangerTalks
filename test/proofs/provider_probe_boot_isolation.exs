@@ -77,7 +77,12 @@ defmodule StrangertalksNew.ProviderProbeBootIsolationProof do
   defp prove_disabled_control do
     stop_application()
     System.put_env("AGENT_SYSTEMS_PROVIDER_PROBE", "false")
-    Application.put_env(:strangertalks_new, :provider_probe_proof_result, {:error, :connection_failure})
+
+    Application.put_env(
+      :strangertalks_new,
+      :provider_probe_proof_result,
+      {:error, :connection_failure}
+    )
 
     start_result = Application.ensure_all_started(:strangertalks_new)
     IO.inspect(start_result, label: "PROBE_DISABLED_PROVIDER_UNAVAILABLE_BOOT_RESULT")
@@ -89,19 +94,28 @@ defmodule StrangertalksNew.ProviderProbeBootIsolationProof do
   defp prove_enabled_failure_isolated do
     stop_application()
     System.put_env("AGENT_SYSTEMS_PROVIDER_PROBE", "true")
-    Application.put_env(:strangertalks_new, :provider_probe_proof_result, {:error, :connection_failure})
+
+    Application.put_env(
+      :strangertalks_new,
+      :provider_probe_proof_result,
+      {:error, :connection_failure}
+    )
 
     start_result = Application.ensure_all_started(:strangertalks_new)
     IO.inspect(start_result, label: "PROBE_ENABLED_PROVIDER_FAILURE_BOOT_RESULT")
 
     case start_result do
       {:ok, _started} ->
-        :ok
+        IO.puts("T_A04_002_BOOT_PHASE=POST_FIX_EXPECTED_GREEN")
+
+      {:error,
+       {:strangertalks_new,
+        {{:agent_provider_probe_failed, reason},
+         {StrangertalksNew.Application, :start, [:normal, []]}}}} ->
+        raise_pre_fix_red!(reason, start_result)
 
       {:error, {:strangertalks_new, {:agent_provider_probe_failed, reason}}} ->
-        IO.inspect(reason, label: "RED_CAUSAL_PROVIDER_PROBE_FAILURE")
-
-        raise "RED proof: enabled ProviderProbe failure still controls Application.start/2 and stops core Phoenix"
+        raise_pre_fix_red!(reason, start_result)
 
       other ->
         raise "unexpected application-start failure during provider isolation proof: #{inspect(other)}"
@@ -134,7 +148,13 @@ defmodule StrangertalksNew.ProviderProbeBootIsolationProof do
 
   defp prove_malformed_and_semantic_invalid do
     Application.put_env(:strangertalks_new, :provider_probe_proof_result, :malformed_success)
-    assert_equal!({:error, :invalid_probe_output}, ProviderProbe.run(), :malformed_provider_response)
+
+    assert_equal!(
+      {:error, :invalid_probe_output},
+      ProviderProbe.run(),
+      :malformed_provider_response
+    )
+
     assert_probe_call!(:malformed_provider_response)
     assert_core_alive!(:malformed_provider_response)
     IO.puts("FAILURE_MATRIX=malformed_provider_response:verification_failed_core_alive")
@@ -145,7 +165,12 @@ defmodule StrangertalksNew.ProviderProbeBootIsolationProof do
       :semantic_invalid_success
     )
 
-    assert_equal!({:error, :invalid_probe_output}, ProviderProbe.run(), :semantic_invalid_response)
+    assert_equal!(
+      {:error, :invalid_probe_output},
+      ProviderProbe.run(),
+      :semantic_invalid_response
+    )
+
     assert_probe_call!(:semantic_invalid_response)
     assert_core_alive!(:semantic_invalid_response)
     IO.puts("FAILURE_MATRIX=semantic_invalid_response:verification_failed_core_alive")
@@ -180,6 +205,14 @@ defmodule StrangertalksNew.ProviderProbeBootIsolationProof do
     assert_core_alive!(:provider_outage_restart_after_verification)
 
     IO.puts("FAILURE_MATRIX=phoenix_restart_during_provider_outage:core_restarted")
+  end
+
+  defp raise_pre_fix_red!(reason, start_result) do
+    IO.puts("T_A04_002_BOOT_PHASE=PRE_FIX_EXPECTED_RED")
+    IO.inspect(reason, label: "RED_CAUSAL_PROVIDER_PROBE_FAILURE")
+    IO.inspect(start_result, label: "RED_CAUSAL_APPLICATION_START_RESULT")
+
+    raise "RED proof: enabled ProviderProbe failure still controls Application.start/2 and stops core Phoenix"
   end
 
   defp assert_started!({:ok, _apps}, _label), do: :ok
