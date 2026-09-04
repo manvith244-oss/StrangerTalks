@@ -32,6 +32,9 @@ defmodule StrangertalksNew.AgentCollaborationContractTest do
     assert contract =~ "# StrangerTalks Agent Collaboration Contract V1"
     assert contract =~ "default caller policy: **DENY**"
     assert contract =~ "T-A06 owns lifecycle/deployment/activation/governance truth"
+    assert contract =~ "`docs/AGENT_MASTER_REGISTRY.md`"
+    assert contract =~ "sensitive-evidence external-provider"
+    assert contract =~ "does not lift, narrow, or override that hold"
 
     assert contract =~ "`conversation_companion.assist:v1`"
     assert contract =~ "`learning_advisor.model:v1`"
