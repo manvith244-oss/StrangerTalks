@@ -6,8 +6,7 @@ on:
       - newteam/core-authority
   pull_request:
     branches:
-      - release/prep-2026-08-22
-      - newteam/core-authority-ci-base
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -39,21 +38,55 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      TEAM1_START_SHA: e938cdd6e806cc5d05837a9c97755477be95bb27
+      EXPECTED_TEAM1_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+      PR_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
 
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ env.EXPECTED_TEAM1_COMMIT }}
           fetch-depth: 0
 
       - name: Prove checkout identity
         run: |
-          echo "EXPECTED_TEAM1_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          set -euo pipefail
+          echo "EXPECTED_TEAM1_COMMIT=$EXPECTED_TEAM1_COMMIT"
           echo "ACTUAL_TEAM1_COMMIT=$(git rev-parse HEAD)"
-          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha || github.sha }}"
-          git merge-base --is-ancestor "$TEAM1_START_SHA" HEAD
+          test "$(git rev-parse HEAD)" = "$EXPECTED_TEAM1_COMMIT"
+
+      - name: Resolve exact canonical candidate base
+        id: resolve_base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            candidate_base_sha="$PR_BASE_SHA"
+            base_source="github.event.pull_request.base.sha"
+            test -n "$candidate_base_sha"
+            if ! git cat-file -e "${candidate_base_sha}^{commit}" 2>/dev/null; then
+              git fetch --no-tags origin "$candidate_base_sha"
+            fi
+          else
+            candidate_base_sha=$(git rev-parse origin/main)
+            base_source="origin/main"
+            echo "MAIN_MERGE_BASE_SHA=$(git merge-base HEAD origin/main)"
+          fi
+
+          git cat-file -e "${candidate_base_sha}^{commit}"
+          candidate_merge_base_sha=$(git merge-base "$candidate_base_sha" HEAD)
+
+          echo "CANDIDATE_BASE_SOURCE=$base_source"
+          echo "CANDIDATE_BASE_SHA=$candidate_base_sha"
+          echo "CANDIDATE_MERGE_BASE_SHA=$candidate_merge_base_sha"
+          echo "CANDIDATE_SHA=$(git rev-parse HEAD)"
+
+          echo "CANDIDATE_BASE_SHA=$candidate_base_sha" >> "$GITHUB_ENV"
+          echo "CANDIDATE_MERGE_BASE_SHA=$candidate_merge_base_sha" >> "$GITHUB_ENV"
+          echo "candidate_base_sha=$candidate_base_sha" >> "$GITHUB_OUTPUT"
+          echo "candidate_merge_base_sha=$candidate_merge_base_sha" >> "$GITHUB_OUTPUT"
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -98,22 +131,67 @@ jobs:
           mix ecto.create --quiet
           mix ecto.migrate --quiet
 
-      - name: Full repository precommit
-        run: mix precommit
+      - name: Full repository precommit in detached exact-SHA worktree
+        run: EXPECTED_SHA="$EXPECTED_TEAM1_COMMIT" bash ops/run_precommit_isolated.sh
 
-      - name: Diff integrity
+      - name: Candidate-relative diff integrity
+        id: diffcheck
+        if: always()
+        continue-on-error: true
+        shell: bash
         run: |
-          git diff --check "$TEAM1_START_SHA"...HEAD
-          git diff --check
+          set +e
+          bash ops/check_candidate_diff.sh "$CANDIDATE_BASE_SHA" HEAD
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
 
       - name: Prove final checkout clean
+        id: clean
+        if: always()
+        continue-on-error: true
+        shell: bash
         run: |
+          set +e
           git status --short --branch
           git status --porcelain | tee /tmp/team1-status
-          test ! -s /tmp/team1-status
+          if [ -s /tmp/team1-status ]; then
+            code=1
+          else
+            code=0
+          fi
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
 
-      - name: Record exact tested commit
+      - name: Record exact tested candidate and base
+        if: always()
+        shell: bash
         run: |
-          echo "TEAM1_EXPECTED_COMMIT=${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "TEAM1_EXPECTED_COMMIT=$EXPECTED_TEAM1_COMMIT"
           echo "TEAM1_CHECKED_OUT_COMMIT=$(git rev-parse HEAD)"
           echo "TEAM1_TESTED_COMMIT=$(git rev-parse HEAD)"
+          echo "TEAM1_CANDIDATE_BASE_SHA=${CANDIDATE_BASE_SHA:-missing}"
+          echo "TEAM1_CANDIDATE_MERGE_BASE_SHA=${CANDIDATE_MERGE_BASE_SHA:-missing}"
+
+      - name: Fail Team 1 gate if required verification failed
+        if: always()
+        shell: bash
+        env:
+          BASE_OUTCOME: ${{ steps.resolve_base.outcome }}
+          DIFF_OUTCOME: ${{ steps.diffcheck.outcome }}
+          CLEAN_OUTCOME: ${{ steps.clean.outcome }}
+          DIFF_EXIT: ${{ steps.diffcheck.outputs.exit_code }}
+          CLEAN_EXIT: ${{ steps.clean.outputs.exit_code }}
+        run: |
+          set -euo pipefail
+          echo "BASE_OUTCOME=$BASE_OUTCOME"
+          echo "DIFF_OUTCOME=$DIFF_OUTCOME"
+          echo "DIFF_EXIT=${DIFF_EXIT:-missing}"
+          echo "CLEAN_OUTCOME=$CLEAN_OUTCOME"
+          echo "CLEAN_EXIT=${CLEAN_EXIT:-missing}"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_TEAM1_COMMIT"
+          test "$BASE_OUTCOME" = "success"
+          test "$DIFF_OUTCOME" = "success"
+          test "$DIFF_EXIT" = "0"
+          test "$CLEAN_OUTCOME" = "success"
+          test "$CLEAN_EXIT" = "0"

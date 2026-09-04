@@ -1,0 +1,82 @@
+name: StrangerTalks Retention Maintenance
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '47 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: strangertalks-production-retention
+  cancel-in-progress: false
+
+jobs:
+  retention:
+    if: ${{ vars.STRANGERTALKS_RETENTION_ENABLED == 'true' }}
+    runs-on: ubuntu-24.04
+    env:
+      EXPECTED_SHA: ${{ github.sha }}
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || vars.SUPABASE_DATABASE_URL }}
+      MIX_ENV: prod
+
+    steps:
+      - name: Checkout exact retention operational source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          fetch-depth: 1
+
+      - name: Prove exact source authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          checked_out_sha=$(git rev-parse HEAD)
+          echo "RETENTION_WORKFLOW_SOURCE_SHA=$GITHUB_SHA"
+          echo "RETENTION_CHECKED_OUT_OPS_SHA=$checked_out_sha"
+          test "$checked_out_sha" = "$EXPECTED_SHA"
+          test "$checked_out_sha" = "$GITHUB_SHA"
+          git status --porcelain
+          test -f lib/mix/tasks/strangertalks.retention.ex
+          test -f lib/strangertalks_new/retention_cleanup.ex
+          test -f ops/run_retention.sh
+
+      - name: Guard authoritative production database credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_DATABASE_URL:-}" ]; then
+            echo "retention_database_url_present=false"
+            echo "RETENTION_RESULT=BLOCKED_MISSING_DATABASE_CREDENTIAL"
+            exit 2
+          fi
+          echo "retention_database_url_present=true"
+          echo "retention_database_authority=supabase"
+          echo "retention_render_database_fallback=false"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex and Rebar
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install production dependencies
+        run: mix deps.get --only prod
+
+      - name: Run canonical retention task
+        shell: bash
+        env:
+          DATABASE_URL: ${{ env.SUPABASE_DATABASE_URL }}
+          PHX_HOST: retention.invalid
+          POOL_SIZE: '2'
+        run: |
+          set -euo pipefail
+          bash ops/run_retention.sh
