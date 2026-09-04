@@ -24,6 +24,7 @@ import {
   applyIcebreakerSnapshot, dismissIcebreaker, initialIcebreakerState, resetIcebreakerState, visibleIcebreaker
 } from "./icebreakers.mjs"
 import {AmbientAudioController} from "./ambient_audio.mjs"
+import "./normal_media_runtime.mjs"
 import {
   MAX_PHOTO_BYTES, MAX_PHOTO_DIMENSION, isApprovedPhotoType, validPhotoBlob, viewOnceDraftMatchesRuntime
 } from "./view_once.mjs"
@@ -134,6 +135,8 @@ function accountFetch(path, options = {}) {
 function announce(message) { $("#status").textContent = message }
 
 function presentScreen(name) {
+  app.liveCall?.setConversationSurfaceActive(name === "conversation")
+  if (name !== "conversation") releaseVoiceCaptureForNavigation()
   document.querySelectorAll("[data-screen]").forEach((node) => node.classList.toggle("active", node.dataset.screen === name))
   $("#expressive-composer").hidden = name !== "conversation"
   if (name !== "conversation") closeExpressivePicker(false)
@@ -335,6 +338,8 @@ async function createIdentity(replacing) {
   await putRecord({id: identityKey, type: "identity", value: app.identity, updated_at: now()})
 }
 
+let socketBootFailures = 0
+
 function connectSocket() {
   if (!app.identity?.token) return
   if (app.socket) {
@@ -346,7 +351,18 @@ function connectSocket() {
     reconnectAfterMs: socketReconnectAfterMs,
     rejoinAfterMs: channelRejoinAfterMs
   })
-  app.socket.onError(() => { updateLocalConnection("reconnecting"); announce("Connection interrupted. Reconnecting.") })
+  app.socket.onOpen(() => { socketBootFailures = 0 })
+  app.socket.onError(() => {
+    updateLocalConnection("reconnecting")
+    announce("Connection interrupted. Reconnecting.")
+    if (!app.participantJoined) {
+      socketBootFailures++
+      if (socketBootFailures >= 2) {
+        socketBootFailures = 0
+        recoverIdentity().catch(() => {})
+      }
+    }
+  })
   app.socket.onClose(() => { if (app.conversationId) { updateLocalConnection("recovery") } })
   app.socket.connect()
   app.participant = app.socket.channel(`participant:${app.identity.participant_id}`, {})
@@ -3670,6 +3686,11 @@ function closeVoiceStream() {
   $("#voice-recording-waveform")?.classList.remove("active")
 }
 
+function releaseVoiceCaptureForNavigation() {
+  app.voice.captureRequestId++
+  closeVoiceStream()
+}
+
 async function requestVoiceRecording() {
   const warning = await getRecord("settings:voice-warning:v1")
   if (!warningAcknowledged(warning)) { $("#voice-warning").hidden = false; return }
@@ -4421,7 +4442,15 @@ function displayReaction(payload) {
   const item = document.createElement("div")
   item.className = "floating-reaction"
   item.setAttribute("role", "status")
-  item.innerHTML = `<span>${payload.emoji || "❤️"}</span> <span class="sr-only">${payload.label || "Reaction"}</span>`
+
+  const emoji = document.createElement("span")
+  emoji.textContent = payload?.emoji || "❤️"
+
+  const label = document.createElement("span")
+  label.className = "sr-only"
+  label.textContent = payload?.label || "Reaction"
+
+  item.append(emoji, document.createTextNode(" "), label)
   container.appendChild(item)
 
   const ring = getStrangerRing()
@@ -4437,7 +4466,11 @@ function displayReaction(payload) {
 }
 
 function initLiveCallCoordinator() {
-  if (app.liveCall) return app.liveCall
+  const surfaceActive = Boolean(document.querySelector('[data-screen="conversation"]')?.classList.contains("active"))
+  if (app.liveCall) {
+    app.liveCall.setConversationSurfaceActive(surfaceActive)
+    return app.liveCall
+  }
 
   const localVideoEl = $("#live-call-local-video")
   const remoteVideoEl = $("#live-call-remote-video")
@@ -4494,6 +4527,7 @@ function initLiveCallCoordinator() {
   })
 
   app.liveCall.setVideoElements(localVideoEl, remoteVideoEl)
+  app.liveCall.setConversationSurfaceActive(surfaceActive)
   return app.liveCall
 }
 
@@ -4574,23 +4608,7 @@ function renderLiveCallState(state) {
 function applyCallStateSync(callState) {
   if (!callState) return
   const coord = initLiveCallCoordinator()
-  if (callState.status === "ACTIVE" || callState.status === "CONNECTING") {
-    coord.callAttemptId = callState.call_attempt_id
-    coord.role = callState.role
-    coord.callType = callState.call_type
-    coord.mediaGeneration = callState.media_generation || 1
-    coord.selfMuted = callState.self_muted || false
-    coord.peerMuted = callState.peer_muted || false
-    coord.activeAt = callState.active_at
-    coord.status = callState.status === "ACTIVE" ? CALL_STATUS.ACTIVE : CALL_STATUS.CONNECTING
-    renderLiveCallState(coord.getState())
-  } else if (callState.status === "PENDING") {
-    coord.callAttemptId = callState.call_attempt_id
-    coord.role = callState.role
-    coord.callType = callState.call_type
-    coord.status = callState.role === "caller" ? CALL_STATUS.PENDING_OUTGOING : CALL_STATUS.PENDING_INCOMING
-    renderLiveCallState(coord.getState())
-  }
+  if (coord.applyCallStateSync(callState)) renderLiveCallState(coord.getState())
 }
 
 $("#btn-voice-call")?.addEventListener("click", async () => {

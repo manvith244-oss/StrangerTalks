@@ -432,6 +432,10 @@ test("F04 foreground and background visibility do not replace Conversation runti
   const peer = await boot(browser)
   try {
     await matchPair(user.page, peer.page)
+    await user.page.waitForFunction(() => {
+      const state = window.__f04RuntimeProbe.state()
+      return Boolean(state.conversationId && state.currentEpochId && state.topic)
+    }, null, {timeout: WAIT})
     const beforeState = await user.page.evaluate(() => window.__f04RuntimeProbe.state())
     const beforeMetrics = await channelMetrics(user.page)
     const topic = lastTopic(beforeMetrics)

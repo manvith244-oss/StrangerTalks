@@ -5,7 +5,7 @@ config :strangertalks_new, StrangertalksNew.Repo,
   username: System.get_env("STRANGERTALKS_LOCAL_DB_USER", "strangertalks_local"),
   password: System.get_env("STRANGERTALKS_LOCAL_DB_PASSWORD"),
   hostname: "localhost",
-  database: "strangertalks_new_dev",
+  database: System.get_env("STRANGERTALKS_LOCAL_DB_NAME", "strangertalks_new_dev"),
   stacktrace: true,
   show_sensitive_data_on_connection_error: false,
   pool_size: 10
@@ -51,6 +51,14 @@ config :strangertalks_new, StrangertalksNewWeb.Endpoint,
 
 # Enable dev routes for dashboard and mailbox
 config :strangertalks_new, dev_routes: true
+
+# Relax participant issuance limits in development to allow local reloads and testing
+config :strangertalks_new,
+  participant_issuance_policies: [
+    {:participant_issuance_burst, 600, 60_000},
+    {:participant_recent_identity_slots, 1200, 15 * 60_000},
+    {:participant_identity_rotation, 2000, 60 * 60_000}
+  ]
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $metadata$message\n"
