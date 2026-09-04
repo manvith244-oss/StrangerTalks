@@ -35,7 +35,8 @@ defmodule StrangertalksNew.AgentSystemsFakeProvider do
         result
 
       :error ->
-        raise ArgumentError, "no AgentSystems fake-provider response scripted for #{inspect(agent_id)}"
+        raise ArgumentError,
+              "no AgentSystems fake-provider response scripted for #{inspect(agent_id)}"
     end
   end
 
