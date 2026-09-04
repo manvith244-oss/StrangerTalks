@@ -58,9 +58,9 @@ from pathlib import Path
 p=Path('lib/strangertalks_new/conversation_lifecycle/conversation_server.ex')
 s=p.read_text()
 old='''        case DynamicSupervisor.start_child(
-                 StrangertalksNew.ConversationDynamicSupervisor,
-                 {__MODULE__, %{conversation_id: conversation_id}}
-               ) do'''
+               StrangertalksNew.ConversationDynamicSupervisor,
+               {__MODULE__, %{conversation_id: conversation_id}}
+             ) do'''
 new='''        child_spec =
           Supervisor.child_spec(
             {__MODULE__, %{conversation_id: conversation_id}},
