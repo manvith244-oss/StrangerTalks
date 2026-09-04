@@ -1,0 +1,320 @@
+name: T09 NET 003 Independent Verification
+
+on:
+  push:
+    branches:
+      - team9/net-003-independent-verification
+
+permissions:
+  contents: read
+
+env:
+  T05_RED: 77475e8fc42b4054db5f123bf96a97c9caa6392b
+  T05_CANDIDATE: f68a039af2f1267e4222036e787e0954cf8f5266
+  T05_CANDIDATE_TREE: 1e5b82dcaaa743398beb1fd182df586d83989de2
+
+jobs:
+  exact-source-and-adverse-network:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Prove exact candidate identity and proof-only branch scope
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse "$T05_CANDIDATE")" = "$T05_CANDIDATE"
+          test "$(git rev-parse "$T05_CANDIDATE^{tree}")" = "$T05_CANDIDATE_TREE"
+          test "$(git rev-parse "$T05_CANDIDATE^")" = "$T05_RED"
+          test "$(git diff --name-only "$T05_RED" "$T05_CANDIDATE")" = "priv/static/assets/live_call.mjs"
+          git diff --check "$T05_RED" "$T05_CANDIDATE"
+          mapfile -t proof_delta < <(git diff --name-only "$T05_CANDIDATE" HEAD)
+          for path in "${proof_delta[@]}"; do
+            case "$path" in
+              test/js/t09_net_003_independent_test.mjs|test/js/t09_net_003_real_turn_browser_test.mjs|.github/workflows/t09-net-003-independent-verification.yml) ;;
+              *) echo "UNEXPECTED_T09_PRODUCT_DELTA=$path"; exit 1 ;;
+            esac
+          done
+          echo "T05_EXACT_IDENTITY=PASS"
+          echo "T05_PRODUCT_DELTA=priv/static/assets/live_call.mjs"
+          echo "T09_PROOF_ONLY_SCOPE=PASS"
+
+      - name: Run same independent oracle against preserved RED and require causal RED
+        run: |
+          set -euo pipefail
+          PROOF_SHA="$(git rev-parse HEAD)"
+          cp test/js/t09_net_003_independent_test.mjs /tmp/t09_net_003_independent_test.mjs
+          git checkout --detach "$T05_RED"
+          cp /tmp/t09_net_003_independent_test.mjs test/js/t09_net_003_independent_test.mjs
+          set +e
+          node --test --test-concurrency=1 test/js/t09_net_003_independent_test.mjs > /tmp/t09-red.log 2>&1
+          rc=$?
+          set -e
+          cat /tmp/t09-red.log
+          if [ "$rc" -eq 0 ]; then
+            echo "EXPECTED_RED_BUT_ORACLE_PASSED"
+            exit 1
+          fi
+          if ! grep -Eq 'fatal authority helper must exist|credential timeout did not settle|initializeWebRTC must settle after credential timeout|call:end' /tmp/t09-red.log; then
+            echo "RED_DID_NOT_FAIL_FOR_NET003_CONTRACT"
+            exit 1
+          fi
+          echo "T09_SAME_ORACLE_RED=EXPECTED_FAILURE"
+          git reset --hard "$T05_RED"
+          git clean -fd
+          git checkout --detach "$PROOF_SHA"
+
+      - name: Run independent adverse-network oracle against exact candidate
+        run: |
+          set -euo pipefail
+          PROOF_SHA="$(git rev-parse HEAD)"
+          cp test/js/t09_net_003_independent_test.mjs /tmp/t09_net_003_independent_test.mjs
+          git checkout --detach "$T05_CANDIDATE"
+          cp /tmp/t09_net_003_independent_test.mjs test/js/t09_net_003_independent_test.mjs
+          node --test --test-concurrency=1 test/js/t09_net_003_independent_test.mjs
+          echo "T09_INDEPENDENT_ADVERSE_NETWORK=PASS"
+          rm test/js/t09_net_003_independent_test.mjs
+          test -z "$(git status --porcelain)"
+          git checkout --detach "$PROOF_SHA"
+
+      - name: Consume inherited T04 T05 T06 client authority regressions on exact candidate
+        run: |
+          set -euo pipefail
+          PROOF_SHA="$(git rev-parse HEAD)"
+          git checkout --detach "$T05_CANDIDATE"
+          node --test --test-concurrency=1 \
+            test/js/live_call_test.mjs \
+            test/js/live_call_signal_queue_regression_test.mjs \
+            test/js/team4_media_authority_test.mjs \
+            test/js/team4_initiation_aba_test.mjs \
+            test/js/team4_call_operation_race_test.mjs \
+            test/js/team6_media_gate_test.mjs \
+            test/js/team6_media_privacy_test.mjs \
+            test/js/t05_call_end_aba_closure_test.mjs \
+            test/js/t05_net_003_credential_timeout_test.mjs \
+            test/js/t05_net_003_ice_failure_test.mjs \
+            test/js/normal_media_test.mjs \
+            test/js/fx04_media_navigation_boundary_test.mjs \
+            test/js/view_once_test.mjs
+          echo "T09_INHERITED_CLIENT_REGRESSIONS=PASS"
+          test -z "$(git status --porcelain)"
+          git checkout --detach "$PROOF_SHA"
+
+      - name: Final source diff and clean worktree proof
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -z "$(git status --porcelain)"
+          echo "T09_SOURCE_JOB_CLEAN_TREE=PASS"
+
+  server-authority-regressions:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: f68a039af2f1267e4222036e787e0954cf8f5266
+          fetch-depth: 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install server dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Prepare database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Run consumed server media and TURN authority contracts
+        run: |
+          mix test --trace \
+            test/strangertalks_new/team6_media_authority_test.exs \
+            test/strangertalks_new/conversation_live_call_test.exs \
+            test/strangertalks_new/team6_turn_provider_test.exs \
+            test/strangertalks_new/c11_policy_test.exs
+      - name: Probe known external T02 terminal regression without patching it
+        id: t02_probe
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          mix test --trace test/strangertalks_new_web/controllers/team2_normal_media_terminal_test.exs | tee /tmp/t09-t02-probe.log
+      - name: Record T02 probe classification input
+        if: always()
+        run: |
+          if [ "${{ steps.t02_probe.outcome }}" = "success" ]; then
+            echo "T02_EXTERNAL_PROBE=NOT_REPRODUCED"
+          else
+            echo "T02_EXTERNAL_PROBE=REPRODUCED_REQUIRES_LOG_CLASSIFICATION"
+            cat /tmp/t09-t02-probe.log || true
+          fi
+      - name: Server clean-tree proof
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain)"
+          echo "T09_SERVER_JOB_CLEAN_TREE=PASS"
+
+  chromium-local-turn-relay:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4000
+      T09_STATIC_BASE_URL: http://127.0.0.1:8008
+      T09_TURN_URL: turn:127.0.0.1:3478?transport=udp
+      T09_TURN_USERNAME: t09
+      T09_TURN_CREDENTIAL: t09-secret
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Preserve T09 browser oracle then checkout exact product candidate
+        run: |
+          cp test/js/t09_net_003_real_turn_browser_test.mjs /tmp/t09_net_003_real_turn_browser_test.mjs
+          git checkout --detach "$T05_CANDIDATE"
+          cp /tmp/t09_net_003_real_turn_browser_test.mjs test/js/t09_net_003_real_turn_browser_test.mjs
+          test "$(git rev-parse HEAD)" = "$T05_CANDIDATE"
+          test "$(git rev-parse HEAD^{tree})" = "$T05_CANDIDATE_TREE"
+      - name: Install application browser TURN and media dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+          sudo apt-get update -qq
+          sudo apt-get install -y coturn ffmpeg
+      - name: Start independently configured isolated coturn relay
+        run: |
+          set -euo pipefail
+          sudo systemctl stop coturn 2>/dev/null || true
+          sudo pkill -x turnserver 2>/dev/null || true
+          cat > /tmp/t09-turnserver.conf <<'EOF'
+          listening-ip=127.0.0.1
+          relay-ip=127.0.0.1
+          listening-port=3478
+          min-port=49300
+          max-port=49380
+          fingerprint
+          lt-cred-mech
+          user=t09:t09-secret
+          realm=t09.local
+          allow-loopback-peers
+          no-multicast-peers
+          no-cli
+          no-tls
+          no-dtls
+          EOF
+          sudo turnserver -c /tmp/t09-turnserver.conf > /tmp/t09-turn.log 2>&1 &
+          echo $! > /tmp/t09-turn.pid
+          for attempt in $(seq 1 30); do
+            if sudo ss -lunp | grep ':3478' | grep -Fq 'turnserver'; then
+              echo "T09_LOCAL_TURN_LISTENER=READY"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/t09-turn.log
+          exit 1
+      - name: Start static candidate source server for browser coordinator instrumentation
+        run: |
+          python3 -m http.server 8008 --bind 127.0.0.1 > /tmp/t09-static.log 2>&1 &
+          echo $! > /tmp/t09-static.pid
+          for attempt in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:8008/ >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/t09-static.log
+          exit 1
+      - name: Run independent real Chromium local TURN relay and fatal authority proof
+        run: |
+          node --test --test-concurrency=1 test/js/t09_net_003_real_turn_browser_test.mjs
+          echo "T09_CHROMIUM_LOCAL_REAL_TURN_RELAY=PASS"
+      - name: Prepare Phoenix browser regression database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start exact candidate Phoenix runtime
+        run: |
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/t09-phoenix.log 2>&1 &
+          echo $! > /tmp/t09-phoenix.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 || curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/" >/dev/null 2>&1; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/t09-phoenix.pid)" 2>/dev/null; then cat /tmp/t09-phoenix.log; exit 1; fi
+            sleep 1
+          done
+          cat /tmp/t09-phoenix.log
+          exit 1
+      - name: Consume relevant real-browser media lifecycle regressions
+        run: |
+          node --test --test-concurrency=1 test/js/team4_media_browser_test.mjs test/js/normal_media_browser_test.mjs
+          node --test --test-concurrency=1 --test-name-pattern='Feature 1Q E2E-(RTV|REACTION|RING)' test/js/browser_e2e_test.mjs
+          echo "T09_BROWSER_MEDIA_REGRESSIONS=PASS"
+      - name: Candidate clean-tree proof
+        run: |
+          rm test/js/t09_net_003_real_turn_browser_test.mjs
+          git diff --check
+          test -z "$(git status --porcelain)"
+          echo "T09_BROWSER_CANDIDATE_CLEAN_TREE=PASS"
+      - name: Cleanup runtimes
+        if: always()
+        run: |
+          if [ -f /tmp/t09-phoenix.pid ]; then kill "$(cat /tmp/t09-phoenix.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/t09-static.pid ]; then kill "$(cat /tmp/t09-static.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/t09-turn.pid ]; then sudo kill "$(cat /tmp/t09-turn.pid)" 2>/dev/null || true; fi
