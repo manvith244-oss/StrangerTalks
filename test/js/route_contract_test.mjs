@@ -135,6 +135,38 @@ test("terminal and unavailable Conversation routes remain canonical locations", 
   }
 })
 
+test("terminal route ownership follows canonical activity truth without erasing pending terminal presentation", () => {
+  for (const path of ["/conversation/ended", "/conversation/unavailable"]) {
+    assert.deepEqual(resolveRequestedRoute(parseRoute(path), active), {
+      path: "/conversation",
+      screen: "conversation",
+      replace: true,
+      reason: "active_conversation_supersedes_stale_location"
+    })
+
+    const pending = resolveRequestedRoute(parseRoute(path), {
+      canonical_state: "AVAILABLE",
+      terminal_retention_pending: true
+    })
+    assert.equal(pending.path, path)
+    assert.equal(pending.replace, false)
+
+    const unknown = resolveRequestedRoute(parseRoute(path), available)
+    assert.equal(unknown.path, path)
+    assert.equal(unknown.replace, false)
+
+    assert.deepEqual(resolveRequestedRoute(parseRoute(path), {
+      canonical_state: "AVAILABLE",
+      terminal_retention_pending: false
+    }), {
+      path: "/",
+      screen: "doors",
+      replace: true,
+      reason: "available_supersedes_resolved_terminal_location"
+    })
+  }
+})
+
 test("activity events only move activity-owned routes", () => {
   assert.equal(resolveActivityEventRoute(parseRoute("/matchmaking"), "match_found").path, "/conversation")
   assert.equal(resolveActivityEventRoute(parseRoute("/you"), "match_found").path, "/you")

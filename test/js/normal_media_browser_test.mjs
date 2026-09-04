@@ -2,10 +2,12 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import {execFileSync} from "node:child_process"
 import {mkdirSync, rmSync} from "node:fs"
+import {tmpdir} from "node:os"
+import {join} from "node:path"
 import {chromium} from "playwright"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
-const SCREEN_DIR = "/tmp/team9-normal-media-browser"
+const SCREEN_DIR = join(tmpdir(), "team9-normal-media-browser")
 const WAIT_MS = 12_000
 
 function validJpeg(entropy = 0x12) {

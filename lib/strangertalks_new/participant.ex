@@ -14,6 +14,7 @@ defmodule StrangertalksNew.Participant do
       ],
       default: :OFFLINE
 
+    field :credential_version, :integer, default: 0
     field :last_active_at, :utc_datetime_usec
     field :created_at, :utc_datetime_usec
   end
