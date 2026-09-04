@@ -7,102 +7,24 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
     TrendBridgeResearch
   }
 
-  defmodule FakeProvider do
-    @behaviour StrangertalksNew.AgentSystems.Provider
-
-    @impl true
-    def structured(agent_id, payload, _instructions, _schema, _opts) do
-      send(Application.fetch_env!(:strangertalks_new, :agent_systems_test_pid), {
-        :agent_request,
-        agent_id,
-        payload
-      })
-
-      case agent_id do
-        "learning_advisor" ->
-          {:ok,
-           %{
-             "recommendations" => [
-               %{
-                 "title" => "Test queue recovery before changing thresholds",
-                 "hypothesis" => "Recovery behavior may explain the observed drop.",
-                 "evidence" => "The supplied aggregate snapshot shows recovery activation.",
-                 "experiment" => "Run a small reviewed recovery-copy experiment.",
-                 "confidence" => "medium"
-               }
-             ]
-           }}
-
-        "safety_review_assistant" ->
-          mode = Application.get_env(:strangertalks_new, :safety_agent_test_mode, :normal)
-
-          case mode do
-            :unsafe_high_without_human ->
-              {:ok,
-               %{
-                 "severity" => "critical",
-                 "recommendation" => "permanent_ban",
-                 "rationale" => "Severe threat language.",
-                 "needs_human_review" => false
-               }}
-
-            _ ->
-              {:ok,
-               %{
-                 "severity" => "medium",
-                 "recommendation" => "warning",
-                 "rationale" => "The supplied text warrants contextual human review.",
-                 "needs_human_review" => true
-               }}
-          end
-
-        "trend_bridge_research" ->
-          {:ok,
-           %{
-             "candidates" => [
-               %{
-                 "tier" => "universal",
-                 "bridge" => "What small thing has made this week better than expected?",
-                 "rationale" => "Turns a current-week signal into ordinary lived experience."
-               },
-               %{
-                 "tier" => "broad",
-                 "bridge" =>
-                   "What is something everyone seems to be talking about that you actually enjoy?",
-                 "rationale" => "Keeps the prompt broad without requiring specialist knowledge."
-               },
-               %{
-                 "tier" => "niche",
-                 "bridge" =>
-                   "Has a recent match, movie, or festival changed your mood this week?",
-                 "rationale" =>
-                   "Offers optional cultural anchors without assuming one shared interest."
-               }
-             ]
-           }}
-      end
-    end
-  end
+  alias StrangertalksNew.AgentSystemsFakeProvider, as: FakeProvider
 
   setup do
-    previous_pid = Application.get_env(:strangertalks_new, :agent_systems_test_pid)
     previous_learning = Application.get_env(:strangertalks_new, :learning_advisor)
     previous_safety = Application.get_env(:strangertalks_new, :safety_review_assistant)
     previous_trend = Application.get_env(:strangertalks_new, :trend_bridge_research)
-    previous_mode = Application.get_env(:strangertalks_new, :safety_agent_test_mode)
 
-    Application.put_env(:strangertalks_new, :agent_systems_test_pid, self())
+    FakeProvider.reset()
+    script_default_responses()
+
     Application.put_env(:strangertalks_new, :learning_advisor, provider: FakeProvider)
     Application.put_env(:strangertalks_new, :safety_review_assistant, provider: FakeProvider)
     Application.put_env(:strangertalks_new, :trend_bridge_research, provider: FakeProvider)
-    Application.put_env(:strangertalks_new, :safety_agent_test_mode, :normal)
 
     on_exit(fn ->
-      restore(:agent_systems_test_pid, previous_pid)
       restore(:learning_advisor, previous_learning)
       restore(:safety_review_assistant, previous_safety)
       restore(:trend_bridge_research, previous_trend)
-      restore(:safety_agent_test_mode, previous_mode)
     end)
 
     :ok
@@ -126,7 +48,9 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
     assert result.source_rows == 1
     assert length(result.recommendations) == 1
 
-    assert_receive {:agent_request, "learning_advisor", %{analytics: [payload]}}
+    assert [request] = FakeProvider.requests()
+    assert request.agent_id == "learning_advisor"
+    assert %{analytics: [payload]} = request.payload
     refute Map.has_key?(payload, :participant_id)
     refute Map.has_key?(payload, :conversation_id)
   end
@@ -141,7 +65,7 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
                }
              ])
 
-    refute_receive {:agent_request, "learning_advisor", _}, 20
+    assert FakeProvider.requests() == []
   end
 
   test "Safety Review Assistant is advisory and strips identity authority" do
@@ -158,13 +82,23 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
     assert result.mutation_authority == false
     assert result.needs_human_review == true
 
-    assert_receive {:agent_request, "safety_review_assistant", payload}
-    refute Map.has_key?(payload, :participant_id)
-    refute Map.has_key?(payload, "participant_id")
+    assert [request] = FakeProvider.requests()
+    assert request.agent_id == "safety_review_assistant"
+    refute Map.has_key?(request.payload, :participant_id)
+    refute Map.has_key?(request.payload, "participant_id")
   end
 
   test "Safety Review Assistant rejects high punitive output without human review" do
-    Application.put_env(:strangertalks_new, :safety_agent_test_mode, :unsafe_high_without_human)
+    FakeProvider.script(
+      "safety_review_assistant",
+      {:ok,
+       %{
+         "severity" => "critical",
+         "recommendation" => "permanent_ban",
+         "rationale" => "Severe threat language.",
+         "needs_human_review" => false
+       }}
+    )
 
     assert {:error, :invalid_safety_review_output} =
              SafetyReviewAssistant.review(%{
@@ -176,7 +110,16 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
   end
 
   test "media safety review can never bypass human review" do
-    Application.put_env(:strangertalks_new, :safety_agent_test_mode, :unsafe_high_without_human)
+    FakeProvider.script(
+      "safety_review_assistant",
+      {:ok,
+       %{
+         "severity" => "critical",
+         "recommendation" => "permanent_ban",
+         "rationale" => "Severe threat language.",
+         "needs_human_review" => false
+       }}
+    )
 
     assert {:error, :invalid_safety_review_output} =
              SafetyReviewAssistant.review(%{
@@ -184,6 +127,18 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
                status: "SUBMITTED",
                evidence: "[View-Once Video Evidence Attached]",
                media_attached: true
+             })
+  end
+
+  test "Safety Review Assistant propagates the existing provider error unchanged" do
+    FakeProvider.script("safety_review_assistant", {:error, :agent_unavailable})
+
+    assert {:error, :agent_unavailable} =
+             SafetyReviewAssistant.review(%{
+               category: "HARASSMENT",
+               status: "SUBMITTED",
+               evidence: "bounded evidence",
+               media_attached: false
              })
   end
 
@@ -199,9 +154,10 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
     assert result.publication_authority == false
     assert length(result.candidates) == 3
 
-    assert_receive {:agent_request, "trend_bridge_research", payload}
-    assert payload.language == "en"
-    assert length(payload.signals) == 2
+    assert [request] = FakeProvider.requests()
+    assert request.agent_id == "trend_bridge_research"
+    assert request.payload.language == "en"
+    assert length(request.payload.signals) == 2
   end
 
   test "Trend research rejects unsupported languages and oversized signals before provider" do
@@ -210,7 +166,62 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
     assert {:error, :invalid_trend_research} =
              TrendBridgeResearch.research("en", [String.duplicate("x", 241)])
 
-    refute_receive {:agent_request, "trend_bridge_research", _}, 20
+    assert FakeProvider.requests() == []
+  end
+
+  defp script_default_responses do
+    FakeProvider.script(
+      "learning_advisor",
+      {:ok,
+       %{
+         "recommendations" => [
+           %{
+             "title" => "Test queue recovery before changing thresholds",
+             "hypothesis" => "Recovery behavior may explain the observed drop.",
+             "evidence" => "The supplied aggregate snapshot shows recovery activation.",
+             "experiment" => "Run a small reviewed recovery-copy experiment.",
+             "confidence" => "medium"
+           }
+         ]
+       }}
+    )
+
+    FakeProvider.script(
+      "safety_review_assistant",
+      {:ok,
+       %{
+         "severity" => "medium",
+         "recommendation" => "warning",
+         "rationale" => "The supplied text warrants contextual human review.",
+         "needs_human_review" => true
+       }}
+    )
+
+    FakeProvider.script(
+      "trend_bridge_research",
+      {:ok,
+       %{
+         "candidates" => [
+           %{
+             "tier" => "universal",
+             "bridge" => "What small thing has made this week better than expected?",
+             "rationale" => "Turns a current-week signal into ordinary lived experience."
+           },
+           %{
+             "tier" => "broad",
+             "bridge" =>
+               "What is something everyone seems to be talking about that you actually enjoy?",
+             "rationale" => "Keeps the prompt broad without requiring specialist knowledge."
+           },
+           %{
+             "tier" => "niche",
+             "bridge" => "Has a recent match, movie, or festival changed your mood this week?",
+             "rationale" =>
+               "Offers optional cultural anchors without assuming one shared interest."
+           }
+         ]
+       }}
+    )
   end
 
   defp restore(key, nil), do: Application.delete_env(:strangertalks_new, key)
