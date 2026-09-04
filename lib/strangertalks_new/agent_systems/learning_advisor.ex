@@ -47,6 +47,27 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
     :aggregation_level
   ]
 
+  @forbidden_personal_keys [
+    :participant_id,
+    :participant_a_id,
+    :participant_b_id,
+    :conversation_id,
+    :match_id,
+    :message_id,
+    :report_id,
+    :reporter_context,
+    :review_notes,
+    "participant_id",
+    "participant_a_id",
+    "participant_b_id",
+    "conversation_id",
+    "match_id",
+    "message_id",
+    "report_id",
+    "reporter_context",
+    "review_notes"
+  ]
+
   def advise_latest(limit \\ 12)
 
   def advise_latest(limit) when is_integer(limit) and limit in 1..@max_rows do
@@ -137,28 +158,18 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
     end
   end
 
-  defp personal_key_present?(row) do
-    forbidden = [
-      :participant_id,
-      :participant_a_id,
-      :participant_b_id,
-      :conversation_id,
-      :message_id,
-      :reporter_context,
-      :review_notes,
-      "participant_id",
-      "participant_a_id",
-      "participant_b_id",
-      "conversation_id",
-      "message_id",
-      "reporter_context",
-      "review_notes"
-    ]
-
-    Enum.any?(forbidden, &Map.has_key?(row, &1)) or
-      Map.get(row, :contains_personal_data) == true or
-      Map.get(row, "contains_personal_data") == true
+  defp personal_key_present?(value) when is_map(value) do
+    Map.get(value, :contains_personal_data) == true or
+      Map.get(value, "contains_personal_data") == true or
+      Enum.any?(value, fn {key, nested} ->
+        key in @forbidden_personal_keys or personal_key_present?(nested)
+      end)
   end
+
+  defp personal_key_present?(value) when is_list(value),
+    do: Enum.any?(value, &personal_key_present?/1)
+
+  defp personal_key_present?(_value), do: false
 
   defp normalize_values(%Decimal{} = value), do: Decimal.to_string(value, :normal)
   defp normalize_values(%Date{} = value), do: Date.to_iso8601(value)

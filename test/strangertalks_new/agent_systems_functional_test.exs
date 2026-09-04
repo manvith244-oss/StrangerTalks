@@ -144,6 +144,25 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
     refute_receive {:agent_request, "learning_advisor", _}, 20
   end
 
+  test "Learning Advisor rejects nested private identifiers before provider invocation" do
+    assert {:error, :personal_data_not_allowed} =
+             LearningAdvisor.advise([
+               %{
+                 analytics_period: :DAILY,
+                 source_type: :SYSTEM,
+                 trend_category: %{
+                   nested: %{
+                     "conversation_id" => Ecto.UUID.generate(),
+                     report_id: Ecto.UUID.generate()
+                   }
+                 },
+                 aggregation_level: :AGGREGATED
+               }
+             ])
+
+    refute_receive {:agent_request, "learning_advisor", _}, 20
+  end
+
   test "Safety Review Assistant is advisory and strips identity authority" do
     assert {:ok, result} =
              SafetyReviewAssistant.review(%{
