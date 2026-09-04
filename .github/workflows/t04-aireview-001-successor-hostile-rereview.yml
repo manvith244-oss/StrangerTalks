@@ -1,0 +1,137 @@
+name: T04 AIREVIEW 001 Successor Hostile Rereview
+
+on:
+  push:
+    branches:
+      - team4/aireview-001-hostile-rereview-53759a
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: t04-aireview-001-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  hostile-rereview:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      T07_CANDIDATE: 53759a00cac4a19c6dca9ad2cadf7f713a324218
+      T07_TREE: d329b5a894b19b33265be6d7875a3d12476c214f
+      T07_PARENT: 492fae85c54d91f9c88d0574900aef3479e0a2fe
+
+    steps:
+      - name: Checkout exact T04 proof head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove T07 candidate identity and proof-only ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "T04_PROOF_HEAD=$(git rev-parse HEAD)"
+          echo "T07_CANDIDATE=$T07_CANDIDATE"
+          test "$(git rev-parse "$T07_CANDIDATE^{tree}")" = "$T07_TREE"
+          test "$(git rev-parse "$T07_CANDIDATE^")" = "$T07_PARENT"
+          test "$(git rev-list --parents -n 1 "$T07_CANDIDATE" | awk '{print NF}')" = "2"
+          test "$(git merge-base "$T07_CANDIDATE" HEAD)" = "$T07_CANDIDATE"
+
+          expected_candidate_delta=$(printf '%s\n' \
+            'lib/strangertalks_new/agent_systems/learning_advisor.ex' \
+            'test/strangertalks_new/t07_ai_003_privacy_boundary_test.exs')
+          actual_candidate_delta=$(git diff --name-only "$T07_PARENT" "$T07_CANDIDATE")
+          printf '%s\n' "$actual_candidate_delta"
+          test "$actual_candidate_delta" = "$expected_candidate_delta"
+
+          expected_proof_delta=$(printf '%s\n' \
+            '.github/workflows/t04-aireview-001-successor-hostile-rereview.yml' \
+            'test/strangertalks_new/t04_aireview_001_successor_hostile_rereview_test.exs')
+          actual_proof_delta=$(git diff --name-only "$T07_CANDIDATE" HEAD)
+          printf '%s\n' "$actual_proof_delta"
+          test "$actual_proof_delta" = "$expected_proof_delta"
+
+          if git diff --name-only "$T07_CANDIDATE" HEAD | grep -E '^lib/'; then
+            echo 'T04 proof lane modified product source' >&2
+            exit 1
+          fi
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Hex Rebar and dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Run independent T04 hostile privacy matrix
+        run: mix test test/strangertalks_new/t04_aireview_001_successor_hostile_rereview_test.exs --trace
+
+      - name: Consume T07 privacy and provider regression surfaces
+        run: |
+          mix test \
+            test/strangertalks_new/t07_ai_003_privacy_boundary_test.exs \
+            test/strangertalks_new/t07_provider_failure_matrix_test.exs
+
+      - name: Consume A01 A02 A03 A04 and advisory authority regressions
+        run: |
+          mix test \
+            test/strangertalks_new/companion_test.exs \
+            test/strangertalks_new/companion_conversation_start_test.exs \
+            test/strangertalks_new/companion_open_ai_provider_test.exs \
+            test/strangertalks_new/agent_systems_provider_probe_test.exs \
+            test/strangertalks_new/agent_systems_functional_test.exs \
+            test/strangertalks_new/agent_systems_break_test.exs \
+            test/strangertalks_new/agent_systems_remediation_test.exs \
+            test/strangertalks_new/team7_intelligence_boundary_test.exs \
+            test/strangertalks_new_web/controllers/companion_controller_test.exs
+
+      - name: Consume Companion browser regression
+        run: node --test test/js/companion_test.mjs test/js/prompt_cards_test.mjs
+
+      - name: Prove no forbidden atom creation source path
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R -n -F 'String.to_atom(' lib/strangertalks_new/agent_systems
+          ! grep -R -n -E ':erlang\.(binary_to_atom|list_to_atom)' lib/strangertalks_new/agent_systems
+
+      - name: Prove final checkout clean and record exact evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=$(git status --porcelain --untracked-files=all)
+          printf '%s\n' "$status"
+          test -z "$status"
+          echo "T04_PROOF_SHA=$(git rev-parse HEAD)"
+          echo "T04_PROOF_TREE=$(git rev-parse 'HEAD^{tree}')"
+          echo "T07_TESTED_SHA=$T07_CANDIDATE"
+          echo "T07_TESTED_TREE=$(git rev-parse "$T07_CANDIDATE^{tree}")"
