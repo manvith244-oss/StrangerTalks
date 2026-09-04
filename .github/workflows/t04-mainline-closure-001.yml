@@ -1,0 +1,122 @@
+name: T04 Mainline Closure 001
+
+on:
+  push:
+    branches:
+      - team4/mainline-closure-001
+  workflow_dispatch:
+
+concurrency:
+  group: t04-mainline-closure-001-${{ github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  t04-mainline-closure:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      T04_MAIN_BASE: bc177c2fb932a309cd122da2ad808e9e7c2f85e3
+
+    steps:
+      - name: Checkout exact T04 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Prove current-main ancestry and candidate identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+          test "$(git merge-base "$T04_MAIN_BASE" HEAD)" = "$T04_MAIN_BASE"
+          echo "T04_MAINLINE_TESTED_SHA=$(git rev-parse HEAD)"
+          echo "T04_MAINLINE_TESTED_TREE=$(git rev-parse HEAD^{tree})"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+
+      - name: T04-owned DB and Block closure proofs
+        run: |
+          set -euo pipefail
+          mix test \
+            test/strangertalks_new/team4_db_security_closure_test.exs \
+            test/strangertalks_new/team4_mainline_block_retry_test.exs
+
+      - name: Existing hostile security and privacy boundary proofs
+        run: |
+          set -euo pipefail
+          mix test \
+            test/strangertalks_new/security_adversarial_test.exs \
+            test/strangertalks_new/team4_safety_boundary_test.exs \
+            test/strangertalks_new/matching_rules_test.exs \
+            test/strangertalks_new/relationship_consent_safety_review_test.exs \
+            test/strangertalks_new_web/channels/participant_channel_test.exs
+
+      - name: T04 candidate format and diff hygiene
+        run: |
+          set -euo pipefail
+          mix format --check-formatted \
+            lib/strangertalks_new/matching_rules.ex \
+            priv/repo/migrations/20260903144000_secure_supabase_public_schema.exs \
+            test/strangertalks_new/team4_db_security_closure_test.exs \
+            test/strangertalks_new/team4_mainline_block_retry_test.exs
+          git diff --check "$T04_MAIN_BASE"...HEAD
+          test -z "$(git status --porcelain)"
+
+      - name: Full precommit
+        run: |
+          set -euo pipefail
+          mix precommit
+          git diff --check "$T04_MAIN_BASE"...HEAD
+          test -z "$(git status --porcelain)"
+
+      - name: Prove final checkout clean
+        if: ${{ always() }}
+        run: |
+          git status --short --branch
+          git status --porcelain | tee /tmp/t04-mainline-status
+          test ! -s /tmp/t04-mainline-status
+
+      - name: Record exact candidate
+        if: ${{ always() }}
+        run: |
+          echo "T04_MAINLINE_TESTED_SHA=$(git rev-parse HEAD)"
+          echo "T04_MAINLINE_TESTED_TREE=$(git rev-parse HEAD^{tree})"
