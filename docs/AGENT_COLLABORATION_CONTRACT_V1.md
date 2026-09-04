@@ -4,7 +4,7 @@ Status: **NORMATIVE V1 COLLABORATION CONTRACT**
 
 Owner: **T-A08 — Agent Collaboration, Orchestration & Capability Contracts**
 
-Governance boundary: **T-A06 owns lifecycle/deployment/activation/governance truth**. T-A08 does not create a second Agent Master Registry. When the canonical T-A06 registry exists, this document cross-references it for Agent lifecycle and governance classifications. Until then, the Agent Command classifications frozen for T-A08 remain references only and must not be treated as a competing lifecycle source of truth.
+Governance boundary: **T-A06 owns lifecycle/deployment/activation/governance truth** in `docs/AGENT_MASTER_REGISTRY.md`. T-A08 does not create a second Agent Master Registry. T-A06-002 has produced that governance artifact on its candidate branch; this contract consumes/cross-references its Agent ownership/runtime classifications while treating acceptance, deployment, activation and governance holds as T-A06 truth. Until that registry is accepted/merged as canonical on `main`, this contract does not restate lifecycle status as an independent source of truth.
 
 This contract turns the current safe V1 property — **NO DIRECT AGENT-TO-AGENT COLLABORATION** — into an explicit collaboration boundary. It does not authorize a new Agent, activate a dormant Agent, create an orchestrator, or create a runtime dispatch layer.
 
@@ -135,7 +135,7 @@ Record only privacy-safe workflow metadata needed to prove execution, such as ca
 
 - **Semantic owner:** A02 Organizational Learning domain / Agent Command Team 2.
 - **Implementation:** `StrangertalksNew.AgentSystems.LearningAdvisor`.
-- **Operational status reference:** **SUPERSEDED FOR CURRENT V1 OPERATION / DORMANT MODEL RUNTIME**. T-A06 remains authoritative for lifecycle wording once its canonical registry lands.
+- **Operational status reference:** defer to `docs/AGENT_MASTER_REGISTRY.md`; the current T-A06-002 candidate classifies A02 organizational responsibility CURRENT, the deterministic V1 runtime CURRENT, and `LearningAdvisor` `SUPERSEDED_FOR_CURRENT_V1 / DORMANT`. This is a cross-reference, not T-A08 lifecycle authority.
 - **Allowed caller class:** no new current-V1 runtime caller admitted.
 - **Agent callers:** none.
 - **Request contract:** aggregate/system-only analytics projection; personal participant/conversation/message/report-context identifiers are rejected by implementation.
@@ -173,15 +173,16 @@ Record only privacy-safe workflow metadata needed to prove execution, such as ca
 
 - **Semantic owner:** A03 Safety Review Assistant domain / Agent Command Team 3.
 - **Implementation:** `StrangertalksNew.AgentSystems.SafetyReviewAssistant`.
+- **Governance/input hold reference:** `docs/AGENT_MASTER_REGISTRY.md` currently records sensitive-evidence external-provider enablement on HOLD pending input-truth hardening and coordinated security closure. This collaboration contract does not lift, narrow, or override that hold.
 - **Allowed caller class:** authorized operator/Safety review workflow.
 - **Agent callers:** none.
-- **Request contract:** existing Report category/status, bounded textual evidence, and boolean media-presence projection. Participant IDs, Conversation IDs and raw Safety media are outside the model payload.
+- **Request contract:** existing Report category/status, bounded textual evidence, and boolean media-presence projection. Participant IDs, Conversation IDs and raw Safety media are outside the model payload. This request description is a collaboration-contract boundary, not authorization to bypass the T-A06/T-A10 provider hold.
 - **Response contract:** severity, recommendation, rationale, required human-review flag, and `mutation_authority: false` after deterministic output validation.
 - **Data class:** `Safety-sensitive` + `operational`; receiving callers do not acquire raw Safety evidence rights beyond their pre-existing authorization.
 - **Authority class:** `advisory`.
 - **Mutation:** `mutation_authority = false`; A03 cannot ban, Block, punish, terminalize, mutate Report/SafetyReview/Matchmaking, or deploy.
 - **Failure:** bounded review error/unavailable result; canonical deterministic Safety continues independently and no weaker authority substitutes for it.
-- **Deadline:** provider-local timeout inside the authorized review call; no A2A root chain.
+- **Deadline:** provider-local timeout only when separately authorized by the governing provider/security boundary; no A2A root chain is created here.
 - **Cancellation/staleness:** recommendation remains advisory. Any effectful human/system action must be based on current canonical Safety/report authority; this contract creates no automatic post-model mutation path.
 - **Version:** `v1`.
 - **Provenance:** output remains A03 recommendation and must retain human-review requirement where validation requires it.
@@ -212,7 +213,7 @@ Provider execution is infrastructure, not Agent collaboration.
 Current shared model surface: `StrangertalksNew.Companion.OpenAIProvider` implementing the bounded Companion/AgentSystems provider contracts.
 
 - **Runtime owner:** provider/runtime organization (T-A04 boundary); Team 8 does not own provider implementation.
-- **Input:** only the projection supplied by the owning capability.
+- **Input:** only the projection supplied by the owning capability and only where governance/security admission permits external-provider execution.
 - **Output authority class:** `provider result`.
 - **Product authority:** none.
 - **Mutation authority:** none.
@@ -220,6 +221,7 @@ Current shared model surface: `StrangertalksNew.Companion.OpenAIProvider` implem
 - **Collaboration edge:** none. `Axx -> provider` is an infrastructure dependency, not `Axx -> Ayy`.
 - **Failure:** owning capability handles unavailable/invalid provider output according to its capability contract; provider failure never grants fallback authority.
 - **Data rule:** provider access is limited to the supplied projection and does not imply database, queue, Safety, Conversation, content-publication, deployment, or tool authority.
+- **Governance rule:** recording a provider dependency here does not activate or approve a provider path that T-A06/T-A10 has placed on hold.
 
 ## 4. Direct A2A V1 baseline
 
@@ -262,13 +264,14 @@ The absence of an edge is the V1 permission state, not missing implementation wo
 It must prove:
 
 1. this normative contract exists and freezes the required capability identities/classes;
-2. all twelve possible directed A01-A04 pairs remain `NO EDGE`;
-3. current A01-A04 runtime source surfaces do not directly reference another Agent capability module;
-4. historical model A02 remains superseded in the current operator path while `V1Metrics`/`V1Recommendations` remain the deterministic V1 learning implementation.
+2. the T-A06 master-registry ownership boundary and current A03 governance hold are cross-referenced rather than duplicated or weakened;
+3. all twelve possible directed A01-A04 pairs remain `NO EDGE`;
+4. current A01-A04 runtime source surfaces do not directly reference another Agent capability module, including grouped/leaf aliases;
+5. historical model A02 remains superseded in the current operator path while `V1Metrics`/`V1Recommendations` remain the deterministic V1 learning implementation.
 
 The shared provider module is explicitly sanitized from the static edge check because provider execution is infrastructure, not an A01 collaboration edge.
 
-A future direct Agent-to-Agent call must not be implemented by weakening, deleting, bypassing, or path-excluding this guard. It requires a separately authorized T-A08 collaboration-admission packet and any T-A06/T-A05/security review required by the change.
+A future direct Agent-to-Agent call must not be implemented by weakening, deleting, bypassing, or path-excluding this guard. It requires a separately authorized T-A08 collaboration-admission packet and any T-A06/T-A05/T-A10 review required by the change.
 
 ## 6. Collaboration admission rule
 
@@ -307,6 +310,7 @@ This document does **not**:
 - grant Agent-to-Agent calls;
 - grant tool use;
 - grant model/provider mutation authority;
+- lift an external-provider or sensitive-evidence hold;
 - grant autonomous planning or delegation;
 - turn deterministic learning recommendations into product-change authority.
 
