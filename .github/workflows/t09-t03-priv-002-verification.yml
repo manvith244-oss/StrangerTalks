@@ -1,0 +1,404 @@
+name: T09 T03 PRIV-002 Independent Privacy Copy Verification
+
+on:
+  push:
+    branches: [team9/t03-priv-002-verification]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  PORT: "4000"
+  EXPECTED_SHA: 99787f0b85e0cf9f6c3c001c3f0462f4d6fec89f
+  EXPECTED_TREE: 31d156cfcdae30db2f49740033b4f454e1e7004c
+  EXPECTED_PARENT: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+
+jobs:
+  verify:
+    name: T09-T03-PRIV-002 exact child-delta proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - name: Record T09 proof lineage
+        run: |
+          echo "T09_PROOF_BRANCH=${GITHUB_REF_NAME}"
+          echo "T09_PROOF_SHA=${GITHUB_SHA}"
+          echo "T09_RUN_ID=${GITHUB_RUN_ID}"
+
+      - name: Checkout exact T03 PRIV-002 product target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          fetch-depth: 0
+
+      - name: Exact identity candidate-only diff and scope proof
+        run: |
+          set -euo pipefail
+          echo "REQUESTED_SHA=$EXPECTED_SHA"
+          echo "CHECKED_OUT_SHA=$(git rev-parse HEAD)"
+          echo "TESTED_SHA=$(git rev-parse HEAD)"
+          echo "REQUESTED_TREE=$EXPECTED_TREE"
+          echo "CHECKED_OUT_TREE=$(git rev-parse HEAD^{tree})"
+          echo "DIRECT_PARENT=$(git rev-parse HEAD^)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          test -z "$(git status --porcelain)"
+          git diff --check "$EXPECTED_PARENT"..HEAD
+
+          git diff --name-only "$EXPECTED_PARENT"..HEAD | tee /tmp/t09-changed-files
+          cat > /tmp/t09-expected-files <<'EOF'
+          priv/static/assets/app.js
+          priv/static/index.html
+          test/js/ephemeral_conversation_ux_test.mjs
+          test/js/message_unsend_test.mjs
+          test/js/t03_privacy_retention_copy_test.mjs
+          EOF
+          diff -u /tmp/t09-expected-files /tmp/t09-changed-files
+
+          git diff --numstat "$EXPECTED_PARENT"..HEAD | tee /tmp/t09-numstat
+          cat > /tmp/t09-expected-numstat <<'EOF'
+          1	1	priv/static/assets/app.js
+          2	2	priv/static/index.html
+          3	3	test/js/ephemeral_conversation_ux_test.mjs
+          2	2	test/js/message_unsend_test.mjs
+          34	0	test/js/t03_privacy_retention_copy_test.mjs
+          EOF
+          diff -u /tmp/t09-expected-numstat /tmp/t09-numstat
+
+          git diff --unified=0 "$EXPECTED_PARENT"..HEAD -- priv/static/assets/app.js priv/static/index.html | tee /tmp/t09-product.patch
+          test "$(grep -c '^@@' /tmp/t09-product.patch)" -eq 3
+          ! grep -E '^[+-].*(connectSocket|WebSocket|indexedDB|putRecord|deleteRecord|navigation\.|history\.|location\.|message-form|message-input|ConversationServer|reportForm\.addEventListener|fetch\(|/api/reports)' /tmp/t09-product.patch
+          grep -F 'Limited safety evidence is minimized or deleted on its own safety-retention schedule.' /tmp/t09-product.patch
+          grep -F 'Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling.' /tmp/t09-product.patch
+          grep -F 'If you report a View-Once photo while StrangerTalks still has its server-owned safety copy' /tmp/t09-product.patch
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install exact test stack and Chromium
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Relevant frontend privacy regressions
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 \
+            test/js/t03_privacy_retention_copy_test.mjs \
+            test/js/ephemeral_conversation_ux_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/f11_retained_cleanup_guard_test.mjs
+
+      - name: T04 retention and safety authority regressions consumed by copy
+        run: |
+          set -euo pipefail
+          mix ecto.drop --force || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          mix test \
+            test/strangertalks_new/team4_retention_privacy_closure_test.exs \
+            test/strangertalks_new/retention_policy_test.exs \
+            test/strangertalks_new/retention_cleanup_test.exs \
+            test/strangertalks_new/retention_cleanup_db_test.exs \
+            test/strangertalks_new/retention_safety_media_closure_test.exs \
+            test/strangertalks_new/retention_closure_db_test.exs \
+            test/strangertalks_new/privacy_persistence_guard_test.exs \
+            test/strangertalks_new/conversation_unsend_report_safety_test.exs \
+            test/strangertalks_new/conversation_message_unsend_test.exs \
+            test/strangertalks_new/telemetry_privacy_test.exs \
+            test/strangertalks_new_web/channel_crash_diagnostic_privacy_test.exs
+
+      - name: Fresh database for real Chromium
+        run: |
+          set -euo pipefail
+          mix ecto.drop --force || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Inject T09-only independent PRIV-002 Chromium oracle
+        run: |
+          cat > test/t09_t03_priv_002_hostile_browser_test.mjs <<'JAVASCRIPT'
+          import assert from "node:assert/strict"
+          import {readFileSync} from "node:fs"
+          import test from "node:test"
+          import {chromium} from "playwright"
+
+          const BASE = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const WAIT = 20_000
+          const VP = {width: 390, height: 844}
+          const SAFETY_SCHEDULE = "Limited safety evidence is minimized or deleted on its own safety-retention schedule."
+          const SAFETY_SEPARATION = "Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
+          const LOCAL_FADE = "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary."
+          const ORDINARY = "This is a temporary Conversation, not a permanent chat-history thread."
+          const VIEW_ONCE = "If you report a View-Once photo while StrangerTalks still has its server-owned safety copy, the photo may be stored separately as limited safety evidence. That sensitive evidence is minimized or deleted on its own safety-retention schedule."
+          const STALE = /no automatic expiry|no automatic cleanup|no automatic expiry or cleanup/i
+          const LEGAL = /fully compliant|legally required for|legal compliance|DPDP compliant|we never retain anything|deletion is immediate everywhere/i
+          const active = (page, screen) => page.locator(`section[data-screen="${screen}"].active`)
+
+          async function waitPath(page, path, label) {
+            await page.waitForFunction(expected => location.pathname === expected, path, {timeout: WAIT})
+            assert.equal(new URL(page.url()).pathname, path, label)
+          }
+
+          async function boot(browser, label) {
+            const context = await browser.newContext({viewport: VP})
+            const page = await context.newPage()
+            const errors = []
+            const failed = []
+            page.on("pageerror", e => errors.push(`pageerror:${e.message}`))
+            page.on("console", m => { if (m.type() === "error") errors.push(`console:${m.text()}`) })
+            page.on("requestfailed", r => failed.push(`${r.method()} ${r.url()} ${r.failure()?.errorText || "failed"}`))
+            const issuanceWait = page.waitForResponse(r => {
+              try { return new URL(r.url()).pathname === "/api/participants" } catch { return false }
+            })
+            const response = await page.goto(BASE, {waitUntil: "domcontentloaded"})
+            assert.ok(response?.ok(), `${label}: root loads`)
+            const issuance = await issuanceWait
+            assert.ok(issuance.status() >= 200 && issuance.status() < 300, `${label}: participant issuance is 2xx`)
+            await active(page, "doors").waitFor({state: "visible", timeout: WAIT})
+            await page.locator("#conversation-language").selectOption("en")
+            return {context, page, errors, failed}
+          }
+
+          async function matchPair(browser) {
+            const a = await boot(browser, "A")
+            const b = await boot(browser, "B")
+            await a.page.getByRole("button", {name: /Advice/}).click()
+            await active(a.page, "queue").waitFor({state: "visible", timeout: WAIT})
+            await b.page.getByRole("button", {name: /Advice/}).click()
+            await Promise.all([
+              active(a.page, "conversation").waitFor({state: "visible", timeout: WAIT}),
+              active(b.page, "conversation").waitFor({state: "visible", timeout: WAIT})
+            ])
+            await Promise.all([
+              waitPath(a.page, "/conversation", "A remains on canonical Conversation route"),
+              waitPath(b.page, "/conversation", "B remains on canonical Conversation route")
+            ])
+            return {a, b}
+          }
+
+          test("T09 independently renders truthful lifetime and report privacy surfaces without changing live authority", {timeout: 180_000}, async () => {
+            const html = readFileSync("priv/static/index.html", "utf8")
+            const app = readFileSync("priv/static/assets/app.js", "utf8")
+            assert.ok(html.includes(ORDINARY), "ordinary Conversation copy rejects permanent chat-history framing")
+            assert.ok(html.includes(LOCAL_FADE), "participant-local Fade boundary is explicit")
+            assert.ok(html.includes(VIEW_ONCE), "static View-Once reporting disclosure is bounded safety evidence")
+            assert.doesNotMatch(html, STALE)
+            assert.doesNotMatch(app.match(/reportForm\.insertAdjacentHTML\("afterbegin",[\s\S]*?\)\n/)?.[0] || "", STALE)
+
+            const browser = await chromium.launch({headless: true})
+            let pair
+            try {
+              pair = await matchPair(browser)
+              const {a, b} = pair
+              const composer = a.page.locator("#message-input")
+              const send = a.page.locator('#message-form button.primary')
+              assert.equal(await composer.count(), 1, "one composer authority before privacy disclosure")
+              assert.equal(await send.count(), 1, "one send authority before privacy disclosure")
+              assert.equal(await composer.isVisible(), true)
+              assert.equal(await composer.isEnabled(), true)
+
+              const pathBefore = new URL(a.page.url()).pathname
+              const lifetimeTrigger = a.page.locator('.temporary-conversation-cue [data-lifetime-details]')
+              await lifetimeTrigger.focus()
+              await lifetimeTrigger.click()
+              const dialog = a.page.locator("#lifetime-details-dialog")
+              await dialog.waitFor({state: "visible", timeout: WAIT})
+              const lifetimeText = await dialog.innerText()
+              console.log(`T09_LIFETIME_TEXT=${JSON.stringify(lifetimeText)}`)
+              assert.match(lifetimeText, /temporary Conversation, not a permanent chat-history thread/i)
+              assert.ok(lifetimeText.includes(LOCAL_FADE))
+              assert.ok(lifetimeText.includes(SAFETY_SCHEDULE))
+              assert.ok(lifetimeText.includes(SAFETY_SEPARATION))
+              assert.doesNotMatch(lifetimeText, STALE)
+              assert.doesNotMatch(lifetimeText, LEGAL)
+              await a.page.locator("#lifetime-details-close").click()
+              await dialog.waitFor({state: "hidden", timeout: WAIT})
+              assert.equal(await lifetimeTrigger.evaluate(node => node === document.activeElement), true, "lifetime dialog restores focus to trigger")
+              assert.equal(new URL(a.page.url()).pathname, pathBefore, "lifetime disclosure changes no route")
+              assert.equal(await active(a.page, "conversation").count(), 1, "lifetime disclosure changes no lifecycle state")
+
+              const reportPosts = []
+              a.page.on("request", r => { if (r.method() === "POST" && /\/api\/reports(?:$|\?)/.test(r.url())) reportPosts.push(r.url()) })
+              const overflow = a.page.locator("details.overflow")
+              if ((await overflow.getAttribute("open")) === null) await overflow.locator("summary").click()
+              await a.page.locator("#report-open").click()
+              const report = a.page.locator("#report-form")
+              await report.waitFor({state: "visible", timeout: WAIT})
+              const reportText = await report.innerText()
+              const dynamicText = await report.locator(".report-disclosure").innerText()
+              console.log(`T09_REPORT_TEXT=${JSON.stringify(reportText)}`)
+              assert.match(dynamicText, /Reports are stored separately for safety/i)
+              assert.match(dynamicText, /does not automatically save the ordinary Conversation transcript/i)
+              assert.ok(dynamicText.includes(SAFETY_SCHEDULE))
+              assert.ok(dynamicText.includes(SAFETY_SEPARATION))
+              assert.ok(reportText.includes(VIEW_ONCE))
+              assert.doesNotMatch(reportText, STALE)
+              assert.doesNotMatch(reportText, LEGAL)
+              assert.equal(await report.locator("#report-category").count(), 1, "report category authority remains")
+              assert.equal(await report.locator("#report-evidence").count(), 1, "report evidence authority remains")
+              assert.equal(await report.getByRole("button", {name: "Submit Report"}).count(), 1, "one report submit authority remains")
+              assert.deepEqual(reportPosts, [], "opening privacy disclosure submits no report")
+              await a.page.locator("#report-cancel").click()
+              await report.waitFor({state: "hidden", timeout: WAIT})
+              assert.equal(new URL(a.page.url()).pathname, pathBefore, "report disclosure changes no route")
+              assert.equal(await active(a.page, "conversation").count(), 1, "report disclosure changes no lifecycle state")
+
+              await composer.focus()
+              await composer.fill("t09 privacy-copy socket continuity")
+              await send.click()
+              await b.page.locator("#messages li", {hasText: "t09 privacy-copy socket continuity"}).waitFor({state: "visible", timeout: WAIT})
+              assert.equal(new URL(a.page.url()).pathname, "/conversation", "composer/send remains on active route")
+              assert.equal(await composer.isVisible(), true, "composer remains visible after privacy surfaces")
+              assert.equal(await composer.isEnabled(), true, "composer remains enabled after privacy surfaces")
+              assert.deepEqual(a.errors, [], `A browser errors: ${JSON.stringify(a.errors)}`)
+              assert.deepEqual(b.errors, [], `B browser errors: ${JSON.stringify(b.errors)}`)
+              assert.deepEqual(a.failed, [], `A failed requests: ${JSON.stringify(a.failed)}`)
+              assert.deepEqual(b.failed, [], `B failed requests: ${JSON.stringify(b.failed)}`)
+            } finally {
+              await pair?.a.context.close().catch(() => {})
+              await pair?.b.context.close().catch(() => {})
+              await browser.close().catch(() => {})
+            }
+          })
+
+          test("T09 independently preserves inherited historical-delete replacement route", {timeout: 90_000}, async () => {
+            const browser = await chromium.launch({headless: true})
+            const context = await browser.newContext({viewport: VP})
+            const page = await context.newPage()
+            const errors = []
+            page.on("pageerror", e => errors.push(e.message))
+            page.on("console", m => { if (m.type() === "error") errors.push(m.text()) })
+            const id = "123e4567-e89b-42d3-a456-4266141740aa"
+            const at = "2026-09-04T00:00:00.000Z"
+            try {
+              const response = await page.goto(BASE, {waitUntil: "domcontentloaded"})
+              assert.ok(response?.ok())
+              await active(page, "doors").waitFor({state: "visible", timeout: WAIT})
+              await page.evaluate(async ({id, at}) => {
+                const localData = await import("/assets/local_data.mjs")
+                const conversation = localData.temporaryConversation({conversation_id: id, door_type: "EXPLORE", display_door: "Advice", started_at: at})
+                await localData.putRecord({...conversation, value: {...conversation.value, status: "kept", connection_state: "ended", ended_at: at}})
+                await localData.putRecord(localData.localMessage({conversation_id: id, client_message_id: "t09-priv-history", message_id: "t09-priv-history", type: "text", content: "retained local control", mine: true, delivery_status: "delivered", sent_at: at, sequence: 1}))
+              }, {id, at})
+              await page.locator('#bottom-nav [data-go="chats"]').click()
+              await active(page, "chats").waitFor({state: "visible", timeout: WAIT})
+              await page.getByRole("button", {name: "Open local copy: Advice"}).click()
+              await waitPath(page, `/chats/${id}`, "retained detail owns exact route")
+              await active(page, "history").waitFor({state: "visible", timeout: WAIT})
+              assert.match(await page.locator(".local-copy-banner").innerText(), /not an active Conversation/i)
+              page.once("dialog", d => d.accept())
+              await page.locator("#history-delete").click()
+              await active(page, "chats").waitFor({state: "visible", timeout: WAIT})
+              await waitPath(page, "/chats", "Delete replaces invalidated retained-detail route")
+              assert.equal(await active(page, "history").count(), 0)
+              assert.deepEqual(errors, [])
+            } finally {
+              await context.close().catch(() => {})
+              await browser.close().catch(() => {})
+            }
+          })
+          JAVASCRIPT
+          node --check test/t09_t03_priv_002_hostile_browser_test.mjs
+
+      - name: Start exact-SHA Phoenix for real Chromium proof
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, endpoint |> Keyword.put(:server, true) |> Keyword.put(:http, [ip: {127,0,0,1}, port: 4000]))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' >/tmp/t09-priv-server.log 2>&1 &
+          echo $! >/tmp/t09-priv-server.pid
+          for i in $(seq 1 45); do
+            pid="$(cat /tmp/t09-priv-server.pid)"
+            kill -0 "$pid" 2>/dev/null || { cat /tmp/t09-priv-server.log; exit 1; }
+            curl -fsS http://localhost:4000/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/t09-priv-server.log
+          exit 1
+
+      - name: Execute independent real Chromium privacy and retained-delete proof
+        run: |
+          set -euo pipefail
+          echo "CHROMIUM_TESTED_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          node --test --test-concurrency=1 test/t09_t03_priv_002_hostile_browser_test.mjs
+
+      - name: Remove T09 oracle and stop server
+        if: always()
+        run: |
+          rm -f test/t09_t03_priv_002_hostile_browser_test.mjs
+          if [ -f /tmp/t09-priv-server.pid ]; then
+            pid="$(cat /tmp/t09-priv-server.pid)"
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+          fi
+
+      - name: Existing exact-candidate historical-delete browser regression
+        run: |
+          set -euo pipefail
+          mix ecto.drop --force || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, endpoint |> Keyword.put(:server, true) |> Keyword.put(:http, [ip: {127,0,0,1}, port: 4000]))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' >/tmp/t09-history-server.log 2>&1 & P=$!
+          trap 'kill "$P" 2>/dev/null || true' EXIT
+          for i in $(seq 1 45); do kill -0 "$P" 2>/dev/null || { cat /tmp/t09-history-server.log; exit 1; }; curl -fsS http://localhost:4000/ >/dev/null && break; sleep 1; done
+          curl -fsS http://localhost:4000/ >/dev/null
+          node --test --test-concurrency=1 test/js/t03_history_route_browser_test.mjs
+          kill "$P" 2>/dev/null || true; wait "$P" 2>/dev/null || true; trap - EXIT
+
+      - name: Final diff check exact identity and clean worktree
+        run: |
+          set -euo pipefail
+          git diff --check "$EXPECTED_PARENT"..HEAD
+          node --check priv/static/assets/app.js
+          echo "FINAL_TESTED_SHA=$(git rev-parse HEAD)"
+          echo "FINAL_TREE=$(git rev-parse HEAD^{tree})"
+          printf 'FINAL_STATUS=%q\n' "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test -z "$(git status --porcelain)"
+          echo "T09_T03_PRIV_002_OWNED_GATES=GREEN"
