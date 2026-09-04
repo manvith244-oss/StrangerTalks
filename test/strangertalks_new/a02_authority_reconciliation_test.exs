@@ -33,6 +33,7 @@ defmodule StrangertalksNew.A02AuthorityReconciliationTest do
 
     assert operator_section =~ "Current operators use:"
     assert operator_section =~ "mix strangertalks.intelligence [hours]"
+
     assert operator_section =~
              "Historical/superseded reference: `mix strangertalks.agents learning [limit]`"
 
@@ -49,6 +50,7 @@ defmodule StrangertalksNew.A02AuthorityReconciliationTest do
 
     assert team8 =~ "Historical Team 8"
     assert team8 =~ "T-A08"
+
     assert team8 =~
              "historical model-based `mix strangertalks.agents learning` path is superseded"
   end
