@@ -1,0 +1,431 @@
+name: T03 PRIV-002A Send Authority Browser Proof
+
+on:
+  push:
+    branches: [validation/t03-priv-002a-send-authority-390]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  EXPECTED_SHA: 99787f0b85e0cf9f6c3c001c3f0462f4d6fec89f
+  EXPECTED_TREE: 31d156cfcdae30db2f49740033b4f454e1e7004c
+  EXPECTED_PARENT: cff1d080cfbe050164eaea96bfe7de33641a2fa1
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+
+jobs:
+  prove:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - name: Record validation lineage
+        run: |
+          echo "T03_002A_VALIDATION_BRANCH=$GITHUB_REF_NAME"
+          echo "T03_002A_VALIDATION_SHA=$GITHUB_SHA"
+          echo "T03_002A_RUN_ID=$GITHUB_RUN_ID"
+
+      - name: Checkout exact frozen product candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXPECTED_SHA }}
+          fetch-depth: 0
+
+      - name: Prove exact candidate identity and narrow diff
+        run: |
+          set -euo pipefail
+          echo "T03_002A_PRODUCT_SHA=$(git rev-parse HEAD)"
+          echo "T03_002A_PRODUCT_TREE=$(git rev-parse HEAD^{tree})"
+          echo "T03_002A_PRODUCT_PARENT=$(git rev-parse HEAD^)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT"
+          test -z "$(git status --porcelain)"
+          git diff --check "$EXPECTED_PARENT"..HEAD
+          git diff --name-only "$EXPECTED_PARENT"..HEAD | tee /tmp/actual
+          cat > /tmp/expected <<'EOF'
+          priv/static/assets/app.js
+          priv/static/index.html
+          test/js/ephemeral_conversation_ux_test.mjs
+          test/js/message_unsend_test.mjs
+          test/js/t03_privacy_retention_copy_test.mjs
+          EOF
+          diff -u /tmp/expected /tmp/actual
+          git diff --unified=0 "$EXPECTED_PARENT"..HEAD -- priv/static/assets/app.js priv/static/index.html | tee /tmp/product.patch
+          ! grep -E '^[+-].*(message-form|message-input|connectSocket|WebSocket|ConversationServer|navigation\.|history\.|location\.)' /tmp/product.patch
+          echo "T03_002A_PRODUCT_SCOPE=PASS"
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies and Chromium
+        run: |
+          set -euo pipefail
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run required T03 frontend matrix
+        run: |
+          node --test --test-concurrency=1 \
+            test/js/t03_privacy_retention_copy_test.mjs \
+            test/js/ephemeral_conversation_ux_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/view_once_test.mjs \
+            test/js/f11_retained_cleanup_guard_test.mjs
+          echo "T03_002A_T03_MATRIX=PASS"
+
+      - name: Run required T04 consumed contracts
+        run: |
+          set -euo pipefail
+          mix ecto.drop --force || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          mix test \
+            test/strangertalks_new/team4_retention_privacy_closure_test.exs \
+            test/strangertalks_new/retention_policy_test.exs \
+            test/strangertalks_new/retention_cleanup_test.exs \
+            test/strangertalks_new/retention_cleanup_db_test.exs \
+            test/strangertalks_new/retention_safety_media_closure_test.exs \
+            test/strangertalks_new/retention_closure_db_test.exs \
+            test/strangertalks_new/privacy_persistence_guard_test.exs \
+            test/strangertalks_new/conversation_unsend_report_safety_test.exs \
+            test/strangertalks_new/conversation_message_unsend_test.exs \
+            test/strangertalks_new/telemetry_privacy_test.exs \
+            test/strangertalks_new_web/channel_crash_diagnostic_privacy_test.exs
+          echo "T03_002A_T04_MATRIX=PASS"
+
+      - name: Prepare fresh browser database
+        run: |
+          set -euo pipefail
+          mix ecto.drop --force || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Inject T03-only DOM authority and browser oracle
+        run: |
+          cat > test/t03_priv_002a_browser_test.mjs <<'JAVASCRIPT'
+          import assert from "node:assert/strict"
+          import test from "node:test"
+          import {chromium} from "playwright"
+
+          const BASE = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const WAIT = 20_000
+          const ORDINARY = "This is a temporary Conversation, not a permanent chat-history thread."
+          const LOCAL_FADE = "If a participant chooses to keep a local Conversation copy on their own device, that copy has a separate local lifetime; Fade removes that participant-local transcript and summary."
+          const SCHEDULE = "Limited safety evidence is minimized or deleted on its own safety-retention schedule."
+          const SURVIVES = "Unsend or Fade can remove participant-visible or local content, but they do not erase safety evidence already authorized for safety handling."
+          const VIEW_ONCE = "If you report a View-Once photo while StrangerTalks still has its server-owned safety copy, the photo may be stored separately as limited safety evidence. That sensitive evidence is minimized or deleted on its own safety-retention schedule."
+          const STALE = /no automatic expiry|no automatic cleanup/i
+          const LEGAL = /fully compliant|legal compliance|DPDP compliant|we never retain anything|deletion is immediate everywhere/i
+          const active = (page, name) => page.locator(`section[data-screen="${name}"].active`)
+
+          async function boot(browser, label) {
+            const context = await browser.newContext({viewport: {width: 390, height: 844}})
+            const page = await context.newPage()
+            const issuance = page.waitForResponse(r => {
+              try { return new URL(r.url()).pathname === "/api/participants" } catch { return false }
+            })
+            const response = await page.goto(BASE, {waitUntil: "domcontentloaded"})
+            assert.ok(response?.ok(), `${label}: root loads`)
+            assert.ok((await issuance).ok(), `${label}: participant issued`)
+            await active(page, "doors").waitFor({state: "visible", timeout: WAIT})
+            await page.locator("#conversation-language").selectOption("en")
+            return {context, page}
+          }
+
+          async function pair(browser, label) {
+            const a = await boot(browser, `${label}-A`)
+            const b = await boot(browser, `${label}-B`)
+            await a.page.getByRole("button", {name: /Advice/}).click()
+            await active(a.page, "queue").waitFor({state: "visible", timeout: WAIT})
+            await b.page.getByRole("button", {name: /Advice/}).click()
+            await Promise.all([
+              active(a.page, "conversation").waitFor({state: "visible", timeout: WAIT}),
+              active(b.page, "conversation").waitFor({state: "visible", timeout: WAIT})
+            ])
+            await a.page.locator("#message-input").waitFor({state: "visible", timeout: WAIT})
+            await b.page.locator("#message-input").waitFor({state: "visible", timeout: WAIT})
+            assert.equal(new URL(a.page.url()).pathname, "/conversation")
+            assert.equal(new URL(b.page.url()).pathname, "/conversation")
+            return {a, b}
+          }
+
+          async function closePair(pair) {
+            await pair?.a.context.close().catch(() => {})
+            await pair?.b.context.close().catch(() => {})
+          }
+
+          async function inventoryMatch(locator, index) {
+            const info = await locator.evaluate(el => {
+              const rect = el.getBoundingClientRect()
+              const style = getComputedStyle(el)
+              return {
+                outerHTML: el.outerHTML,
+                id: el.id || "",
+                classes: el.className || "",
+                rawType: el.getAttribute("type"),
+                effectiveType: el.type,
+                visible: style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0,
+                enabled: !el.disabled,
+                ariaLabel: el.getAttribute("aria-label"),
+                textContent: (el.textContent || "").trim(),
+                parentTag: el.parentElement?.tagName || null,
+                parentId: el.parentElement?.id || null,
+                parentClasses: el.parentElement?.className || null,
+                insideMessageForm: Boolean(el.closest("#message-form")),
+                formId: el.form?.id || null
+              }
+            })
+            info.accessibleName = info.ariaLabel || info.textContent
+            console.log(`T03_002A_DOM_MATCH_${index}=${JSON.stringify(info)}`)
+            return info
+          }
+
+          test("T03 PRIV-002A exact 390x844 send-authority classification", {timeout: 180_000}, async () => {
+            const browser = await chromium.launch({headless: true})
+            let first
+            let second
+            try {
+              first = await pair(browser, "inventory")
+              const page = first.a.page
+              const broad = page.locator("#message-form button.primary")
+              const broadCount = await broad.count()
+              const inputCount = await page.locator("#message-input").count()
+              console.log(`T03_002A_BROAD_SELECTOR_COUNT=${broadCount}`)
+              console.log(`T03_002A_INPUT_COUNT=${inputCount}`)
+              console.log(`T03_002A_REPRODUCED=${broadCount === 2 ? "YES" : "NO"}`)
+              assert.equal(inputCount, 1, "one canonical composer input")
+
+              const infos = []
+              for (let i = 0; i < broadCount; i++) infos.push(await inventoryMatch(broad.nth(i), i + 1))
+
+              await page.evaluate(() => {
+                const form = document.querySelector("#message-form")
+                window.__t03SubmitProbe = 0
+                window.__t03LastSubmitter = null
+                window.__t03ProbeListener = event => {
+                  window.__t03SubmitProbe += 1
+                  window.__t03LastSubmitter = event.submitter?.outerHTML || null
+                  event.preventDefault()
+                  event.stopImmediatePropagation()
+                }
+                form.addEventListener("submit", window.__t03ProbeListener, true)
+              })
+              await page.locator("#message-input").fill("probe-only-not-sent")
+              for (let i = 0; i < broadCount; i++) {
+                const candidate = broad.nth(i)
+                const info = infos[i]
+                await page.evaluate(() => { window.__t03SubmitProbe = 0; window.__t03LastSubmitter = null })
+                let clickResult = "NOT_CLICKED"
+                if (info.visible && info.enabled) {
+                  await candidate.click()
+                  await page.waitForTimeout(50)
+                  const probe = await page.evaluate(() => ({count: window.__t03SubmitProbe, submitter: window.__t03LastSubmitter}))
+                  clickResult = probe.count === 1 ? "SUBMITS_MESSAGE_FORM" : `NO_MESSAGE_FORM_SUBMIT:${probe.count}`
+                  console.log(`T03_002A_CLICK_PROBE_${i + 1}=${JSON.stringify({result: clickResult, submitter: probe.submitter})}`)
+                } else {
+                  console.log(`T03_002A_CLICK_PROBE_${i + 1}=${JSON.stringify({result: "NOT_ACTIONABLE", visible: info.visible, enabled: info.enabled})}`)
+                }
+              }
+
+              await page.evaluate(() => {
+                const form = document.querySelector("#message-form")
+                window.__t03SubmitProbe = 0
+                window.__t03LastSubmitter = null
+              })
+              await page.locator("#message-input").fill("enter-probe-only-not-sent")
+              await page.locator("#message-input").press("Enter")
+              await page.waitForTimeout(50)
+              const enterProbe = await page.evaluate(() => ({count: window.__t03SubmitProbe, submitter: window.__t03LastSubmitter}))
+              console.log(`T03_002A_ENTER_PROBE=${JSON.stringify(enterProbe)}`)
+              assert.equal(enterProbe.count, 1, "Enter follows the one message-form submit path")
+
+              await page.evaluate(() => {
+                const form = document.querySelector("#message-form")
+                form.removeEventListener("submit", window.__t03ProbeListener, true)
+                delete window.__t03ProbeListener
+              })
+
+              const activeForm = page.locator('section[data-screen="conversation"].active #message-form')
+              const semanticSend = activeForm.getByRole("button", {name: "Send", exact: true})
+              const semanticCount = await semanticSend.count()
+              console.log(`T03_002A_SEMANTIC_SEND_COUNT=${semanticCount}`)
+              assert.equal(semanticCount, 1, "exactly one accessible Send authority")
+              const semanticInfo = await semanticSend.evaluate(el => ({
+                outerHTML: el.outerHTML,
+                effectiveType: el.type,
+                formId: el.form?.id || null,
+                text: (el.textContent || "").trim(),
+                visible: getComputedStyle(el).display !== "none" && el.getBoundingClientRect().width > 0,
+                enabled: !el.disabled
+              }))
+              console.log(`T03_002A_SEMANTIC_SEND=${JSON.stringify(semanticInfo)}`)
+              assert.equal(semanticInfo.effectiveType, "submit")
+              assert.equal(semanticInfo.formId, "message-form")
+              assert.equal(semanticInfo.visible, true)
+              assert.equal(semanticInfo.enabled, true)
+
+              await closePair(first)
+              first = null
+              second = await pair(browser, "journey")
+              const {a, b} = second
+              const errors = []
+              const failed = []
+              a.page.on("pageerror", error => errors.push(`pageerror:${error.message}`))
+              a.page.on("console", message => { if (message.type() === "error") errors.push(`console:${message.text()}`) })
+              a.page.on("requestfailed", request => failed.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || "failed"}`))
+
+              const composer = a.page.getByRole("textbox", {name: "Message"})
+              const form = a.page.locator('section[data-screen="conversation"].active #message-form')
+              const send = form.getByRole("button", {name: "Send", exact: true})
+              assert.equal(await composer.count(), 1)
+              assert.equal(await send.count(), 1)
+              assert.equal(await composer.isVisible(), true)
+              assert.equal(await composer.isEnabled(), true)
+              assert.equal(new URL(a.page.url()).pathname, "/conversation")
+
+              const trigger = a.page.locator('.temporary-conversation-cue [data-lifetime-details]')
+              await trigger.focus()
+              await trigger.click()
+              const lifetime = a.page.locator("#lifetime-details-dialog")
+              await lifetime.waitFor({state: "visible", timeout: WAIT})
+              const lifetimeText = await lifetime.innerText()
+              assert.ok(lifetimeText.includes(ORDINARY))
+              assert.ok(lifetimeText.includes(LOCAL_FADE))
+              assert.ok(lifetimeText.includes(SCHEDULE))
+              assert.ok(lifetimeText.includes(SURVIVES))
+              assert.doesNotMatch(lifetimeText, STALE)
+              assert.doesNotMatch(lifetimeText, LEGAL)
+              await a.page.locator("#lifetime-details-close").click()
+              await lifetime.waitFor({state: "hidden", timeout: WAIT})
+              assert.equal(await trigger.evaluate(node => node === document.activeElement), true)
+              assert.equal(new URL(a.page.url()).pathname, "/conversation")
+              assert.equal(await active(a.page, "conversation").count(), 1)
+              console.log("T03_002A_LIFETIME=PASS")
+
+              const reportPosts = []
+              a.page.on("request", request => {
+                try {
+                  const path = new URL(request.url()).pathname
+                  if (request.method() === "POST" && path === "/api/reports") reportPosts.push(request.url())
+                } catch {}
+              })
+              const menu = a.page.locator("details.overflow")
+              if ((await menu.getAttribute("open")) === null) await menu.locator("summary").click()
+              await a.page.locator("#report-open").click()
+              const report = a.page.locator("#report-form")
+              await report.waitFor({state: "visible", timeout: WAIT})
+              assert.equal(await a.page.locator("#report-form").count(), 1)
+              assert.equal(await report.locator("#report-category").count(), 1)
+              assert.equal(await report.locator("#report-evidence").count(), 1)
+              assert.equal(await report.getByRole("button", {name: "Submit Report", exact: true}).count(), 1)
+              const dynamic = await report.locator(".report-disclosure").innerText()
+              const media = await report.locator(".report-safety-media-disclosure").innerText()
+              assert.ok(dynamic.includes(SCHEDULE))
+              assert.ok(dynamic.includes(SURVIVES))
+              assert.equal(media, VIEW_ONCE)
+              assert.doesNotMatch(`${dynamic}\n${media}`, STALE)
+              assert.doesNotMatch(`${dynamic}\n${media}`, LEGAL)
+              assert.deepEqual(reportPosts, [])
+              await a.page.locator("#report-cancel").click()
+              await report.waitFor({state: "hidden", timeout: WAIT})
+              assert.equal(new URL(a.page.url()).pathname, "/conversation")
+              assert.equal(await active(a.page, "conversation").count(), 1)
+              console.log("T03_002A_REPORT=PASS")
+
+              const clickText = `t03-002a-click-${Date.now()}`
+              await composer.fill(clickText)
+              await send.click()
+              const clickReceived = b.page.locator("#messages li", {hasText: clickText})
+              await clickReceived.waitFor({state: "visible", timeout: WAIT})
+              assert.equal(await b.page.locator("#messages li", {hasText: clickText}).count(), 1)
+              assert.equal(await a.page.locator("#messages li", {hasText: clickText}).count(), 1)
+
+              const enterText = `t03-002a-enter-${Date.now()}`
+              await composer.fill(enterText)
+              await composer.press("Enter")
+              const enterReceived = b.page.locator("#messages li", {hasText: enterText})
+              await enterReceived.waitFor({state: "visible", timeout: WAIT})
+              assert.equal(await b.page.locator("#messages li", {hasText: enterText}).count(), 1)
+              assert.equal(await a.page.locator("#messages li", {hasText: enterText}).count(), 1)
+              assert.equal(await composer.isVisible(), true)
+              assert.equal(await composer.isEnabled(), true)
+              assert.equal(new URL(a.page.url()).pathname, "/conversation")
+              assert.equal(await active(a.page, "conversation").count(), 1)
+              await a.page.waitForTimeout(250)
+              console.log(`T03_002A_PAGE_ERRORS=${JSON.stringify(errors)}`)
+              console.log(`T03_002A_FAILED_REQUESTS=${JSON.stringify(failed)}`)
+              assert.deepEqual(errors, [])
+              assert.deepEqual(failed, [])
+              console.log("T03_002A_MESSAGE_CONTINUITY=PASS")
+            } finally {
+              await closePair(first)
+              await closePair(second)
+              await browser.close().catch(() => {})
+            }
+          })
+          JAVASCRIPT
+          node --check test/t03_priv_002a_browser_test.mjs
+
+      - name: Start exact-SHA Phoenix
+        run: |
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, endpoint |> Keyword.put(:server, true) |> Keyword.put(:http, [ip: {127,0,0,1}, port: 4000]))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' >/tmp/t03-002a-server.log 2>&1 & echo $! >/tmp/t03-002a-server.pid
+          for i in $(seq 1 45); do
+            kill -0 "$(cat /tmp/t03-002a-server.pid)" 2>/dev/null || { cat /tmp/t03-002a-server.log; exit 1; }
+            curl -fsS http://localhost:4000/ >/dev/null && { echo "T03_002A_SERVER=READY"; exit 0; }
+            sleep 1
+          done
+          cat /tmp/t03-002a-server.log; exit 1
+
+      - name: Execute exact 390x844 authority privacy continuity and historical-delete proof
+        run: |
+          set -euo pipefail
+          echo "T03_002A_CHROMIUM_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          node --test --test-concurrency=1 \
+            test/t03_priv_002a_browser_test.mjs \
+            test/js/t03_history_route_browser_test.mjs
+          echo "T03_002A_BROWSER_JOURNEY=PASS"
+          echo "T03_002A_HISTORICAL_DELETE=PASS"
+
+      - name: Cleanup proof harness and prove clean product tree
+        if: always()
+        run: |
+          rm -f test/t03_priv_002a_browser_test.mjs
+          if [ -f /tmp/t03-002a-server.pid ]; then kill "$(cat /tmp/t03-002a-server.pid)" 2>/dev/null || true; fi
+          echo "T03_002A_FINAL_SHA=$(git rev-parse HEAD)"
+          echo "T03_002A_FINAL_TREE=$(git rev-parse HEAD^{tree})"
+          git diff --check "$EXPECTED_PARENT"..HEAD
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test -z "$(git status --porcelain)"
+          echo "T03_002A_CLEAN_TREE=PASS"
