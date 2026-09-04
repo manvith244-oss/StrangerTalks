@@ -3,7 +3,7 @@ name: Team 3 A03 Canonical Review Proof
 on:
   push:
     branches:
-      - team3/a03-canonical-review-proof
+      - team3/a03-canonical-review-fix-002
   workflow_dispatch:
 
 concurrency:
