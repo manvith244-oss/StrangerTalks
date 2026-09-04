@@ -65,6 +65,33 @@ function isNavigationState(state) {
   return Boolean(state && typeof state === "object" && state[NAVIGATION_STATE_KEY] === true)
 }
 
+function terminalRetentionPending(records) {
+  return records.some((record) => (
+    record?.type === "local_conversation" &&
+    record?.value?.status === "temporary" &&
+    record?.value?.connection_state === "ended"
+  ))
+}
+
+async function withTerminalRetentionOwnership(route, snapshot) {
+  if (
+    !["conversation_ended", "conversation_unavailable"].includes(route?.kind) ||
+    snapshot?.canonical_state !== "AVAILABLE"
+  ) {
+    return snapshot
+  }
+
+  try {
+    const {listRecords} = await import("./local_data.mjs")
+    const records = await listRecords()
+    return {...snapshot, terminal_retention_pending: terminalRetentionPending(records)}
+  } catch {
+    // Local ownership is unknown, so preserve terminal presentation rather than
+    // guessing that retention/recovery has completed.
+    return snapshot
+  }
+}
+
 export function createNavigationHistory({history, location, getCanonicalSnapshot, applyRoute}) {
   if (!history || typeof history.pushState !== "function" || typeof history.replaceState !== "function") {
     throw new TypeError("history with pushState/replaceState is required")
@@ -91,6 +118,7 @@ export function createNavigationHistory({history, location, getCanonicalSnapshot
     if (runtimeState.requiresCanonicalReadiness && snapshot === undefined) {
       snapshot = await getCanonicalSnapshot()
     }
+    snapshot = await withTerminalRetentionOwnership(runtimeState.requestedRoute, snapshot)
 
     return refreshResolution(pathname, snapshot ?? null)
   }

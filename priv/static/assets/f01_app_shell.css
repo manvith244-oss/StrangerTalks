@@ -34,6 +34,11 @@ body.st-chat-mode #bottom-nav.bottom-nav {
   display: flex !important;
 }
 
+/* The open Conversation actions menu must escape the live-call panel's stacking layer. */
+body.st-chat-mode .conversation-head:has(.overflow[open]) {
+  z-index: 90;
+}
+
 /* Active Conversation keeps its composer above the compact primary navigation. */
 @media (max-width: 61.999rem) {
   body:has([data-screen="conversation"].active) .conversation.active {
