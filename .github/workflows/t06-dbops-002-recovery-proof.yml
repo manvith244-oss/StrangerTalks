@@ -1,0 +1,14 @@
+name: T06 DBOPS-002 Recovery Proof
+
+on:
+  push:
+    branches:
+      - team6/dbops-002-recovery-proof
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-proof:
+    uses: ./.github/workflows/postgres-r2-backup.yml
+    secrets: inherit
