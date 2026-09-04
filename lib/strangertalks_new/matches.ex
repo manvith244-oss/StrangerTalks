@@ -29,7 +29,7 @@ defmodule StrangertalksNew.Matches do
 
     unless matching.conversation_started do
       matching
-      |> Matching.changeset(%{conversation_started: true})
+      |> Ecto.Changeset.change(conversation_started: true)
       |> Repo.update!()
     end
 
