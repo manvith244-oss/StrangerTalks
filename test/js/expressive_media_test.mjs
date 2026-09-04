@@ -6,6 +6,7 @@ import "./team10_expression_surface_test.mjs"
 const appSource = await readFile(new URL("../../priv/static/assets/app.js", import.meta.url), "utf8")
 const html = await readFile(new URL("../../priv/static/index.html", import.meta.url), "utf8")
 const css = await readFile(new URL("../../priv/static/assets/app.css", import.meta.url), "utf8")
+const loadingRuntimeSource = await readFile(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
 const runtimeSource = await readFile(new URL("../../priv/static/assets/expression_runtime.mjs", import.meta.url), "utf8")
 const expressionCss = await readFile(new URL("../../priv/static/assets/expression_surface.css", import.meta.url), "utf8")
 const pageController = await readFile(new URL("../../lib/strangertalks_new_web/controllers/page_controller.ex", import.meta.url), "utf8")
@@ -51,11 +52,21 @@ test("Feature 1D bundled catalog remains same-origin and is presented as sticker
 })
 
 test("Team 10 canonical entry exposes composer emoji and provider-controlled GIF seam", () => {
-  assert.equal((html.match(/expression_runtime\.mjs/g) || []).length, 1)
+  assert.equal((html.match(/flow_loading_runtime\.mjs/g) || []).length, 1)
+  assert.equal((html.match(/expression_runtime\.mjs/g) || []).length, 0)
   assert.equal((html.match(/<script[^>]+\/assets\/app\.js/g) || []).length, 0)
+  assert.match(loadingRuntimeSource, /const APP_ENTRY = "\/assets\/expression_runtime\.mjs\?v=[^"]+"/)
+  assert.equal((loadingRuntimeSource.match(/await import\(APP_ENTRY\)/g) || []).length, 1)
+  assert.match(runtimeSource, /const APP_ENTRY = "\/assets\/app\.js\?v=[^"]+"/)
+  assert.equal((runtimeSource.match(/await import\(APP_ENTRY\)/g) || []).length, 1)
   assert.match(html, /expression_surface\.css/)
-  assert.match(pageController, /send_file/)
-  assert.doesNotMatch(pageController, /String\.replace|expression_runtime|expression_surface/)
+
+  assert.match(pageController, /Application\.app_dir\(:strangertalks_new, "priv\/static\/index\.html"\)/)
+  assert.match(pageController, /\|> File\.read!\(\)/)
+  assert.match(pageController, /@route_runtime_tag <> "\\n    " <> @mobile_runtime_tag <> "\\n    " <> @app_bootstrap_tag/)
+  assert.match(pageController, /send_resp\(200, body\)/)
+  assert.doesNotMatch(pageController, /expression_runtime|\/assets\/app\.js/)
+
   assert.match(runtimeSource, /emoji_picker\/index\.js/)
   assert.match(runtimeSource, /insertEmojiIntoDraft/)
   assert.match(runtimeSource, /\/api\/gifs\/status/)

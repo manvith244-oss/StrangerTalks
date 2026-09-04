@@ -22,6 +22,7 @@ defmodule StrangertalksNewWeb.Router do
 
     get "/health/live", HealthController, :live
     get "/health/ready", HealthController, :ready
+    get "/health/version", HealthController, :version
     get "/auth/google/start", GoogleAuthController, :start
     get "/auth/google/callback", GoogleAuthController, :callback
   end

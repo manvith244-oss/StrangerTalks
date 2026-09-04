@@ -1,0 +1,96 @@
+name: Participant Pairing Reservation Concurrency Proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reservation-concurrency-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: pairing_proof_password
+          POSTGRES_DB: pairing_proof
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d pairing_proof"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PROOF_DATABASE_URL: postgresql://postgres:pairing_proof_password@127.0.0.1:5432/pairing_proof
+      EXPECTED_DRIVER_SHA256: 61f2bb634304d5545b5bdd604dc063f2b9a2a3f7ca1a16dd7d44f194dd1041c4
+
+    steps:
+      - name: Prove ephemeral GitHub PostgreSQL environment
+        env:
+          PROOF_REPORT_PATH: ${{ runner.temp }}/participant-pairing-proof.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "ENVIRONMENT PROOF"
+            echo "github_event_name=$GITHUB_EVENT_NAME"
+            echo "github_run_id=$GITHUB_RUN_ID"
+            echo "runner_name=$RUNNER_NAME"
+            echo "connection_target=127.0.0.1:5432/pairing_proof"
+            echo "database_source=GitHub Actions services.postgres image postgres:17"
+            echo "production_database_credentials_used=false"
+            cid=$(docker ps --filter ancestor=postgres:17 --format '{{.ID}}' | head -n1)
+            test -n "$cid"
+            echo "postgres_service_container_id=$cid"
+            docker ps --filter id="$cid" --format 'container={{.ID}} image={{.Image}} status={{.Status}} ports={{.Ports}}'
+            docker exec "$cid" psql -U postgres -d pairing_proof -X -At -c "SELECT 'postgres_version=' || version(); SELECT 'server=' || inet_server_addr()::text || ':' || inet_server_port()::text || '/pairing_proof';"
+            echo "ephemeral_isolation=service container exists only for this GitHub Actions job and is destroyed with the job"
+          } | tee "$PROOF_REPORT_PATH"
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+
+      - name: Checkout proof harness only
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/proof
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Install proof-only async PostgreSQL driver
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --user --break-system-packages asyncpg==0.30.0
+
+      - name: Materialize and verify proof-only concurrency driver
+        env:
+          PROOF_REPORT_PATH: ${{ runner.temp }}/participant-pairing-proof.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          gzip --decompress --stdout .github/proof/participant_pairing_reservation_concurrency.py.gz > "$RUNNER_TEMP/pairing_proof.py"
+          python3 -m py_compile "$RUNNER_TEMP/pairing_proof.py"
+          actual_sha=$(sha256sum "$RUNNER_TEMP/pairing_proof.py" | awk '{print $1}')
+          echo "proof_driver_sha256=$actual_sha" | tee -a "$PROOF_REPORT_PATH"
+          test "$actual_sha" = "$EXPECTED_DRIVER_SHA256"
+
+      - name: Execute frozen 29-test concurrency matrix
+        env:
+          PROOF_REPORT_PATH: ${{ runner.temp }}/participant-pairing-proof.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/pairing_proof.py"
+
+      - name: Upload raw concurrency proof transcript
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: participant-pairing-reservation-concurrency-proof-${{ github.run_id }}
+          path: ${{ runner.temp }}/participant-pairing-proof.txt
+          if-no-files-found: ignore
+          retention-days: 7
