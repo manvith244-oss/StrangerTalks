@@ -3,11 +3,11 @@ defmodule StrangertalksNew.AgentCollaborationContractTest do
 
   @contract_path "docs/AGENT_COLLABORATION_CONTRACT_V1.md"
 
-  @capability_modules %{
-    "A01" => "StrangertalksNew.Companion",
-    "A02" => "StrangertalksNew.AgentSystems.LearningAdvisor",
-    "A03" => "StrangertalksNew.AgentSystems.SafetyReviewAssistant",
-    "A04" => "StrangertalksNew.AgentSystems.TrendBridgeResearch"
+  @capability_markers %{
+    "A01" => ["StrangertalksNew.Companion", "Companion"],
+    "A02" => ["StrangertalksNew.AgentSystems.LearningAdvisor", "LearningAdvisor"],
+    "A03" => ["StrangertalksNew.AgentSystems.SafetyReviewAssistant", "SafetyReviewAssistant"],
+    "A04" => ["StrangertalksNew.AgentSystems.TrendBridgeResearch", "TrendBridgeResearch"]
   }
 
   @capability_surfaces %{
@@ -85,11 +85,13 @@ defmodule StrangertalksNew.AgentCollaborationContractTest do
         |> Enum.join("\n")
         |> sanitize_shared_provider()
 
-      @capability_modules
+      @capability_markers
       |> Map.drop([owner])
-      |> Enum.each(fn {other_id, other_module} ->
-        refute source =~ other_module,
-               "#{owner} directly references #{other_id} (#{other_module}); V1 direct A2A edges are denied"
+      |> Enum.each(fn {other_id, markers} ->
+        Enum.each(markers, fn marker ->
+          refute source =~ marker,
+                 "#{owner} directly references #{other_id} via #{marker}; V1 direct A2A edges are denied"
+        end)
       end)
     end
   end
