@@ -99,6 +99,7 @@ jobs:
             test/strangertalks_new/agent_systems_functional_test.exs \
             test/strangertalks_new/agent_systems_break_test.exs \
             test/strangertalks_new/agent_systems_remediation_test.exs \
+            test/strangertalks_new/intelligence_v1_hostile_test.exs \
             test/strangertalks_new/privacy_persistence_guard_test.exs \
             test/strangertalks_new/ai_service/boundary_contract_test.exs \
             test/strangertalks_new_web/controllers/companion_controller_test.exs
