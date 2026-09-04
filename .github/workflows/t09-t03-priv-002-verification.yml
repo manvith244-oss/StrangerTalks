@@ -147,9 +147,24 @@ jobs:
           const LEGAL = /fully compliant|legal compliance|DPDP compliant|we never retain anything|deletion is immediate everywhere/i
           const active = (page, name) => page.locator(`section[data-screen="${name}"].active`)
 
+          function observe(page) {
+            const pageErrors = []
+            const requestFailures = []
+            const serverErrors = []
+            page.on("pageerror", error => pageErrors.push(String(error)))
+            page.on("requestfailed", request => {
+              requestFailures.push(`${request.method()} ${request.url()} ${request.failure()?.errorText || "request_failed"}`)
+            })
+            page.on("response", response => {
+              if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.request().method()} ${response.url()}`)
+            })
+            return {pageErrors, requestFailures, serverErrors}
+          }
+
           async function boot(browser) {
             const context = await browser.newContext({viewport: {width: 390, height: 844}})
             const page = await context.newPage()
+            const diagnostics = observe(page)
             const issuance = page.waitForResponse(r => {
               try { return new URL(r.url()).pathname === "/api/participants" } catch { return false }
             })
@@ -158,7 +173,7 @@ jobs:
             assert.ok((await issuance).ok())
             await active(page, "doors").waitFor({state: "visible", timeout: WAIT})
             await page.locator("#conversation-language").selectOption("en")
-            return {context, page}
+            return {context, page, diagnostics}
           }
 
           async function pair(browser) {
@@ -174,6 +189,19 @@ jobs:
             assert.equal(new URL(a.page.url()).pathname, "/conversation")
             assert.equal(new URL(b.page.url()).pathname, "/conversation")
             return {a, b}
+          }
+
+          async function assertExactlyOneMessage(page, content) {
+            const message = page.locator("#messages li.message", {hasText: content})
+            await message.first().waitFor({state: "visible", timeout: WAIT})
+            await page.waitForTimeout(200)
+            assert.equal(await message.count(), 1, `duplicate or missing delivery for ${content}`)
+          }
+
+          function assertCleanDiagnostics(side, name) {
+            assert.deepEqual(side.diagnostics.pageErrors, [], `${name} page errors: ${JSON.stringify(side.diagnostics.pageErrors)}`)
+            assert.deepEqual(side.diagnostics.requestFailures, [], `${name} failed requests: ${JSON.stringify(side.diagnostics.requestFailures)}`)
+            assert.deepEqual(side.diagnostics.serverErrors, [], `${name} 5xx responses: ${JSON.stringify(side.diagnostics.serverErrors)}`)
           }
 
           test("T09 real Chromium privacy-copy authority", {timeout: 180_000}, async () => {
@@ -193,13 +221,44 @@ jobs:
             try {
               matched = await pair(browser)
               const {a, b} = matched
-              const composer = a.page.getByRole("textbox", {name: "Message"})
-              const send = a.page.locator('section[data-screen="conversation"].active #message-form').getByRole("button", {name: "Send message", exact: true})
-              assert.equal(await composer.count(), 1)
-              assert.equal(await send.count(), 1)
-              assert.equal(await composer.isEnabled(), true)
-
               const route = new URL(a.page.url()).pathname
+              const messageForm = a.page.locator('section[data-screen="conversation"].active #message-form')
+              const composer = messageForm.locator("#message-input")
+              const semanticSubmitControls = messageForm.locator('button:not([type]), button[type="submit"], input[type="submit"]')
+              const structuralSend = messageForm.locator(".compose > button.primary")
+              const companionGenerate = messageForm.locator("#companion-generate")
+
+              // BEFORE DRAFT: prove structural authority without demanding mobile visual actionability.
+              assert.equal(await messageForm.count(), 1)
+              assert.equal(await composer.count(), 1)
+              assert.equal(await composer.isEnabled(), true)
+              assert.equal(await semanticSubmitControls.count(), 1, "message form must have exactly one submit authority")
+              assert.equal(await structuralSend.count(), 1)
+              const structural = await structuralSend.evaluate(button => ({
+                tag: button.tagName,
+                effectiveType: button.type,
+                explicitType: button.getAttribute("type"),
+                formId: button.form?.id || null,
+                ariaLabel: button.getAttribute("aria-label"),
+                visible: Boolean(button.offsetWidth || button.offsetHeight || button.getClientRects().length)
+              }))
+              assert.deepEqual(
+                {tag: structural.tag, effectiveType: structural.effectiveType, explicitType: structural.explicitType, formId: structural.formId},
+                {tag: "BUTTON", effectiveType: "submit", explicitType: null, formId: "message-form"}
+              )
+              assert.equal(structural.ariaLabel, "Send message")
+              console.log(`T09_SEND_BEFORE_DRAFT=${JSON.stringify(structural)}`)
+
+              assert.equal(await companionGenerate.count(), 1)
+              assert.equal(await companionGenerate.evaluate(button => button.type), "button")
+              assert.equal(await companionGenerate.getAttribute("type"), "button")
+              assert.equal(await companionGenerate.evaluate(button => button.form?.id || null), "message-form")
+
+              await messageForm.evaluate(form => {
+                window.__t09MessageSubmitEvents = 0
+                form.addEventListener("submit", () => { window.__t09MessageSubmitEvents += 1 })
+              })
+
               const trigger = a.page.locator('.temporary-conversation-cue [data-lifetime-details]')
               await trigger.focus()
               await trigger.click()
@@ -239,20 +298,61 @@ jobs:
               assert.equal(media, VIEW_ONCE)
               assert.doesNotMatch(`${dynamic}\n${media}`, STALE)
               assert.doesNotMatch(`${dynamic}\n${media}`, LEGAL)
-              assert.equal(await report.locator("#report-category").count(), 1)
-              assert.equal(await report.locator("#report-evidence").count(), 1)
-              assert.equal(await report.getByRole("button", {name: "Submit Report"}).count(), 1)
-              assert.deepEqual(reportPosts, [])
+
+              const category = report.locator("#report-category")
+              const evidence = report.locator("#report-evidence")
+              const reportSubmit = report.getByRole("button", {name: "Submit Report"})
+              assert.equal(await category.count(), 1)
+              assert.equal(await category.evaluate(select => select.required), true)
+              assert.deepEqual(
+                await category.locator("option").evaluateAll(options => options.map(option => option.value)),
+                ["", "SPAM", "HARASSMENT", "SEXUAL_MISCONDUCT", "MALICIOUS_LINKS", "THREATS"]
+              )
+              assert.equal(await evidence.count(), 1)
+              assert.equal(await evidence.getAttribute("maxlength"), "4096")
+              assert.equal(await reportSubmit.count(), 1)
+              assert.equal(await reportSubmit.evaluate(button => button.type), "submit")
+              assert.deepEqual(reportPosts, [], "opening Report must not create a report POST")
               await a.page.locator("#report-cancel").click()
               await report.waitFor({state: "hidden", timeout: WAIT})
               assert.equal(new URL(a.page.url()).pathname, route)
               assert.equal(await active(a.page, "conversation").count(), 1)
 
-              await composer.fill("t09 privacy-copy socket continuity")
-              await send.click()
-              await b.page.locator("#messages li", {hasText: "t09 privacy-copy socket continuity"}).waitFor({state: "visible", timeout: WAIT})
+              // AFTER DRAFT: accessible/actionable Send must resolve to the same single submit authority.
+              const clickText = "t09 privacy click send exact once"
+              await composer.fill(clickText)
+              const sendAfterDraft = messageForm.getByRole("button", {name: "Send message", exact: true})
+              assert.equal(await sendAfterDraft.count(), 1)
+              assert.equal(await sendAfterDraft.isVisible(), true)
+              assert.equal(await sendAfterDraft.isEnabled(), true)
+              assert.equal(await sendAfterDraft.evaluate(button => button === document.querySelector('#message-form .compose > button.primary')), true)
+              assert.equal(await semanticSubmitControls.count(), 1)
+              await sendAfterDraft.click()
+              await Promise.all([
+                assertExactlyOneMessage(a.page, clickText),
+                assertExactlyOneMessage(b.page, clickText)
+              ])
+              assert.equal(await a.page.evaluate(() => window.__t09MessageSubmitEvents), 1, "click Send must create one message-form submit path")
+
+              const enterText = "t09 privacy enter send exact once"
+              await composer.fill(enterText)
+              const sendBeforeEnter = messageForm.getByRole("button", {name: "Send message", exact: true})
+              assert.equal(await sendBeforeEnter.count(), 1)
+              assert.equal(await sendBeforeEnter.isVisible(), true)
+              await composer.press("Enter")
+              await Promise.all([
+                assertExactlyOneMessage(a.page, enterText),
+                assertExactlyOneMessage(b.page, enterText)
+              ])
+              assert.equal(await a.page.evaluate(() => window.__t09MessageSubmitEvents), 2, "Enter must add exactly one message-form submit path")
+              assert.equal(await a.page.locator("#messages li.message", {hasText: clickText}).count(), 1)
+              assert.equal(await b.page.locator("#messages li.message", {hasText: clickText}).count(), 1)
               assert.equal(new URL(a.page.url()).pathname, "/conversation")
+              assert.equal(new URL(b.page.url()).pathname, "/conversation")
               assert.equal(await composer.isEnabled(), true)
+
+              assertCleanDiagnostics(a, "participant A")
+              assertCleanDiagnostics(b, "participant B")
             } finally {
               await matched?.a.context.close().catch(() => {})
               await matched?.b.context.close().catch(() => {})
