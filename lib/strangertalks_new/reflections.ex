@@ -311,7 +311,7 @@ defmodule StrangertalksNew.Reflections do
       when is_binary(reflection_id) and is_binary(participant_id) do
     with %Reflection{} = reflection <- get_reflection(reflection_id, participant_id),
          true <-
-           is_nil(expected_revision) or reflection.revision == expected_revision ||
+           (is_nil(expected_revision) or reflection.revision == expected_revision) ||
              {:error, :stale} do
       case Repo.delete(reflection) do
         {:ok, _deleted} ->
