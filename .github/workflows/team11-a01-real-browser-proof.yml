@@ -1,0 +1,160 @@
+name: Team 11 A01 Real-Browser Human-Authorship Proof
+
+on:
+  push:
+    branches:
+      - team11/a01-real-browser-proof-002
+  workflow_dispatch:
+
+concurrency:
+  group: team11-a01-proof-${{ github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  a01-human-authorship-proof:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      TEAM11_BASE_SHA: 20293425b0556d733f47d43714d236582df7948d
+      TEAM11_EXPECTED_COMPANION_BLOB: 4658758c306fde679b9f9ef5851174b99453eb04
+
+    steps:
+      - name: Checkout exact proof commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Prove identity and proof-only scope
+        run: |
+          echo "TEAM11_TESTED_SHA=$(git rev-parse HEAD)"
+          echo "TEAM11_TESTED_TREE=$(git rev-parse HEAD^{tree})"
+          test "$(git rev-parse HEAD:priv/static/assets/companion.mjs)" = "$TEAM11_EXPECTED_COMPANION_BLOB"
+          git diff --name-only "$TEAM11_BASE_SHA" HEAD | sort | tee /tmp/team11-proof-files
+          printf '%s\n' \
+            '.github/workflows/team11-a01-real-browser-proof.yml' \
+            'test/js/team11_a01_real_browser_proof_test.mjs' | sort > /tmp/team11-expected-files
+          diff -u /tmp/team11-expected-files /tmp/team11-proof-files
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Focused A01 contract regressions
+        run: |
+          node --check test/js/team11_a01_real_browser_proof_test.mjs
+          node --test --test-concurrency=1 test/js/companion_test.mjs
+          mix test test/strangertalks_new_web/controllers/companion_controller_test.exs
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix browser server
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/team11-a01-browser.log 2>&1 &
+          echo $! > /tmp/team11-a01-browser.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS http://localhost:4000/ >/dev/null; then
+              echo "Team 11 browser endpoint ready."
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/team11-a01-browser.pid)" 2>/dev/null; then
+              cat /tmp/team11-a01-browser.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/team11-a01-browser.log
+          exit 1
+
+      - name: Real Chromium A01 human-authorship and degradation proof
+        run: node --test --test-concurrency=1 test/js/team11_a01_real_browser_proof_test.mjs
+
+      - name: Upload Team 11 proof screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: team11-a01-real-browser-proof-${{ github.sha }}
+          path: tmp/team11-a01-proof-screenshots
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Stop browser server
+        if: always()
+        run: |
+          if [ -f /tmp/team11-a01-browser.pid ]; then
+            pid="$(cat /tmp/team11-a01-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Reset browser data before repository precommit
+        run: |
+          mix ecto.drop --quiet
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Full repository precommit
+        run: mix precommit
+
+      - name: Final exact-SHA and clean-tree proof
+        run: |
+          git diff --check
+          git status --porcelain | tee /tmp/team11-final-status
+          test ! -s /tmp/team11-final-status
+          test "$(git rev-parse HEAD:priv/static/assets/companion.mjs)" = "$TEAM11_EXPECTED_COMPANION_BLOB"
+          echo "TEAM11_FINAL_SHA=$(git rev-parse HEAD)"
+          echo "TEAM11_FINAL_TREE=$(git rev-parse HEAD^{tree})"
+
+      - name: Browser log on failure
+        if: failure()
+        run: cat /tmp/team11-a01-browser.log || true
