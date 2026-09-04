@@ -12,3 +12,5 @@ jobs:
   recovery-proof:
     uses: ./.github/workflows/postgres-r2-backup.yml
     secrets: inherit
+
+# T06-DBOPS-002 owner-authorized pre-live recovery refresh
