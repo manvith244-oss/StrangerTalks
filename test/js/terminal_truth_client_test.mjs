@@ -7,6 +7,17 @@ const appSource = fs.readFileSync(new URL("../../priv/static/assets/app.js", imp
 test("terminal events are scoped to the Conversation that registered the handler", () => {
   assert.match(
     appSource,
+    /const runtimeIsCurrent = \(\) => app\.conversation === channel && app\.conversationId === id/
+  )
+
+  const onCurrentHelper = appSource.match(
+    /const onCurrent = \(event, handler\) => \{([\s\S]*?)\n  \}\n  channel\.__f04ReleaseRuntimeBindings/
+  )?.[1] || ""
+
+  assert.match(onCurrentHelper, /channel\.on\(event, \(\.\.\.args\) => \{/)
+  assert.match(onCurrentHelper, /if \(!runtimeIsCurrent\(\)\) return/)
+  assert.match(
+    appSource,
     /onCurrent\("conversation:ended", async \(\) => \{\s*if \(app\.conversationId !== id\) return/
   )
 })

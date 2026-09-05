@@ -1,0 +1,255 @@
+name: StrangerTalks PostgreSQL R2 Backup
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 2 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  backup-restore-proof:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: scratch_restore_password
+          POSTGRES_DB: strangertalks_restore
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d strangertalks_restore"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || vars.SUPABASE_DATABASE_URL }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID || vars.R2_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID || vars.CLOUDFLARE_ACCOUNT_ID }}
+      R2_ENDPOINT: ${{ secrets.R2_ENDPOINT || vars.R2_ENDPOINT || secrets.R2_ENDPOINT_URL || vars.R2_ENDPOINT_URL || secrets.R2_S3_ENDPOINT || vars.R2_S3_ENDPOINT }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET || vars.R2_BUCKET || secrets.R2_BUCKET_NAME || vars.R2_BUCKET_NAME }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || vars.R2_ACCESS_KEY_ID || secrets.CLOUDFLARE_R2_ACCESS_KEY_ID || vars.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || vars.R2_SECRET_ACCESS_KEY || secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY || vars.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+      SUPABASE_CA_URL: https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: 'true'
+    steps:
+      - name: Prove trigger and guard credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "phase2_event_name=${GITHUB_EVENT_NAME}"
+          echo "phase2_run_id=${GITHUB_RUN_ID}"
+          echo "phase2_source=supabase"
+          echo "phase2_source_operation=read_only_dump"
+          echo "phase2_backup_schema=public"
+          echo "phase2_render_database_url_used=false"
+          missing=0
+          for name in SUPABASE_DATABASE_URL R2_BUCKET R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
+            if [ -n "${!name:-}" ]; then
+              echo "phase2_${name}_present=true"
+            else
+              echo "phase2_${name}_present=false"
+              missing=1
+            fi
+          done
+          if [ -n "${R2_ENDPOINT:-}" ]; then
+            echo "phase2_R2_ENDPOINT_present=true"
+          elif [ -n "${R2_ACCOUNT_ID:-}" ]; then
+            echo "phase2_R2_ACCOUNT_ID_present=true"
+          else
+            echo "phase2_R2_ENDPOINT_or_ACCOUNT_ID_present=false"
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            echo "PHASE2_RESULT=BLOCKED_MISSING_GITHUB_CREDENTIALS"
+            exit 2
+          fi
+
+      - name: Checkout backup scripts only
+        uses: actions/checkout@v4
+        with:
+          ref: release/prep-2026-08-22
+          fetch-depth: 1
+
+      - name: Prove checkout branch and protected files untouched
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "phase2_checked_out_sha=$(git rev-parse HEAD)"
+          echo "phase2_checked_out_branch=release/prep-2026-08-22"
+          git status --porcelain
+          test -f ops/postgres_backup.sh
+          test -f ops/postgres_restore.sh
+
+      - name: Install PostgreSQL 17 client and AWS CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg python3-pip
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor --yes -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          python3 -m pip install --user --break-system-packages awscli
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Download Supabase root CA
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location "$SUPABASE_CA_URL" -o /tmp/prod-ca-2021.crt
+          openssl x509 -in /tmp/prod-ca-2021.crt -noout -subject -issuer -fingerprint -sha256
+          echo "phase2_supabase_ca_ready=true"
+
+      - name: Capture Supabase read-only inventory and create backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/postgresql/17/bin:$HOME/.local/bin:$PATH"
+          export PGSSLMODE=verify-full
+          export PGSSLROOTCERT=/tmp/prod-ca-2021.crt
+          export PGOPTIONS='-c default_transaction_read_only=on'
+          echo "phase2_pg_dump_version=$(pg_dump --version)"
+          work="$RUNNER_TEMP/phase2"
+          mkdir -p "$work"
+          chmod 700 "$work"
+          tables="$work/source_tables.txt"
+          counts="$work/source_counts.tsv"
+          schema="$work/source_schema.sql"
+          schema_norm="$work/source_schema.norm"
+          dump="$work/source.dump"
+
+          psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c \
+            "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename" > "$tables"
+
+          : > "$counts"
+          while IFS= read -r table; do
+            [ -n "$table" ] || continue
+            q=${table//\"/\"\"}
+            rows=$(psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c \
+              "SELECT count(*)::bigint FROM public.\"$q\"")
+            printf '%s\t%s\n' "$table" "$rows" >> "$counts"
+          done < "$tables"
+          sort -o "$counts" "$counts"
+
+          pg_dump --schema-only --no-owner --no-acl --schema=public "$SUPABASE_DATABASE_URL" > "$schema"
+          grep -Ev '^(--|\\restrict |\\unrestrict |$)' "$schema" > "$schema_norm"
+
+          echo "PHASE2_SOURCE_ROW_COUNTS_BEGIN"
+          cat "$counts"
+          echo "PHASE2_SOURCE_ROW_COUNTS_END"
+          echo "phase2_source_schema_sha256=$(sha256sum "$schema_norm" | awk '{print $1}')"
+
+          DATABASE_URL="$SUPABASE_DATABASE_URL" bash ops/postgres_backup.sh "$dump"
+          bytes=$(stat -c%s "$dump")
+          sha=$(sha256sum "$dump" | awk '{print $1}')
+          echo "phase2_backup_size_bytes=$bytes"
+          echo "phase2_backup_sha256=$sha"
+          echo "BACKUP_PATH=$dump" >> "$GITHUB_ENV"
+          echo "BACKUP_BYTES=$bytes" >> "$GITHUB_ENV"
+          echo "BACKUP_SHA=$sha" >> "$GITHUB_ENV"
+          echo "SOURCE_TABLES=$tables" >> "$GITHUB_ENV"
+          echo "SOURCE_COUNTS=$counts" >> "$GITHUB_ENV"
+          echo "SOURCE_SCHEMA_NORM=$schema_norm" >> "$GITHUB_ENV"
+
+      - name: Upload backup to Cloudflare R2 and download it back
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.local/bin:$PATH"
+          endpoint="${R2_ENDPOINT:-}"
+          if [ -z "$endpoint" ]; then
+            endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          fi
+          export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
+          export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
+          key="strangertalks/postgres/$(date -u +%Y/%m/%d)/strangertalks-${GITHUB_RUN_ID}.dump"
+          echo "phase2_r2_object_key=$key"
+          aws s3 cp "$BACKUP_PATH" "s3://${R2_BUCKET}/${key}" --endpoint-url "$endpoint" --only-show-errors
+          remote_bytes=$(aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$endpoint" --query ContentLength --output text)
+          echo "phase2_r2_head_content_length=$remote_bytes"
+          test "$remote_bytes" = "$BACKUP_BYTES"
+          downloaded="$RUNNER_TEMP/phase2/from-r2.dump"
+          aws s3 cp "s3://${R2_BUCKET}/${key}" "$downloaded" --endpoint-url "$endpoint" --only-show-errors
+          downloaded_sha=$(sha256sum "$downloaded" | awk '{print $1}')
+          echo "phase2_r2_download_sha256=$downloaded_sha"
+          test "$downloaded_sha" = "$BACKUP_SHA"
+          echo "R2_OBJECT_KEY=$key" >> "$GITHUB_ENV"
+          echo "R2_DOWNLOADED_BACKUP=$downloaded" >> "$GITHUB_ENV"
+          echo "phase2_r2_roundtrip_integrity=true"
+
+      - name: Restore R2 backup into scratch PostgreSQL 17
+        shell: bash
+        env:
+          RESTORE_DATABASE_URL: postgresql://postgres:scratch_restore_password@127.0.0.1:5432/strangertalks_restore
+          CONFIRM_RESTORE: RESTORE_STRANGERTALKS
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+          bash ops/postgres_restore.sh "$R2_DOWNLOADED_BACKUP"
+          echo "phase2_restore_from_r2_completed=true"
+
+      - name: Verify restored row counts and schema match source
+        shell: bash
+        env:
+          SCRATCH_DATABASE_URL: postgresql://postgres:scratch_restore_password@127.0.0.1:5432/strangertalks_restore
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+          work="$RUNNER_TEMP/phase2"
+          scratch_tables="$work/scratch_tables.txt"
+          scratch_counts="$work/scratch_counts.tsv"
+          scratch_schema="$work/scratch_schema.sql"
+          scratch_schema_norm="$work/scratch_schema.norm"
+
+          psql "$SCRATCH_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c \
+            "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename" > "$scratch_tables"
+          diff -u "$SOURCE_TABLES" "$scratch_tables"
+          echo "phase2_table_sets_match=true"
+
+          : > "$scratch_counts"
+          while IFS= read -r table; do
+            [ -n "$table" ] || continue
+            q=${table//\"/\"\"}
+            rows=$(psql "$SCRATCH_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c \
+              "SELECT count(*)::bigint FROM public.\"$q\"")
+            printf '%s\t%s\n' "$table" "$rows" >> "$scratch_counts"
+          done < "$scratch_tables"
+          sort -o "$scratch_counts" "$scratch_counts"
+
+          echo "PHASE2_RESTORED_ROW_COUNTS_BEGIN"
+          cat "$scratch_counts"
+          echo "PHASE2_RESTORED_ROW_COUNTS_END"
+          diff -u "$SOURCE_COUNTS" "$scratch_counts"
+          echo "phase2_row_counts_match=true"
+
+          pg_dump --schema-only --no-owner --no-acl --schema=public "$SCRATCH_DATABASE_URL" > "$scratch_schema"
+          grep -Ev '^(--|\\restrict |\\unrestrict |$)' "$scratch_schema" > "$scratch_schema_norm"
+          source_schema_sha=$(sha256sum "$SOURCE_SCHEMA_NORM" | awk '{print $1}')
+          scratch_schema_sha=$(sha256sum "$scratch_schema_norm" | awk '{print $1}')
+          echo "phase2_source_schema_sha256=$source_schema_sha"
+          echo "phase2_restored_schema_sha256=$scratch_schema_sha"
+          diff -u "$SOURCE_SCHEMA_NORM" "$scratch_schema_norm"
+          echo "phase2_schema_match=true"
+          echo "PHASE2_RESTORE_PROOF=PASS"
+
+      - name: Print free-tier footprint and final proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          monthly_bytes=$((BACKUP_BYTES * 31))
+          yearly_bytes=$((BACKUP_BYTES * 366))
+          echo "phase2_backup_size_bytes=$BACKUP_BYTES"
+          echo "phase2_31_daily_backups_bytes=$monthly_bytes"
+          echo "phase2_366_daily_backups_bytes=$yearly_bytes"
+          echo "phase2_r2_puts_per_31_day_month=31"
+          echo "phase2_r2_restore_test_gets_this_run=1"
+          echo "PHASE2_RESULT=PASS"

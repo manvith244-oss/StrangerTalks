@@ -10,7 +10,7 @@ defmodule StrangertalksNew.AgentSystems.SafetyReviewAssistant do
 
   import Ecto.Query, warn: false
 
-  alias StrangertalksNew.{Report, ReportSafetyMedia, Repo}
+  alias StrangertalksNew.{Report, ReportSafetyMedia, Repo, SafetyReview, SafetyReviews}
   alias StrangertalksNew.Companion.OpenAIProvider
 
   @max_context_chars 4_096
@@ -20,17 +20,23 @@ defmodule StrangertalksNew.AgentSystems.SafetyReviewAssistant do
   def review_report(report_id) when is_binary(report_id) do
     case Repo.get(Report, report_id) do
       %Report{} = report ->
-        media_attached =
-          Repo.exists?(
-            from media in ReportSafetyMedia, where: media.report_id == ^report.report_id
-          )
+        case SafetyReviews.get_review_by_report(report.report_id) do
+          %SafetyReview{} = safety_review ->
+            media_attached =
+              Repo.exists?(
+                from media in ReportSafetyMedia, where: media.report_id == ^report.report_id
+              )
 
-        review(%{
-          category: report.report_category && Atom.to_string(report.report_category),
-          status: report.report_status && Atom.to_string(report.report_status),
-          evidence: bounded_context(report.reporter_context),
-          media_attached: media_attached
-        })
+            review(%{
+              category: report.report_category && Atom.to_string(report.report_category),
+              status: safety_review.status && Atom.to_string(safety_review.status),
+              evidence: bounded_context(report.reporter_context),
+              media_attached: media_attached
+            })
+
+          nil ->
+            {:error, :safety_review_unavailable}
+        end
 
       nil ->
         {:error, :report_not_found}

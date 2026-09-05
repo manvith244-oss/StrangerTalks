@@ -1,0 +1,366 @@
+name: T06 DBOPS-002 Live DBSEC Execution
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: t06-dbops-002-live-dbsec
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-proof:
+    uses: ./.github/workflows/postgres-r2-backup.yml
+    secrets: inherit
+
+  live-dbsec:
+    needs: recovery-proof
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: prod
+      SUPABASE_DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || vars.SUPABASE_DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || vars.SUPABASE_DATABASE_URL }}
+      SECRET_KEY_BASE: t06-dbops-002-execution-only-not-used-for-serving
+      PHX_HOST: strangertalks-phoenix.onrender.com
+      T04_SHA: 277d1c56f6cfdce0a95b2c2e085df65fec56c337
+      T04_TREE: 7e880f9f1db196abbaba90c9fb90453beba17c7b
+      DBSEC_VERSION: "20260903144000"
+      DBSEC_BLOB: 030226a9b0938d11e1b13aae19d8ce457e7e108f
+      DBSEC_MIGRATION: priv/repo/migrations/20260903144000_secure_supabase_public_schema.exs
+      EXPECTED_LATEST_MIGRATION: "20260821191324"
+      RENDER_HEALTH_URL: https://strangertalks-phoenix.onrender.com/
+
+    steps:
+      - name: Guard execution credentials
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_DATABASE_URL:-}"
+          echo "T06_DBOPS_DATABASE_CREDENTIAL_PRESENT=true"
+
+      - name: Checkout exact accepted T04 authority
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.T04_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prove exact T04 SHA tree and migration blob
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse HEAD^{tree})"
+          actual_blob="$(git rev-parse "HEAD:${DBSEC_MIGRATION}")"
+          echo "T04_EXPECTED_SHA=$T04_SHA"
+          echo "T04_ACTUAL_SHA=$actual_sha"
+          echo "T04_EXPECTED_TREE=$T04_TREE"
+          echo "T04_ACTUAL_TREE=$actual_tree"
+          echo "DBSEC_EXPECTED_BLOB=$DBSEC_BLOB"
+          echo "DBSEC_ACTUAL_BLOB=$actual_blob"
+          test "$actual_sha" = "$T04_SHA"
+          test "$actual_tree" = "$T04_TREE"
+          test "$actual_blob" = "$DBSEC_BLOB"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install PostgreSQL client and compile exact T04 source
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --only prod
+          mix compile
+
+      - name: Pre-mutation application health
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --max-time 45 \
+            "$RENDER_HEALTH_URL" -o /dev/null
+          echo "PRE_MUTATION_PHOENIX_HEALTH=PASS"
+
+      - name: Pre-mutation database hard gates
+        run: |
+          set -euo pipefail
+          export PGOPTIONS='-c default_transaction_read_only=on'
+          psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At <<'SQL' > /tmp/t06-preflight.tsv
+          WITH protected(name) AS (
+            VALUES
+              ('account_sessions'),('account_sync_states'),('analytics_records'),
+              ('boundary_blocks'),('composer_grants'),('conversations'),
+              ('google_account_links'),('google_oauth_attempts'),('learning_records'),
+              ('matches'),('memories'),('message_reactions'),('messages'),
+              ('participants'),('private_accounts'),('queue_states'),('reflections'),
+              ('relationship_consents'),('relationship_reconnection_intents'),
+              ('relationships'),('report_safety_media'),('reports'),
+              ('safety_events'),('safety_reviews')
+          )
+          SELECT 'current_user', current_user
+          UNION ALL
+          SELECT 'server_version', current_setting('server_version')
+          UNION ALL
+          SELECT 'protected_existing', count(*)::text
+            FROM protected p
+            JOIN pg_class c ON c.relname = p.name
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname='public' AND c.relkind IN ('r','p')
+          UNION ALL
+          SELECT 'protected_owned_postgres', count(*)::text
+            FROM protected p
+            JOIN pg_class c ON c.relname = p.name
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname='public'
+             AND c.relkind IN ('r','p')
+             AND pg_get_userbyid(c.relowner)='postgres'
+          UNION ALL
+          SELECT 'rls_enabled', count(*)::text
+            FROM protected p
+            JOIN pg_class c ON c.relname = p.name
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname='public' AND c.relrowsecurity
+          UNION ALL
+          SELECT 'force_rls_enabled', count(*)::text
+            FROM protected p
+            JOIN pg_class c ON c.relname = p.name
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+           WHERE n.nspname='public' AND c.relforcerowsecurity
+          UNION ALL
+          SELECT 'dbsec_registered',
+                 EXISTS (
+                   SELECT 1 FROM public.schema_migrations
+                   WHERE version = 20260903144000
+                 )::text
+          UNION ALL
+          SELECT 'unrelated_registered_count',
+                 count(*)::text
+            FROM public.schema_migrations
+           WHERE version IN (20260826142000, 20260826143000, 20260830044500)
+          UNION ALL
+          SELECT 'latest_registered', max(version)::text
+            FROM public.schema_migrations;
+          SQL
+
+          cat /tmp/t06-preflight.tsv
+          test "$(awk -F'|' '$1=="current_user"{print $2}' /tmp/t06-preflight.tsv)" = "postgres"
+          server_version="$(awk -F'|' '$1=="server_version"{print $2}' /tmp/t06-preflight.tsv)"
+          case "$server_version" in 17.6*) ;; *) echo "unexpected_server_version=$server_version"; exit 1;; esac
+          test "$(awk -F'|' '$1=="protected_existing"{print $2}' /tmp/t06-preflight.tsv)" = "24"
+          test "$(awk -F'|' '$1=="protected_owned_postgres"{print $2}' /tmp/t06-preflight.tsv)" = "24"
+          test "$(awk -F'|' '$1=="rls_enabled"{print $2}' /tmp/t06-preflight.tsv)" = "0"
+          test "$(awk -F'|' '$1=="force_rls_enabled"{print $2}' /tmp/t06-preflight.tsv)" = "0"
+          test "$(awk -F'|' '$1=="dbsec_registered"{print $2}' /tmp/t06-preflight.tsv)" = "false"
+          test "$(awk -F'|' '$1=="unrelated_registered_count"{print $2}' /tmp/t06-preflight.tsv)" = "0"
+          test "$(awk -F'|' '$1=="latest_registered"{print $2}' /tmp/t06-preflight.tsv)" = "$EXPECTED_LATEST_MIGRATION"
+
+          psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT version FROM public.schema_migrations ORDER BY version" \
+            > /tmp/schema_migrations.before
+
+          psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At <<'SQL' \
+            > /tmp/supabase_admin_defaults.before
+          SELECT d.defaclobjtype || '|' || COALESCE(array_to_string(d.defaclacl, ','), '')
+          FROM pg_default_acl d
+          JOIN pg_namespace n ON n.oid=d.defaclnamespace
+          WHERE n.nspname='public'
+            AND d.defaclrole='supabase_admin'::regrole
+          ORDER BY 1;
+          SQL
+
+      - name: Isolate exactly one accepted DBSEC migration
+        run: |
+          set -euo pipefail
+          isolated="$RUNNER_TEMP/t06-dbops-002-migrations"
+          rm -rf "$isolated"
+          mkdir -p "$isolated"
+          cp "$DBSEC_MIGRATION" "$isolated/"
+          test "$(find "$isolated" -maxdepth 1 -type f -name '*.exs' | wc -l)" -eq 1
+          actual_blob="$(git hash-object "$isolated/$(basename "$DBSEC_MIGRATION")")"
+          echo "ISOLATED_DBSEC_BLOB=$actual_blob"
+          test "$actual_blob" = "$DBSEC_BLOB"
+          for forbidden in 20260826142000 20260826143000 20260830044500; do
+            test ! -e "$isolated/${forbidden}"*
+          done
+          echo "DBSEC_ISOLATED_MIGRATIONS_PATH=$isolated" >> "$GITHUB_ENV"
+
+      - name: Apply exact DBSEC-003 only
+        run: |
+          set -euo pipefail
+          unset PGOPTIONS
+          echo "DBSEC_MIGRATION_COMMAND=mix ecto.migrate --migrations-path <isolated> --to $DBSEC_VERSION"
+          mix ecto.migrate \
+            --migrations-path "$DBSEC_ISOLATED_MIGRATIONS_PATH" \
+            --to "$DBSEC_VERSION"
+
+      - name: Prove migration registration and unrelated-migration exclusion
+        run: |
+          set -euo pipefail
+          export PGOPTIONS='-c default_transaction_read_only=on'
+          psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At \
+            -c "SELECT version FROM public.schema_migrations ORDER BY version" \
+            > /tmp/schema_migrations.after
+
+          echo "SCHEMA_MIGRATIONS_NEW_BEGIN"
+          comm -13 /tmp/schema_migrations.before /tmp/schema_migrations.after
+          echo "SCHEMA_MIGRATIONS_NEW_END"
+          test "$(comm -13 /tmp/schema_migrations.before /tmp/schema_migrations.after)" = "$DBSEC_VERSION"
+          test -z "$(comm -23 /tmp/schema_migrations.before /tmp/schema_migrations.after)"
+
+          for forbidden in 20260826142000 20260826143000 20260830044500; do
+            ! grep -qx "$forbidden" /tmp/schema_migrations.after
+          done
+          echo "UNRELATED_MIGRATIONS_EXECUTED=0"
+
+      - name: Prove catalog and table privilege closure
+        run: |
+          set -euo pipefail
+          export PGOPTIONS='-c default_transaction_read_only=on'
+          psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At <<'SQL' > /tmp/catalog-proof.tsv
+          WITH protected(name) AS (
+            VALUES
+              ('account_sessions'),('account_sync_states'),('analytics_records'),
+              ('boundary_blocks'),('composer_grants'),('conversations'),
+              ('google_account_links'),('google_oauth_attempts'),('learning_records'),
+              ('matches'),('memories'),('message_reactions'),('messages'),
+              ('participants'),('private_accounts'),('queue_states'),('reflections'),
+              ('relationship_consents'),('relationship_reconnection_intents'),
+              ('relationships'),('report_safety_media'),('reports'),
+              ('safety_events'),('safety_reviews')
+          ),
+          all_tables(name) AS (
+            SELECT name FROM protected
+            UNION ALL SELECT 'schema_migrations'
+          ),
+          roles(name) AS (
+            VALUES ('anon'),('authenticated'),('service_role')
+          ),
+          privs(name) AS (
+            VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE'),
+                   ('TRUNCATE'),('REFERENCES'),('TRIGGER')
+          )
+          SELECT 'rls_enabled', count(*)::text
+          FROM protected p
+          JOIN pg_class c ON c.relname=p.name
+          JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname='public' AND c.relrowsecurity
+          UNION ALL
+          SELECT 'force_rls_enabled', count(*)::text
+          FROM protected p
+          JOIN pg_class c ON c.relname=p.name
+          JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname='public' AND c.relforcerowsecurity
+          UNION ALL
+          SELECT 'owned_postgres', count(*)::text
+          FROM protected p
+          JOIN pg_class c ON c.relname=p.name
+          JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname='public' AND pg_get_userbyid(c.relowner)='postgres'
+          UNION ALL
+          SELECT 'api_privilege_violations', count(*)::text
+          FROM all_tables t CROSS JOIN roles r CROSS JOIN privs p
+          WHERE has_table_privilege(r.name, format('public.%I', t.name), p.name)
+          UNION ALL
+          SELECT 'schema_migrations_rls', c.relrowsecurity::text
+          FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname='public' AND c.relname='schema_migrations'
+          UNION ALL
+          SELECT 'schema_migrations_force_rls', c.relforcerowsecurity::text
+          FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname='public' AND c.relname='schema_migrations'
+          UNION ALL
+          SELECT 'schema_migrations_owner', pg_get_userbyid(c.relowner)
+          FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+          WHERE n.nspname='public' AND c.relname='schema_migrations';
+          SQL
+
+          cat /tmp/catalog-proof.tsv
+          test "$(awk -F'|' '$1=="rls_enabled"{print $2}' /tmp/catalog-proof.tsv)" = "24"
+          test "$(awk -F'|' '$1=="force_rls_enabled"{print $2}' /tmp/catalog-proof.tsv)" = "0"
+          test "$(awk -F'|' '$1=="owned_postgres"{print $2}' /tmp/catalog-proof.tsv)" = "24"
+          test "$(awk -F'|' '$1=="api_privilege_violations"{print $2}' /tmp/catalog-proof.tsv)" = "0"
+          test "$(awk -F'|' '$1=="schema_migrations_rls"{print $2}' /tmp/catalog-proof.tsv)" = "false"
+          test "$(awk -F'|' '$1=="schema_migrations_force_rls"{print $2}' /tmp/catalog-proof.tsv)" = "false"
+          test "$(awk -F'|' '$1=="schema_migrations_owner"{print $2}' /tmp/catalog-proof.tsv)" = "postgres"
+
+      - name: Prove accepted default ACL behavior
+        run: |
+          set -euo pipefail
+          export PGOPTIONS='-c default_transaction_read_only=on'
+          violations="$(
+            psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At <<'SQL'
+          SELECT count(*)
+          FROM pg_default_acl d
+          JOIN pg_namespace n ON n.oid=d.defaclnamespace
+          CROSS JOIN LATERAL aclexplode(d.defaclacl) x
+          JOIN pg_roles grantee ON grantee.oid=x.grantee
+          WHERE n.nspname='public'
+            AND d.defaclrole='postgres'::regrole
+            AND d.defaclobjtype IN ('r','S')
+            AND grantee.rolname IN ('anon','authenticated','service_role');
+          SQL
+          )"
+          echo "POSTGRES_DEFAULT_API_GRANTS=$violations"
+          test "$violations" = "0"
+
+          psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At <<'SQL' \
+            > /tmp/supabase_admin_defaults.after
+          SELECT d.defaclobjtype || '|' || COALESCE(array_to_string(d.defaclacl, ','), '')
+          FROM pg_default_acl d
+          JOIN pg_namespace n ON n.oid=d.defaclnamespace
+          WHERE n.nspname='public'
+            AND d.defaclrole='supabase_admin'::regrole
+          ORDER BY 1;
+          SQL
+          diff -u /tmp/supabase_admin_defaults.before /tmp/supabase_admin_defaults.after
+          echo "SUPABASE_ADMIN_DEFAULT_ACL_UNCHANGED=true"
+
+      - name: Direct hostile role denial proof
+        run: |
+          set -euo pipefail
+          unset PGOPTIONS
+          deny() {
+            role="$1"
+            relation="$2"
+            if psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+              -c "SET ROLE ${role}; SELECT 1 FROM ${relation} LIMIT 0;" \
+              >/tmp/t06-deny.out 2>&1; then
+              echo "unexpected_access role=${role} relation=${relation}"
+              exit 1
+            fi
+            grep -Eq 'permission denied|42501' /tmp/t06-deny.out
+            echo "DENIED role=${role} relation=${relation}"
+          }
+          for role in anon authenticated service_role; do
+            deny "$role" public.participants
+            deny "$role" public.schema_migrations
+          done
+
+      - name: Prove Ecto migration metadata authority
+        run: |
+          set -euo pipefail
+          unset PGOPTIONS
+          mix ecto.migrations --migrations-path "$DBSEC_ISOLATED_MIGRATIONS_PATH" \
+            | tee /tmp/t06-ecto-migrations.out
+          grep -q "$DBSEC_VERSION" /tmp/t06-ecto-migrations.out
+          echo "ECTO_MIGRATION_METADATA=PASS"
+
+      - name: Post-mutation Phoenix health
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --max-time 45 \
+            "$RENDER_HEALTH_URL" -o /dev/null
+          echo "POST_MUTATION_PHOENIX_HEALTH=PASS"
+
+      - name: Final DBSEC execution ledger
+        if: ${{ always() }}
+        run: |
+          echo "T06_DBOPS_EXECUTOR_SHA=${GITHUB_SHA}"
+          echo "T04_SHA=$T04_SHA"
+          echo "T04_TREE=$T04_TREE"
+          echo "DBSEC_VERSION=$DBSEC_VERSION"
+          echo "DBSEC_BLOB=$DBSEC_BLOB"
