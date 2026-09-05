@@ -1,0 +1,15 @@
+{
+  "protocol_version": "T-A13-V1",
+  "counts": {
+    "ml_core": 104,
+    "ctx": 24,
+    "safety_collision": 3,
+    "total": 131
+  },
+  "hashes": {
+    "ml_core": "7609fce3927b9d24b9491703a9064549decc5a4711ab488a3ff27dc3bd3f8f66",
+    "ctx": "13785501eb2b2bd833c5c96de95c40af0e7e99207fb781a69e9f543776c0914b",
+    "safety_collision": "5c4a221136634eec248a6b892dfdf1c77ee57c7d66c163b3d08614daa89f9340",
+    "controls": "1c9c34e11e605c8f90a7a0b170aa995db52e1095e5340c8860c4ff43cf5d43f6"
+  }
+}

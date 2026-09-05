@@ -1,0 +1,1250 @@
+[
+  {
+    "id": "ML-CORE-001",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "icebreaker",
+    "description": "Opening light conversation with a stranger",
+    "input": "English ML Core item 1: Exploring icebreaker context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 1
+    }
+  },
+  {
+    "id": "ML-CORE-002",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "deep_talk",
+    "description": "Sharing meaningful personal experiences and philosophy",
+    "input": "English ML Core item 2: Exploring deep_talk context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 2
+    }
+  },
+  {
+    "id": "ML-CORE-003",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "vent",
+    "description": "Expressing frustration about daily challenges without hostility",
+    "input": "English ML Core item 3: Exploring vent context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 3
+    }
+  },
+  {
+    "id": "ML-CORE-004",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "advice",
+    "description": "Asking for practical life advice or perspective",
+    "input": "English ML Core item 4: Exploring advice context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 4
+    }
+  },
+  {
+    "id": "ML-CORE-005",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "cultural",
+    "description": "Discussing local customs, food, music, and art",
+    "input": "English ML Core item 5: Exploring cultural context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 5
+    }
+  },
+  {
+    "id": "ML-CORE-006",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "empathy",
+    "description": "Offering comfort to someone having a rough day",
+    "input": "English ML Core item 6: Exploring empathy context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 6
+    }
+  },
+  {
+    "id": "ML-CORE-007",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "humor",
+    "description": "Playful, lighthearted, and relatable stranger banter",
+    "input": "English ML Core item 7: Exploring humor context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 7
+    }
+  },
+  {
+    "id": "ML-CORE-008",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "boundaries",
+    "description": "Politely communicating personal space and limits",
+    "input": "English ML Core item 8: Exploring boundaries context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 8
+    }
+  },
+  {
+    "id": "ML-CORE-009",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "icebreaker",
+    "description": "Opening light conversation with a stranger",
+    "input": "English ML Core item 9: Exploring icebreaker context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 9
+    }
+  },
+  {
+    "id": "ML-CORE-010",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "deep_talk",
+    "description": "Sharing meaningful personal experiences and philosophy",
+    "input": "English ML Core item 10: Exploring deep_talk context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 10
+    }
+  },
+  {
+    "id": "ML-CORE-011",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "vent",
+    "description": "Expressing frustration about daily challenges without hostility",
+    "input": "English ML Core item 11: Exploring vent context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 11
+    }
+  },
+  {
+    "id": "ML-CORE-012",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "advice",
+    "description": "Asking for practical life advice or perspective",
+    "input": "English ML Core item 12: Exploring advice context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 12
+    }
+  },
+  {
+    "id": "ML-CORE-013",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "cultural",
+    "description": "Discussing local customs, food, music, and art",
+    "input": "English ML Core item 13: Exploring cultural context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 13
+    }
+  },
+  {
+    "id": "ML-CORE-014",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "empathy",
+    "description": "Offering comfort to someone having a rough day",
+    "input": "English ML Core item 14: Exploring empathy context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 14
+    }
+  },
+  {
+    "id": "ML-CORE-015",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "humor",
+    "description": "Playful, lighthearted, and relatable stranger banter",
+    "input": "English ML Core item 15: Exploring humor context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 15
+    }
+  },
+  {
+    "id": "ML-CORE-016",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "boundaries",
+    "description": "Politely communicating personal space and limits",
+    "input": "English ML Core item 16: Exploring boundaries context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 16
+    }
+  },
+  {
+    "id": "ML-CORE-017",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "icebreaker",
+    "description": "Opening light conversation with a stranger",
+    "input": "English ML Core item 17: Exploring icebreaker context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 17
+    }
+  },
+  {
+    "id": "ML-CORE-018",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "deep_talk",
+    "description": "Sharing meaningful personal experiences and philosophy",
+    "input": "English ML Core item 18: Exploring deep_talk context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 18
+    }
+  },
+  {
+    "id": "ML-CORE-019",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "vent",
+    "description": "Expressing frustration about daily challenges without hostility",
+    "input": "English ML Core item 19: Exploring vent context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 19
+    }
+  },
+  {
+    "id": "ML-CORE-020",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "advice",
+    "description": "Asking for practical life advice or perspective",
+    "input": "English ML Core item 20: Exploring advice context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 20
+    }
+  },
+  {
+    "id": "ML-CORE-021",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "cultural",
+    "description": "Discussing local customs, food, music, and art",
+    "input": "English ML Core item 21: Exploring cultural context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 21
+    }
+  },
+  {
+    "id": "ML-CORE-022",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "empathy",
+    "description": "Offering comfort to someone having a rough day",
+    "input": "English ML Core item 22: Exploring empathy context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 22
+    }
+  },
+  {
+    "id": "ML-CORE-023",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "humor",
+    "description": "Playful, lighthearted, and relatable stranger banter",
+    "input": "English ML Core item 23: Exploring humor context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 23
+    }
+  },
+  {
+    "id": "ML-CORE-024",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "boundaries",
+    "description": "Politely communicating personal space and limits",
+    "input": "English ML Core item 24: Exploring boundaries context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 24
+    }
+  },
+  {
+    "id": "ML-CORE-025",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "icebreaker",
+    "description": "Opening light conversation with a stranger",
+    "input": "English ML Core item 25: Exploring icebreaker context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 25
+    }
+  },
+  {
+    "id": "ML-CORE-026",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "deep_talk",
+    "description": "Sharing meaningful personal experiences and philosophy",
+    "input": "English ML Core item 26: Exploring deep_talk context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 26
+    }
+  },
+  {
+    "id": "ML-CORE-027",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "vent",
+    "description": "Expressing frustration about daily challenges without hostility",
+    "input": "English ML Core item 27: Exploring vent context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 27
+    }
+  },
+  {
+    "id": "ML-CORE-028",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "advice",
+    "description": "Asking for practical life advice or perspective",
+    "input": "English ML Core item 28: Exploring advice context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 28
+    }
+  },
+  {
+    "id": "ML-CORE-029",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "cultural",
+    "description": "Discussing local customs, food, music, and art",
+    "input": "English ML Core item 29: Exploring cultural context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 29
+    }
+  },
+  {
+    "id": "ML-CORE-030",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "empathy",
+    "description": "Offering comfort to someone having a rough day",
+    "input": "English ML Core item 30: Exploring empathy context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 30
+    }
+  },
+  {
+    "id": "ML-CORE-031",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "humor",
+    "description": "Playful, lighthearted, and relatable stranger banter",
+    "input": "English ML Core item 31: Exploring humor context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 31
+    }
+  },
+  {
+    "id": "ML-CORE-032",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "boundaries",
+    "description": "Politely communicating personal space and limits",
+    "input": "English ML Core item 32: Exploring boundaries context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 32
+    }
+  },
+  {
+    "id": "ML-CORE-033",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "icebreaker",
+    "description": "Opening light conversation with a stranger",
+    "input": "English ML Core item 33: Exploring icebreaker context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 33
+    }
+  },
+  {
+    "id": "ML-CORE-034",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "deep_talk",
+    "description": "Sharing meaningful personal experiences and philosophy",
+    "input": "English ML Core item 34: Exploring deep_talk context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 34
+    }
+  },
+  {
+    "id": "ML-CORE-035",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "vent",
+    "description": "Expressing frustration about daily challenges without hostility",
+    "input": "English ML Core item 35: Exploring vent context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 35
+    }
+  },
+  {
+    "id": "ML-CORE-036",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "advice",
+    "description": "Asking for practical life advice or perspective",
+    "input": "English ML Core item 36: Exploring advice context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 36
+    }
+  },
+  {
+    "id": "ML-CORE-037",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "cultural",
+    "description": "Discussing local customs, food, music, and art",
+    "input": "English ML Core item 37: Exploring cultural context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 37
+    }
+  },
+  {
+    "id": "ML-CORE-038",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "empathy",
+    "description": "Offering comfort to someone having a rough day",
+    "input": "English ML Core item 38: Exploring empathy context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 38
+    }
+  },
+  {
+    "id": "ML-CORE-039",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "humor",
+    "description": "Playful, lighthearted, and relatable stranger banter",
+    "input": "English ML Core item 39: Exploring humor context with a stranger.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 39
+    }
+  },
+  {
+    "id": "ML-CORE-040",
+    "corpus": "ml_core",
+    "language": "en",
+    "category": "boundaries",
+    "description": "Politely communicating personal space and limits",
+    "input": "English ML Core item 40: Exploring boundaries context with a stranger.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 40
+    }
+  },
+  {
+    "id": "ML-CORE-041",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "icebreaker",
+    "description": "స్నేహపూర్వక పరిచయ సంభాషణ",
+    "input": "తెలుగు ML Core అంశం 1: స్నేహపూర్వక పరిచయ సంభాషణ సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 41
+    }
+  },
+  {
+    "id": "ML-CORE-042",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "deep_talk",
+    "description": "జీవిత అనుభవాలు మరియు ఆలోచనలు పంచుకోవడం",
+    "input": "తెలుగు ML Core అంశం 2: జీవిత అనుభవాలు మరియు ఆలోచనలు పంచుకోవడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 42
+    }
+  },
+  {
+    "id": "ML-CORE-043",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "vent",
+    "description": "రోజువారీ ఇబ్బందుల గురించి చెప్పుకోవడం",
+    "input": "తెలుగు ML Core అంశం 3: రోజువారీ ఇబ్బందుల గురించి చెప్పుకోవడం సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 43
+    }
+  },
+  {
+    "id": "ML-CORE-044",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "advice",
+    "description": "సలహా లేదా సూచన కోరడం",
+    "input": "తెలుగు ML Core అంశం 4: సలహా లేదా సూచన కోరడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 44
+    }
+  },
+  {
+    "id": "ML-CORE-045",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "cultural",
+    "description": "తెలుగు సంస్కృతి, పండుగలు, ఆహారం గురించి చర్చ",
+    "input": "తెలుగు ML Core అంశం 5: తెలుగు సంస్కృతి, పండుగలు, ఆహారం గురించి చర్చ సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 45
+    }
+  },
+  {
+    "id": "ML-CORE-046",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "empathy",
+    "description": "కష్టాల్లో ఉన్నవారికి ధైర్యం చెప్పడం",
+    "input": "తెలుగు ML Core అంశం 6: కష్టాల్లో ఉన్నవారికి ధైర్యం చెప్పడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 46
+    }
+  },
+  {
+    "id": "ML-CORE-047",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "humor",
+    "description": "సరదా సంభాషణ మరియు హాస్యం",
+    "input": "తెలుగు ML Core అంశం 7: సరదా సంభాషణ మరియు హాస్యం సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 47
+    }
+  },
+  {
+    "id": "ML-CORE-048",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "boundaries",
+    "description": "గౌరవప్రదమైన హద్దులు పాటించడం",
+    "input": "తెలుగు ML Core అంశం 8: గౌరవప్రదమైన హద్దులు పాటించడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 48
+    }
+  },
+  {
+    "id": "ML-CORE-049",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "icebreaker",
+    "description": "స్నేహపూర్వక పరిచయ సంభాషణ",
+    "input": "తెలుగు ML Core అంశం 9: స్నేహపూర్వక పరిచయ సంభాషణ సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 49
+    }
+  },
+  {
+    "id": "ML-CORE-050",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "deep_talk",
+    "description": "జీవిత అనుభవాలు మరియు ఆలోచనలు పంచుకోవడం",
+    "input": "తెలుగు ML Core అంశం 10: జీవిత అనుభవాలు మరియు ఆలోచనలు పంచుకోవడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 50
+    }
+  },
+  {
+    "id": "ML-CORE-051",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "vent",
+    "description": "రోజువారీ ఇబ్బందుల గురించి చెప్పుకోవడం",
+    "input": "తెలుగు ML Core అంశం 11: రోజువారీ ఇబ్బందుల గురించి చెప్పుకోవడం సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 51
+    }
+  },
+  {
+    "id": "ML-CORE-052",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "advice",
+    "description": "సలహా లేదా సూచన కోరడం",
+    "input": "తెలుగు ML Core అంశం 12: సలహా లేదా సూచన కోరడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 52
+    }
+  },
+  {
+    "id": "ML-CORE-053",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "cultural",
+    "description": "తెలుగు సంస్కృతి, పండుగలు, ఆహారం గురించి చర్చ",
+    "input": "తెలుగు ML Core అంశం 13: తెలుగు సంస్కృతి, పండుగలు, ఆహారం గురించి చర్చ సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 53
+    }
+  },
+  {
+    "id": "ML-CORE-054",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "empathy",
+    "description": "కష్టాల్లో ఉన్నవారికి ధైర్యం చెప్పడం",
+    "input": "తెలుగు ML Core అంశం 14: కష్టాల్లో ఉన్నవారికి ధైర్యం చెప్పడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 54
+    }
+  },
+  {
+    "id": "ML-CORE-055",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "humor",
+    "description": "సరదా సంభాషణ మరియు హాస్యం",
+    "input": "తెలుగు ML Core అంశం 15: సరదా సంభాషణ మరియు హాస్యం సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 55
+    }
+  },
+  {
+    "id": "ML-CORE-056",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "boundaries",
+    "description": "గౌరవప్రదమైన హద్దులు పాటించడం",
+    "input": "తెలుగు ML Core అంశం 16: గౌరవప్రదమైన హద్దులు పాటించడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 56
+    }
+  },
+  {
+    "id": "ML-CORE-057",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "icebreaker",
+    "description": "స్నేహపూర్వక పరిచయ సంభాషణ",
+    "input": "తెలుగు ML Core అంశం 17: స్నేహపూర్వక పరిచయ సంభాషణ సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 57
+    }
+  },
+  {
+    "id": "ML-CORE-058",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "deep_talk",
+    "description": "జీవిత అనుభవాలు మరియు ఆలోచనలు పంచుకోవడం",
+    "input": "తెలుగు ML Core అంశం 18: జీవిత అనుభవాలు మరియు ఆలోచనలు పంచుకోవడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 58
+    }
+  },
+  {
+    "id": "ML-CORE-059",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "vent",
+    "description": "రోజువారీ ఇబ్బందుల గురించి చెప్పుకోవడం",
+    "input": "తెలుగు ML Core అంశం 19: రోజువారీ ఇబ్బందుల గురించి చెప్పుకోవడం సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 59
+    }
+  },
+  {
+    "id": "ML-CORE-060",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "advice",
+    "description": "సలహా లేదా సూచన కోరడం",
+    "input": "తెలుగు ML Core అంశం 20: సలహా లేదా సూచన కోరడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 60
+    }
+  },
+  {
+    "id": "ML-CORE-061",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "cultural",
+    "description": "తెలుగు సంస్కృతి, పండుగలు, ఆహారం గురించి చర్చ",
+    "input": "తెలుగు ML Core అంశం 21: తెలుగు సంస్కృతి, పండుగలు, ఆహారం గురించి చర్చ సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 61
+    }
+  },
+  {
+    "id": "ML-CORE-062",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "empathy",
+    "description": "కష్టాల్లో ఉన్నవారికి ధైర్యం చెప్పడం",
+    "input": "తెలుగు ML Core అంశం 22: కష్టాల్లో ఉన్నవారికి ధైర్యం చెప్పడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 62
+    }
+  },
+  {
+    "id": "ML-CORE-063",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "humor",
+    "description": "సరదా సంభాషణ మరియు హాస్యం",
+    "input": "తెలుగు ML Core అంశం 23: సరదా సంభాషణ మరియు హాస్యం సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 63
+    }
+  },
+  {
+    "id": "ML-CORE-064",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "boundaries",
+    "description": "గౌరవప్రదమైన హద్దులు పాటించడం",
+    "input": "తెలుగు ML Core అంశం 24: గౌరవప్రదమైన హద్దులు పాటించడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 64
+    }
+  },
+  {
+    "id": "ML-CORE-065",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "icebreaker",
+    "description": "స్నేహపూర్వక పరిచయ సంభాషణ",
+    "input": "తెలుగు ML Core అంశం 25: స్నేహపూర్వక పరిచయ సంభాషణ సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 65
+    }
+  },
+  {
+    "id": "ML-CORE-066",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "deep_talk",
+    "description": "జీవిత అనుభవాలు మరియు ఆలోచనలు పంచుకోవడం",
+    "input": "తెలుగు ML Core అంశం 26: జీవిత అనుభవాలు మరియు ఆలోచనలు పంచుకోవడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 66
+    }
+  },
+  {
+    "id": "ML-CORE-067",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "vent",
+    "description": "రోజువారీ ఇబ్బందుల గురించి చెప్పుకోవడం",
+    "input": "తెలుగు ML Core అంశం 27: రోజువారీ ఇబ్బందుల గురించి చెప్పుకోవడం సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 67
+    }
+  },
+  {
+    "id": "ML-CORE-068",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "advice",
+    "description": "సలహా లేదా సూచన కోరడం",
+    "input": "తెలుగు ML Core అంశం 28: సలహా లేదా సూచన కోరడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 68
+    }
+  },
+  {
+    "id": "ML-CORE-069",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "cultural",
+    "description": "తెలుగు సంస్కృతి, పండుగలు, ఆహారం గురించి చర్చ",
+    "input": "తెలుగు ML Core అంశం 29: తెలుగు సంస్కృతి, పండుగలు, ఆహారం గురించి చర్చ సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 69
+    }
+  },
+  {
+    "id": "ML-CORE-070",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "empathy",
+    "description": "కష్టాల్లో ఉన్నవారికి ధైర్యం చెప్పడం",
+    "input": "తెలుగు ML Core అంశం 30: కష్టాల్లో ఉన్నవారికి ధైర్యం చెప్పడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 70
+    }
+  },
+  {
+    "id": "ML-CORE-071",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "humor",
+    "description": "సరదా సంభాషణ మరియు హాస్యం",
+    "input": "తెలుగు ML Core అంశం 31: సరదా సంభాషణ మరియు హాస్యం సందర్భం.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 71
+    }
+  },
+  {
+    "id": "ML-CORE-072",
+    "corpus": "ml_core",
+    "language": "te",
+    "category": "boundaries",
+    "description": "గౌరవప్రదమైన హద్దులు పాటించడం",
+    "input": "తెలుగు ML Core అంశం 32: గౌరవప్రదమైన హద్దులు పాటించడం సందర్భం.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 72
+    }
+  },
+  {
+    "id": "ML-CORE-073",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "icebreaker",
+    "description": "अपरिचित से मित्रतापूर्ण परिचय",
+    "input": "हिंदी ML Core संवाद 1: अपरिचित से मित्रतापूर्ण परिचय का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 73
+    }
+  },
+  {
+    "id": "ML-CORE-074",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "deep_talk",
+    "description": "गंभीर विचार और जीवन के अनुभव साझा करना",
+    "input": "हिंदी ML Core संवाद 2: गंभीर विचार और जीवन के अनुभव साझा करना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 74
+    }
+  },
+  {
+    "id": "ML-CORE-075",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "vent",
+    "description": "दिनभर की परेशानी साझा करना बिना कड़वाहट के",
+    "input": "हिंदी ML Core संवाद 3: दिनभर की परेशानी साझा करना बिना कड़वाहट के का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 75
+    }
+  },
+  {
+    "id": "ML-CORE-076",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "advice",
+    "description": "सलाह या मार्गदर्शन मांगना",
+    "input": "हिंदी ML Core संवाद 4: सलाह या मार्गदर्शन मांगना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 76
+    }
+  },
+  {
+    "id": "ML-CORE-077",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "cultural",
+    "description": "भारतीय संस्कृति, संगीत और भोजन की बातें",
+    "input": "हिंदी ML Core संवाद 5: भारतीय संस्कृति, संगीत और भोजन की बातें का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 77
+    }
+  },
+  {
+    "id": "ML-CORE-078",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "empathy",
+    "description": "उदास व्यक्ति को सांत्वना और सहारा देना",
+    "input": "हिंदी ML Core संवाद 6: उदास व्यक्ति को सांत्वना और सहारा देना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 78
+    }
+  },
+  {
+    "id": "ML-CORE-079",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "humor",
+    "description": "हल्की-फुल्की और मनोरंजक बातचीत",
+    "input": "हिंदी ML Core संवाद 7: हल्की-फुल्की और मनोरंजक बातचीत का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 79
+    }
+  },
+  {
+    "id": "ML-CORE-080",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "boundaries",
+    "description": "मर्यादा और व्यक्तिगत सीमाओं का सम्मान",
+    "input": "हिंदी ML Core संवाद 8: मर्यादा और व्यक्तिगत सीमाओं का सम्मान का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 80
+    }
+  },
+  {
+    "id": "ML-CORE-081",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "icebreaker",
+    "description": "अपरिचित से मित्रतापूर्ण परिचय",
+    "input": "हिंदी ML Core संवाद 9: अपरिचित से मित्रतापूर्ण परिचय का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 81
+    }
+  },
+  {
+    "id": "ML-CORE-082",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "deep_talk",
+    "description": "गंभीर विचार और जीवन के अनुभव साझा करना",
+    "input": "हिंदी ML Core संवाद 10: गंभीर विचार और जीवन के अनुभव साझा करना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 82
+    }
+  },
+  {
+    "id": "ML-CORE-083",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "vent",
+    "description": "दिनभर की परेशानी साझा करना बिना कड़वाहट के",
+    "input": "हिंदी ML Core संवाद 11: दिनभर की परेशानी साझा करना बिना कड़वाहट के का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 83
+    }
+  },
+  {
+    "id": "ML-CORE-084",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "advice",
+    "description": "सलाह या मार्गदर्शन मांगना",
+    "input": "हिंदी ML Core संवाद 12: सलाह या मार्गदर्शन मांगना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 84
+    }
+  },
+  {
+    "id": "ML-CORE-085",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "cultural",
+    "description": "भारतीय संस्कृति, संगीत और भोजन की बातें",
+    "input": "हिंदी ML Core संवाद 13: भारतीय संस्कृति, संगीत और भोजन की बातें का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 85
+    }
+  },
+  {
+    "id": "ML-CORE-086",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "empathy",
+    "description": "उदास व्यक्ति को सांत्वना और सहारा देना",
+    "input": "हिंदी ML Core संवाद 14: उदास व्यक्ति को सांत्वना और सहारा देना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 86
+    }
+  },
+  {
+    "id": "ML-CORE-087",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "humor",
+    "description": "हल्की-फुल्की और मनोरंजक बातचीत",
+    "input": "हिंदी ML Core संवाद 15: हल्की-फुल्की और मनोरंजक बातचीत का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 87
+    }
+  },
+  {
+    "id": "ML-CORE-088",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "boundaries",
+    "description": "मर्यादा और व्यक्तिगत सीमाओं का सम्मान",
+    "input": "हिंदी ML Core संवाद 16: मर्यादा और व्यक्तिगत सीमाओं का सम्मान का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 88
+    }
+  },
+  {
+    "id": "ML-CORE-089",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "icebreaker",
+    "description": "अपरिचित से मित्रतापूर्ण परिचय",
+    "input": "हिंदी ML Core संवाद 17: अपरिचित से मित्रतापूर्ण परिचय का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 89
+    }
+  },
+  {
+    "id": "ML-CORE-090",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "deep_talk",
+    "description": "गंभीर विचार और जीवन के अनुभव साझा करना",
+    "input": "हिंदी ML Core संवाद 18: गंभीर विचार और जीवन के अनुभव साझा करना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 90
+    }
+  },
+  {
+    "id": "ML-CORE-091",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "vent",
+    "description": "दिनभर की परेशानी साझा करना बिना कड़वाहट के",
+    "input": "हिंदी ML Core संवाद 19: दिनभर की परेशानी साझा करना बिना कड़वाहट के का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 91
+    }
+  },
+  {
+    "id": "ML-CORE-092",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "advice",
+    "description": "सलाह या मार्गदर्शन मांगना",
+    "input": "हिंदी ML Core संवाद 20: सलाह या मार्गदर्शन मांगना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 92
+    }
+  },
+  {
+    "id": "ML-CORE-093",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "cultural",
+    "description": "भारतीय संस्कृति, संगीत और भोजन की बातें",
+    "input": "हिंदी ML Core संवाद 21: भारतीय संस्कृति, संगीत और भोजन की बातें का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 93
+    }
+  },
+  {
+    "id": "ML-CORE-094",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "empathy",
+    "description": "उदास व्यक्ति को सांत्वना और सहारा देना",
+    "input": "हिंदी ML Core संवाद 22: उदास व्यक्ति को सांत्वना और सहारा देना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 94
+    }
+  },
+  {
+    "id": "ML-CORE-095",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "humor",
+    "description": "हल्की-फुल्की और मनोरंजक बातचीत",
+    "input": "हिंदी ML Core संवाद 23: हल्की-फुल्की और मनोरंजक बातचीत का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 95
+    }
+  },
+  {
+    "id": "ML-CORE-096",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "boundaries",
+    "description": "मर्यादा और व्यक्तिगत सीमाओं का सम्मान",
+    "input": "हिंदी ML Core संवाद 24: मर्यादा और व्यक्तिगत सीमाओं का सम्मान का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 96
+    }
+  },
+  {
+    "id": "ML-CORE-097",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "icebreaker",
+    "description": "अपरिचित से मित्रतापूर्ण परिचय",
+    "input": "हिंदी ML Core संवाद 25: अपरिचित से मित्रतापूर्ण परिचय का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 97
+    }
+  },
+  {
+    "id": "ML-CORE-098",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "deep_talk",
+    "description": "गंभीर विचार और जीवन के अनुभव साझा करना",
+    "input": "हिंदी ML Core संवाद 26: गंभीर विचार और जीवन के अनुभव साझा करना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 98
+    }
+  },
+  {
+    "id": "ML-CORE-099",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "vent",
+    "description": "दिनभर की परेशानी साझा करना बिना कड़वाहट के",
+    "input": "हिंदी ML Core संवाद 27: दिनभर की परेशानी साझा करना बिना कड़वाहट के का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 99
+    }
+  },
+  {
+    "id": "ML-CORE-100",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "advice",
+    "description": "सलाह या मार्गदर्शन मांगना",
+    "input": "हिंदी ML Core संवाद 28: सलाह या मार्गदर्शन मांगना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 100
+    }
+  },
+  {
+    "id": "ML-CORE-101",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "cultural",
+    "description": "भारतीय संस्कृति, संगीत और भोजन की बातें",
+    "input": "हिंदी ML Core संवाद 29: भारतीय संस्कृति, संगीत और भोजन की बातें का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 101
+    }
+  },
+  {
+    "id": "ML-CORE-102",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "empathy",
+    "description": "उदास व्यक्ति को सांत्वना और सहारा देना",
+    "input": "हिंदी ML Core संवाद 30: उदास व्यक्ति को सांत्वना और सहारा देना का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 102
+    }
+  },
+  {
+    "id": "ML-CORE-103",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "humor",
+    "description": "हल्की-फुल्की और मनोरंजक बातचीत",
+    "input": "हिंदी ML Core संवाद 31: हल्की-फुल्की और मनोरंजक बातचीत का संदर्भ.",
+    "metadata": {
+      "difficulty": "nuanced",
+      "index": 103
+    }
+  },
+  {
+    "id": "ML-CORE-104",
+    "corpus": "ml_core",
+    "language": "hi",
+    "category": "boundaries",
+    "description": "मर्यादा और व्यक्तिगत सीमाओं का सम्मान",
+    "input": "हिंदी ML Core संवाद 32: मर्यादा और व्यक्तिगत सीमाओं का सम्मान का संदर्भ.",
+    "metadata": {
+      "difficulty": "standard",
+      "index": 104
+    }
+  }
+]

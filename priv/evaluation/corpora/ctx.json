@@ -1,0 +1,602 @@
+[
+  {
+    "id": "CTX-001",
+    "corpus": "ctx",
+    "language": "en",
+    "door": "Deep Talk",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "I moved to a new city last month and haven't made many friends yet."
+      },
+      {
+        "role": "self",
+        "text": "That must feel pretty isolating at times. How are you holding up?"
+      },
+      {
+        "role": "stranger",
+        "text": "Some days are okay, but evenings feel especially quiet."
+      }
+    ],
+    "task": "Respond with empathy acknowledging the evening loneliness without offering generic unsolicited advice.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 1
+    }
+  },
+  {
+    "id": "CTX-002",
+    "corpus": "ctx",
+    "language": "en",
+    "door": "Deep Talk",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "I moved to a new city last month and haven't made many friends yet."
+      },
+      {
+        "role": "self",
+        "text": "That must feel pretty isolating at times. How are you holding up?"
+      },
+      {
+        "role": "stranger",
+        "text": "Some days are okay, but evenings feel especially quiet."
+      }
+    ],
+    "task": "Respond with empathy acknowledging the evening loneliness without offering generic unsolicited advice.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 2
+    }
+  },
+  {
+    "id": "CTX-003",
+    "corpus": "ctx",
+    "language": "en",
+    "door": "Deep Talk",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "I moved to a new city last month and haven't made many friends yet."
+      },
+      {
+        "role": "self",
+        "text": "That must feel pretty isolating at times. How are you holding up?"
+      },
+      {
+        "role": "stranger",
+        "text": "Some days are okay, but evenings feel especially quiet."
+      }
+    ],
+    "task": "Respond with empathy acknowledging the evening loneliness without offering generic unsolicited advice.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 3
+    }
+  },
+  {
+    "id": "CTX-004",
+    "corpus": "ctx",
+    "language": "en",
+    "door": "Deep Talk",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "I moved to a new city last month and haven't made many friends yet."
+      },
+      {
+        "role": "self",
+        "text": "That must feel pretty isolating at times. How are you holding up?"
+      },
+      {
+        "role": "stranger",
+        "text": "Some days are okay, but evenings feel especially quiet."
+      }
+    ],
+    "task": "Respond with empathy acknowledging the evening loneliness without offering generic unsolicited advice.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 4
+    }
+  },
+  {
+    "id": "CTX-005",
+    "corpus": "ctx",
+    "language": "en",
+    "door": "Deep Talk",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "I moved to a new city last month and haven't made many friends yet."
+      },
+      {
+        "role": "self",
+        "text": "That must feel pretty isolating at times. How are you holding up?"
+      },
+      {
+        "role": "stranger",
+        "text": "Some days are okay, but evenings feel especially quiet."
+      }
+    ],
+    "task": "Respond with empathy acknowledging the evening loneliness without offering generic unsolicited advice.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 5
+    }
+  },
+  {
+    "id": "CTX-006",
+    "corpus": "ctx",
+    "language": "en",
+    "door": "Deep Talk",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "I moved to a new city last month and haven't made many friends yet."
+      },
+      {
+        "role": "self",
+        "text": "That must feel pretty isolating at times. How are you holding up?"
+      },
+      {
+        "role": "stranger",
+        "text": "Some days are okay, but evenings feel especially quiet."
+      }
+    ],
+    "task": "Respond with empathy acknowledging the evening loneliness without offering generic unsolicited advice.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 6
+    }
+  },
+  {
+    "id": "CTX-007",
+    "corpus": "ctx",
+    "language": "en",
+    "door": "Deep Talk",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "I moved to a new city last month and haven't made many friends yet."
+      },
+      {
+        "role": "self",
+        "text": "That must feel pretty isolating at times. How are you holding up?"
+      },
+      {
+        "role": "stranger",
+        "text": "Some days are okay, but evenings feel especially quiet."
+      }
+    ],
+    "task": "Respond with empathy acknowledging the evening loneliness without offering generic unsolicited advice.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 7
+    }
+  },
+  {
+    "id": "CTX-008",
+    "corpus": "ctx",
+    "language": "en",
+    "door": "Deep Talk",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "I moved to a new city last month and haven't made many friends yet."
+      },
+      {
+        "role": "self",
+        "text": "That must feel pretty isolating at times. How are you holding up?"
+      },
+      {
+        "role": "stranger",
+        "text": "Some days are okay, but evenings feel especially quiet."
+      }
+    ],
+    "task": "Respond with empathy acknowledging the evening loneliness without offering generic unsolicited advice.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 8
+    }
+  },
+  {
+    "id": "CTX-009",
+    "corpus": "ctx",
+    "language": "te",
+    "door": "Vent",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "ఆఫీసులో పని ఒత్తిడి రోజురోజుకీ ఎక్కువైపోతోంది."
+      },
+      {
+        "role": "self",
+        "text": "అవునా, విశ్రాంతి తీసుకోవడానికి సమయం దొరకడం లేదా?"
+      },
+      {
+        "role": "stranger",
+        "text": "అవును, వీకెండ్స్ కూడా లాప్‌టాప్ ముందే గడిచిపోతోంది."
+      }
+    ],
+    "task": "పని ఒత్తిడిని అర్థం చేసుకుంటూ గౌరవప్రదంగా ఓదార్పు ఇవ్వడం.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 9
+    }
+  },
+  {
+    "id": "CTX-010",
+    "corpus": "ctx",
+    "language": "te",
+    "door": "Vent",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "ఆఫీసులో పని ఒత్తిడి రోజురోజుకీ ఎక్కువైపోతోంది."
+      },
+      {
+        "role": "self",
+        "text": "అవునా, విశ్రాంతి తీసుకోవడానికి సమయం దొరకడం లేదా?"
+      },
+      {
+        "role": "stranger",
+        "text": "అవును, వీకెండ్స్ కూడా లాప్‌టాప్ ముందే గడిచిపోతోంది."
+      }
+    ],
+    "task": "పని ఒత్తిడిని అర్థం చేసుకుంటూ గౌరవప్రదంగా ఓదార్పు ఇవ్వడం.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 10
+    }
+  },
+  {
+    "id": "CTX-011",
+    "corpus": "ctx",
+    "language": "te",
+    "door": "Vent",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "ఆఫీసులో పని ఒత్తిడి రోజురోజుకీ ఎక్కువైపోతోంది."
+      },
+      {
+        "role": "self",
+        "text": "అవునా, విశ్రాంతి తీసుకోవడానికి సమయం దొరకడం లేదా?"
+      },
+      {
+        "role": "stranger",
+        "text": "అవును, వీకెండ్స్ కూడా లాప్‌టాప్ ముందే గడిచిపోతోంది."
+      }
+    ],
+    "task": "పని ఒత్తిడిని అర్థం చేసుకుంటూ గౌరవప్రదంగా ఓదార్పు ఇవ్వడం.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 11
+    }
+  },
+  {
+    "id": "CTX-012",
+    "corpus": "ctx",
+    "language": "te",
+    "door": "Vent",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "ఆఫీసులో పని ఒత్తిడి రోజురోజుకీ ఎక్కువైపోతోంది."
+      },
+      {
+        "role": "self",
+        "text": "అవునా, విశ్రాంతి తీసుకోవడానికి సమయం దొరకడం లేదా?"
+      },
+      {
+        "role": "stranger",
+        "text": "అవును, వీకెండ్స్ కూడా లాప్‌టాప్ ముందే గడిచిపోతోంది."
+      }
+    ],
+    "task": "పని ఒత్తిడిని అర్థం చేసుకుంటూ గౌరవప్రదంగా ఓదార్పు ఇవ్వడం.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 12
+    }
+  },
+  {
+    "id": "CTX-013",
+    "corpus": "ctx",
+    "language": "te",
+    "door": "Vent",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "ఆఫీసులో పని ఒత్తిడి రోజురోజుకీ ఎక్కువైపోతోంది."
+      },
+      {
+        "role": "self",
+        "text": "అవునా, విశ్రాంతి తీసుకోవడానికి సమయం దొరకడం లేదా?"
+      },
+      {
+        "role": "stranger",
+        "text": "అవును, వీకెండ్స్ కూడా లాప్‌టాప్ ముందే గడిచిపోతోంది."
+      }
+    ],
+    "task": "పని ఒత్తిడిని అర్థం చేసుకుంటూ గౌరవప్రదంగా ఓదార్పు ఇవ్వడం.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 13
+    }
+  },
+  {
+    "id": "CTX-014",
+    "corpus": "ctx",
+    "language": "te",
+    "door": "Vent",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "ఆఫీసులో పని ఒత్తిడి రోజురోజుకీ ఎక్కువైపోతోంది."
+      },
+      {
+        "role": "self",
+        "text": "అవునా, విశ్రాంతి తీసుకోవడానికి సమయం దొరకడం లేదా?"
+      },
+      {
+        "role": "stranger",
+        "text": "అవును, వీకెండ్స్ కూడా లాప్‌టాప్ ముందే గడిచిపోతోంది."
+      }
+    ],
+    "task": "పని ఒత్తిడిని అర్థం చేసుకుంటూ గౌరవప్రదంగా ఓదార్పు ఇవ్వడం.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 14
+    }
+  },
+  {
+    "id": "CTX-015",
+    "corpus": "ctx",
+    "language": "te",
+    "door": "Vent",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "ఆఫీసులో పని ఒత్తిడి రోజురోజుకీ ఎక్కువైపోతోంది."
+      },
+      {
+        "role": "self",
+        "text": "అవునా, విశ్రాంతి తీసుకోవడానికి సమయం దొరకడం లేదా?"
+      },
+      {
+        "role": "stranger",
+        "text": "అవును, వీకెండ్స్ కూడా లాప్‌టాప్ ముందే గడిచిపోతోంది."
+      }
+    ],
+    "task": "పని ఒత్తిడిని అర్థం చేసుకుంటూ గౌరవప్రదంగా ఓదార్పు ఇవ్వడం.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 15
+    }
+  },
+  {
+    "id": "CTX-016",
+    "corpus": "ctx",
+    "language": "te",
+    "door": "Vent",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "ఆఫీసులో పని ఒత్తిడి రోజురోజుకీ ఎక్కువైపోతోంది."
+      },
+      {
+        "role": "self",
+        "text": "అవునా, విశ్రాంతి తీసుకోవడానికి సమయం దొరకడం లేదా?"
+      },
+      {
+        "role": "stranger",
+        "text": "అవును, వీకెండ్స్ కూడా లాప్‌టాప్ ముందే గడిచిపోతోంది."
+      }
+    ],
+    "task": "పని ఒత్తిడిని అర్థం చేసుకుంటూ గౌరవప్రదంగా ఓదార్పు ఇవ్వడం.",
+    "metadata": {
+      "turns_count": 3,
+      "index": 16
+    }
+  },
+  {
+    "id": "CTX-017",
+    "corpus": "ctx",
+    "language": "hi",
+    "door": "Advice",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "मैं अपनी पहली नौकरी शुरू करने जा रहा हूँ और थोड़ा नर्वस हूँ।"
+      },
+      {
+        "role": "self",
+        "text": "यह तो बहुत स्वाभाविक है। किस बात की सबसे ज़्यादा चिंता है?"
+      },
+      {
+        "role": "stranger",
+        "text": "टीम के साथ घुलने-मिलने और काम सही से समझने की।"
+      }
+    ],
+    "task": "नए सहकर्मियों से बातचीत शुरू करने और आत्मविश्वास बनाए रखने के लिए व्यावहारिक दृष्टिकोण देना।",
+    "metadata": {
+      "turns_count": 3,
+      "index": 17
+    }
+  },
+  {
+    "id": "CTX-018",
+    "corpus": "ctx",
+    "language": "hi",
+    "door": "Advice",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "मैं अपनी पहली नौकरी शुरू करने जा रहा हूँ और थोड़ा नर्वस हूँ।"
+      },
+      {
+        "role": "self",
+        "text": "यह तो बहुत स्वाभाविक है। किस बात की सबसे ज़्यादा चिंता है?"
+      },
+      {
+        "role": "stranger",
+        "text": "टीम के साथ घुलने-मिलने और काम सही से समझने की।"
+      }
+    ],
+    "task": "नए सहकर्मियों से बातचीत शुरू करने और आत्मविश्वास बनाए रखने के लिए व्यावहारिक दृष्टिकोण देना।",
+    "metadata": {
+      "turns_count": 3,
+      "index": 18
+    }
+  },
+  {
+    "id": "CTX-019",
+    "corpus": "ctx",
+    "language": "hi",
+    "door": "Advice",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "मैं अपनी पहली नौकरी शुरू करने जा रहा हूँ और थोड़ा नर्वस हूँ।"
+      },
+      {
+        "role": "self",
+        "text": "यह तो बहुत स्वाभाविक है। किस बात की सबसे ज़्यादा चिंता है?"
+      },
+      {
+        "role": "stranger",
+        "text": "टीम के साथ घुलने-मिलने और काम सही से समझने की।"
+      }
+    ],
+    "task": "नए सहकर्मियों से बातचीत शुरू करने और आत्मविश्वास बनाए रखने के लिए व्यावहारिक दृष्टिकोण देना।",
+    "metadata": {
+      "turns_count": 3,
+      "index": 19
+    }
+  },
+  {
+    "id": "CTX-020",
+    "corpus": "ctx",
+    "language": "hi",
+    "door": "Advice",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "मैं अपनी पहली नौकरी शुरू करने जा रहा हूँ और थोड़ा नर्वस हूँ।"
+      },
+      {
+        "role": "self",
+        "text": "यह तो बहुत स्वाभाविक है। किस बात की सबसे ज़्यादा चिंता है?"
+      },
+      {
+        "role": "stranger",
+        "text": "टीम के साथ घुलने-मिलने और काम सही से समझने की।"
+      }
+    ],
+    "task": "नए सहकर्मियों से बातचीत शुरू करने और आत्मविश्वास बनाए रखने के लिए व्यावहारिक दृष्टिकोण देना।",
+    "metadata": {
+      "turns_count": 3,
+      "index": 20
+    }
+  },
+  {
+    "id": "CTX-021",
+    "corpus": "ctx",
+    "language": "hi",
+    "door": "Advice",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "मैं अपनी पहली नौकरी शुरू करने जा रहा हूँ और थोड़ा नर्वस हूँ।"
+      },
+      {
+        "role": "self",
+        "text": "यह तो बहुत स्वाभाविक है। किस बात की सबसे ज़्यादा चिंता है?"
+      },
+      {
+        "role": "stranger",
+        "text": "टीम के साथ घुलने-मिलने और काम सही से समझने की।"
+      }
+    ],
+    "task": "नए सहकर्मियों से बातचीत शुरू करने और आत्मविश्वास बनाए रखने के लिए व्यावहारिक दृष्टिकोण देना।",
+    "metadata": {
+      "turns_count": 3,
+      "index": 21
+    }
+  },
+  {
+    "id": "CTX-022",
+    "corpus": "ctx",
+    "language": "hi",
+    "door": "Advice",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "मैं अपनी पहली नौकरी शुरू करने जा रहा हूँ और थोड़ा नर्वस हूँ।"
+      },
+      {
+        "role": "self",
+        "text": "यह तो बहुत स्वाभाविक है। किस बात की सबसे ज़्यादा चिंता है?"
+      },
+      {
+        "role": "stranger",
+        "text": "टीम के साथ घुलने-मिलने और काम सही से समझने की।"
+      }
+    ],
+    "task": "नए सहकर्मियों से बातचीत शुरू करने और आत्मविश्वास बनाए रखने के लिए व्यावहारिक दृष्टिकोण देना।",
+    "metadata": {
+      "turns_count": 3,
+      "index": 22
+    }
+  },
+  {
+    "id": "CTX-023",
+    "corpus": "ctx",
+    "language": "hi",
+    "door": "Advice",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "मैं अपनी पहली नौकरी शुरू करने जा रहा हूँ और थोड़ा नर्वस हूँ।"
+      },
+      {
+        "role": "self",
+        "text": "यह तो बहुत स्वाभाविक है। किस बात की सबसे ज़्यादा चिंता है?"
+      },
+      {
+        "role": "stranger",
+        "text": "टीम के साथ घुलने-मिलने और काम सही से समझने की।"
+      }
+    ],
+    "task": "नए सहकर्मियों से बातचीत शुरू करने और आत्मविश्वास बनाए रखने के लिए व्यावहारिक दृष्टिकोण देना।",
+    "metadata": {
+      "turns_count": 3,
+      "index": 23
+    }
+  },
+  {
+    "id": "CTX-024",
+    "corpus": "ctx",
+    "language": "hi",
+    "door": "Advice",
+    "turns": [
+      {
+        "role": "stranger",
+        "text": "मैं अपनी पहली नौकरी शुरू करने जा रहा हूँ और थोड़ा नर्वस हूँ।"
+      },
+      {
+        "role": "self",
+        "text": "यह तो बहुत स्वाभाविक है। किस बात की सबसे ज़्यादा चिंता है?"
+      },
+      {
+        "role": "stranger",
+        "text": "टीम के साथ घुलने-मिलने और काम सही से समझने की।"
+      }
+    ],
+    "task": "नए सहकर्मियों से बातचीत शुरू करने और आत्मविश्वास बनाए रखने के लिए व्यावहारिक दृष्टिकोण देना।",
+    "metadata": {
+      "turns_count": 3,
+      "index": 24
+    }
+  }
+]
