@@ -172,7 +172,7 @@ test("1K JOIN and sync share canonical truth while retirement listens independen
   assert.match(serverSource, /get_messages_after[\s\S]*icebreaker:\s*icebreaker_snapshot/)
   assert.match(channelSource, /conversation_icebreaker[\s\S]*conversation:icebreaker/)
   assert.match(appSource, /applySyncPayload[\s\S]*applyCanonicalIcebreaker\(syncPayload\.icebreaker\)/)
-  assert.match(appSource, /conversation\.on\("conversation:icebreaker", applyCanonicalIcebreaker\)/)
+  assert.match(appSource, /onCurrent\("conversation:icebreaker", applyCanonicalIcebreaker\)/)
 })
 
 test("1K retirement covers every current human timeline representation and excludes operational owners", async () => {

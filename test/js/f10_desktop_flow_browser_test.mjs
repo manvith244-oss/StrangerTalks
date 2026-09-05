@@ -230,7 +230,11 @@ test("F-10 standard keyboard controls operate Matchmaking and Settings", {timeou
     assert.ok(participantTopic, "keyboard start sends a queue request")
     assert.equal(sentCount(user, participantTopic, "queue:join"), 1, "keyboard start submits exactly one queue attempt")
 
-    await user.page.locator("#leave-queue").focus()
+    await user.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: WAIT_MS})
+    const leaveQueue = user.page.locator("#leave-queue")
+    assert.equal(await leaveQueue.isEnabled(), true, "queue leave control is enabled once matchmaking is cancellable")
+    await leaveQueue.focus()
+    assert.equal(await leaveQueue.evaluate(node => node === document.activeElement), true, "queue leave control receives keyboard focus")
     await user.page.keyboard.press("Space")
     await user.page.locator('[data-screen="doors"].active').waitFor({state: "visible", timeout: WAIT_MS})
 

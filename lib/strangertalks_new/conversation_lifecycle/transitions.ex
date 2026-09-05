@@ -184,18 +184,41 @@ defmodule StrangertalksNew.ConversationLifecycle.Transitions do
   def terminal?(status) when is_atom(status), do: status in @terminal_statuses
 
   defp apply_transition(conv, target_status, event, attrs) do
+    if terminal?(target_status) do
+      StrangertalksNew.Telemetry.execute(
+        [:terminal, :request_accepted],
+        %{count: 1},
+        %{terminal_status: target_status, lifecycle_event: event}
+      )
+    end
+
     try do
       changeset = Conversation.changeset(conv, attrs)
 
       if changeset.valid? do
         persist_if_canonical(conv, changeset, target_status, event)
       else
+        emit_terminal_persistence_failure(target_status, event, changeset)
         {:error, changeset}
       end
     rescue
-      exception -> {:error, exception}
+      exception ->
+        emit_terminal_persistence_failure(target_status, event, exception)
+        {:error, exception}
     catch
-      :exit, reason -> {:error, reason}
+      :exit, reason ->
+        emit_terminal_persistence_failure(target_status, event, reason)
+        {:error, reason}
+    end
+  end
+
+  defp emit_terminal_persistence_failure(target_status, event, reason) do
+    if terminal?(target_status) do
+      StrangertalksNew.Telemetry.failure(
+        [:terminal, :persistence_failed],
+        reason,
+        %{terminal_status: target_status, lifecycle_event: event}
+      )
     end
   end
 
@@ -221,6 +244,14 @@ defmodule StrangertalksNew.ConversationLifecycle.Transitions do
             lifecycle_event: event
           }
         )
+
+        if terminal?(target_status) and updated.ending_type != :BLOCK do
+          StrangertalksNew.Telemetry.execute(
+            [:terminal, :durable_commit],
+            %{count: 1},
+            %{terminal_status: target_status, lifecycle_event: event}
+          )
+        end
 
         {:ok, updated}
 

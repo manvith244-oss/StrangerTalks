@@ -202,7 +202,7 @@ test("1I source audit proves zero server, peer, persistence, diagnostic, or arbi
 
 test("1I app wiring resets only at frozen lifecycle boundaries and reconnect does not enable audio", () => {
   const appSource = fs.readFileSync(path.join(ROOT, "priv/static/assets/app.js"), "utf8")
-  assert.match(appSource, /conversation\.on\("conversation:ended"[\s\S]*?resetAmbientAudio\(\)/)
+  assert.match(appSource, /onCurrent\("conversation:ended"[\s\S]*?resetAmbientAudio\(\)/)
   assert.match(appSource, /currentEpochId !== epoch_id\) \{\s*resetAmbientAudio\(\)/)
   assert.match(appSource, /async function handleMatchedConversation[\s\S]*?resetAmbientAudio\(\)/)
   assert.match(appSource, /\.receive\("ok"[\s\S]*?setConversationActive\(true\)/)

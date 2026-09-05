@@ -190,8 +190,11 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
   test "Trend research returns candidates without publication authority" do
     assert {:ok, result} =
              TrendBridgeResearch.research("en", [
-               "A big cricket match is being discussed this weekend",
-               "Monsoon evenings are back"
+               %{
+                 text: "A big cricket match is being discussed this weekend",
+                 provenance: :OPERATOR_PROVIDED
+               },
+               %{text: "Monsoon evenings are back", provenance: :OPERATOR_PROVIDED}
              ])
 
     assert result.status == "ready"
@@ -205,10 +208,15 @@ defmodule StrangertalksNew.AgentSystemsFunctionalTest do
   end
 
   test "Trend research rejects unsupported languages and oversized signals before provider" do
-    assert {:error, :unsupported_language} = TrendBridgeResearch.research("fr", ["signal"])
+    assert {:error, :unsupported_language} =
+             TrendBridgeResearch.research("fr", [
+               %{text: "signal", provenance: :OPERATOR_PROVIDED}
+             ])
 
     assert {:error, :invalid_trend_research} =
-             TrendBridgeResearch.research("en", [String.duplicate("x", 241)])
+             TrendBridgeResearch.research("en", [
+               %{text: String.duplicate("x", 241), provenance: :OPERATOR_PROVIDED}
+             ])
 
     refute_receive {:agent_request, "trend_bridge_research", _}, 20
   end
