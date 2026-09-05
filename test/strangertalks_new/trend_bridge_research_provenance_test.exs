@@ -75,6 +75,7 @@ defmodule StrangertalksNew.TrendBridgeResearchProvenanceTest do
     assert result.publication_authority == false
 
     assert_receive {:agent_request, "trend_bridge_research", payload}
+
     assert payload == %{
              language: "en",
              signals: [
