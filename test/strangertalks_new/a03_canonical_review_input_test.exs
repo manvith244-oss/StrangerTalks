@@ -134,7 +134,8 @@ defmodule StrangertalksNew.A03CanonicalReviewInputTest do
   end
 
   test "A03 reflects canonical RESOLVED review state" do
-    %{report: report, review: review} = report_fixture("MALICIOUS_LINKS", "resolved review status")
+    %{report: report, review: review} =
+      report_fixture("MALICIOUS_LINKS", "resolved review status")
 
     assert {:ok, %{status: :RESOLVED}} =
              SafetyReviews.resolve_review(
@@ -165,7 +166,8 @@ defmodule StrangertalksNew.A03CanonicalReviewInputTest do
   end
 
   test "A03 fails closed when the canonical SafetyReview row is missing" do
-    %{report: report, review: review} = report_fixture("THREATS", "missing review must fail closed")
+    %{report: report, review: review} =
+      report_fixture("THREATS", "missing review must fail closed")
 
     Repo.delete!(review)
 
