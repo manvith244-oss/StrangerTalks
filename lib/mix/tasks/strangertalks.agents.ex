@@ -30,7 +30,12 @@ defmodule Mix.Tasks.Strangertalks.Agents do
           SafetyReviewAssistant.review_report(report_id)
 
         ["trends", language | signals] when signals != [] ->
-          TrendBridgeResearch.research(language, signals)
+          operator_signals =
+            Enum.map(signals, fn signal ->
+              %{text: signal, provenance: :OPERATOR_PROVIDED}
+            end)
+
+          TrendBridgeResearch.research(language, operator_signals)
 
         _ ->
           {:error, :invalid_agent_command}
