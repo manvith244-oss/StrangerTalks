@@ -16,9 +16,12 @@ on:
       - "lib/mix/tasks/strangertalks.agents.ex"
       - "test/strangertalks_new/intelligence_v1_test.exs"
       - "test/strangertalks_new/intelligence_v1_hostile_test.exs"
+      - "test/strangertalks_new/a02_authority_reconciliation_test.exs"
       - "test/strangertalks_new/team7_intelligence_boundary_test.exs"
       - "test/strangertalks_new/analytics_record_test.exs"
       - "test/strangertalks_new/learning_record_test.exs"
+      - "docs/AGENT_SYSTEMS_V1_BOUNDARIES.md"
+      - "docs/STRANGERTALKS_CURRENT_CONTEXT.md"
       - "docs/TEAM8_INTELLIGENCE_V1.md"
       - ".github/workflows/team8-intelligence.yml"
 
@@ -91,6 +94,7 @@ jobs:
           mix test \
             test/strangertalks_new/intelligence_v1_test.exs \
             test/strangertalks_new/intelligence_v1_hostile_test.exs \
+            test/strangertalks_new/a02_authority_reconciliation_test.exs \
             test/strangertalks_new/team7_intelligence_boundary_test.exs \
             test/strangertalks_new/analytics_record_test.exs \
             test/strangertalks_new/learning_record_test.exs \

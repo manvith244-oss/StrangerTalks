@@ -1,6 +1,8 @@
 # Team 8 — Intelligence, Learning & Analytics V1
 
-Status: canonical Team 8 V1 boundary for the release-prep line.
+Status: canonical historical Team 8 V1 boundary for the release-prep line, retained as current deterministic V1 implementation evidence.
+
+Organizational disambiguation: **Historical Team 8** in this document is the pre-Agent-Command Intelligence, Learning & Analytics team. It is **not** current `T-A08 — Agent Collaboration, Orchestration & Capability Contracts`. Under current Agent Command, A02 owns the organizational learning responsibility while the deterministic `V1Metrics` + `V1Recommendations` implementation described here remains the current V1 evidence/recommendation path.
 
 ## Decision
 
@@ -27,8 +29,8 @@ There is no raw analytics event warehouse, participant intelligence profile, sel
 ## Runtime owners
 
 - `StrangertalksNew.Telemetry` remains the bounded operational telemetry primitive. It strips IDs/content/secrets and is non-authoritative.
-- `StrangertalksNew.Intelligence.V1Metrics` is the Team 8 read-only aggregate owner.
-- `StrangertalksNew.Intelligence.V1Recommendations` is the Team 8 deterministic recommendation owner.
+- `StrangertalksNew.Intelligence.V1Metrics` is the historical Team 8 read-only aggregate owner and current deterministic V1 evidence implementation under A02 organizational responsibility.
+- `StrangertalksNew.Intelligence.V1Recommendations` is the historical Team 8 deterministic recommendation owner and current deterministic V1 recommendation implementation under A02 organizational responsibility.
 - `mix strangertalks.intelligence [hours]` is the operator entry point. The window is capped at 31 days.
 - `AnalyticsRecord` and `LearningRecord` remain legacy schemas only. New writes through their contexts are disabled in V1.
 - The historical model-based `mix strangertalks.agents learning` path is superseded by the deterministic Team 8 report.
@@ -151,7 +153,7 @@ A recommendation and a production change are separate operations owned by Comman
 
 Team 8 V1 uses no model.
 
-The historical `LearningAdvisor` model path fails the V1 necessity test because the current Team 8 questions are answerable from deterministic aggregates and simple arithmetic. Its operator command is therefore superseded.
+The historical `LearningAdvisor` model path fails the V1 necessity test because the current Team 8 questions are answerable from deterministic aggregates and simple arithmetic. Its operator command is therefore superseded. Under current Agent Command this means the **model-backed implementation** is superseded; A02's organizational learning responsibility remains current over the deterministic V1 path.
 
 Current cross-team model-assisted capabilities are classified by Team 8 as **normal bounded services, not formal autonomous Agents**, because they do not possess independent product authority:
 
@@ -195,7 +197,7 @@ Their continued V1 product necessity remains with their owning product/safety bo
 | Metrics & Success | Team 8 aggregate analytics |
 | HCIL | PRODUCT/GOVERNANCE / future research principle, not runtime Agent |
 | A01 Conversation Companion | normal participant-invoked model-assisted service; cross-team owner |
-| A02 Learning Advisor | SUPERSEDED for V1 Team 8 learning; operator path disabled |
+| A02 organizational Learning Advisor | CURRENT Agent Command responsibility over the deterministic V1 evidence/recommendation path; historical model-backed `AgentSystems.LearningAdvisor` is `SUPERSEDED_FOR_CURRENT_V1` |
 | A03 Safety Review Assistant | normal advisory model-assisted service; Team 4 owner |
 | A04 Trend/Bridge Research | normal advisory research service; cross-team owner |
 
