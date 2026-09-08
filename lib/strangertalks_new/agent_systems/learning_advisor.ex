@@ -47,6 +47,29 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
     :aggregation_level
   ]
 
+  @forbidden_personal_keys [
+    :participant_id,
+    :participant_a_id,
+    :participant_b_id,
+    :conversation_id,
+    :match_id,
+    :message_id,
+    :report_id,
+    :reporter_context,
+    :review_notes,
+    "participant_id",
+    "participant_a_id",
+    "participant_b_id",
+    "conversation_id",
+    "match_id",
+    "message_id",
+    "report_id",
+    "reporter_context",
+    "review_notes"
+  ]
+
+  @personal_data_markers [:contains_personal_data, "contains_personal_data"]
+
   def advise_latest(limit \\ 12)
 
   def advise_latest(limit) when is_integer(limit) and limit in 1..@max_rows do
@@ -116,16 +139,21 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
   defp normalize_snapshot(rows) do
     rows
     |> Enum.reduce_while({:ok, []}, fn row, {:ok, acc} ->
-      if is_map(row) do
-        projected =
-          row
-          |> Map.take(@allowed_fields)
-          |> normalize_values()
+      if is_map(row) and not is_struct(row) do
+        case inspect_privacy(row) do
+          :safe ->
+            projected =
+              row
+              |> Map.take(@allowed_fields)
+              |> normalize_values()
 
-        if personal_key_present?(row) do
-          {:halt, {:error, :personal_data_not_allowed}}
-        else
-          {:cont, {:ok, [projected | acc]}}
+            {:cont, {:ok, [projected | acc]}}
+
+          :forbidden ->
+            {:halt, {:error, :personal_data_not_allowed}}
+
+          :unsupported ->
+            {:halt, {:error, :invalid_learning_snapshot}}
         end
       else
         {:halt, {:error, :invalid_learning_snapshot}}
@@ -137,27 +165,79 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
     end
   end
 
-  defp personal_key_present?(row) do
-    forbidden = [
-      :participant_id,
-      :participant_a_id,
-      :participant_b_id,
-      :conversation_id,
-      :message_id,
-      :reporter_context,
-      :review_notes,
-      "participant_id",
-      "participant_a_id",
-      "participant_b_id",
-      "conversation_id",
-      "message_id",
-      "reporter_context",
-      "review_notes"
-    ]
+  defp inspect_privacy(%Decimal{}), do: :safe
+  defp inspect_privacy(%Date{}), do: :safe
+  defp inspect_privacy(%DateTime{}), do: :safe
+  defp inspect_privacy(value) when is_struct(value), do: :unsupported
 
-    Enum.any?(forbidden, &Map.has_key?(row, &1)) or
-      Map.get(row, :contains_personal_data) == true or
-      Map.get(row, "contains_personal_data") == true
+  defp inspect_privacy(value) when is_map(value) do
+    value
+    |> Map.to_list()
+    |> inspect_entries()
+  end
+
+  defp inspect_privacy(value) when is_list(value) do
+    if Keyword.keyword?(value) do
+      inspect_entries(value)
+    else
+      inspect_sequence(value)
+    end
+  end
+
+  defp inspect_privacy(value)
+       when is_binary(value) or is_number(value) or is_boolean(value) or is_atom(value) or
+              is_nil(value),
+       do: :safe
+
+  defp inspect_privacy(_value), do: :unsupported
+
+  defp inspect_entries(entries) do
+    Enum.reduce_while(entries, :safe, fn
+      {key, nested}, :safe ->
+        cond do
+          not (is_atom(key) or is_binary(key)) ->
+            {:halt, :unsupported}
+
+          privacy_key_member?(key, @forbidden_personal_keys) ->
+            {:halt, :forbidden}
+
+          privacy_key_member?(key, @personal_data_markers) and nested == true ->
+            {:halt, :forbidden}
+
+          true ->
+            case inspect_privacy(nested) do
+              :safe -> {:cont, :safe}
+              result -> {:halt, result}
+            end
+        end
+    end)
+  end
+
+  defp privacy_key_member?(key, candidates) do
+    canonical_key = canonical_privacy_key(key)
+    Enum.any?(candidates, &(canonical_privacy_key(&1) == canonical_key))
+  end
+
+  defp canonical_privacy_key(key) when is_atom(key) do
+    key
+    |> Atom.to_string()
+    |> canonical_privacy_key()
+  end
+
+  defp canonical_privacy_key(key) when is_binary(key) do
+    for <<byte <- key>>, into: <<>> do
+      lowered = if byte in ?A..?Z, do: byte + 32, else: byte
+      <<lowered>>
+    end
+  end
+
+  defp inspect_sequence(values) do
+    Enum.reduce_while(values, :safe, fn value, :safe ->
+      case inspect_privacy(value) do
+        :safe -> {:cont, :safe}
+        result -> {:halt, result}
+      end
+    end)
   end
 
   defp normalize_values(%Decimal{} = value), do: Decimal.to_string(value, :normal)
@@ -168,35 +248,64 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
     Map.new(value, fn {key, item} -> {key, normalize_values(item)} end)
   end
 
-  defp normalize_values(value) when is_list(value), do: Enum.map(value, &normalize_values/1)
+  defp normalize_values(value) when is_list(value) do
+    if Keyword.keyword?(value) do
+      Map.new(value, fn {key, item} -> {key, normalize_values(item)} end)
+    else
+      Enum.map(value, &normalize_values/1)
+    end
+  end
+
   defp normalize_values(value) when is_atom(value), do: Atom.to_string(value)
   defp normalize_values(value), do: value
 
-  defp validate_output(%{"recommendations" => recommendations}) when is_list(recommendations) do
-    normalized =
-      recommendations
-      |> Enum.map(&normalize_recommendation/1)
-      |> Enum.filter(&match?({:ok, _}, &1))
-      |> Enum.map(fn {:ok, item} -> item end)
-      |> Enum.uniq_by(&String.downcase(&1.title))
-      |> Enum.take(5)
+  defp validate_output(%{"recommendations" => recommendations} = decoded)
+       when is_list(recommendations) do
+    with true <- exact_keys?(decoded, ["recommendations"]),
+         true <- length(recommendations) in 1..5,
+         {:ok, normalized} <- normalize_recommendations(recommendations) do
+      deduplicated = Enum.uniq_by(normalized, &String.downcase(&1.title))
 
-    if normalized == [], do: {:error, :invalid_learning_output}, else: {:ok, normalized}
+      if deduplicated == [],
+        do: {:error, :invalid_learning_output},
+        else: {:ok, deduplicated}
+    else
+      _ -> {:error, :invalid_learning_output}
+    end
   end
 
   defp validate_output(_decoded), do: {:error, :invalid_learning_output}
 
-  defp normalize_recommendation(%{
-         "title" => title,
-         "hypothesis" => hypothesis,
-         "evidence" => evidence,
-         "experiment" => experiment,
-         "confidence" => confidence
-       })
+  defp normalize_recommendations(recommendations) do
+    Enum.reduce_while(recommendations, {:ok, []}, fn recommendation, {:ok, acc} ->
+      case normalize_recommendation(recommendation) do
+        {:ok, normalized} -> {:cont, {:ok, [normalized | acc]}}
+        {:error, :invalid} -> {:halt, {:error, :invalid_learning_output}}
+      end
+    end)
+    |> case do
+      {:ok, normalized} -> {:ok, Enum.reverse(normalized)}
+      error -> error
+    end
+  end
+
+  defp normalize_recommendation(
+         %{
+           "title" => title,
+           "hypothesis" => hypothesis,
+           "evidence" => evidence,
+           "experiment" => experiment,
+           "confidence" => confidence
+         } = item
+       )
        when confidence in ["low", "medium", "high"] do
     values = [title, hypothesis, evidence, experiment]
 
-    if Enum.all?(values, &(is_binary(&1) and String.trim(&1) != "" and String.length(&1) <= 600)) do
+    if exact_keys?(item, ["title", "hypothesis", "evidence", "experiment", "confidence"]) and
+         Enum.all?(
+           values,
+           &(is_binary(&1) and String.trim(&1) != "" and String.length(&1) <= 600)
+         ) do
       {:ok,
        %{
          title: String.trim(title),
@@ -211,6 +320,12 @@ defmodule StrangertalksNew.AgentSystems.LearningAdvisor do
   end
 
   defp normalize_recommendation(_item), do: {:error, :invalid}
+
+  defp exact_keys?(map, expected) when is_map(map) do
+    map
+    |> Map.keys()
+    |> Enum.sort() == Enum.sort(expected)
+  end
 
   defp instructions do
     """
