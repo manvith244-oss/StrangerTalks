@@ -17,6 +17,8 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   alias StrangertalksNew.C11Policy
   alias StrangertalksNew.Repo
 
+  import Ecto.Query, warn: false
+
   require Logger
 
   @recovery_window_ms 60_000
@@ -57,6 +59,90 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   end
 
   def ensure_started(conversation_id) when is_binary(conversation_id) do
+    case fetch_durable_lifecycle_state(conversation_id) do
+      {:terminal, _status} ->
+        maybe_cleanup_stale_process(conversation_id)
+        {:error, :terminal_conversation}
+
+      :not_found ->
+        {:error, :unknown_conversation}
+
+      {:active, _status} ->
+        start_or_lookup_active(conversation_id)
+    end
+  end
+
+  def lookup(conversation_id) do
+    case Registry.lookup(
+           StrangertalksNew.DistributedRegistry,
+           "conversation:#{conversation_id}"
+         ) do
+      [{pid, _value}] ->
+        if Process.alive?(pid) do
+          {:ok, pid}
+        else
+          {:error, :not_started}
+        end
+
+      [] ->
+        {:error, :not_started}
+    end
+  end
+
+  defp fetch_durable_lifecycle_state(conversation_id) do
+    case Ecto.UUID.cast(conversation_id) do
+      {:ok, valid_id} ->
+        query =
+          from c in Conversation,
+            where: c.conversation_id == ^valid_id,
+            select: c.conversation_status
+
+        case Repo.one(query) do
+          nil ->
+            :not_found
+
+          status when status in @release_terminal_statuses ->
+            {:terminal, status}
+
+          status ->
+            {:active, status}
+        end
+
+      :error ->
+        :not_found
+    end
+  rescue
+    _ -> :not_found
+  end
+
+  defp maybe_cleanup_stale_process(conversation_id) do
+    case Registry.lookup(
+           StrangertalksNew.DistributedRegistry,
+           "conversation:#{conversation_id}"
+         ) do
+      [{pid, _value}] ->
+        if Process.alive?(pid) do
+          _ =
+            DynamicSupervisor.terminate_child(
+              StrangertalksNew.ConversationDynamicSupervisor,
+              pid
+            )
+
+          if Process.alive?(pid) do
+            Process.exit(pid, :shutdown)
+          end
+        end
+
+        :ok
+
+      [] ->
+        :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp start_or_lookup_active(conversation_id) do
     case lookup(conversation_id) do
       {:ok, pid} ->
         {:ok, pid}
@@ -66,21 +152,28 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
                StrangertalksNew.ConversationDynamicSupervisor,
                {__MODULE__, %{conversation_id: conversation_id}}
              ) do
-          {:ok, pid} -> {:ok, pid}
-          {:error, {:already_started, pid}} -> {:ok, pid}
-          {:error, :already_present} -> lookup(conversation_id)
-          {:error, reason} -> {:error, reason}
-        end
-    end
-  end
+          {:ok, pid} ->
+            {:ok, pid}
 
-  def lookup(conversation_id) do
-    case Registry.lookup(
-           StrangertalksNew.DistributedRegistry,
-           "conversation:#{conversation_id}"
-         ) do
-      [{pid, _value}] -> {:ok, pid}
-      [] -> {:error, :not_started}
+          {:error, {:already_started, pid}} ->
+            if Process.alive?(pid) do
+              {:ok, pid}
+            else
+              lookup(conversation_id)
+            end
+
+          {:error, :already_present} ->
+            lookup(conversation_id)
+
+          {:error, :terminal_conversation} ->
+            {:error, :terminal_conversation}
+
+          {:error, {:shutdown, :terminal_conversation}} ->
+            {:error, :terminal_conversation}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 
@@ -6206,7 +6299,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
                :crypto.hash(:sha256, grant_secret) == grant.secret_verifier ||
                  {:error, :invalid_grant_secret},
              true <-
-               (is_nil(grant.source_epoch_id) or grant.source_epoch_id == state.epoch_id) ||
+               is_nil(grant.source_epoch_id) or grant.source_epoch_id == state.epoch_id ||
                  {:error, :epoch_mismatch},
              target when not is_nil(target) <-
                find_recent_message(state.recent_messages, grant.source_client_message_id),
