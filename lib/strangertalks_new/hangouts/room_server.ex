@@ -2,7 +2,15 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   use GenServer, restart: :transient
 
   alias StrangertalksNew.Hangouts
-  alias StrangertalksNew.Hangouts.{HangoutMembership, HangoutRoom, Observability, RoomSupervisor, SharedContent}
+
+  alias StrangertalksNew.Hangouts.{
+    HangoutMembership,
+    HangoutRoom,
+    Observability,
+    RoomSupervisor,
+    SharedContent
+  }
+
   alias StrangertalksNew.Repo
 
   @registry StrangertalksNew.Hangouts.Registry
