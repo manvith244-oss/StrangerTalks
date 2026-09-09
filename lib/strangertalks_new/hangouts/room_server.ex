@@ -2,7 +2,7 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   use GenServer, restart: :transient
 
   alias StrangertalksNew.Hangouts
-  alias StrangertalksNew.Hangouts.{HangoutMembership, RoomSupervisor, SharedContent}
+  alias StrangertalksNew.Hangouts.{HangoutMembership, HangoutRoom, Observability, RoomSupervisor, SharedContent}
   alias StrangertalksNew.Repo
 
   @registry StrangertalksNew.Hangouts.Registry
@@ -210,6 +210,12 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
                 {:hangout_event, "reaction:updated", payload}
               )
 
+              Observability.emit_room(state.room_id, :reaction_accepted, %{
+                count: 1,
+                content_sequence: expected_content_sequence,
+                reaction_count: map_size(reactions)
+              })
+
               {:reply, {:ok, payload}, next_state}
             end
 
@@ -231,6 +237,15 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
       next_state = %{state | skip_voters: voters}
       required_votes = required_skip_votes(MapSet.size(active_ids), ratio)
       vote_count = MapSet.size(voters)
+
+      unless already_voted? do
+        Observability.emit_room(state.room_id, :skip_vote, %{
+          count: 1,
+          content_sequence: expected_content_sequence,
+          votes: vote_count,
+          required_votes: required_votes
+        })
+      end
 
       cond do
         already_voted? ->
@@ -272,6 +287,7 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
     with {:ok, _membership} <- Hangouts.disconnect_member(state.room_id, participant_id),
          {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id) do
       snapshot = enrich_snapshot(snapshot)
+      Observability.emit_room(state.room_id, :disconnect, %{count: 1})
       {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -282,6 +298,7 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
     with {:ok, _membership} <- Hangouts.reconnect_member(state.room_id, participant_id),
          {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id) do
       snapshot = enrich_snapshot(snapshot)
+      Observability.emit_room(state.room_id, :reconnect, %{count: 1})
       {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -291,6 +308,8 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   def handle_call({:send_message, participant_id, attrs}, _from, state) do
     case Hangouts.append_message(state.room_id, participant_id, attrs) do
       {:ok, message} ->
+        new_message? = message.sequence > state.snapshot.message_sequence
+
         with {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id),
              snapshot <- enrich_snapshot(snapshot),
              %{identity: identity} <- Enum.find(snapshot.members, & &1.self) do
@@ -307,6 +326,10 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
             topic(state.room_id),
             {:hangout_event, "message:new", public_message}
           )
+
+          if new_message? do
+            emit_message_telemetry(state.room_id, message)
+          end
 
           {:reply, {:ok, public_message}, %{state | snapshot: snapshot}}
         else
@@ -338,10 +361,55 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
           {:hangout_event, "room:ended", terminal_snapshot}
         )
 
+        Observability.emit(
+          :room_ended,
+          Observability.room_end_measurements(room),
+          Observability.metadata(room)
+        )
+
         {:stop, :normal, {:ok, terminal_snapshot}, state}
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp emit_message_telemetry(room_id, message) do
+    case Repo.get(HangoutRoom, room_id) do
+      %HangoutRoom{} = room ->
+        measurements = %{count: 1, message_sequence: message.sequence}
+        metadata = Observability.metadata(room)
+        Observability.emit(:message_accepted, measurements, metadata)
+
+        if message.sequence == 1 do
+          Observability.emit(
+            :first_human_message,
+            %{
+              count: 1,
+              message_sequence: 1,
+              first_message_latency_ms:
+                Observability.duration_ms(message.created_at, room.activated_at)
+            },
+            metadata
+          )
+        end
+
+        if Observability.first_response_after_current_content?(room) do
+          Observability.emit(
+            :first_response_after_content,
+            %{
+              count: 1,
+              message_sequence: message.sequence,
+              content_sequence: room.content_sequence,
+              content_response_latency_ms:
+                Observability.duration_ms(message.created_at, room.current_content_started_at)
+            },
+            metadata
+          )
+        end
+
+      nil ->
+        :ok
     end
   end
 
