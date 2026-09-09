@@ -14,6 +14,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   alias StrangertalksNew.AvatarCatalog
   alias StrangertalksNew.ExpressiveMediaCatalog
   alias StrangertalksNew.IcebreakerCatalog
+  alias StrangertalksNew.Matches
   alias StrangertalksNew.C11Policy
   alias StrangertalksNew.Repo
 
@@ -833,7 +834,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
            conversation: conversation,
            epoch_id: epoch_id,
            avatar_map: avatar_map,
-           icebreaker: initial_icebreaker(conversation_id),
+           icebreaker: initial_icebreaker(conversation_id, conversation.match_id),
            participant_channels: participant_channels,
            session_visibility: %{},
            channel_sync_floors: %{},
@@ -3389,6 +3390,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       true ->
         with {:ok, reply_author_relation, reply_snippet} <-
                resolve_reply_context(state, sender_id, reply_to_client_message_id) do
+          :ok = Matches.mark_conversation_started!(state.conversation.match_id)
           recipient_id = other_participant(state, sender_id)
           sequence = state.next_sequence
           sent_at = DateTime.utc_now()
@@ -4374,6 +4376,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
 
         case VoiceNoteStore.put(stored_note) do
           {:ok, _metadata, storage_status} ->
+            :ok = Matches.mark_conversation_started!(state.conversation.match_id)
             accepted_monotonic = System.monotonic_time()
 
             expiry_ref =
@@ -5965,6 +5968,14 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
         message.type in [:view_once_photo, :view_once_video, :expressive, :voice_note]
     end)
     |> format_replay_for_participant(participant_id, state)
+  end
+
+  defp initial_icebreaker(conversation_id, match_id) do
+    if Matches.conversation_started?(match_id) do
+      :retired
+    else
+      initial_icebreaker(conversation_id)
+    end
   end
 
   defp initial_icebreaker(conversation_id) do
