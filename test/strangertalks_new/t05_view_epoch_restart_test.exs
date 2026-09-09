@@ -18,11 +18,10 @@ defmodule StrangertalksNew.T05ViewEpochRestartTest do
     client_message_id = Ecto.UUID.generate()
     epoch_id = Ecto.UUID.generate()
     media = valid_jpeg()
-    owner = spawn(fn -> receive do: (:stop -> :ok) end)
+    owner = start_supervised!({Agent, fn -> :t05_view_epoch_owner end})
 
     on_exit(fn ->
       ViewOnceMediaStore.delete_conversation(conversation_id)
-      if Process.alive?(owner), do: send(owner, :stop)
     end)
 
     assert :ok = ViewOnceMediaStore.register_owner(conversation_id, owner)
