@@ -5,6 +5,7 @@ defmodule StrangertalksNew.Hangouts do
     HangoutMembership,
     HangoutMessage,
     HangoutRoom,
+    Observability,
     TemporaryIdentity
   }
 
@@ -139,32 +140,47 @@ defmodule StrangertalksNew.Hangouts do
 
   def leave_room(room_id, participant_id)
       when is_binary(room_id) and is_binary(participant_id) do
-    Repo.transaction(fn ->
-      room = lock_room(room_id)
+    result =
+      Repo.transaction(fn ->
+        room = lock_room(room_id)
 
-      if is_nil(room) do
-        Repo.rollback(:room_not_found)
-      end
+        if is_nil(room) do
+          Repo.rollback(:room_not_found)
+        end
 
-      case lock_membership(room_id, participant_id) do
-        nil ->
-          Repo.rollback(:membership_not_found)
+        case lock_membership(room_id, participant_id) do
+          nil ->
+            Repo.rollback(:membership_not_found)
 
-        %HangoutMembership{status: :LEFT} = membership ->
-          membership
+          %HangoutMembership{status: :LEFT} = membership ->
+            {:unchanged, membership}
 
-        %HangoutMembership{status: :REMOVED} ->
-          Repo.rollback(:membership_removed)
+          %HangoutMembership{status: :REMOVED} ->
+            Repo.rollback(:membership_removed)
 
-        %HangoutMembership{} = membership ->
-          update_membership!(membership, %{
-            status: :LEFT,
-            left_at: now(),
-            last_seen_at: now()
-          })
-      end
-    end)
-    |> normalize_transaction()
+          %HangoutMembership{} = membership ->
+            updated =
+              update_membership!(membership, %{
+                status: :LEFT,
+                left_at: now(),
+                last_seen_at: now()
+              })
+
+            {:left, updated}
+        end
+      end)
+
+    case result do
+      {:ok, {:left, membership}} ->
+        Observability.emit_room(room_id, :leave, %{count: 1})
+        {:ok, membership}
+
+      {:ok, {:unchanged, membership}} ->
+        {:ok, membership}
+
+      other ->
+        normalize_transaction(other)
+    end
   end
 
   def leave_room(_room_id, _participant_id), do: {:error, :invalid_membership_request}
