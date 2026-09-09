@@ -134,6 +134,7 @@ defmodule StrangertalksNew.Matching do
       matching
       |> cast(attrs, @required_fields ++ @optional_fields)
       |> validate_required(@required_fields)
+      |> validate_distinct_participants()
 
     changeset =
       if get_field(changeset, :match_strategy) == :relationship_reconnect_v1,
@@ -144,9 +145,24 @@ defmodule StrangertalksNew.Matching do
     |> check_constraint(:match_strategy, name: :match_strategy_check)
     |> check_constraint(:compatibility_score, name: :matches_compatibility_by_strategy_check)
     |> check_constraint(:conversation_language, name: :conversation_language_check)
+    |> check_constraint(:participant_b_id,
+      name: :matches_distinct_participants_check,
+      message: "must identify two different participants"
+    )
     |> foreign_key_constraint(:participant_a_id)
     |> foreign_key_constraint(:participant_b_id)
     |> unique_constraint(:match_id, name: :matches_pkey)
+  end
+
+  defp validate_distinct_participants(changeset) do
+    participant_a_id = get_field(changeset, :participant_a_id)
+    participant_b_id = get_field(changeset, :participant_b_id)
+
+    if participant_a_id && participant_b_id && participant_a_id == participant_b_id do
+      add_error(changeset, :participant_b_id, "must identify two different participants")
+    else
+      changeset
+    end
   end
 
   defp backfill_entry_doors(attrs) do

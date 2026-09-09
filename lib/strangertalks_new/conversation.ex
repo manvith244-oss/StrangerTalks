@@ -129,10 +129,30 @@ defmodule StrangertalksNew.Conversation do
     conversation
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
+    |> validate_distinct_participants()
+    |> check_constraint(:participant_b_id,
+      name: :conversations_distinct_participants_check,
+      message: "must identify two different participants"
+    )
     |> foreign_key_constraint(:match_id)
+    |> foreign_key_constraint(:match_id,
+      name: :conversations_match_participants_fkey,
+      message: "does not match durable Match participants"
+    )
     |> foreign_key_constraint(:participant_a_id)
     |> foreign_key_constraint(:participant_b_id)
     |> unique_constraint(:conversation_id, name: :conversations_pkey)
     |> unique_constraint(:match_id, name: :conversations_match_id_index)
+  end
+
+  defp validate_distinct_participants(changeset) do
+    participant_a_id = get_field(changeset, :participant_a_id)
+    participant_b_id = get_field(changeset, :participant_b_id)
+
+    if participant_a_id && participant_b_id && participant_a_id == participant_b_id do
+      add_error(changeset, :participant_b_id, "must identify two different participants")
+    else
+      changeset
+    end
   end
 end
