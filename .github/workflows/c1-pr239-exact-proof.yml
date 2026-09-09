@@ -32,8 +32,8 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      TARGET_SHA: 17c579c615e082b57d2e144c5761175eb3ca2016
-      TARGET_TREE: 28fe4cb70c1a2c1885226b7a1cd735c591dcdeee
+      TARGET_SHA: bd6bf6020bedbdf62dc54eb519c1bdda15cd023e
+      TARGET_TREE: 94bc9429ccb62ddb2f0c922251accb736da5fbf6
 
     steps:
       - name: Checkout exact PR239 candidate
