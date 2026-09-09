@@ -1,7 +1,7 @@
 defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
   use StrangertalksNew.DataCase, async: false
 
-  alias StrangertalksNew.{Conversation, Conversations, Matches, Participants, Repo}
+  alias StrangertalksNew.{Conversations, Matches, Participants, Repo}
   alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.MatchingRules.BoundaryBlock
 
