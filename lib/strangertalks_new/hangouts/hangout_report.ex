@@ -3,7 +3,16 @@ defmodule StrangertalksNew.Hangouts.HangoutReport do
   import Ecto.Changeset
 
   @max_evidence_bytes 4_096
-  @categories [:SPAM, :HARASSMENT, :SEXUAL_MISCONDUCT, :MALICIOUS_LINKS, :THREATS]
+  @categories [
+    :SPAM,
+    :HARASSMENT,
+    :SEXUAL_MISCONDUCT,
+    :MALICIOUS_LINKS,
+    :THREATS,
+    :HATE,
+    :PERSONAL_INFORMATION,
+    :OTHER
+  ]
   @primary_key {:report_id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
