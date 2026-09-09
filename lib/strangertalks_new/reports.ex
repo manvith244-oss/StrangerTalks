@@ -35,6 +35,32 @@ defmodule StrangertalksNew.Reports do
     Report.changeset(report, attrs)
   end
 
+  def media_evidence_state(report_id) when is_binary(report_id) do
+    case Repo.get(Report, report_id) do
+      nil ->
+        {:error, :report_not_found}
+
+      %Report{media_origin: nil} ->
+        {:error, :media_origin_unavailable}
+
+      %Report{media_origin: :NO_MEDIA} ->
+        if safety_media_retained?(report_id) do
+          {:error, :invalid_media_origin_state}
+        else
+          {:ok, :NO_MEDIA}
+        end
+
+      %Report{media_origin: :MEDIA_ORIGIN} ->
+        if safety_media_retained?(report_id) do
+          {:ok, :MEDIA_RETAINED}
+        else
+          {:ok, :MEDIA_OMITTED}
+        end
+    end
+  end
+
+  def media_evidence_state(_report_id), do: {:error, :invalid_report_id}
+
   def submit_conversation_report(conversation_id, reporter_id, category, evidence)
       when is_binary(conversation_id) and is_binary(reporter_id) and is_binary(category) and
              (is_binary(evidence) or is_nil(evidence)) do
@@ -57,7 +83,7 @@ defmodule StrangertalksNew.Reports do
     with %Conversation{} = conversation <- Repo.get(Conversation, conversation_id),
          true <- reporter_id in [conversation.participant_a_id, conversation.participant_b_id],
          {:ok, report_category} <- category_from_string(category),
-         {:ok, authoritative_evidence, evidence_key} <-
+         {:ok, authoritative_evidence, evidence_key, media_origin} <-
            authoritative_evidence(
              conversation_id,
              reporter_id,
@@ -82,7 +108,8 @@ defmodule StrangertalksNew.Reports do
         reported_id,
         report_category,
         authoritative_evidence,
-        deduplication_key
+        deduplication_key,
+        media_origin
       )
     else
       nil -> {:error, :conversation_not_found}
@@ -101,7 +128,8 @@ defmodule StrangertalksNew.Reports do
       do: {:error, :invalid_report_payload}
 
   defp authoritative_evidence(_conversation_id, _reporter_id, evidence, nil) do
-    with :ok <- validate_evidence(evidence), do: {:ok, evidence, :participant_context}
+    with :ok <- validate_evidence(evidence),
+         do: {:ok, evidence, :participant_context, :NO_MEDIA}
   end
 
   defp authoritative_evidence(
@@ -131,14 +159,14 @@ defmodule StrangertalksNew.Reports do
              binary: binary,
              media_type: media_type,
              byte_size: byte_size
-           }, {:target, target_client_message_id}}
+           }, {:target, target_client_message_id}, :MEDIA_ORIGIN}
         else
           {:ok, "[View-Once Media Evidence Unavailable: oversized]",
-           {:target, target_client_message_id}}
+           {:target, target_client_message_id}, :MEDIA_ORIGIN}
         end
 
       {:ok, %{content: content}} when is_binary(content) ->
-        {:ok, content, {:target, target_client_message_id}}
+        {:ok, content, {:target, target_client_message_id}, :NO_MEDIA}
 
       {:error, reason} ->
         {:error, reason}
@@ -166,13 +194,18 @@ defmodule StrangertalksNew.Reports do
       else: conversation.participant_a_id
   end
 
+  defp safety_media_retained?(report_id) do
+    Repo.exists?(from media in ReportSafetyMedia, where: media.report_id == ^report_id)
+  end
+
   defp create_report_and_review(
          conversation_id,
          reporter_id,
          reported_id,
          category,
          evidence,
-         key
+         key,
+         media_origin
        ) do
     now = DateTime.utc_now()
 
@@ -206,7 +239,8 @@ defmodule StrangertalksNew.Reports do
           report_category: category,
           report_status: :SUBMITTED,
           reporter_context: reporter_context,
-          deduplication_key: key
+          deduplication_key: key,
+          media_origin: media_origin
         }),
         on_conflict: :nothing,
         conflict_target: [:deduplication_key]
