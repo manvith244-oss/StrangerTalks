@@ -14,6 +14,7 @@ defmodule StrangertalksNew.Hangouts.SharedContentTest do
     assert {:ok, snapshot} = RoomServer.snapshot(room.room_id, participant.participant_id)
 
     assert snapshot.content_sequence == 1
+
     assert %{id: content_id, safety_status: :APPROVED, publication_status: :ACTIVE} =
              snapshot.current_content
 
