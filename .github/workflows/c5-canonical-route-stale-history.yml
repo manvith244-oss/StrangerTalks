@@ -1,0 +1,84 @@
+name: C5 Canonical Route Stale History
+
+on:
+  push:
+    branches:
+      - evidence/c5-canonical-route-stale-history-2026-09-10
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canonical-route:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      CANONICAL_SHA: 77c988e762297723a501165d851ea4233767a41e
+      CANONICAL_TREE: 81ecfe24a07f21016e81e7a1c3423c6a119c4e22
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Prove production tree is canonical main plus C5 evidence only
+        run: |
+          git diff --name-only "$CANONICAL_SHA" HEAD
+          test "$(git rev-parse "$CANONICAL_SHA^{tree}")" = "$CANONICAL_TREE"
+          test "$(git diff --name-only "$CANONICAL_SHA" HEAD -- ':!test/js/c5_canonical_route_stale_history_test.mjs' ':!.github/workflows/c5-canonical-route-stale-history.yml' | wc -l)" -eq 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Prepare database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start Phoenix
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/c5-canonical-route.log 2>&1 &
+          echo $! > /tmp/c5-canonical-route.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS http://localhost:4000/ >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/c5-canonical-route.log
+          exit 1
+      - name: Run canonical stale-history attack
+        run: node --test --test-concurrency=1 test/js/c5_canonical_route_stale_history_test.mjs
+      - name: Browser log on failure
+        if: failure()
+        run: cat /tmp/c5-canonical-route.log || true
