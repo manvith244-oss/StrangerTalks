@@ -27,6 +27,7 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
              )
 
     assert Matches.get_match(fixture.match.match_id).conversation_started == false
+
     assert {:ok, %{icebreaker: {:active, ^identity}}} =
              ConversationServer.inspect_state(conversation_id)
 
