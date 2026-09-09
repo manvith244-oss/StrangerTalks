@@ -1,0 +1,86 @@
+name: C1 T-A01 Exact Final Proof
+
+on:
+  push:
+    branches:
+      - evidence/c1-ta01-final-5b49cc9-2026-09-09
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      TARGET_SHA: 5b49cc9d72399b3defcba7349c7bfdde383b09af
+    steps:
+      - name: Checkout exact final T-A01 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+
+      - name: Prove exact identity
+        run: |
+          echo "TARGET_SHA=$TARGET_SHA"
+          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Compile with warnings as errors
+        run: mix compile --warnings-as-errors
+
+      - name: Check T-A01 durable surfaces are formatted
+        run: |
+          mix format --check-formatted \
+            lib/mix/tasks/strangertalks.agents.ex \
+            lib/strangertalks_new/agent_systems/trend_bridge_research.ex \
+            test/strangertalks_new/agent_systems_functional_test.exs \
+            test/strangertalks_new/agent_systems_break_test.exs \
+            test/strangertalks_new/trend_bridge_research_provenance_test.exs
+
+      - name: Provenance boundary regression
+        run: mix test test/strangertalks_new/trend_bridge_research_provenance_test.exs
+
+      - name: Affected Agent regressions
+        run: |
+          mix test \
+            test/strangertalks_new/agent_systems_functional_test.exs \
+            test/strangertalks_new/agent_systems_break_test.exs
+
+      - name: Full precommit
+        run: mix precommit
+
+      - name: Prove exact clean final candidate
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git diff --check
+          test -z "$(git status --porcelain)"
+          echo "C1_T_A01_FINAL_SHA_PROOF=PASS"
