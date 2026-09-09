@@ -1,0 +1,81 @@
+name: C1 PR222 Exact Final Proof
+
+on:
+  push:
+    branches:
+      - evidence/c1-pr222-final-6949330-2026-09-10
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      TARGET_SHA: 6949330ce70a8c06bbc03ef573f6a0767c1df6ec
+    steps:
+      - name: Checkout exact PR222 candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+
+      - name: Prove exact identity
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Candidate formatting
+        run: mix format --check-formatted test/strangertalks_new/t05_view_epoch_restart_test.exs test/strangertalks_new/t05_view_presentation_atomicity_test.exs
+
+      - name: Focused T05 JavaScript regressions
+        run: |
+          node --test \
+            test/js/t05_call_end_aba_closure_test.mjs \
+            test/js/t05_net_003_credential_timeout_test.mjs \
+            test/js/t05_net_003_ice_failure_test.mjs
+
+      - name: Focused T05 View regressions
+        run: mix test test/strangertalks_new/t05_view_epoch_restart_test.exs test/strangertalks_new/t05_view_presentation_atomicity_test.exs
+
+      - name: Full precommit
+        run: mix precommit
+
+      - name: Git diff check
+        run: git diff --check
+
+      - name: Clean tree and exact final identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test -z "$(git status --porcelain)"
