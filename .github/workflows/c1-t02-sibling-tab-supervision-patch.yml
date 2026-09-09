@@ -108,9 +108,6 @@ jobs:
                 )
           '''
 
-          old = old.replace("\n          ", "\n")
-          new = new.replace("\n          ", "\n")
-
           count = source.count(old)
           if count != 1:
               raise SystemExit(f"expected exactly one unlinked sibling-tab spawn, found {count}")
