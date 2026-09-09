@@ -99,6 +99,69 @@ defmodule StrangertalksNew.ReportMediaOriginTruthTest do
     assert Reports.media_evidence_state(report.report_id) == {:error, :media_origin_unavailable}
   end
 
+  test "free-form text that looks like media evidence never becomes media-origin authority" do
+    fixture = conversation_fixture()
+
+    assert {:ok, report} =
+             Reports.submit_conversation_report(
+               fixture.conversation_id,
+               fixture.sender_id,
+               "SPAM",
+               "[View-Once Photo Evidence Attached]"
+             )
+
+    assert report.reporter_context == "[View-Once Photo Evidence Attached]"
+    assert report.media_origin == :NO_MEDIA
+    assert Reports.media_evidence_state(report.report_id) == {:ok, :NO_MEDIA}
+  end
+
+  test "deleting retained safety bytes does not erase durable media origin" do
+    fixture = media_fixture()
+
+    assert {:ok, report} =
+             Reports.submit_conversation_report(
+               fixture.conversation_id,
+               fixture.recipient_id,
+               "HARASSMENT",
+               nil,
+               fixture.client_message_id
+             )
+
+    safety_media = Repo.get_by!(ReportSafetyMedia, report_id: report.report_id)
+    Repo.delete!(safety_media)
+
+    assert Reports.get_report(report.report_id).media_origin == :MEDIA_ORIGIN
+    assert Reports.media_evidence_state(report.report_id) == {:ok, :MEDIA_OMITTED}
+  end
+
+  test "contradictory no-media origin plus retained safety bytes fails closed" do
+    fixture = conversation_fixture()
+
+    assert {:ok, report} =
+             Reports.submit_conversation_report(
+               fixture.conversation_id,
+               fixture.sender_id,
+               "SPAM",
+               "ordinary text evidence"
+             )
+
+    media = valid_jpeg()
+
+    assert {:ok, _safety_media} =
+             %ReportSafetyMedia{}
+             |> ReportSafetyMedia.changeset(%{
+               report_id: report.report_id,
+               media_bytes: media,
+               media_type: "image/jpeg",
+               byte_size: byte_size(media),
+               created_at: DateTime.utc_now()
+             })
+             |> Repo.insert()
+
+    assert Reports.media_evidence_state(report.report_id) ==
+             {:error, :invalid_media_origin_state}
+  end
+
   defp media_fixture do
     fixture = conversation_fixture()
     media = valid_jpeg()
