@@ -13,6 +13,7 @@ on:
       - "test/js/voice_notes_test.mjs"
       - "test/js/view_once_test.mjs"
       - "test/js/team6_media_gate_test.mjs"
+      - "test/js/t05_fatal_termination_ack_retry_test.mjs"
       - ".github/workflows/team6-media-gate.yml"
 
 permissions:
@@ -38,7 +39,8 @@ jobs:
             test/js/voice_notes_test.mjs \
             test/js/view_once_test.mjs \
             test/js/live_call_test.mjs \
-            test/js/team6_media_gate_test.mjs
+            test/js/team6_media_gate_test.mjs \
+            test/js/t05_fatal_termination_ack_retry_test.mjs
       - name: Diff hygiene
         run: git diff --check
       - name: Clean tree
