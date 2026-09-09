@@ -198,15 +198,18 @@ defmodule StrangertalksNew.Hangouts.Safety do
   end
 
   defp evidence(attrs) do
+    max_bytes = HangoutReport.max_evidence_bytes()
+
     case Map.get(attrs, :evidence) do
       nil ->
         {:ok, nil}
 
-      value when is_binary(value) and byte_size(value) <= HangoutReport.max_evidence_bytes() ->
-        {:ok, value}
-
       value when is_binary(value) ->
-        {:error, :report_evidence_too_large}
+        if byte_size(value) <= max_bytes do
+          {:ok, value}
+        else
+          {:error, :report_evidence_too_large}
+        end
 
       _ ->
         {:error, :invalid_report_intent}
