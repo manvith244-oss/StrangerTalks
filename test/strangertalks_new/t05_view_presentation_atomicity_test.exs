@@ -68,7 +68,9 @@ defmodule StrangertalksNew.T05ViewPresentationAtomicityTest do
                ctx.recipient_id
              )
 
-    assert ViewOnceMediaStore.inspect_state().presentation_reserved_bytes == baseline + ctx.byte_size
+    assert ViewOnceMediaStore.inspect_state().presentation_reserved_bytes ==
+             baseline + ctx.byte_size
+
     assert ViewOnceMediaStore.inspect_state().presentation_reservations_count == 1
 
     expire({:expire_reservation, reservation_token})
@@ -113,7 +115,9 @@ defmodule StrangertalksNew.T05ViewPresentationAtomicityTest do
                ctx.recipient_id
              )
 
-    assert ViewOnceMediaStore.inspect_state().presentation_reserved_bytes == baseline + ctx.byte_size
+    assert ViewOnceMediaStore.inspect_state().presentation_reserved_bytes ==
+             baseline + ctx.byte_size
+
     assert ViewOnceMediaStore.inspect_state().presentation_reservations_count == 1
 
     assert {:ok, capability_token} =
@@ -442,6 +446,7 @@ defmodule StrangertalksNew.T05ViewPresentationAtomicityTest do
              )
 
     assert is_binary(capability_token)
+
     assert ViewOnceMediaStore.inspect_state().presentation_reserved_bytes ==
              baseline + reservation_ctx.byte_size + capability_ctx.byte_size
 
