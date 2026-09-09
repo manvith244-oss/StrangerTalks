@@ -1133,7 +1133,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
          true <- member?(state, sender_id),
          true <- active_conversation?(state),
          {:ok, _uuid} <- Ecto.UUID.cast(message_id),
-         true <- is_binary(content) and String.valid?(content),
+         :ok <- validate_ordinary_text(content),
          {:ok, result, state} <-
            accept_or_replay_message(
              state,
@@ -3907,6 +3907,24 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
         )
     }
   end
+
+  defp validate_ordinary_text(content) when is_binary(content) do
+    cond do
+      not String.valid?(content) ->
+        {:error, :invalid_payload}
+
+      String.trim(content) == "" ->
+        {:error, :invalid_payload}
+
+      byte_size(content) > @max_message_bytes ->
+        {:error, :message_too_large}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_ordinary_text(_content), do: {:error, :invalid_payload}
 
   defp normalize_edited_content(content) when is_binary(content) do
     normalized = String.trim(content)
