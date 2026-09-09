@@ -1,16 +1,16 @@
-defmodule StrangertalksNew.Team4MainlineBlockRetryTest do
+defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
   use StrangertalksNew.DataCase, async: false
 
   alias StrangertalksNew.{Conversation, Conversations, Matches, Participants, Repo}
   alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.MatchingRules.BoundaryBlock
 
-  test "repeated Block does not rebroadcast terminal authority after the first applied action" do
+  test "repeated Block returns the existing durable block without rebroadcasting terminal authority" do
     {conversation, participant_a} = conversation_fixture()
     topic = "conversation:#{conversation.conversation_id}"
     :ok = Phoenix.PubSub.subscribe(StrangertalksNew.PubSub, topic)
 
-    assert {:ok, _block} =
+    assert {:ok, first_block} =
              MatchingRules.block_conversation_participant(
                conversation.conversation_id,
                participant_a.participant_id
@@ -18,13 +18,51 @@ defmodule StrangertalksNew.Team4MainlineBlockRetryTest do
 
     assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "conversation:ended"}
 
-    assert {:ok, _same_block} =
+    assert {:ok, retry_block} =
              MatchingRules.block_conversation_participant(
                conversation.conversation_id,
                participant_a.participant_id
              )
 
+    assert retry_block.boundary_block_id == first_block.boundary_block_id
     refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "conversation:ended"}, 100
+    assert Repo.aggregate(BoundaryBlock, :count) == 1
+  end
+
+  test "concurrent retries after terminal Block collapse to one durable result and zero new terminal broadcasts" do
+    {conversation, participant_a} = conversation_fixture()
+    topic = "conversation:#{conversation.conversation_id}"
+    :ok = Phoenix.PubSub.subscribe(StrangertalksNew.PubSub, topic)
+
+    assert {:ok, first_block} =
+             MatchingRules.block_conversation_participant(
+               conversation.conversation_id,
+               participant_a.participant_id
+             )
+
+    assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "conversation:ended"}
+
+    results =
+      1..8
+      |> Task.async_stream(
+        fn _ ->
+          MatchingRules.block_conversation_participant(
+            conversation.conversation_id,
+            participant_a.participant_id
+          )
+        end,
+        max_concurrency: 8,
+        ordered: false,
+        timeout: 5_000
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert Enum.all?(results, fn
+             {:ok, block} -> block.boundary_block_id == first_block.boundary_block_id
+             _ -> false
+           end)
+
+    refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "conversation:ended"}, 150
     assert Repo.aggregate(BoundaryBlock, :count) == 1
   end
 
