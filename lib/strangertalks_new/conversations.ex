@@ -70,7 +70,6 @@ defmodule StrangertalksNew.Conversations do
   defp terminal_reason(%Conversation{ending_type: :TIMEOUT}), do: "conversation_abandoned"
   defp terminal_reason(%Conversation{ending_type: :DISCONNECT}), do: "initialization_failed"
   defp terminal_reason(%Conversation{ending_type: :SAFETY_ACTION}), do: "safety_terminated"
-  defp terminal_reason(%Conversation{conversation_status: :COMPLETED}), do: "completed"
 
   defp terminal_reason(%Conversation{ending_type: ending_type}) when not is_nil(ending_type) do
     ending_type
