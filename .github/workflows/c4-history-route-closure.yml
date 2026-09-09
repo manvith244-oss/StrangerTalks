@@ -4,10 +4,13 @@ on:
   push:
     branches:
       - convergence/c4-history-route-closure-2026-09-10
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
-  group: c4-history-route-${{ github.ref }}
+  group: c4-history-route-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -37,13 +40,13 @@ jobs:
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
       STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
-      C4_EXPECTED_SHA: ${{ github.sha }}
+      C4_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
     steps:
       - name: Checkout exact head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: Prove exact clean checkout
