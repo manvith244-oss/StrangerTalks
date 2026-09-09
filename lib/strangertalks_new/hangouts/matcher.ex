@@ -10,7 +10,7 @@ defmodule StrangertalksNew.Hangouts.Matcher do
   use GenServer
 
   alias StrangertalksNew.Hangouts
-  alias StrangertalksNew.Hangouts.{HangoutRoom, RoomServer}
+  alias StrangertalksNew.Hangouts.{HangoutRoom, Observability, RoomServer}
   alias StrangertalksNew.MatchingRules
 
   @default_config [minimum_size: 3, target_size: 4, max_size: 6]
@@ -81,13 +81,21 @@ defmodule StrangertalksNew.Hangouts.Matcher do
               |> put_attempt(attempt)
               |> Map.update!(:next_ordinal, &(&1 + 1))
 
+            Observability.emit(:queue_entered, %{count: 1})
             {:reply, {:ok, public_attempt(attempt)}, next_state}
         end
     end
   end
 
   def handle_call({:leave_queue, participant_id}, _from, state) do
-    {:reply, :ok, drop_participant(state, participant_id)}
+    queued? = Map.has_key?(state.attempts, participant_id)
+    next_state = drop_participant(state, participant_id)
+
+    if queued? do
+      Observability.emit(:queue_cancelled, %{count: 1})
+    end
+
+    {:reply, :ok, next_state}
   end
 
   def handle_call({:try_form, language_tag}, _from, state) do
@@ -135,6 +143,8 @@ defmodule StrangertalksNew.Hangouts.Matcher do
           max_size: config.max_size
         }
 
+        formation_latency_ms = formation_latency_ms(state, selected_ids)
+
         case Hangouts.create_formed_room(selected_ids, attrs) do
           {:ok, %{room: room}} ->
             committed_state = Enum.reduce(selected_ids, state, &drop_participant(&2, &1))
@@ -146,6 +156,15 @@ defmodule StrangertalksNew.Hangouts.Matcher do
                   participant_ids: selected_ids,
                   size: length(selected_ids)
                 }
+
+                room_measurements = %{
+                  count: 1,
+                  room_size: length(selected_ids),
+                  formation_latency_ms: formation_latency_ms
+                }
+
+                Observability.emit_room(room.room_id, :room_formed, room_measurements)
+                Observability.emit_room(room.room_id, :room_activated, %{count: 1})
 
                 {{:ok, formed}, committed_state}
 
@@ -170,6 +189,16 @@ defmodule StrangertalksNew.Hangouts.Matcher do
         end
       end
     end
+  end
+
+  defp formation_latency_ms(state, selected_ids) do
+    now_ms = System.monotonic_time(:millisecond)
+
+    selected_ids
+    |> Enum.map(&Map.fetch!(state.attempts, &1).enqueued_monotonic_ms)
+    |> Enum.min(fn -> now_ms end)
+    |> then(&(now_ms - &1))
+    |> max(0)
   end
 
   defp select_compatible_group(participant_ids, config) do
