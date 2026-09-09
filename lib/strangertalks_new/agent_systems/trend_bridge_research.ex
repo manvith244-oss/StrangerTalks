@@ -56,20 +56,26 @@ defmodule StrangertalksNew.AgentSystems.TrendBridgeResearch do
   defp normalize_signals(signals) when length(signals) in 1..@max_signals do
     signals
     |> Enum.reduce_while({:ok, []}, fn signal, {:ok, acc} ->
-      case signal do
-        %{text: text, provenance: :OPERATOR_PROVIDED} when is_binary(text) ->
-          text = String.trim(text)
+      cond do
+        is_map(signal) and not is_struct(signal) and exact_keys?(signal, [:provenance, :text]) ->
+          case signal do
+            %{provenance: :OPERATOR_PROVIDED, text: text} when is_binary(text) ->
+              text = String.trim(text)
 
-          if text != "" and String.length(text) <= @max_signal_chars do
-            {:cont, {:ok, [text | acc]}}
-          else
-            {:halt, {:error, :invalid_trend_research}}
+              if text != "" and String.length(text) <= @max_signal_chars do
+                {:cont, {:ok, [text | acc]}}
+              else
+                {:halt, {:error, :invalid_trend_research}}
+              end
+
+            %{provenance: :OPERATOR_PROVIDED} ->
+              {:halt, {:error, :invalid_trend_research}}
+
+            _ ->
+              {:halt, {:error, :unclassified_research_signal}}
           end
 
-        %{provenance: :OPERATOR_PROVIDED} ->
-          {:halt, {:error, :invalid_trend_research}}
-
-        _ ->
+        true ->
           {:halt, {:error, :unclassified_research_signal}}
       end
     end)
