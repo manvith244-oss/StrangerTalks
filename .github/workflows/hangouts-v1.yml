@@ -1,0 +1,140 @@
+name: Hangouts V1 Proof
+
+on:
+  push:
+    branches:
+      - feature/hangouts-v1
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "docs/hangouts-v1-design.md"
+      - "docs/superpowers/plans/2026-09-10-hangouts-v1.md"
+      - "lib/strangertalks_new/hangouts.ex"
+      - "lib/strangertalks_new/hangouts/**"
+      - "lib/strangertalks_new/application.ex"
+      - "lib/strangertalks_new_web/hangout_channel.ex"
+      - "lib/strangertalks_new_web/user_socket.ex"
+      - "priv/repo/migrations/*hangout*"
+      - "priv/static/index.html"
+      - "priv/static/assets/hangouts.mjs"
+      - "priv/static/assets/hangouts.css"
+      - "priv/static/assets/app.js"
+      - "test/strangertalks_new/hangouts/**"
+      - "test/strangertalks_new_web/hangout_channel_test.exs"
+      - "test/js/hangouts_contract_test.mjs"
+      - ".github/workflows/hangouts-v1.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: hangouts-v1-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  hangouts-proof:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact Hangouts commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "EXPECTED_HANGOUTS_COMMIT=$expected"
+          echo "ACTUAL_HANGOUTS_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$expected"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+
+      - name: Prepare database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Hangouts domain contract
+        id: domain-contract
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/domain_contract_test.exs
+
+      - name: Hangouts context contract
+        id: context-contract
+        if: ${{ hashFiles('test/strangertalks_new/hangouts/context_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/context_test.exs
+
+      - name: Hangouts room authority contract
+        id: room-contract
+        if: ${{ hashFiles('test/strangertalks_new/hangouts/room_server_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/room_server_test.exs
+
+      - name: Hangouts channel contract
+        id: channel-contract
+        if: ${{ hashFiles('test/strangertalks_new_web/hangout_channel_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new_web/hangout_channel_test.exs
+
+      - name: Hangouts browser contract
+        id: browser-contract
+        if: ${{ hashFiles('test/js/hangouts_contract_test.mjs') != '' }}
+        continue-on-error: true
+        run: node --test test/js/hangouts_contract_test.mjs
+
+      - name: Full precommit regression
+        id: full-precommit
+        continue-on-error: true
+        run: |
+          mix precommit
+          git diff --exit-code
+
+      - name: Require Hangouts proofs and precommit
+        if: always()
+        run: |
+          test "${{ steps.domain-contract.outcome }}" = "success"
+          if [ "${{ steps.context-contract.outcome }}" != "skipped" ]; then test "${{ steps.context-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.room-contract.outcome }}" != "skipped" ]; then test "${{ steps.room-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.channel-contract.outcome }}" != "skipped" ]; then test "${{ steps.channel-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.browser-contract.outcome }}" != "skipped" ]; then test "${{ steps.browser-contract.outcome }}" = "success"; fi
+          test "${{ steps.full-precommit.outcome }}" = "success"
