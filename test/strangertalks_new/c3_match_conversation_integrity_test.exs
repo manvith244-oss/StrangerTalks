@@ -60,7 +60,10 @@ defmodule StrangertalksNew.C3MatchConversationIntegrityTest do
 
     assert {:error,
             %Postgrex.Error{
-              postgres: %{code: :check_violation, constraint: "matches_distinct_participants_check"}
+              postgres: %{
+                code: :check_violation,
+                constraint: "matches_distinct_participants_check"
+              }
             }} =
              Repo.query(
                "UPDATE matches SET participant_b_id = participant_a_id WHERE match_id = $1",

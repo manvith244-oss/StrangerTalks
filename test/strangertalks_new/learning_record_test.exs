@@ -6,13 +6,16 @@ defmodule StrangertalksNew.LearningRecordTest do
   @valid_time DateTime.from_naive!(~N[2026-07-04 12:00:00.000000], "Etc/UTC")
 
   setup do
-    {:ok, participant} =
+    {:ok, participant_a} =
+      StrangertalksNew.Participants.create_participant(%{created_at: @valid_time})
+
+    {:ok, participant_b} =
       StrangertalksNew.Participants.create_participant(%{created_at: @valid_time})
 
     {:ok, match} =
       StrangertalksNew.Matches.create_match(%{
-        participant_a_id: participant.participant_id,
-        participant_b_id: participant.participant_id,
+        participant_a_id: participant_a.participant_id,
+        participant_b_id: participant_b.participant_id,
         door_type: :JUST_TALK,
         match_status: :ACTIVE,
         match_strategy: :COMPATIBILITY,
@@ -42,8 +45,8 @@ defmodule StrangertalksNew.LearningRecordTest do
     {:ok, conv} =
       StrangertalksNew.Conversations.create_conversation(%{
         match_id: match.match_id,
-        participant_a_id: participant.participant_id,
-        participant_b_id: participant.participant_id,
+        participant_a_id: participant_a.participant_id,
+        participant_b_id: participant_b.participant_id,
         conversation_status: :ACTIVE,
         created_at: @valid_time,
         door_type: :JUST_TALK,
@@ -76,7 +79,7 @@ defmodule StrangertalksNew.LearningRecordTest do
         longest_silence_seconds: 0
       })
 
-    %{participant: participant, match: match, conv: conv}
+    %{participant: participant_a, match: match, conv: conv}
   end
 
   test "legacy participant-linked LearningRecord writer is disabled for V1", %{
