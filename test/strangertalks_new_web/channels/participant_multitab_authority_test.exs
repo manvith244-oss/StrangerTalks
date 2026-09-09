@@ -125,8 +125,8 @@ defmodule StrangertalksNewWeb.ParticipantMultiTabAuthorityTest do
                       payload: %{status: "matched", conversation_id: ^conversation_id}
                     }}
 
-    refute_receive {:channel_push, _label,
-                    %Phoenix.Socket.Message{event: "match_found"}}, 0
+    refute_receive {:channel_push, _label, %Phoenix.Socket.Message{event: "match_found"}},
+                   0
 
     assert Repo.aggregate(Matching, :count, :match_id) == 1
     assert Repo.aggregate(Conversation, :count, :conversation_id) == 1
@@ -151,8 +151,8 @@ defmodule StrangertalksNewWeb.ParticipantMultiTabAuthorityTest do
 
     synchronize_match_fanout(sockets, collectors)
 
-    refute_receive {:channel_push, _label,
-                    %Phoenix.Socket.Message{event: "match_found"}}, 0
+    refute_receive {:channel_push, _label, %Phoenix.Socket.Message{event: "match_found"}},
+                   0
   end
 
   defp start_collector(label) do
