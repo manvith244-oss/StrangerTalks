@@ -8,6 +8,7 @@ defmodule StrangertalksNewWeb.UserSocket do
 
   channel "participant:*", StrangertalksNewWeb.ParticipantChannel
   channel "conversation:*", StrangertalksNewWeb.ConversationChannel
+  channel "hangout:*", StrangertalksNewWeb.HangoutChannel
 
   @impl true
   def connect(_params, socket, %{auth_token: token}) when is_binary(token) do
