@@ -134,6 +134,12 @@ jobs:
         continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/shared_content_test.exs
 
+      - name: Hangouts interaction contract
+        id: interaction-contract
+        if: ${{ hashFiles('test/strangertalks_new/hangouts/interactions_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/interactions_test.exs
+
       - name: Hangouts browser contract
         id: browser-contract
         if: ${{ hashFiles('test/js/hangouts_contract_test.mjs') != '' }}
@@ -157,5 +163,6 @@ jobs:
           if [ "${{ steps.matcher-contract.outcome }}" != "skipped" ]; then test "${{ steps.matcher-contract.outcome }}" = "success"; fi
           if [ "${{ steps.channel-contract.outcome }}" != "skipped" ]; then test "${{ steps.channel-contract.outcome }}" = "success"; fi
           if [ "${{ steps.content-contract.outcome }}" != "skipped" ]; then test "${{ steps.content-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.interaction-contract.outcome }}" != "skipped" ]; then test "${{ steps.interaction-contract.outcome }}" = "success"; fi
           if [ "${{ steps.browser-contract.outcome }}" != "skipped" ]; then test "${{ steps.browser-contract.outcome }}" = "success"; fi
           test "${{ steps.full-precommit.outcome }}" = "success"
