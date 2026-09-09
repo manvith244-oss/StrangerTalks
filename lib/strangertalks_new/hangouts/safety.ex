@@ -7,7 +7,7 @@ defmodule StrangertalksNew.Hangouts.Safety do
   `MatchingRules` pair-boundary authority.
   """
 
-  alias StrangertalksNew.Hangouts.{HangoutMembership, HangoutReport, HangoutRoom}
+  alias StrangertalksNew.Hangouts.{HangoutMembership, HangoutReport, HangoutRoom, Observability}
   alias StrangertalksNew.{MatchingRules, Repo}
 
   @category_pairs [
@@ -61,6 +61,7 @@ defmodule StrangertalksNew.Hangouts.Safety do
          :ok <- reject_self(blocking_participant_id, target.participant_id, :self_block),
          {:ok, _block} <-
            MatchingRules.enforce_block(blocking_participant_id, target.participant_id, "HANGOUT") do
+      Observability.emit_room(room_id, :block, %{count: 1})
       {:ok, %{status: "blocked", target: public_identity(target)}}
     end
   end
@@ -99,6 +100,7 @@ defmodule StrangertalksNew.Hangouts.Safety do
 
     case result do
       {:ok, _report} ->
+        Observability.emit_room(room_id, :report, %{count: 1})
         {:ok, public_report(semantic)}
 
       {:error, %Ecto.Changeset{} = changeset} ->
