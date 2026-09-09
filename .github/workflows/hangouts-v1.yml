@@ -21,6 +21,7 @@ on:
       - "priv/static/assets/hangouts.css"
       - "priv/static/assets/app.js"
       - "test/strangertalks_new/hangouts/**"
+      - "test/strangertalks_new/team4_db_security_closure_test.exs"
       - "test/strangertalks_new_web/hangout_channel_test.exs"
       - "test/js/hangouts_contract_test.mjs"
       - ".github/workflows/hangouts-v1.yml"
@@ -104,6 +105,11 @@ jobs:
         continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/context_test.exs
 
+      - name: Canonical Team-4 DB security closure
+        id: db-security-contract
+        continue-on-error: true
+        run: mix test test/strangertalks_new/team4_db_security_closure_test.exs
+
       - name: Hangouts room authority contract
         id: room-contract
         if: ${{ hashFiles('test/strangertalks_new/hangouts/room_server_test.exs') != '' }}
@@ -134,6 +140,7 @@ jobs:
         run: |
           test "${{ steps.domain-contract.outcome }}" = "success"
           if [ "${{ steps.context-contract.outcome }}" != "skipped" ]; then test "${{ steps.context-contract.outcome }}" = "success"; fi
+          test "${{ steps.db-security-contract.outcome }}" = "success"
           if [ "${{ steps.room-contract.outcome }}" != "skipped" ]; then test "${{ steps.room-contract.outcome }}" = "success"; fi
           if [ "${{ steps.channel-contract.outcome }}" != "skipped" ]; then test "${{ steps.channel-contract.outcome }}" = "success"; fi
           if [ "${{ steps.browser-contract.outcome }}" != "skipped" ]; then test "${{ steps.browser-contract.outcome }}" = "success"; fi
