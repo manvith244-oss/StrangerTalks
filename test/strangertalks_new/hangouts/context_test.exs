@@ -132,6 +132,7 @@ defmodule StrangertalksNew.Hangouts.ContextTest do
              })
 
     replacement = room!()
+
     assert {:ok, replacement_membership} =
              Hangouts.add_member(replacement.room_id, participant.participant_id)
 
