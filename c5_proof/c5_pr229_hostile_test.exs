@@ -51,18 +51,18 @@ defmodule StrangertalksNew.C5PR229HostileTest do
 
     install_match_start_failure_trigger!()
 
-    message_id = Ecto.UUID.generate()
+    monitor = Process.monitor(initial_pid)
 
-    assert catch_exit(
-             ConversationServer.append_message(
-               conversation_id,
-               fixture.a,
-               message_id,
-               "C5 persistence failure probe"
-             )
-           )
+    result =
+      ConversationServer.append_message(
+        conversation_id,
+        fixture.a,
+        Ecto.UUID.generate(),
+        "C5 persistence failure probe"
+      )
 
-    refute Process.alive?(initial_pid)
+    assert {:error, _reason} = result
+    assert_receive {:DOWN, ^monitor, :process, ^initial_pid, _reason}, 1_000
     assert Matches.get_match(fixture.match.match_id).conversation_started == false
 
     remove_match_start_failure_trigger!()
