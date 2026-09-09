@@ -14,6 +14,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
   alias StrangertalksNew.AvatarCatalog
   alias StrangertalksNew.ExpressiveMediaCatalog
   alias StrangertalksNew.IcebreakerCatalog
+  alias StrangertalksNew.Matches
   alias StrangertalksNew.C11Policy
   alias StrangertalksNew.Repo
 
@@ -827,13 +828,15 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
           )
 
         epoch_id = Ecto.UUID.generate()
+        conversation_started = Matches.conversation_started?(conversation.match_id)
 
         {:ok,
          %{
            conversation: conversation,
+           conversation_started: conversation_started,
            epoch_id: epoch_id,
            avatar_map: avatar_map,
-           icebreaker: initial_icebreaker(conversation_id),
+           icebreaker: initial_icebreaker(conversation_id, conversation_started),
            participant_channels: participant_channels,
            session_visibility: %{},
            channel_sync_floors: %{},
@@ -3389,6 +3392,8 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       true ->
         with {:ok, reply_author_relation, reply_snippet} <-
                resolve_reply_context(state, sender_id, reply_to_client_message_id) do
+          state = establish_conversation_start(state)
+          state = retire_icebreaker(state)
           recipient_id = other_participant(state, sender_id)
           sequence = state.next_sequence
           sent_at = DateTime.utc_now()
@@ -3443,7 +3448,6 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
           }
 
           state = append_recent_message(state, replay_entry)
-          state = retire_icebreaker(state)
 
           StrangertalksNew.Telemetry.execute(
             [:message, :accepted],
@@ -4374,6 +4378,8 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
 
         case VoiceNoteStore.put(stored_note) do
           {:ok, _metadata, storage_status} ->
+            state = establish_conversation_start(state)
+            state = retire_icebreaker(state)
             accepted_monotonic = System.monotonic_time()
 
             expiry_ref =
@@ -4415,7 +4421,6 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
             }
 
             state = append_recent_message(state, replay_entry)
-            state = retire_icebreaker(state)
 
             StrangertalksNew.Telemetry.execute(
               [:message, :accepted],
@@ -5966,6 +5971,16 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     end)
     |> format_replay_for_participant(participant_id, state)
   end
+
+  defp establish_conversation_start(%{conversation_started: true} = state), do: state
+
+  defp establish_conversation_start(state) do
+    :ok = Matches.mark_conversation_started!(state.conversation.match_id)
+    %{state | conversation_started: true}
+  end
+
+  defp initial_icebreaker(_conversation_id, true), do: :retired
+  defp initial_icebreaker(conversation_id, false), do: initial_icebreaker(conversation_id)
 
   defp initial_icebreaker(conversation_id) do
     identity = IcebreakerCatalog.identity_for(conversation_id)
