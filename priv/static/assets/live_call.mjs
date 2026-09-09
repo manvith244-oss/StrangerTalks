@@ -191,6 +191,7 @@ export class LiveCallCoordinator {
     this.conversationSurfaceActive = true
     this.navigationGeneration = 0
     this.navigationBlockedAttemptIds = new Set()
+    this.fatalTerminatedAttemptIds = new Set()
   }
 
   setChannel(channel) {
@@ -376,6 +377,23 @@ activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection = thi
     this.status === CALL_STATUS.ACTIVE &&
     (!peerConnection || this.peerConnection === peerConnection)
   )
+}
+
+fatalTerminateCurrentAttempt({callAttemptId, mediaGeneration, peerConnection = this.peerConnection, reason = "connection_error"} = {}) {
+  const attemptId = callAttemptId || this.callAttemptId
+  const generation = mediaGeneration ?? this.mediaGeneration
+  if (!this.mediaAttemptIsCurrent(attemptId, generation, peerConnection)) return false
+  if (this.fatalTerminatedAttemptIds.has(attemptId)) return false
+
+  this.fatalTerminatedAttemptIds.add(attemptId)
+  if (this.fatalTerminatedAttemptIds.size > 32) {
+    const oldest = this.fatalTerminatedAttemptIds.values().next().value
+    this.fatalTerminatedAttemptIds.delete(oldest)
+  }
+
+  this.teardown(reason)
+  this.channel?.push("call:end", {call_attempt_id: attemptId})
+  return true
 }
 
   // --- Channel Event Handlers ---
@@ -1126,6 +1144,7 @@ async requestMediaUpgrade(requestType = "video_upgrade", proposal = {}) {
           resolve(creds)
         })
         .receive("error", reject)
+        .receive("timeout", () => reject(new Error("TURN credential request timed out")))
     })
   }
 
@@ -1202,7 +1221,12 @@ async initializeWebRTC(isOfferSide = false) {
   } catch (error) {
     if (this.mediaAttemptIsCurrent(setupAttemptId, setupGeneration, peerConnection)) {
       this.onError(error)
-      this.teardown("connection_error")
+      this.fatalTerminateCurrentAttempt({
+        callAttemptId: setupAttemptId,
+        mediaGeneration: setupGeneration,
+        peerConnection,
+        reason: "connection_error"
+      })
     }
   }
 }
@@ -1219,7 +1243,12 @@ async activateLocalMedia(callAttemptId, mediaGeneration, peerConnection) {
   } catch (error) {
     if (this.activeMediaAttemptIsCurrent(callAttemptId, mediaGeneration, peerConnection)) {
       this.onError(error)
-      this.teardown("media_permission_failed")
+      this.fatalTerminateCurrentAttempt({
+        callAttemptId,
+        mediaGeneration,
+        peerConnection,
+        reason: "media_permission_failed"
+      })
     }
     return
   }
@@ -1330,7 +1359,14 @@ async handleIceFailure() {
       if (peerConnection.restartIce) peerConnection.restartIce()
     }
   } catch {
-    if (this.mediaAttemptIsCurrent(attemptId, generation, peerConnection)) this.teardown("ice_failed")
+    if (this.mediaAttemptIsCurrent(attemptId, generation, peerConnection)) {
+      this.fatalTerminateCurrentAttempt({
+        callAttemptId: attemptId,
+        mediaGeneration: generation,
+        peerConnection,
+        reason: "ice_failed"
+      })
+    }
   }
 }
 
