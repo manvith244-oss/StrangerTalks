@@ -50,8 +50,8 @@ jobs:
                   "accepted voice durable write",
               ),
               (
-                  "  defp initial_icebreaker(conversation_id) do\n    identity = IcebreakerCatalog.identity_for(conversation_id)\n    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired\n  rescue\n    _ -> :retired\n  end\n",
-                  "  defp initial_icebreaker(conversation_id, match_id) do\n    if Matches.conversation_started?(match_id) do\n      :retired\n    else\n      initial_icebreaker(conversation_id)\n    end\n  end\n\n  defp initial_icebreaker(conversation_id) do\n    identity = IcebreakerCatalog.identity_for(conversation_id)\n    if IcebreakerCatalog.approved?(identity), do: {:active, identity}, else: :retired\n  rescue\n    _ -> :retired\n  end\n",
+                  "  defp initial_icebreaker(conversation_id) do\n",
+                  "  defp initial_icebreaker(conversation_id, match_id) do\n    if Matches.conversation_started?(match_id) do\n      :retired\n    else\n      initial_icebreaker(conversation_id)\n    end\n  end\n\n  defp initial_icebreaker(conversation_id) do\n",
                   "durable-aware startup helper",
               ),
           ]
