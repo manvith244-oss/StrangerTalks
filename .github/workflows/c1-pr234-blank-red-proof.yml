@@ -1,0 +1,69 @@
+name: C1 PR234 Blank Start RED Proof
+
+on:
+  push:
+    branches:
+      - evidence/c1-pr234-blank-start-red-2026-09-10
+
+permissions:
+  contents: read
+
+jobs:
+  red:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      TARGET_SHA: 5d3fa35c78f87fab39a467487284f53f817c03f2
+      BASE_SHA: 77c988e762297723a501165d851ea4233767a41e
+    steps:
+      - name: Checkout exact test-only RED head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Prove exact one-file RED scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA" "$TARGET_SHA" | sort)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 1
+          test "${changed[0]}" = "test/strangertalks_new/t02_conversation_start_restart_controls_test.exs"
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Prove blank-text start regression is RED
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          mix test test/strangertalks_new/t02_conversation_start_restart_controls_test.exs > /tmp/pr234-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/pr234-red.log
+          test "$status" -ne 0
+          grep -F 'blank ordinary text is rejected before durable Conversation Start truth' /tmp/pr234-red.log
