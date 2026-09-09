@@ -15,6 +15,8 @@ defmodule StrangertalksNew.Application do
       {Registry, keys: :unique, name: StrangertalksNew.DistributedRegistry},
       {DynamicSupervisor,
        strategy: :one_for_one, name: StrangertalksNew.ConversationDynamicSupervisor},
+      {Registry, keys: :unique, name: StrangertalksNew.Hangouts.Registry},
+      StrangertalksNew.Hangouts.RoomSupervisor,
       StrangertalksNew.ConversationLifecycle.TerminalObserver,
       StrangertalksNew.ConversationLifecycle.VoiceNoteStore,
       StrangertalksNew.ConversationLifecycle.ViewOnceMediaStore,

@@ -105,6 +105,135 @@ defmodule StrangertalksNew.Hangouts do
 
   def leave_room(_room_id, _participant_id), do: {:error, :invalid_membership_request}
 
+  def activate_if_ready(room_id) when is_binary(room_id) do
+    Repo.transaction(fn ->
+      case lock_room(room_id) do
+        nil ->
+          Repo.rollback(:room_not_found)
+
+        %HangoutRoom{status: status} when status in [:ENDING, :ENDED] ->
+          Repo.rollback(:terminal_room)
+
+        %HangoutRoom{status: :ACTIVE} = room ->
+          room
+
+        %HangoutRoom{status: :FORMING} = room ->
+          active_count =
+            Repo.aggregate(
+              from(m in HangoutMembership,
+                where: m.room_id == ^room_id and m.status == :ACTIVE
+              ),
+              :count,
+              :membership_id
+            )
+
+          if active_count >= room.minimum_size do
+            update_room!(room, %{status: :ACTIVE, activated_at: room.activated_at || now()})
+          else
+            room
+          end
+      end
+    end)
+    |> normalize_transaction()
+  end
+
+  def activate_if_ready(_room_id), do: {:error, :invalid_room_request}
+
+  def disconnect_member(room_id, participant_id)
+      when is_binary(room_id) and is_binary(participant_id) do
+    Repo.transaction(fn ->
+      room = lock_room(room_id)
+
+      cond do
+        is_nil(room) ->
+          Repo.rollback(:room_not_found)
+
+        room.status in [:ENDING, :ENDED] ->
+          Repo.rollback(:terminal_room)
+
+        true ->
+          case lock_membership(room_id, participant_id) do
+            nil ->
+              Repo.rollback(:membership_not_found)
+
+            %HangoutMembership{status: :ACTIVE} = membership ->
+              update_membership!(membership, %{
+                status: :DISCONNECTED,
+                last_seen_at: now(),
+                left_at: nil,
+                disconnect_count: membership.disconnect_count + 1
+              })
+
+            %HangoutMembership{status: :DISCONNECTED} = membership ->
+              membership
+
+            %HangoutMembership{} ->
+              Repo.rollback(:membership_not_active)
+          end
+      end
+    end)
+    |> normalize_transaction()
+  end
+
+  def disconnect_member(_room_id, _participant_id),
+    do: {:error, :invalid_membership_request}
+
+  def reconnect_member(room_id, participant_id)
+      when is_binary(room_id) and is_binary(participant_id) do
+    Repo.transaction(fn ->
+      room = lock_room(room_id)
+
+      cond do
+        is_nil(room) ->
+          Repo.rollback(:room_not_found)
+
+        room.status in [:ENDING, :ENDED] ->
+          Repo.rollback(:terminal_room)
+
+        true ->
+          case lock_membership(room_id, participant_id) do
+            nil ->
+              Repo.rollback(:membership_not_found)
+
+            %HangoutMembership{status: :ACTIVE} = membership ->
+              membership
+
+            %HangoutMembership{status: :DISCONNECTED} = membership ->
+              update_membership!(membership, %{
+                status: :ACTIVE,
+                last_seen_at: now(),
+                left_at: nil
+              })
+
+            %HangoutMembership{} ->
+              Repo.rollback(:membership_not_active)
+          end
+      end
+    end)
+    |> normalize_transaction()
+  end
+
+  def reconnect_member(_room_id, _participant_id),
+    do: {:error, :invalid_membership_request}
+
+  def end_room(room_id) when is_binary(room_id) do
+    Repo.transaction(fn ->
+      case lock_room(room_id) do
+        nil ->
+          Repo.rollback(:room_not_found)
+
+        %HangoutRoom{status: :ENDED} = room ->
+          room
+
+        %HangoutRoom{} = room ->
+          update_room!(room, %{status: :ENDED, ended_at: room.ended_at || now()})
+      end
+    end)
+    |> normalize_transaction()
+  end
+
+  def end_room(_room_id), do: {:error, :invalid_room_request}
+
   def internal_room_snapshot(room_id) when is_binary(room_id) do
     case Repo.get(HangoutRoom, room_id) do
       nil ->
@@ -325,6 +454,16 @@ defmodule StrangertalksNew.Hangouts do
     |> case do
       {:ok, updated} -> updated
       {:error, changeset} -> Repo.rollback({:invalid_membership, changeset})
+    end
+  end
+
+  defp update_room!(room, attrs) do
+    room
+    |> HangoutRoom.changeset(attrs)
+    |> Repo.update()
+    |> case do
+      {:ok, updated} -> updated
+      {:error, changeset} -> Repo.rollback({:invalid_room, changeset})
     end
   end
 
