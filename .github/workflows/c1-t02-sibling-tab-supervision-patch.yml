@@ -1,0 +1,168 @@
+name: C1 T02 Sibling Tab Supervision Patch
+
+on:
+  push:
+    branches:
+      - convergence/c1-t02-sibling-tab-supervision-main-2026-09-10
+    paths:
+      - ".github/workflows/c1-t02-sibling-tab-supervision-patch.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-prove:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      BASE_SHA: d1e8962b1340222a40f5e6104a8fdddb3ebe7797
+      BRANCH: convergence/c1-t02-sibling-tab-supervision-main-2026-09-10
+
+    steps:
+      - name: Checkout successor branch
+        uses: actions/checkout@v4
+        with:
+          ref: convergence/c1-t02-sibling-tab-supervision-main-2026-09-10
+          fetch-depth: 0
+
+      - name: Prove fresh construction base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          actual_main="$(git rev-parse origin/main)"
+          printf 'EXPECTED_BASE=%s\nCURRENT_MAIN=%s\n' "$BASE_SHA" "$actual_main"
+          test "$actual_main" = "$BASE_SHA"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Apply bounded ExUnit supervision repair
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("test/strangertalks_new/t02_conversation_start_restart_controls_test.exs")
+          source = path.read_text()
+
+          old = '''    tab2 =
+      spawn(fn ->
+        receive do
+          {:conversation_icebreaker, %{status: "retired"}} = msg ->
+            send(parent, {:tab2_retired, msg})
+
+          {:conversation_message, _} = msg ->
+            send(parent, {:tab2_message, msg})
+
+          _other ->
+            :ok
+        end
+      end)
+'''
+
+          new = '''    tab2 =
+      start_supervised!(
+        {Task,
+         fn ->
+           receive do
+             {:conversation_icebreaker, %{status: "retired"}} = msg ->
+               send(parent, {:tab2_retired, msg})
+
+             {:conversation_message, _} = msg ->
+               send(parent, {:tab2_message, msg})
+
+             _other ->
+               :ok
+           end
+         end},
+        id: {:sibling_tab, conversation_id},
+        restart: :temporary
+      )
+'''
+
+          count = source.count(old)
+          if count != 1:
+              raise SystemExit(f"expected exactly one unlinked sibling-tab spawn, found {count}")
+
+          path.write_text(source.replace(old, new, 1))
+
+      - name: Prove bounded patch before commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test "$(git diff --name-only)" = "test/strangertalks_new/t02_conversation_start_restart_controls_test.exs"
+          ! grep -n '^      spawn(fn ->' test/strangertalks_new/t02_conversation_start_restart_controls_test.exs
+          grep -n 'id: {:sibling_tab, conversation_id}' test/strangertalks_new/t02_conversation_start_restart_controls_test.exs
+
+      - name: Commit durable one-file successor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add test/strangertalks_new/t02_conversation_start_restart_controls_test.exs
+          git rm .github/workflows/c1-t02-sibling-tab-supervision-patch.yml
+          git commit -m "test: supervise Conversation Start sibling tab"
+
+          net_changed="$(git diff --name-only "$BASE_SHA"...HEAD)"
+          printf 'NET_CHANGED=%s\n' "$net_changed"
+          test "$net_changed" = "test/strangertalks_new/t02_conversation_start_restart_controls_test.exs"
+
+      - name: Focused Conversation Start proof on exact commit
+        run: |
+          mix test \
+            test/strangertalks_new/t02_conversation_start_restart_controls_test.exs \
+            test/strangertalks_new/t_a01_002_conversation_start_restart_proof_test.exs
+
+      - name: Compile warnings as errors
+        run: mix compile --warnings-as-errors
+
+      - name: Format and dependency lock
+        run: |
+          mix format --check-formatted
+          mix deps.unlock --check-unused
+
+      - name: Full precommit on exact commit
+        run: mix precommit
+
+      - name: Final exact-head hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          status="$(git status --porcelain)"
+          printf 'WORKTREE=%s\n' "${status:-CLEAN}"
+          test -z "$status"
+          printf 'FINAL_SHA=%s\nFINAL_TREE=%s\n' "$(git rev-parse HEAD)" "$(git rev-parse HEAD^{tree})"
+
+      - name: Push proven successor
+        run: git push origin HEAD:"$BRANCH"
