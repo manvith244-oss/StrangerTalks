@@ -13,16 +13,22 @@ const VECTOR_ASSETS = [
 ]
 const BRAND_COLORS = ["#5b3df6", "#ff6b6b", "#14b8a6", "#f4b942"]
 
-test("brand identity: static shell uses the canonical StrangerTalks lockup and SVG favicon", async () => {
+test("brand identity: static shell uses the inline StrangerTalks mark and SVG favicon", async () => {
   const html = await readFile(HTML_PATH, "utf8")
+  const normalized = html.toLowerCase()
 
   assert.ok(html.includes('href="/images/favicon.svg"'), "shell must reference the SVG favicon")
   assert.ok(
-    html.includes('src="/images/strangertalks-lockup-reversed.svg"'),
-    "header must reference the canonical reversed lockup"
+    html.includes('data-brand-mark="strangertalks"'),
+    "header must contain the canonical inline StrangerTalks mark"
   )
-  assert.ok(html.includes('alt="StrangerTalks"'), "visible lockup must have the StrangerTalks accessible name")
+  assert.ok(html.includes(">StrangerTalks</strong>"), "header must expose the visible StrangerTalks wordmark")
+  assert.ok(!normalized.includes("<img"), "brand integration must preserve the app shell no-img invariant")
   assert.ok(!html.includes('<span aria-hidden="true">S</span>'), "legacy placeholder S mark must be removed")
+
+  for (const color of BRAND_COLORS) {
+    assert.ok(normalized.includes(color), `inline header mark must include canonical brand color ${color}`)
+  }
 })
 
 test("brand identity: canonical assets stay self-contained vector files", async () => {
