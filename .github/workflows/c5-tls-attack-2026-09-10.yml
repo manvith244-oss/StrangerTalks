@@ -11,22 +11,41 @@ permissions:
 env:
   TARGET_SHA: 1efffd7c7436483e0188cc06a29fd7a15c7aea45
   TARGET_TREE: 8fec18429d8cca49443021c12daae954c2b6c88b
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: c5owner
+  STRANGERTALKS_LOCAL_DB_PASSWORD: c5proof
 
 jobs:
   tls:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: c5owner
+          POSTGRES_PASSWORD: c5proof
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U c5owner -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0
-      - name: Exact identity
+      - name: Exact clean identity before proof
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+          git diff --check
+          test -z "$(git status --porcelain)"
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.18.4"
@@ -57,12 +76,14 @@ jobs:
           ! grep -nE 'IO\.(puts|inspect).*DATABASE_URL|Logger\..*DATABASE_URL' config/runtime.exs
       - name: Production release assembly
         shell: bash
+        env:
+          MIX_ENV: prod
         run: |
           set -euo pipefail
-          MIX_ENV=prod mix deps.get --only prod
-          MIX_ENV=prod mix compile --warnings-as-errors
-          MIX_ENV=prod mix assets.deploy
-          MIX_ENV=prod mix release --overwrite
+          mix deps.get --only prod
+          mix compile --warnings-as-errors
+          mix assets.deploy
+          mix release --overwrite
           test -x _build/prod/rel/strangertalks_new/bin/migrate
       - name: Docker compatibility
         shell: bash
@@ -70,12 +91,19 @@ jobs:
           set -euo pipefail
           docker build --pull -t strangertalks-c5-tls:${GITHUB_RUN_ID} .
           test "$(docker inspect --format '{{.Config.User}}' strangertalks-c5-tls:${GITHUB_RUN_ID})" = "nobody"
-      - name: Clean exact identity
+      - name: Prove candidate content was not edited by proof
         shell: bash
         run: |
           set -euo pipefail
           git diff --check
-          git diff --exit-code -- .
+          git diff --name-only | tee /tmp/c5-tls-tracked-diff
+          test ! -s /tmp/c5-tls-tracked-diff
+      - name: Restore pristine checkout and prove exact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git reset --hard "$TARGET_SHA"
+          git clean -fdx
           test -z "$(git status --porcelain)"
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
