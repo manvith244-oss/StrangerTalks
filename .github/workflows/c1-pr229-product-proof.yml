@@ -1,0 +1,164 @@
+name: C1 PR229 Product Proof
+
+on:
+  push:
+    branches:
+      - evidence/c1-pr229-product-proof-b6e1539-2026-09-10
+
+permissions:
+  contents: read
+
+jobs:
+  red-proof:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      RED_SHA: af6a57e55c4472eeda26edaa4130b4c447bd6f07
+      BASE_SHA: 71dbc9546ddf7bca46b62953a6fc4ba1f20d5af1
+    steps:
+      - name: Checkout exact test-only RED head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RED_SHA }}
+          fetch-depth: 0
+      - name: Prove RED head is test-only against canonical base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RED_SHA"
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA" "$RED_SHA" | sort)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 2
+          test "${changed[0]}" = "test/strangertalks_new/t02_conversation_start_restart_controls_test.exs"
+          test "${changed[1]}" = "test/strangertalks_new/t_a01_002_conversation_start_restart_proof_test.exs"
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Prove focused restart controls are RED before production correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          mix test test/strangertalks_new/t02_conversation_start_restart_controls_test.exs > /tmp/t02-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/t02-red.log
+          test "$status" -ne 0
+      - name: Prove replacement restart proof is RED before production correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          mix test test/strangertalks_new/t_a01_002_conversation_start_restart_proof_test.exs > /tmp/a01-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/a01-red.log
+          test "$status" -ne 0
+
+  final-green:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      TARGET_SHA: b6e153920c0c2c01f65c0984ea4a9301a6313606
+      TARGET_TREE: da5adf7cc90a8f27884be28755cf7d26efe2c543
+      BASE_SHA: 71dbc9546ddf7bca46b62953a6fc4ba1f20d5af1
+    steps:
+      - name: Checkout exact final candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Prove exact SHA tree and four-file scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+          mapfile -t changed < <(git diff --name-only "$BASE_SHA" "$TARGET_SHA" | sort)
+          printf '%s\n' "${changed[@]}"
+          test "${#changed[@]}" -eq 4
+          test "${changed[0]}" = "lib/strangertalks_new/conversation_lifecycle/conversation_server.ex"
+          test "${changed[1]}" = "lib/strangertalks_new/matches.ex"
+          test "${changed[2]}" = "test/strangertalks_new/t02_conversation_start_restart_controls_test.exs"
+          test "${changed[3]}" = "test/strangertalks_new/t_a01_002_conversation_start_restart_proof_test.exs"
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Compile warnings as errors
+        run: mix compile --warnings-as-errors
+      - name: Format clean
+        run: mix format --check-formatted
+      - name: Focused T02 restart durability proofs
+        run: |
+          mix test \
+            test/strangertalks_new/t02_conversation_start_restart_controls_test.exs \
+            test/strangertalks_new/t_a01_002_conversation_start_restart_proof_test.exs
+      - name: Affected lifecycle matchmaking and terminal regressions
+        run: |
+          mix test \
+            test/strangertalks_new/conversation_test.exs \
+            test/strangertalks_new/participant_pairing_reservation_release_cases.exs \
+            test/strangertalks_new/companion_conversation_start_test.exs \
+            test/strangertalks_new/c3_legacy_completed_status_test.exs \
+            test/strangertalks_new/team3_recovery_coordination_test.exs
+      - name: Dependency lock hygiene
+        run: mix deps.unlock --check-unused
+      - name: Full precommit
+        run: mix precommit
+      - name: Diff check and clean tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check "$BASE_SHA" "$TARGET_SHA"
+          git diff --exit-code -- .
+          status="$(git status --porcelain)"
+          printf 'WORKTREE=%s\n' "${status:-CLEAN}"
+          test -z "$status"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
