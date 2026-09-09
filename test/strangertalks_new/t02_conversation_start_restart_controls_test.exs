@@ -256,18 +256,23 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
     parent = self()
 
     tab2 =
-      spawn(fn ->
-        receive do
-          {:conversation_icebreaker, %{status: "retired"}} = msg ->
-            send(parent, {:tab2_retired, msg})
+      start_supervised!(
+        {Task,
+         fn ->
+           receive do
+             {:conversation_icebreaker, %{status: "retired"}} = msg ->
+               send(parent, {:tab2_retired, msg})
 
-          {:conversation_message, _} = msg ->
-            send(parent, {:tab2_message, msg})
+             {:conversation_message, _} = msg ->
+               send(parent, {:tab2_message, msg})
 
-          _other ->
-            :ok
-        end
-      end)
+             _other ->
+               :ok
+           end
+         end},
+        id: {:sibling_tab, conversation_id},
+        restart: :temporary
+      )
 
     assert {:ok, _} =
              ConversationServer.sync_and_register_channel(
