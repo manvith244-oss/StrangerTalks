@@ -8,7 +8,7 @@ defmodule StrangertalksNew.Hangouts do
     TemporaryIdentity
   }
 
-  alias StrangertalksNew.Repo
+  alias StrangertalksNew.{ParticipantActivityLock, Repo}
 
   @room_intent_fields [
     :language_tag,
@@ -24,19 +24,7 @@ defmodule StrangertalksNew.Hangouts do
   def create_room(attrs \\ %{})
 
   def create_room(attrs) when is_map(attrs) do
-    canonical_attrs =
-      %{
-        created_at: now(),
-        status: :FORMING,
-        language_tag: "en",
-        experiment_arm: :GROUP_WITH_CONTENT,
-        minimum_size: 3,
-        target_size: 4,
-        max_size: 6,
-        message_sequence: 0,
-        content_sequence: 0
-      }
-      |> Map.merge(intent_attrs(attrs, @room_intent_fields))
+    canonical_attrs = canonical_room_attrs(attrs)
 
     Repo.transaction(fn ->
       %HangoutRoom{}
@@ -51,6 +39,82 @@ defmodule StrangertalksNew.Hangouts do
   end
 
   def create_room(_attrs), do: {:error, :invalid_room_input}
+
+  def create_formed_room(participant_ids, attrs)
+      when is_list(participant_ids) and is_map(attrs) do
+    unique_participant_ids = Enum.uniq(participant_ids)
+
+    cond do
+      unique_participant_ids == [] ->
+        {:error, :invalid_formation_input}
+
+      length(unique_participant_ids) != length(participant_ids) ->
+        {:error, :invalid_formation_input}
+
+      not Enum.all?(unique_participant_ids, &valid_participant_id?/1) ->
+        {:error, :invalid_formation_input}
+
+      true ->
+        participant_ids = unique_participant_ids
+        canonical_attrs = canonical_room_attrs(attrs)
+        room_changeset = HangoutRoom.changeset(%HangoutRoom{}, canonical_attrs)
+
+        cond do
+          not room_changeset.valid? ->
+            {:error, :invalid_room, room_changeset}
+
+          length(participant_ids) < Ecto.Changeset.get_field(room_changeset, :minimum_size) ->
+            {:error, :invalid_formation_size}
+
+          length(participant_ids) > Ecto.Changeset.get_field(room_changeset, :max_size) ->
+            {:error, :invalid_formation_size}
+
+          true ->
+            ParticipantActivityLock.with_participants(participant_ids, fn ->
+              Repo.transaction(fn ->
+                if any_current_membership?(participant_ids) do
+                  Repo.rollback(:already_in_hangout)
+                end
+
+                room =
+                  room_changeset
+                  |> Repo.insert()
+                  |> case do
+                    {:ok, room} -> room
+                    {:error, changeset} -> Repo.rollback({:invalid_room, changeset})
+                  end
+
+                memberships =
+                  Enum.map(participant_ids, fn participant_id ->
+                    insert_member(room, participant_id)
+                  end)
+
+                active_room =
+                  update_room!(room, %{
+                    status: :ACTIVE,
+                    activated_at: now()
+                  })
+
+                %{room: active_room, memberships: memberships}
+              end)
+            end)
+            |> normalize_transaction()
+        end
+    end
+  end
+
+  def create_formed_room(_participant_ids, _attrs), do: {:error, :invalid_formation_input}
+
+  def participant_available?(participant_id) when is_binary(participant_id) do
+    not Repo.exists?(
+      from m in HangoutMembership,
+        where:
+          m.participant_id == ^participant_id and
+            m.status in ^@current_membership_statuses
+    )
+  end
+
+  def participant_available?(_participant_id), do: false
 
   def add_member(room_id, participant_id)
       when is_binary(room_id) and is_binary(participant_id) do
@@ -467,6 +531,15 @@ defmodule StrangertalksNew.Hangouts do
     end
   end
 
+  defp any_current_membership?(participant_ids) do
+    Repo.exists?(
+      from m in HangoutMembership,
+        where:
+          m.participant_id in ^participant_ids and
+            m.status in ^@current_membership_statuses
+    )
+  end
+
   defp lock_room(room_id) do
     Repo.one(from r in HangoutRoom, where: r.room_id == ^room_id, lock: "FOR UPDATE")
   end
@@ -494,6 +567,21 @@ defmodule StrangertalksNew.Hangouts do
     }
   end
 
+  defp canonical_room_attrs(attrs) do
+    %{
+      created_at: now(),
+      status: :FORMING,
+      language_tag: "en",
+      experiment_arm: :GROUP_WITH_CONTENT,
+      minimum_size: 3,
+      target_size: 4,
+      max_size: 6,
+      message_sequence: 0,
+      content_sequence: 0
+    }
+    |> Map.merge(intent_attrs(attrs, @room_intent_fields))
+  end
+
   defp intent_attrs(attrs, fields) do
     Enum.reduce(fields, %{}, fn field, acc ->
       string_field = Atom.to_string(field)
@@ -511,6 +599,12 @@ defmodule StrangertalksNew.Hangouts do
       to_string(Keyword.get(metadata, :constraint_name, "")) == name
     end)
   end
+
+  defp valid_participant_id?(participant_id) when is_binary(participant_id) do
+    match?({:ok, _canonical}, Ecto.UUID.cast(participant_id))
+  end
+
+  defp valid_participant_id?(_participant_id), do: false
 
   defp normalize_transaction({:ok, value}), do: {:ok, value}
 
