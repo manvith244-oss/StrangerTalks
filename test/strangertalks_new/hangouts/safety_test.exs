@@ -114,8 +114,9 @@ defmodule StrangertalksNew.Hangouts.SafetyTest do
   end
 
   test "report rejects self, nonexistent target, oversized evidence, terminal room, and outsider authority" do
-    {room, [reporter, _target | _]} = active_room!(3, "en-S03")
+    {room, [reporter, target | _]} = active_room!(3, "en-S03")
     self_identity = identity_for(room.room_id, reporter.participant_id)
+    target_identity = identity_for(room.room_id, target.participant_id)
     assert {:ok, _snapshot, socket} = join_room(reporter, room.room_id)
 
     self_ref =
@@ -141,7 +142,7 @@ defmodule StrangertalksNew.Hangouts.SafetyTest do
     large_ref =
       push(socket, "safety:report", %{
         "client_report_id" => "large",
-        "target_identity_slot" => 2,
+        "target_identity_slot" => target_identity.slot,
         "category" => "harassment",
         "evidence" => String.duplicate("é", div(HangoutReport.max_evidence_bytes(), 2) + 1)
       })
@@ -153,7 +154,7 @@ defmodule StrangertalksNew.Hangouts.SafetyTest do
     assert {:error, :membership_not_active} =
              Safety.submit_report(room.room_id, outsider.participant_id, %{
                client_report_id: "outsider",
-               target_identity_slot: 2,
+               target_identity_slot: target_identity.slot,
                category: "harassment",
                evidence: nil
              })
@@ -163,7 +164,7 @@ defmodule StrangertalksNew.Hangouts.SafetyTest do
     assert {:error, :terminal_room} =
              Safety.submit_report(room.room_id, reporter.participant_id, %{
                client_report_id: "ended",
-               target_identity_slot: 2,
+               target_identity_slot: target_identity.slot,
                category: "harassment",
                evidence: nil
              })
