@@ -39,6 +39,37 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
     assert Matches.get_match(fixture.match.match_id).conversation_started == false
   end
 
+  test "blank ordinary text is rejected before durable Conversation Start truth" do
+    for {generation, content} <- [{:empty_text, ""}, {:whitespace_text, " \t\n"}] do
+      fixture = conversation_fixture("en")
+      conversation_id = fixture.conversation.conversation_id
+
+      old_pid = start_runtime(conversation_id, generation)
+
+      assert {:ok, %{icebreaker: {:active, identity}}} =
+               ConversationServer.inspect_state(conversation_id)
+
+      assert {:error, :invalid_payload} =
+               ConversationServer.append_message(
+                 conversation_id,
+                 fixture.a,
+                 Ecto.UUID.generate(),
+                 content
+               )
+
+      assert Matches.get_match(fixture.match.match_id).conversation_started == false
+      assert {:ok, %{icebreaker: {:active, ^identity}}} =
+               ConversationServer.inspect_state(conversation_id)
+
+      replacement_pid = replace_runtime(conversation_id, old_pid)
+      refute replacement_pid == old_pid
+
+      assert Matches.get_match(fixture.match.match_id).conversation_started == false
+      assert {:ok, %{icebreaker: {:active, ^identity}}} =
+               ConversationServer.inspect_state(conversation_id)
+    end
+  end
+
   test "missing language stays fail-closed across real replacement without inventing a starter" do
     fixture = conversation_fixture(nil)
     conversation_id = fixture.conversation.conversation_id
