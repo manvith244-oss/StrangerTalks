@@ -191,6 +191,162 @@ defmodule StrangertalksNewWeb.HangoutChannelTest do
     assert Repo.aggregate(HangoutMessage, :count, :message_id) == 1
   end
 
+  test "reaction intent uses socket identity, returns redacted state, and rejects spoofed invalid or stale input" do
+    {room, [actor | participants]} = active_room!()
+
+    assert {:ok, _snapshot, socket} =
+             actor
+             |> connected_socket()
+             |> subscribe_and_join(HangoutChannel, "hangout:#{room.room_id}", %{})
+
+    assert {:ok, current} = RoomServer.current_content(room.room_id)
+
+    ref =
+      push(socket, "reaction:add", %{
+        "expected_content_sequence" => current.sequence,
+        "reaction" => "laugh"
+      })
+
+    assert_reply ref, :ok, accepted
+    assert accepted.content_sequence == current.sequence
+    assert accepted.reaction == "laugh"
+    assert accepted.counts == %{"laugh" => 1}
+    assert Map.keys(accepted.actor) |> Enum.sort() == [:emoji, :label, :slot]
+    assert_push "reaction:updated", ^accepted
+
+    encoded = inspect(accepted)
+    refute encoded =~ actor.participant_id
+
+    for participant <- participants do
+      refute encoded =~ participant.participant_id
+    end
+
+    for membership <- memberships(room.room_id) do
+      refute encoded =~ membership.membership_id
+    end
+
+    spoof_ref =
+      push(socket, "reaction:add", %{
+        "expected_content_sequence" => current.sequence,
+        "reaction" => "fire",
+        "participant_id" => Ecto.UUID.generate()
+      })
+
+    assert_reply spoof_ref, :error, %{reason: "invalid_reaction_intent"}
+
+    invalid_ref =
+      push(socket, "reaction:add", %{
+        "expected_content_sequence" => current.sequence,
+        "reaction" => "not-allowed"
+      })
+
+    assert_reply invalid_ref, :error, %{reason: "invalid_reaction"}
+
+    stale_ref =
+      push(socket, "reaction:add", %{
+        "expected_content_sequence" => current.sequence - 1,
+        "reaction" => "fire"
+      })
+
+    assert_reply stale_ref, :error, %{reason: "stale_content"}
+  end
+
+  test "skip intent delegates quorum to RoomServer, advances once, rejects spoofing, and makes old packets stale" do
+    {room, [first, second | _]} = active_room!()
+
+    assert {:ok, _snapshot, first_socket} =
+             first
+             |> connected_socket()
+             |> subscribe_and_join(HangoutChannel, "hangout:#{room.room_id}", %{})
+
+    assert {:ok, _snapshot, second_socket} =
+             second
+             |> connected_socket()
+             |> subscribe_and_join(HangoutChannel, "hangout:#{room.room_id}", %{})
+
+    assert {:ok, current} = RoomServer.current_content(room.room_id)
+
+    first_ref =
+      push(first_socket, "content:skip_vote", %{
+        "expected_content_sequence" => current.sequence
+      })
+
+    assert_reply first_ref, :ok, first_vote
+    assert first_vote.advanced == false
+    assert first_vote.content_sequence == current.sequence
+    assert first_vote.votes == 1
+    assert first_vote.required_votes == 2
+    assert_push "skip:updated", %{content_sequence: sequence, votes: 1, required_votes: 2}
+    assert sequence == current.sequence
+
+    second_ref =
+      push(second_socket, "content:skip_vote", %{
+        "expected_content_sequence" => current.sequence
+      })
+
+    assert_reply second_ref, :ok, advanced
+    assert advanced.advanced == true
+    assert advanced.previous_content_sequence == current.sequence
+    assert advanced.content.sequence == current.sequence + 1
+    assert_push "content:changed", changed
+    assert changed.sequence == current.sequence + 1
+
+    stale_ref =
+      push(first_socket, "content:skip_vote", %{
+        "expected_content_sequence" => current.sequence
+      })
+
+    assert_reply stale_ref, :error, %{reason: "stale_content"}
+
+    spoof_ref =
+      push(first_socket, "content:skip_vote", %{
+        "expected_content_sequence" => current.sequence + 1,
+        "participant_id" => Ecto.UUID.generate()
+      })
+
+    assert_reply spoof_ref, :error, %{reason: "invalid_skip_intent"}
+  end
+
+  test "content interactions stay disabled for control rooms and map terminal room state deliberately" do
+    {control, [control_member | _]} = active_room!(:GROUP_NO_CONTENT)
+
+    assert {:ok, _snapshot, control_socket} =
+             control_member
+             |> connected_socket()
+             |> subscribe_and_join(HangoutChannel, "hangout:#{control.room_id}", %{})
+
+    reaction_ref =
+      push(control_socket, "reaction:add", %{
+        "expected_content_sequence" => 0,
+        "reaction" => "laugh"
+      })
+
+    assert_reply reaction_ref, :error, %{reason: "content_disabled"}
+
+    skip_ref =
+      push(control_socket, "content:skip_vote", %{"expected_content_sequence" => 0})
+
+    assert_reply skip_ref, :error, %{reason: "content_disabled"}
+
+    {terminal, [member | _]} = active_room!()
+
+    assert {:ok, _snapshot, terminal_socket} =
+             member
+             |> connected_socket()
+             |> subscribe_and_join(HangoutChannel, "hangout:#{terminal.room_id}", %{})
+
+    assert {:ok, current} = RoomServer.current_content(terminal.room_id)
+    assert {:ok, %{status: :ENDED}} = RoomServer.end_room(terminal.room_id)
+
+    terminal_ref =
+      push(terminal_socket, "reaction:add", %{
+        "expected_content_sequence" => current.sequence,
+        "reaction" => "laugh"
+      })
+
+    assert_reply terminal_ref, :error, %{reason: "hangout_ended"}
+  end
+
   test "socket/channel disconnect becomes durable DISCONNECTED and never LEFT" do
     Process.flag(:trap_exit, true)
     {room, [participant | _]} = active_room!()
@@ -252,7 +408,7 @@ defmodule StrangertalksNewWeb.HangoutChannelTest do
     socket
   end
 
-  defp active_room! do
+  defp active_room!(experiment_arm \\ :GROUP_WITH_CONTENT) do
     participants = for _ <- 1..3, do: participant!()
 
     {:ok, %{room: room}} =
@@ -260,7 +416,7 @@ defmodule StrangertalksNewWeb.HangoutChannelTest do
         Enum.map(participants, & &1.participant_id),
         %{
           language_tag: "en",
-          experiment_arm: :GROUP_WITH_CONTENT,
+          experiment_arm: experiment_arm,
           minimum_size: 3,
           target_size: 4,
           max_size: 6
