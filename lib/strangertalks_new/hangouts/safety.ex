@@ -7,8 +7,6 @@ defmodule StrangertalksNew.Hangouts.Safety do
   `MatchingRules` pair-boundary authority.
   """
 
-  import Ecto.Query, warn: false
-
   alias StrangertalksNew.Hangouts.{HangoutMembership, HangoutReport, HangoutRoom}
   alias StrangertalksNew.{MatchingRules, Repo}
 
@@ -22,7 +20,6 @@ defmodule StrangertalksNew.Hangouts.Safety do
     {"other", :OTHER}
   ]
   @wire_to_db Map.new(@category_pairs)
-  @db_to_wire Map.new(@category_pairs, fn {wire, database} -> {database, wire} end)
 
   def report_categories, do: Enum.map(@category_pairs, &elem(&1, 0))
 
@@ -32,7 +29,7 @@ defmodule StrangertalksNew.Hangouts.Safety do
          {:ok, _reporter} <- active_membership(room_id, reporting_participant_id),
          {:ok, client_report_id} <- report_id(attrs),
          {:ok, target_slot} <- target_slot(attrs),
-         {:ok, target} <- target_membership(room_id, target_slot),
+         {:ok, target} <- report_target_membership(room_id, target_slot),
          :ok <- reject_self(reporting_participant_id, target.participant_id, :self_report),
          {:ok, wire_category, database_category} <- report_category(attrs),
          {:ok, evidence} <- evidence(attrs) do
@@ -60,7 +57,7 @@ defmodule StrangertalksNew.Hangouts.Safety do
              is_integer(target_identity_slot) and target_identity_slot >= 0 do
     with {:ok, _room} <- active_room(room_id),
          {:ok, _blocker} <- active_membership(room_id, blocking_participant_id),
-         {:ok, target} <- target_membership(room_id, target_identity_slot),
+         {:ok, target} <- block_target_membership(room_id, target_identity_slot),
          :ok <- reject_self(blocking_participant_id, target.participant_id, :self_block),
          {:ok, _block} <-
            MatchingRules.enforce_block(blocking_participant_id, target.participant_id, "HANGOUT") do
@@ -152,11 +149,22 @@ defmodule StrangertalksNew.Hangouts.Safety do
     end
   end
 
-  defp target_membership(room_id, slot) do
-    case Repo.get_by(HangoutMembership, room_id: room_id, temporary_identity_slot: slot) do
+  defp report_target_membership(room_id, slot) do
+    case membership_by_slot(room_id, slot) do
       %HangoutMembership{} = membership -> {:ok, membership}
       nil -> {:error, :invalid_report_target}
     end
+  end
+
+  defp block_target_membership(room_id, slot) do
+    case membership_by_slot(room_id, slot) do
+      %HangoutMembership{} = membership -> {:ok, membership}
+      nil -> {:error, :invalid_block_target}
+    end
+  end
+
+  defp membership_by_slot(room_id, slot) do
+    Repo.get_by(HangoutMembership, room_id: room_id, temporary_identity_slot: slot)
   end
 
   defp reject_self(participant_id, participant_id, reason), do: {:error, reason}
@@ -191,10 +199,17 @@ defmodule StrangertalksNew.Hangouts.Safety do
 
   defp evidence(attrs) do
     case Map.get(attrs, :evidence) do
-      nil -> {:ok, nil}
-      value when is_binary(value) and byte_size(value) <= HangoutReport.max_evidence_bytes() -> {:ok, value}
-      value when is_binary(value) -> {:error, :report_evidence_too_large}
-      _ -> {:error, :invalid_report_intent}
+      nil ->
+        {:ok, nil}
+
+      value when is_binary(value) and byte_size(value) <= HangoutReport.max_evidence_bytes() ->
+        {:ok, value}
+
+      value when is_binary(value) ->
+        {:error, :report_evidence_too_large}
+
+      _ ->
+        {:error, :invalid_report_intent}
     end
   end
 
@@ -212,6 +227,4 @@ defmodule StrangertalksNew.Hangouts.Safety do
       emoji: membership.temporary_identity_emoji
     }
   end
-
-  defp database_category_to_wire(category), do: Map.get(@db_to_wire, category)
 end
