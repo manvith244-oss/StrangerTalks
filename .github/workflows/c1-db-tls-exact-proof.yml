@@ -93,7 +93,7 @@ jobs:
         run: |
           set -euo pipefail
           grep -q '^ARG ELIXIR_VERSION=1.18.4$' Dockerfile
-          grep -q '^ARG OTP_VERSION=27.3.4$' Dockerfile
+          grep -q '^ARG OTP_VERSION=27.3.4.16$' Dockerfile
           docker build --pull -t "strangertalks-c1-db-tls:${TARGET_SHA}" .
           docker inspect "strangertalks-c1-db-tls:${TARGET_SHA}" >/dev/null
 
