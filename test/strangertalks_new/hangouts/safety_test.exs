@@ -8,6 +8,7 @@ defmodule StrangertalksNew.Hangouts.SafetyTest do
   @wire_categories ~w(harassment sexual_content hate threat spam_scam personal_information other)
 
   alias StrangertalksNew.Hangouts
+
   alias StrangertalksNew.Hangouts.{
     HangoutMembership,
     HangoutReport,
@@ -207,8 +208,7 @@ defmodule StrangertalksNew.Hangouts.SafetyTest do
     block_ref =
       push(socket, "safety:block", %{"target_identity_slot" => target_identity.slot})
 
-    assert_reply block_ref, :ok,
-                 %{status: "blocked", target: ^target_identity} = accepted
+    assert_reply block_ref, :ok, %{status: "blocked", target: ^target_identity} = accepted
 
     encoded = inspect(accepted)
     refute encoded =~ blocker.participant_id
@@ -242,7 +242,8 @@ defmodule StrangertalksNew.Hangouts.SafetyTest do
     language = "en-S06"
     [a, b, c, d, e, f] = participants!(6)
 
-    assert {:ok, _block} = MatchingRules.enforce_block(a.participant_id, c.participant_id, "HANGOUT")
+    assert {:ok, _block} =
+             MatchingRules.enforce_block(a.participant_id, c.participant_id, "HANGOUT")
 
     Enum.each([a, b, c, d], fn participant ->
       assert {:ok, %{status: :queued}} = Matcher.enqueue(participant.participant_id, language)
