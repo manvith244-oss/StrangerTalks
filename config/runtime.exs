@@ -105,10 +105,54 @@ if config_env() == :prod do
       For example: ecto://USER:PASS@HOST/DATABASE
       """
 
+  database_host =
+    case URI.parse(database_url).host do
+      host when is_binary(host) and host != "" ->
+        host
+
+      _ ->
+        raise "DATABASE_URL must include a database hostname for TLS certificate verification"
+    end
+
+  database_ca_options =
+    case System.get_env("DB_CA_CERT_FILE") do
+      nil ->
+        case :public_key.cacerts_get() do
+          certs when is_list(certs) and certs != [] ->
+            [cacerts: certs]
+
+          _ ->
+            raise "production database TLS requires trusted system CA certificates"
+        end
+
+      "" ->
+        raise "DB_CA_CERT_FILE must not be blank when configured"
+
+      path ->
+        if File.regular?(path) do
+          case File.open(path, [:read]) do
+            {:ok, device} ->
+              File.close(device)
+              [cacertfile: path]
+
+            {:error, _reason} ->
+              raise "DB_CA_CERT_FILE must point to a readable regular CA bundle file"
+          end
+        else
+          raise "DB_CA_CERT_FILE must point to a readable regular CA bundle file"
+        end
+    end
+
+  database_ssl_options =
+    [
+      verify: :verify_peer,
+      server_name_indication: String.to_charlist(database_host)
+    ] ++ database_ca_options
+
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
   config :strangertalks_new, StrangertalksNew.Repo,
-    # ssl: true,
+    ssl: database_ssl_options,
     url: database_url,
     pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
     # For machines with several cores, consider starting multiple pools of `pool_size`
