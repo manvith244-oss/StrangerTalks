@@ -290,8 +290,9 @@ defmodule StrangertalksNew.AgentSystemsBreakTest do
         {:ok, decoded}
       )
 
-      assert TrendBridgeResearch.research("en", ["bounded current signal"]) ==
-               {:error, :invalid_trend_research_output},
+      assert TrendBridgeResearch.research("en", [
+               %{text: "bounded current signal", provenance: :OPERATOR_PROVIDED}
+             ]) == {:error, :invalid_trend_research_output},
              label
     end)
   end
