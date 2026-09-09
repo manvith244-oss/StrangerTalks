@@ -1348,6 +1348,7 @@ defmodule StrangertalksNewWeb.ConversationChannel do
   defp validate_message_content(content) when is_binary(content) do
     cond do
       not String.valid?(content) -> {:error, :invalid_payload}
+      String.trim(content) == "" -> {:error, :invalid_payload}
       byte_size(content) > ConversationServer.max_message_bytes() -> {:error, :message_too_large}
       true -> :ok
     end

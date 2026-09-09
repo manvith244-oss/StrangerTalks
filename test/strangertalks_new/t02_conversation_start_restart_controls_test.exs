@@ -39,6 +39,312 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
     assert Matches.get_match(fixture.match.match_id).conversation_started == false
   end
 
+  test "blank ordinary text is rejected before durable Conversation Start truth" do
+    blank_cases = [
+      {:empty, ""},
+      {:single_space, " "},
+      {:multiple_spaces, "   "},
+      {:tab, "\t"},
+      {:newline, "\n"},
+      {:crlf, "\r\n"},
+      {:mixed_whitespace, "  \t\r\n  \t  \n "}
+    ]
+
+    for {generation, content} <- blank_cases do
+      fixture = conversation_fixture("en")
+      conversation_id = fixture.conversation.conversation_id
+
+      old_pid = start_runtime(conversation_id, generation)
+
+      assert {:ok, %{icebreaker: {:active, identity}}} =
+               ConversationServer.inspect_state(conversation_id)
+
+      assert {:error, :invalid_payload} =
+               ConversationServer.append_message(
+                 conversation_id,
+                 fixture.a,
+                 Ecto.UUID.generate(),
+                 content
+               )
+
+      assert Matches.get_match(fixture.match.match_id).conversation_started == false
+
+      assert {:ok, %{icebreaker: {:active, ^identity}}} =
+               ConversationServer.inspect_state(conversation_id)
+
+      replacement_pid = replace_runtime(conversation_id, old_pid)
+      refute replacement_pid == old_pid
+
+      assert Matches.get_match(fixture.match.match_id).conversation_started == false
+
+      assert {:ok, %{icebreaker: {:active, ^identity}}} =
+               ConversationServer.inspect_state(conversation_id)
+    end
+  end
+
+  test "positive controls: multilingual text, emojis, and padded text establish durable Conversation Start" do
+    positive_cases = [
+      {:ascii, "Hello world"},
+      {:telugu, "నమస్కారం"},
+      {:hindi, "नमस्ते"},
+      {:arabic, "مرحبا"},
+      {:cjk, "你好世界"},
+      {:emoji, "👋🚀✨"},
+      {:padded, "   hello stranger   "}
+    ]
+
+    for {generation, content} <- positive_cases do
+      fixture = conversation_fixture("en")
+      conversation_id = fixture.conversation.conversation_id
+
+      old_pid = start_runtime(conversation_id, generation)
+
+      assert {:ok, %{icebreaker: {:active, _identity}}} =
+               ConversationServer.inspect_state(conversation_id)
+
+      assert {:ok, result} =
+               ConversationServer.append_message(
+                 conversation_id,
+                 fixture.a,
+                 Ecto.UUID.generate(),
+                 content
+               )
+
+      assert result.sequence == 1
+      assert Matches.get_match(fixture.match.match_id).conversation_started == true
+      assert {:ok, %{icebreaker: :retired}} = ConversationServer.inspect_state(conversation_id)
+
+      replacement_pid = replace_runtime(conversation_id, old_pid)
+      refute replacement_pid == old_pid
+
+      assert Matches.get_match(fixture.match.match_id).conversation_started == true
+      assert {:ok, %{icebreaker: :retired}} = ConversationServer.inspect_state(conversation_id)
+    end
+  end
+
+  test "repeated and concurrent blank submissions produce deterministic rejections without starter retirement" do
+    fixture = conversation_fixture("en")
+    conversation_id = fixture.conversation.conversation_id
+    old_pid = start_runtime(conversation_id, :repeated_blank)
+
+    assert {:ok, %{icebreaker: {:active, identity}}} =
+             ConversationServer.inspect_state(conversation_id)
+
+    for _i <- 1..5 do
+      assert {:error, :invalid_payload} =
+               ConversationServer.append_message(
+                 conversation_id,
+                 fixture.a,
+                 Ecto.UUID.generate(),
+                 "   \t  \n  "
+               )
+    end
+
+    assert Matches.get_match(fixture.match.match_id).conversation_started == false
+
+    assert {:ok, %{icebreaker: {:active, ^identity}}} =
+             ConversationServer.inspect_state(conversation_id)
+
+    tasks =
+      for _i <- 1..10 do
+        Task.async(fn ->
+          ConversationServer.append_message(
+            conversation_id,
+            fixture.a,
+            Ecto.UUID.generate(),
+            "   "
+          )
+        end)
+      end
+
+    results = Task.await_many(tasks)
+    assert Enum.all?(results, &(&1 == {:error, :invalid_payload}))
+
+    assert Matches.get_match(fixture.match.match_id).conversation_started == false
+
+    assert {:ok, %{icebreaker: {:active, ^identity}}} =
+             ConversationServer.inspect_state(conversation_id)
+
+    replacement_pid = replace_runtime(conversation_id, old_pid)
+    refute replacement_pid == old_pid
+
+    assert Matches.get_match(fixture.match.match_id).conversation_started == false
+
+    assert {:ok, %{icebreaker: {:active, ^identity}}} =
+             ConversationServer.inspect_state(conversation_id)
+  end
+
+  test "blank before valid, valid before blank, and blank racing with valid content" do
+    fixture = conversation_fixture("en")
+    conversation_id = fixture.conversation.conversation_id
+    _pid = start_runtime(conversation_id, :ordering_and_race)
+
+    # 1. Blank before valid
+    assert {:error, :invalid_payload} =
+             ConversationServer.append_message(
+               conversation_id,
+               fixture.a,
+               Ecto.UUID.generate(),
+               ""
+             )
+
+    assert Matches.get_match(fixture.match.match_id).conversation_started == false
+
+    assert {:ok, %{sequence: 1}} =
+             ConversationServer.append_message(
+               conversation_id,
+               fixture.a,
+               Ecto.UUID.generate(),
+               "valid first message"
+             )
+
+    assert Matches.get_match(fixture.match.match_id).conversation_started == true
+    assert {:ok, %{icebreaker: :retired}} = ConversationServer.inspect_state(conversation_id)
+
+    # 2. Valid before blank
+    assert {:error, :invalid_payload} =
+             ConversationServer.append_message(
+               conversation_id,
+               fixture.a,
+               Ecto.UUID.generate(),
+               "   "
+             )
+
+    assert {:ok, state} = ConversationServer.inspect_state(conversation_id)
+    assert state.next_sequence == 2
+
+    # 3. Race between blank and valid content on a fresh conversation
+    race_fixture = conversation_fixture("en")
+    race_conv_id = race_fixture.conversation.conversation_id
+    _race_pid = start_runtime(race_conv_id, :racing_content)
+
+    t1 =
+      Task.async(fn ->
+        ConversationServer.append_message(
+          race_conv_id,
+          race_fixture.a,
+          Ecto.UUID.generate(),
+          "   \n\t   "
+        )
+      end)
+
+    t2 =
+      Task.async(fn ->
+        ConversationServer.append_message(
+          race_conv_id,
+          race_fixture.b,
+          Ecto.UUID.generate(),
+          "racing valid message"
+        )
+      end)
+
+    r1 = Task.await(t1)
+    r2 = Task.await(t2)
+
+    assert r1 == {:error, :invalid_payload}
+    assert match?({:ok, %{sequence: 1}}, r2)
+    assert Matches.get_match(race_fixture.match.match_id).conversation_started == true
+    assert {:ok, %{icebreaker: :retired}} = ConversationServer.inspect_state(race_conv_id)
+  end
+
+  test "rejected blank does not fan out retirement to sibling tabs and handles stale channel safely" do
+    fixture = conversation_fixture("en")
+    conversation_id = fixture.conversation.conversation_id
+    _pid = start_runtime(conversation_id, :tab_fanout)
+
+    tab1 = self()
+    parent = self()
+
+    tab2 =
+      spawn(fn ->
+        receive do
+          {:conversation_icebreaker, %{status: "retired"}} = msg ->
+            send(parent, {:tab2_retired, msg})
+
+          {:conversation_message, _} = msg ->
+            send(parent, {:tab2_message, msg})
+
+          _other ->
+            :ok
+        end
+      end)
+
+    assert {:ok, _} =
+             ConversationServer.sync_and_register_channel(
+               conversation_id,
+               fixture.a,
+               tab1,
+               nil,
+               0
+             )
+
+    assert {:ok, _} =
+             ConversationServer.sync_and_register_channel(
+               conversation_id,
+               fixture.a,
+               tab2,
+               nil,
+               0
+             )
+
+    # Submit blank
+    assert {:error, :invalid_payload} =
+             ConversationServer.append_message(
+               conversation_id,
+               fixture.a,
+               Ecto.UUID.generate(),
+               "  "
+             )
+
+    refute_receive {:conversation_icebreaker, %{status: "retired"}}
+    refute_receive {:tab2_retired, _}
+    refute_receive {:tab2_message, _}
+
+    # Stale/dead channel: kill tab2 and submit blank again
+    Process.exit(tab2, :kill)
+
+    assert {:error, :invalid_payload} =
+             ConversationServer.append_message(
+               conversation_id,
+               fixture.a,
+               Ecto.UUID.generate(),
+               "\t"
+             )
+
+    refute_receive {:conversation_icebreaker, %{status: "retired"}}
+    assert Matches.get_match(fixture.match.match_id).conversation_started == false
+  end
+
+  test "malformed ordinary-text payload and terminal conversation fail safely" do
+    fixture = conversation_fixture("en")
+    conversation_id = fixture.conversation.conversation_id
+    _pid = start_runtime(conversation_id, :malformed_and_terminal)
+
+    # Non-string and malformed payloads
+    for malformed <- [123, %{bad: "payload"}, [:list], <<255, 255>>] do
+      assert {:error, :invalid_payload} =
+               ConversationServer.append_message(
+                 conversation_id,
+                 fixture.a,
+                 Ecto.UUID.generate(),
+                 malformed
+               )
+    end
+
+    assert Matches.get_match(fixture.match.match_id).conversation_started == false
+
+    # Terminal conversation rejects input safely
+    assert {:ok, _} = ConversationServer.complete_conversation(conversation_id, fixture.a)
+
+    assert {:error, _reason} =
+             ConversationServer.append_message(
+               conversation_id,
+               fixture.a,
+               Ecto.UUID.generate(),
+               "   "
+             )
+  end
+
   test "missing language stays fail-closed across real replacement without inventing a starter" do
     fixture = conversation_fixture(nil)
     conversation_id = fixture.conversation.conversation_id
