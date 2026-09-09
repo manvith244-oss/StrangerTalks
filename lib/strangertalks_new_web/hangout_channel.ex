@@ -73,6 +73,67 @@ defmodule StrangertalksNewWeb.HangoutChannel do
   def handle_in("message:send", _params, socket),
     do: message_error(socket, :invalid_message_intent)
 
+  def handle_in("reaction:add", params, socket) when is_map(params) do
+    with true <- allowed_keys?(params, ["expected_content_sequence", "reaction"]),
+         expected_content_sequence
+         when is_integer(expected_content_sequence) and expected_content_sequence >= 0 <-
+           Map.get(params, "expected_content_sequence"),
+         reaction when is_binary(reaction) <- Map.get(params, "reaction"),
+         {:ok, result} <-
+           RoomServer.add_reaction(
+             room_id(socket),
+             socket.assigns.participant_id,
+             expected_content_sequence,
+             reaction
+           ) do
+      {:reply, {:ok, result}, socket}
+    else
+      false -> interaction_error(socket, :invalid_reaction_intent)
+      nil -> interaction_error(socket, :invalid_reaction_intent)
+      {:error, :invalid_reaction} -> interaction_error(socket, :invalid_reaction)
+      {:error, :stale_content} -> interaction_error(socket, :stale_content)
+      {:error, :content_disabled} -> interaction_error(socket, :content_disabled)
+      {:error, :terminal_room} -> interaction_error(socket, :hangout_ended)
+      {:error, :room_not_active} -> interaction_error(socket, :hangout_ended)
+      {:error, :membership_not_found} -> interaction_error(socket, :not_hangout_member)
+      {:error, :membership_not_active} -> interaction_error(socket, :not_hangout_member)
+      {:error, _reason} -> interaction_error(socket, :invalid_reaction_intent)
+      _ -> interaction_error(socket, :invalid_reaction_intent)
+    end
+  end
+
+  def handle_in("reaction:add", _params, socket),
+    do: interaction_error(socket, :invalid_reaction_intent)
+
+  def handle_in("content:skip_vote", params, socket) when is_map(params) do
+    with true <- allowed_keys?(params, ["expected_content_sequence"]),
+         expected_content_sequence
+         when is_integer(expected_content_sequence) and expected_content_sequence >= 0 <-
+           Map.get(params, "expected_content_sequence"),
+         {:ok, result} <-
+           RoomServer.vote_skip(
+             room_id(socket),
+             socket.assigns.participant_id,
+             expected_content_sequence
+           ) do
+      {:reply, {:ok, result}, socket}
+    else
+      false -> interaction_error(socket, :invalid_skip_intent)
+      nil -> interaction_error(socket, :invalid_skip_intent)
+      {:error, :stale_content} -> interaction_error(socket, :stale_content)
+      {:error, :content_disabled} -> interaction_error(socket, :content_disabled)
+      {:error, :terminal_room} -> interaction_error(socket, :hangout_ended)
+      {:error, :room_not_active} -> interaction_error(socket, :hangout_ended)
+      {:error, :membership_not_found} -> interaction_error(socket, :not_hangout_member)
+      {:error, :membership_not_active} -> interaction_error(socket, :not_hangout_member)
+      {:error, _reason} -> interaction_error(socket, :invalid_skip_intent)
+      _ -> interaction_error(socket, :invalid_skip_intent)
+    end
+  end
+
+  def handle_in("content:skip_vote", _params, socket),
+    do: interaction_error(socket, :invalid_skip_intent)
+
   def handle_in("room:leave", params, socket) when params == %{} do
     case Hangouts.leave_room(room_id(socket), socket.assigns.participant_id) do
       {:ok, _membership} ->
@@ -131,6 +192,9 @@ defmodule StrangertalksNewWeb.HangoutChannel do
   defp join_error(reason), do: {:error, %{reason: Atom.to_string(reason)}}
 
   defp message_error(socket, reason),
+    do: {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
+
+  defp interaction_error(socket, reason),
     do: {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
 
   defp room_id(socket), do: socket.assigns.hangout_room_id
