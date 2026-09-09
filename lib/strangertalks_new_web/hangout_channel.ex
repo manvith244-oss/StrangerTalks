@@ -2,7 +2,7 @@ defmodule StrangertalksNewWeb.HangoutChannel do
   use Phoenix.Channel, log_join: false, log_handle_in: false
 
   alias StrangertalksNew.Hangouts
-  alias StrangertalksNew.Hangouts.RoomServer
+  alias StrangertalksNew.Hangouts.{RoomServer, Safety}
 
   @pubsub StrangertalksNew.PubSub
 
@@ -134,6 +134,77 @@ defmodule StrangertalksNewWeb.HangoutChannel do
   def handle_in("content:skip_vote", _params, socket),
     do: interaction_error(socket, :invalid_skip_intent)
 
+  def handle_in("safety:report", params, socket) when is_map(params) do
+    with true <-
+           allowed_keys?(params, [
+             "client_report_id",
+             "target_identity_slot",
+             "category",
+             "evidence"
+           ]),
+         client_report_id when is_binary(client_report_id) and client_report_id != "" <-
+           Map.get(params, "client_report_id"),
+         target_identity_slot
+         when is_integer(target_identity_slot) and target_identity_slot >= 0 <-
+           Map.get(params, "target_identity_slot"),
+         category when is_binary(category) and category != "" <- Map.get(params, "category"),
+         evidence when is_nil(evidence) or is_binary(evidence) <- Map.get(params, "evidence"),
+         {:ok, result} <-
+           Safety.submit_report(room_id(socket), socket.assigns.participant_id, %{
+             client_report_id: client_report_id,
+             target_identity_slot: target_identity_slot,
+             category: category,
+             evidence: evidence
+           }) do
+      {:reply, {:ok, result}, socket}
+    else
+      false -> safety_error(socket, :invalid_report_intent)
+      {:error, :invalid_report_category} -> safety_error(socket, :invalid_report_category)
+      {:error, :invalid_report_target} -> safety_error(socket, :invalid_report_target)
+      {:error, :self_report} -> safety_error(socket, :self_report)
+      {:error, :report_evidence_too_large} -> safety_error(socket, :report_evidence_too_large)
+      {:error, :idempotency_conflict} -> safety_error(socket, :idempotency_conflict)
+      {:error, :terminal_room} -> safety_error(socket, :hangout_ended)
+      {:error, :room_not_active} -> safety_error(socket, :hangout_ended)
+      {:error, :membership_not_found} -> safety_error(socket, :not_hangout_member)
+      {:error, :membership_not_active} -> safety_error(socket, :not_hangout_member)
+      {:error, _reason} -> safety_error(socket, :invalid_report_intent)
+      _ -> safety_error(socket, :invalid_report_intent)
+    end
+  end
+
+  def handle_in("safety:report", _params, socket),
+    do: safety_error(socket, :invalid_report_intent)
+
+  def handle_in("safety:block", params, socket) when is_map(params) do
+    with true <- allowed_keys?(params, ["target_identity_slot"]),
+         target_identity_slot
+         when is_integer(target_identity_slot) and target_identity_slot >= 0 <-
+           Map.get(params, "target_identity_slot"),
+         {:ok, result} <-
+           Safety.block_member(
+             room_id(socket),
+             socket.assigns.participant_id,
+             target_identity_slot
+           ) do
+      {:reply, {:ok, result}, socket}
+    else
+      false -> safety_error(socket, :invalid_block_intent)
+      {:error, :invalid_block_target} -> safety_error(socket, :invalid_block_target)
+      {:error, :invalid_report_target} -> safety_error(socket, :invalid_block_target)
+      {:error, :self_block} -> safety_error(socket, :self_block)
+      {:error, :terminal_room} -> safety_error(socket, :hangout_ended)
+      {:error, :room_not_active} -> safety_error(socket, :hangout_ended)
+      {:error, :membership_not_found} -> safety_error(socket, :not_hangout_member)
+      {:error, :membership_not_active} -> safety_error(socket, :not_hangout_member)
+      {:error, _reason} -> safety_error(socket, :invalid_block_intent)
+      _ -> safety_error(socket, :invalid_block_intent)
+    end
+  end
+
+  def handle_in("safety:block", _params, socket),
+    do: safety_error(socket, :invalid_block_intent)
+
   def handle_in("room:leave", params, socket) when params == %{} do
     case Hangouts.leave_room(room_id(socket), socket.assigns.participant_id) do
       {:ok, _membership} ->
@@ -195,6 +266,9 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     do: {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
 
   defp interaction_error(socket, reason),
+    do: {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
+
+  defp safety_error(socket, reason),
     do: {:reply, {:error, %{reason: Atom.to_string(reason)}}, socket}
 
   defp room_id(socket), do: socket.assigns.hangout_room_id
