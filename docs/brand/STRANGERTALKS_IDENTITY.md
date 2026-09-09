@@ -60,15 +60,16 @@ The companion wordmark is exactly `StrangerTalks`. Keep it neutral so the colorf
 - Dark surfaces: Warm Neutral wordmark.
 - Do not split `Stranger` and `Talks` into different colors or typefaces.
 
-The current production SVG lockups use Inter with robust system fallbacks. The symbol geometry is independent of the font.
+Standalone SVG lockup assets are retained for marketing/export use. In the application shell, the canonical symbol is rendered inline beside the visible HTML `StrangerTalks` wordmark so the existing no-`img` presentation invariant remains intact. The product typography continues to inherit the existing Inter/system stack.
 
 ## Canonical assets
 
 - `priv/static/images/strangertalks-mark.svg` — full-color master symbol.
 - `priv/static/images/strangertalks-mark-reversed.svg` — full-color symbol for dark contexts.
-- `priv/static/images/strangertalks-lockup.svg` — full-color symbol + Midnight wordmark for light surfaces.
-- `priv/static/images/strangertalks-lockup-reversed.svg` — full-color symbol + Warm Neutral wordmark for dark surfaces.
+- `priv/static/images/strangertalks-lockup.svg` — full-color symbol + Midnight wordmark for light/export surfaces.
+- `priv/static/images/strangertalks-lockup-reversed.svg` — full-color symbol + Warm Neutral wordmark for dark/export surfaces.
 - `priv/static/images/favicon.svg` — full-color symbol on a Midnight rounded tile.
+- `priv/static/index.html` — inline full-color header symbol plus visible `StrangerTalks` wordmark; no `<img>` dependency.
 
 ## Minimum sizes
 
@@ -77,7 +78,7 @@ The master geometry was inspected at 64, 32, 24, and 16 px before color was intr
 Recommended minimums:
 
 - UI symbol: 16 px absolute minimum; 20–24 px preferred.
-- Header lockup: 28 px mark height or larger.
+- Header symbol: 28 px preferred.
 - Standalone marketing mark: vector source may scale freely.
 
 At tiny sizes, recognizability outranks preserving every subtle gradient transition.
@@ -88,14 +89,15 @@ Keep at least one quarter of the symbol width clear on every side when it stands
 
 ## Dark and light use
 
-- Use `strangertalks-lockup.svg` on light surfaces.
-- Use `strangertalks-lockup-reversed.svg` on Carbon Deep, Midnight, or similarly dark surfaces.
+- Use `strangertalks-lockup.svg` on light export/marketing surfaces.
+- Use `strangertalks-lockup-reversed.svg` on Carbon Deep, Midnight, or similarly dark export/marketing surfaces.
+- The live dark app header uses the same full-color symbol inline with a neutral visible wordmark.
 - The symbol remains full-color in both contexts.
 - Do not add glow, drop shadow, bevels, glass effects, texture, or 3D styling to compensate for poor placement.
 
 ## Accessibility
 
-When the logo image is the only visible brand name, provide accessible text such as `alt="StrangerTalks"`. If a decorative symbol sits beside visible `StrangerTalks` text, avoid duplicated accessible names.
+In the application header, the inline symbol is decorative (`aria-hidden="true"`) because the visible `StrangerTalks` wordmark already provides the brand name. When a logo image is the only visible brand name in another context, provide equivalent accessible text.
 
 The logo must never be the sole carrier of a safety, privacy, consent, error, or product-state message. Brand color is emotional identity, not status color.
 
@@ -124,10 +126,10 @@ Brand integration is presentation-only. It must not change matchmaking, Four Doo
 
 Before mainline admission:
 
-1. The current dark app header uses the full-color reversed lockup.
+1. The current dark app header uses the inline full-color canonical symbol beside the visible `StrangerTalks` wordmark and preserves the shell no-`img` invariant.
 2. The app references the full-color SVG favicon.
-3. Static tests prove the legacy placeholder `S` is gone and the canonical color assets remain self-contained SVGs.
-4. Real Chromium desktop and mobile verification proves the lockup loads without clipping, overflow, broken URLs, or layout shift.
+3. Static tests prove the legacy placeholder `S` is gone, the inline header contains the canonical colors, and export assets remain self-contained SVGs.
+4. Real Chromium desktop and mobile verification proves the identity renders without clipping, overflow, broken URLs, or layout shift.
 5. Run repository-required `mix precommit` and diff/clean-tree checks without weakening tests.
 6. Reconcile with fresh `origin/main`, rerun exact-candidate evidence, and admit only after the required gates are green.
 7. Production deployment remains separately authorized.
