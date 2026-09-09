@@ -18,8 +18,12 @@ defmodule StrangertalksNewWeb.HangoutChannel do
        |> assign(:hangout_room_id, room_id)
        |> assign(:hangout_explicit_leave, false)}
     else
-      :error -> join_error(:not_hangout_member)
-      {:error, :terminal_room} -> join_error(:hangout_ended)
+      :error ->
+        join_error(:not_hangout_member)
+
+      {:error, :terminal_room} ->
+        join_error(:hangout_ended)
+
       {:error, reason}
       when reason in [
              :membership_not_found,
@@ -29,8 +33,11 @@ defmodule StrangertalksNewWeb.HangoutChannel do
            ] ->
         join_error(:not_hangout_member)
 
-      {:error, :room_not_found} -> join_error(:not_hangout_member)
-      {:error, _reason} -> join_error(:not_hangout_member)
+      {:error, :room_not_found} ->
+        join_error(:not_hangout_member)
+
+      {:error, _reason} ->
+        join_error(:not_hangout_member)
     end
   end
 

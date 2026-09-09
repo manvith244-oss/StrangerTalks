@@ -123,7 +123,14 @@ defmodule StrangertalksNewWeb.HangoutChannelTest do
     assert_reply ref, :ok, accepted
     assert accepted.sequence == 1
     assert accepted.body == "hello from channel"
-    assert Map.keys(accepted) |> Enum.sort() == [:body, :created_at, :message_id, :sender, :sequence]
+
+    assert Map.keys(accepted) |> Enum.sort() == [
+             :body,
+             :created_at,
+             :message_id,
+             :sender,
+             :sequence
+           ]
 
     assert_push "message:new", pushed
     assert pushed == accepted
