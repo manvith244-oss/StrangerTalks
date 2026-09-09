@@ -86,48 +86,74 @@ defmodule StrangertalksNew.MatchingRules do
               else: conversation.participant_a_id
 
           ParticipantActivityLock.with_participants([blocker_id, blocked_id], fn ->
-            suspended_runtime = suspend_conversation_runtime(conversation_id)
+            current_conversation = Repo.get!(Conversation, conversation_id)
 
-            result =
-              Repo.transaction(fn ->
-                current_conversation = Repo.get!(Conversation, conversation_id)
-
-                with {:ok, block} <- insert_block(blocker_id, blocked_id, "CONVERSATION"),
-                     {:ok, terminal_conversation} <-
-                       terminate_conversation_for_block(current_conversation, blocker_id),
-                     {:ok, terminal_truth} <-
-                       Conversations.terminal_truth(terminal_conversation) do
-                  {block, terminal_conversation, terminal_truth}
-                else
-                  {:error, reason} -> Repo.rollback(reason)
-                end
-              end)
-
-            case result do
-              {:ok, {block, terminal_conversation, terminal_truth}} ->
-                if terminal_conversation.ending_type == :BLOCK do
-                  StrangertalksNew.Telemetry.execute(
-                    [:terminal, :durable_commit],
-                    %{count: 1},
-                    %{terminal_status: :ENDED, lifecycle_event: :safety_terminated}
-                  )
-                end
-
-                terminate_suspended_runtime(suspended_runtime)
-                stop_conversation_runtime(conversation_id)
-                emit_block_runtime_cleanup(suspended_runtime, terminal_conversation)
-                broadcast_terminal_authority(conversation_id, terminal_truth.client_event)
-                emit_block_notification_observability(terminal_conversation)
+            case existing_terminal_block(current_conversation, blocker_id, blocked_id) do
+              %BoundaryBlock{} = block ->
                 {:ok, block}
 
-              {:error, reason} ->
-                resume_conversation_runtime(suspended_runtime)
-                {:error, reason}
+              nil ->
+                apply_conversation_block(conversation_id, blocker_id, blocked_id)
             end
           end)
         else
           {:error, :not_conversation_member}
         end
+    end
+  end
+
+  defp existing_terminal_block(
+         %Conversation{conversation_status: status},
+         blocker_id,
+         blocked_id
+       )
+       when status in @terminal_conversation_statuses do
+    Repo.get_by(BoundaryBlock,
+      blocker_user_id: blocker_id,
+      blocked_user_id: blocked_id,
+      active_status: true
+    )
+  end
+
+  defp existing_terminal_block(%Conversation{}, _blocker_id, _blocked_id), do: nil
+
+  defp apply_conversation_block(conversation_id, blocker_id, blocked_id) do
+    suspended_runtime = suspend_conversation_runtime(conversation_id)
+
+    result =
+      Repo.transaction(fn ->
+        current_conversation = Repo.get!(Conversation, conversation_id)
+
+        with {:ok, block} <- insert_block(blocker_id, blocked_id, "CONVERSATION"),
+             {:ok, terminal_conversation} <-
+               terminate_conversation_for_block(current_conversation, blocker_id),
+             {:ok, terminal_truth} <- Conversations.terminal_truth(terminal_conversation) do
+          {block, terminal_conversation, terminal_truth}
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case result do
+      {:ok, {block, terminal_conversation, terminal_truth}} ->
+        if terminal_conversation.ending_type == :BLOCK do
+          StrangertalksNew.Telemetry.execute(
+            [:terminal, :durable_commit],
+            %{count: 1},
+            %{terminal_status: :ENDED, lifecycle_event: :safety_terminated}
+          )
+        end
+
+        terminate_suspended_runtime(suspended_runtime)
+        stop_conversation_runtime(conversation_id)
+        emit_block_runtime_cleanup(suspended_runtime, terminal_conversation)
+        broadcast_terminal_authority(conversation_id, terminal_truth.client_event)
+        emit_block_notification_observability(terminal_conversation)
+        {:ok, block}
+
+      {:error, reason} ->
+        resume_conversation_runtime(suspended_runtime)
+        {:error, reason}
     end
   end
 
