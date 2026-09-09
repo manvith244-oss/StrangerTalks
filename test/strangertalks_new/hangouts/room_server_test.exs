@@ -117,7 +117,9 @@ defmodule StrangertalksNew.Hangouts.RoomServerTest do
     assert {:ok, before} = RoomServer.snapshot(room.room_id, first.participant_id)
     identity_before = self_identity(before)
 
-    assert {:ok, disconnected_snapshot} = RoomServer.disconnect(room.room_id, first.participant_id)
+    assert {:ok, disconnected_snapshot} =
+             RoomServer.disconnect(room.room_id, first.participant_id)
+
     assert self_member(disconnected_snapshot).status == :DISCONNECTED
 
     disconnected = membership!(room.room_id, first.participant_id)
