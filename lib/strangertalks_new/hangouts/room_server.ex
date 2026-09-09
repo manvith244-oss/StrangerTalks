@@ -158,8 +158,12 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
 
   def handle_call({:snapshot, participant_id}, _from, state) do
     case Hangouts.room_snapshot(state.room_id, participant_id) do
-      {:ok, snapshot} -> {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:ok, snapshot} ->
+        snapshot = enrich_snapshot(snapshot)
+        {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -267,6 +271,7 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   def handle_call({:disconnect, participant_id}, _from, state) do
     with {:ok, _membership} <- Hangouts.disconnect_member(state.room_id, participant_id),
          {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id) do
+      snapshot = enrich_snapshot(snapshot)
       {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -276,6 +281,7 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   def handle_call({:reconnect, participant_id}, _from, state) do
     with {:ok, _membership} <- Hangouts.reconnect_member(state.room_id, participant_id),
          {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id) do
+      snapshot = enrich_snapshot(snapshot)
       {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -286,6 +292,7 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
     case Hangouts.append_message(state.room_id, participant_id, attrs) do
       {:ok, message} ->
         with {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id),
+             snapshot <- enrich_snapshot(snapshot),
              %{identity: identity} <- Enum.find(snapshot.members, & &1.self) do
           public_message = %{
             message_id: message.message_id,
@@ -471,6 +478,14 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
          {:ok, snapshot} <- Hangouts.internal_room_snapshot(room_id),
          {:ok, current_content} <- SharedContent.current(room_id) do
       {:ok, enrich_snapshot(snapshot, current_content)}
+    end
+  end
+
+  defp enrich_snapshot(snapshot) do
+    case SharedContent.current(snapshot.room_id) do
+      {:ok, nil} -> Map.put(snapshot, :current_content, nil)
+      {:ok, content_state} -> Map.put(snapshot, :current_content, content_state.content)
+      {:error, _reason} -> Map.put(snapshot, :current_content, nil)
     end
   end
 
