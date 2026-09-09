@@ -1,0 +1,45 @@
+name: C1 DB TLS Docker Exact Proof
+
+on:
+  push:
+    branches:
+      - evidence/c1-db-tls-docker-1efffd7-2026-09-10
+
+permissions:
+  contents: read
+
+jobs:
+  prove-docker:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_SHA: 1efffd7c7436483e0188cc06a29fd7a15c7aea45
+    steps:
+      - name: Checkout exact TLS candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+
+      - name: Prove exact candidate identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "8fec18429d8cca49443021c12daae954c2b6c88b"
+          grep -q '^ARG ELIXIR_VERSION=1.18.4$' Dockerfile
+          grep -q '^ARG OTP_VERSION=27.3.4.16$' Dockerfile
+
+      - name: Docker production image build
+        run: |
+          set -euo pipefail
+          docker build --pull -t "strangertalks-c1-db-tls:${TARGET_SHA}" .
+          docker inspect "strangertalks-c1-db-tls:${TARGET_SHA}" >/dev/null
+
+      - name: Diff check clean tree and final identity
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "8fec18429d8cca49443021c12daae954c2b6c88b"
+          echo "FINAL_SHA=$(git rev-parse HEAD)"
+          echo "FINAL_TREE=$(git rev-parse HEAD^{tree})"
