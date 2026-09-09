@@ -13,7 +13,7 @@ defmodule StrangertalksNew.MatchingRules do
   alias StrangertalksNew.ConversationLifecycle.{ConversationServer, Transitions}
   alias StrangertalksNew.MatchingRules.{Participant, QueueState, BoundaryBlock}
 
-  @terminal_conversation_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]
+  @terminal_conversation_statuses [:ENDED, :ABANDONED, :FAILED]
 
   def create_participant(attrs \\ %{}) do
     %Participant{}

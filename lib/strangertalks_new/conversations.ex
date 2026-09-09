@@ -6,7 +6,7 @@ defmodule StrangertalksNew.Conversations do
   alias StrangertalksNew.Repo
   alias StrangertalksNew.Conversation
 
-  @terminal_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]
+  @terminal_statuses [:ENDED, :ABANDONED, :FAILED]
 
   def get_conversation(conversation_id) do
     Repo.get(Conversation, conversation_id)

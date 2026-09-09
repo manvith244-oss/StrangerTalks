@@ -319,7 +319,7 @@ defmodule StrangertalksNew.RetentionCleanupDbTest do
         bridge_shown: false,
         bridge_used: false,
         bridge_ignored: false,
-        conversation_completed: status in [:ENDED, :COMPLETED],
+        conversation_completed: status == :ENDED,
         memory_created: false,
         relationship_created: false,
         reconnected_later: false,
