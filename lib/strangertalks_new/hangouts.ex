@@ -374,7 +374,9 @@ defmodule StrangertalksNew.Hangouts do
   end
 
   defp normalize_transaction({:ok, value}), do: {:ok, value}
-  defp normalize_transaction({:error, {:invalid_room, changeset}}), do: {:error, :invalid_room, changeset}
+
+  defp normalize_transaction({:error, {:invalid_room, changeset}}),
+    do: {:error, :invalid_room, changeset}
 
   defp normalize_transaction({:error, {:invalid_message, changeset}}),
     do: {:error, :invalid_message, changeset}
