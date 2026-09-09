@@ -7,10 +7,10 @@ const IMAGE_ROOT = "priv/static/images"
 const VECTOR_ASSETS = [
   "strangertalks-mark.svg",
   "strangertalks-mark-reversed.svg",
+  "strangertalks-lockup.svg",
   "strangertalks-lockup-reversed.svg",
   "favicon.svg"
 ]
-const CANONICAL_COLOR_MARK_ASSETS = [...VECTOR_ASSETS]
 const BRAND_COLORS = ["#5b3df6", "#ff6b6b", "#14b8a6", "#f4b942"]
 
 test("brand identity: static shell uses the canonical StrangerTalks lockup and SVG favicon", async () => {
@@ -39,7 +39,7 @@ test("brand identity: canonical assets stay self-contained vector files", async 
 })
 
 test("brand identity: canonical mark is intentionally colorful, not a monochrome placeholder", async () => {
-  for (const name of CANONICAL_COLOR_MARK_ASSETS) {
+  for (const name of VECTOR_ASSETS) {
     const svg = (await readFile(`${IMAGE_ROOT}/${name}`, "utf8")).toLowerCase()
 
     assert.ok(svg.includes("lineargradient"), `${name} must use the canonical color gradient`)
