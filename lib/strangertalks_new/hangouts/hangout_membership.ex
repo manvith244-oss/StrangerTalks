@@ -61,5 +61,8 @@ defmodule StrangertalksNew.Hangouts.HangoutMembership do
     |> unique_constraint([:room_id, :temporary_identity_slot],
       name: :hangout_memberships_room_identity_slot_index
     )
+    |> unique_constraint(:participant_id,
+      name: :hangout_memberships_one_active_room_per_participant_index
+    )
   end
 end
