@@ -76,10 +76,7 @@ jobs:
           npx playwright install --with-deps chromium
 
       - name: Node navigation regressions
-        run: |
-          node --test --test-concurrency=1 \
-            test/js/navigation_history_test.mjs \
-            test/js/navigation_history_browser_test.mjs
+        run: node --test --test-concurrency=1 test/js/navigation_history_test.mjs
 
       - name: Prepare browser database
         run: |
