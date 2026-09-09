@@ -35,7 +35,11 @@ defmodule StrangertalksNew.Repo.Migrations.CreateHangoutsV1 do
           null: false
 
       add :participant_id,
-          references(:participants, column: :participant_id, type: :binary_id, on_delete: :delete_all),
+          references(:participants,
+            column: :participant_id,
+            type: :binary_id,
+            on_delete: :delete_all
+          ),
           null: false
 
       add :status, :string, null: false, default: "ACTIVE"
@@ -110,11 +114,19 @@ defmodule StrangertalksNew.Repo.Migrations.CreateHangoutsV1 do
           null: false
 
       add :reporting_participant_id,
-          references(:participants, column: :participant_id, type: :binary_id, on_delete: :delete_all),
+          references(:participants,
+            column: :participant_id,
+            type: :binary_id,
+            on_delete: :delete_all
+          ),
           null: false
 
       add :reported_participant_id,
-          references(:participants, column: :participant_id, type: :binary_id, on_delete: :nilify_all)
+          references(:participants,
+            column: :participant_id,
+            type: :binary_id,
+            on_delete: :nilify_all
+          )
 
       add :category, :string, null: false
       add :status, :string, null: false, default: "SUBMITTED"

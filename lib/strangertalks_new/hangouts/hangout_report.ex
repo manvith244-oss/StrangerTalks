@@ -46,7 +46,14 @@ defmodule StrangertalksNew.Hangouts.HangoutReport do
     |> put_change(:room_id, room_id)
     |> put_change(:reporting_participant_id, reporting_participant_id)
     |> put_reported_participant(reported_participant_id)
-    |> validate_required([:room_id, :reporting_participant_id, :category, :status, :created_at, :updated_at])
+    |> validate_required([
+      :room_id,
+      :reporting_participant_id,
+      :category,
+      :status,
+      :created_at,
+      :updated_at
+    ])
     |> validate_evidence()
     |> validate_self_reporting()
     |> foreign_key_constraint(:room_id)

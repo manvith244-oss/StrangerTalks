@@ -55,7 +55,9 @@ defmodule StrangertalksNew.Hangouts.HangoutMembership do
     |> validate_length(:temporary_identity_emoji, min: 1, max: 16)
     |> foreign_key_constraint(:room_id)
     |> foreign_key_constraint(:participant_id)
-    |> unique_constraint([:room_id, :participant_id], name: :hangout_memberships_room_participant_index)
+    |> unique_constraint([:room_id, :participant_id],
+      name: :hangout_memberships_room_participant_index
+    )
     |> unique_constraint([:room_id, :temporary_identity_slot],
       name: :hangout_memberships_room_identity_slot_index
     )

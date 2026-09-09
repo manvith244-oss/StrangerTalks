@@ -30,7 +30,14 @@ defmodule StrangertalksNew.Hangouts.HangoutMessage do
     |> put_change(:room_id, room_id)
     |> put_change(:membership_id, membership_id)
     |> put_change(:sequence, sequence)
-    |> validate_required([:room_id, :membership_id, :sequence, :client_message_id, :body, :created_at])
+    |> validate_required([
+      :room_id,
+      :membership_id,
+      :sequence,
+      :client_message_id,
+      :body,
+      :created_at
+    ])
     |> validate_number(:sequence, greater_than: 0)
     |> validate_length(:client_message_id, min: 1, max: 128)
     |> validate_body()

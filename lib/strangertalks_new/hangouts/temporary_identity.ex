@@ -33,7 +33,8 @@ defmodule StrangertalksNew.Hangouts.TemporaryIdentity do
     end
   end
 
-  def slot_for(_room_id, _participant_id, _occupied_slots), do: {:error, :invalid_identity_request}
+  def slot_for(_room_id, _participant_id, _occupied_slots),
+    do: {:error, :invalid_identity_request}
 
   def pool_size, do: length(@identities)
 end
