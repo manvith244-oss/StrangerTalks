@@ -45,7 +45,9 @@ defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
     results =
       1..8
       |> Task.async_stream(
-        fn _ -> MatchingRules.block_conversation_participant(conversation.conversation_id, blocker_id) end,
+        fn _ ->
+          MatchingRules.block_conversation_participant(conversation.conversation_id, blocker_id)
+        end,
         max_concurrency: 8,
         ordered: false,
         timeout: 5_000
