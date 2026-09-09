@@ -97,7 +97,7 @@ defmodule StrangertalksNew.ConversationTest do
 
   test "change_conversation/2 tracks changes correctly", %{valid_attrs: attrs} do
     {:ok, conv} = Conversations.create_conversation(attrs)
-    changeset = Conversations.change_conversation(conv, %{conversation_status: :COMPLETED})
-    assert changeset.changes == %{conversation_status: :COMPLETED}
+    changeset = Conversations.change_conversation(conv, %{conversation_status: :ENDED})
+    assert changeset.changes == %{conversation_status: :ENDED}
   end
 end

@@ -11,7 +11,7 @@ defmodule StrangertalksNew.ConversationLifecycle.Transitions do
   alias StrangertalksNew.Conversation
   alias StrangertalksNew.Repo
 
-  @terminal_statuses [:ENDED, :ABANDONED, :FAILED, :COMPLETED]
+  @terminal_statuses [:ENDED, :ABANDONED, :FAILED]
 
   @type event ::
           :participants_connected

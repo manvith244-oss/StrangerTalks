@@ -9,9 +9,8 @@ defmodule StrangertalksNew.Conversation do
     field :created_at, :utc_datetime_usec
     field :ended_at, :utc_datetime_usec
 
-    # ✅ Added :COMPLETED to allowed values
     field :conversation_status, Ecto.Enum,
-      values: [:PENDING, :ACTIVE, :PAUSED, :ENDED, :ABANDONED, :FAILED, :COMPLETED]
+      values: [:PENDING, :ACTIVE, :PAUSED, :ENDED, :ABANDONED, :FAILED]
 
     field :door_type, Ecto.Enum, values: [:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL]
 
