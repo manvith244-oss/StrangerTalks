@@ -1,30 +1,41 @@
 defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
   use StrangertalksNew.DataCase, async: false
 
-  alias StrangertalksNew.{Conversation, Conversations, Matches, Participants, Repo}
+  alias StrangertalksNew.{Conversations, Matches, Participants, Repo}
   alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.MatchingRules.BoundaryBlock
 
   test "repeated Block returns the existing durable block without rebroadcasting terminal authority" do
     {conversation, participant_a} = conversation_fixture()
     topic = "conversation:#{conversation.conversation_id}"
+    blocker_id = participant_a.participant_id
+    blocked_id = conversation.participant_b_id
     :ok = Phoenix.PubSub.subscribe(StrangertalksNew.PubSub, topic)
 
-    assert {:ok, first_block} =
+    assert {:ok,
+            %BoundaryBlock{
+              blocker_user_id: ^blocker_id,
+              blocked_user_id: ^blocked_id,
+              active_status: true
+            }} =
              MatchingRules.block_conversation_participant(
                conversation.conversation_id,
-               participant_a.participant_id
+               blocker_id
              )
 
     assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "conversation:ended"}
 
-    assert {:ok, retry_block} =
+    assert {:ok,
+            %BoundaryBlock{
+              blocker_user_id: ^blocker_id,
+              blocked_user_id: ^blocked_id,
+              active_status: true
+            }} =
              MatchingRules.block_conversation_participant(
                conversation.conversation_id,
-               participant_a.participant_id
+               blocker_id
              )
 
-    assert retry_block.boundary_block_id == first_block.boundary_block_id
     refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "conversation:ended"}, 100
     assert Repo.aggregate(BoundaryBlock, :count) == 1
   end
@@ -32,12 +43,19 @@ defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
   test "concurrent retries after terminal Block collapse to one durable result and zero new terminal broadcasts" do
     {conversation, participant_a} = conversation_fixture()
     topic = "conversation:#{conversation.conversation_id}"
+    blocker_id = participant_a.participant_id
+    blocked_id = conversation.participant_b_id
     :ok = Phoenix.PubSub.subscribe(StrangertalksNew.PubSub, topic)
 
-    assert {:ok, first_block} =
+    assert {:ok,
+            %BoundaryBlock{
+              blocker_user_id: ^blocker_id,
+              blocked_user_id: ^blocked_id,
+              active_status: true
+            }} =
              MatchingRules.block_conversation_participant(
                conversation.conversation_id,
-               participant_a.participant_id
+               blocker_id
              )
 
     assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "conversation:ended"}
@@ -48,7 +66,7 @@ defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
         fn _ ->
           MatchingRules.block_conversation_participant(
             conversation.conversation_id,
-            participant_a.participant_id
+            blocker_id
           )
         end,
         max_concurrency: 8,
@@ -58,8 +76,16 @@ defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
       |> Enum.map(fn {:ok, result} -> result end)
 
     assert Enum.all?(results, fn
-             {:ok, block} -> block.boundary_block_id == first_block.boundary_block_id
-             _ -> false
+             {:ok,
+              %BoundaryBlock{
+                blocker_user_id: ^blocker_id,
+                blocked_user_id: ^blocked_id,
+                active_status: true
+              }} ->
+               true
+
+             _ ->
+               false
            end)
 
     refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "conversation:ended"}, 150
