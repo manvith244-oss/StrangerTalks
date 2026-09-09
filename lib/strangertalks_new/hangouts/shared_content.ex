@@ -9,33 +9,49 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
 
   import Ecto.Query
 
-  alias StrangertalksNew.Hangouts.{ContentCatalog, HangoutRoom}
+  alias StrangertalksNew.Hangouts.{ContentCatalog, HangoutRoom, Observability}
   alias StrangertalksNew.Repo
 
   def ensure_initial(room_id) when is_binary(room_id) do
-    Repo.transaction(fn ->
-      case lock_room(room_id) do
-        nil ->
-          Repo.rollback(:room_not_found)
+    result =
+      Repo.transaction(fn ->
+        case lock_room(room_id) do
+          nil ->
+            Repo.rollback(:room_not_found)
 
-        %HangoutRoom{status: status} when status in [:ENDING, :ENDED] ->
-          Repo.rollback(:terminal_room)
+          %HangoutRoom{status: status} when status in [:ENDING, :ENDED] ->
+            Repo.rollback(:terminal_room)
 
-        %HangoutRoom{experiment_arm: :GROUP_NO_CONTENT} ->
-          nil
+          %HangoutRoom{experiment_arm: :GROUP_NO_CONTENT} ->
+            {:unchanged, nil}
 
-        %HangoutRoom{status: :FORMING} ->
-          nil
+          %HangoutRoom{status: :FORMING} ->
+            {:unchanged, nil}
 
-        %HangoutRoom{status: :ACTIVE} = room ->
-          cond do
-            current_content_present?(room) -> content_state!(room)
-            room.content_sequence == 0 -> advance_locked(room)
-            true -> nil
-          end
-      end
-    end)
-    |> normalize_transaction()
+          %HangoutRoom{status: :ACTIVE} = room ->
+            cond do
+              current_content_present?(room) -> {:unchanged, content_state!(room)}
+              room.content_sequence == 0 -> {:activated, advance_locked(room)}
+              true -> {:unchanged, nil}
+            end
+        end
+      end)
+
+    case result do
+      {:ok, {:activated, content_state}} ->
+        Observability.emit_room(room_id, :content_activated, %{
+          count: 1,
+          content_sequence: content_state.sequence
+        })
+
+        {:ok, content_state}
+
+      {:ok, {:unchanged, value}} ->
+        {:ok, value}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   def ensure_initial(_room_id), do: {:error, :invalid_room_request}
@@ -70,29 +86,44 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
   def advance(_room_id, _expected_sequence), do: {:error, :invalid_room_request}
 
   defp advance_with_guard(room_id, expected_sequence) do
-    Repo.transaction(fn ->
-      case lock_room(room_id) do
-        nil ->
-          Repo.rollback(:room_not_found)
+    result =
+      Repo.transaction(fn ->
+        case lock_room(room_id) do
+          nil ->
+            Repo.rollback(:room_not_found)
 
-        %HangoutRoom{status: status} when status in [:ENDING, :ENDED] ->
-          Repo.rollback(:terminal_room)
+          %HangoutRoom{status: status} when status in [:ENDING, :ENDED] ->
+            Repo.rollback(:terminal_room)
 
-        %HangoutRoom{experiment_arm: :GROUP_NO_CONTENT} ->
-          Repo.rollback(:content_disabled)
+          %HangoutRoom{experiment_arm: :GROUP_NO_CONTENT} ->
+            Repo.rollback(:content_disabled)
 
-        %HangoutRoom{status: status} when status != :ACTIVE ->
-          Repo.rollback(:room_not_active)
+          %HangoutRoom{status: status} when status != :ACTIVE ->
+            Repo.rollback(:room_not_active)
 
-        %HangoutRoom{} = room ->
-          if expected_sequence == :any or expected_sequence == room.content_sequence do
-            advance_locked(room)
-          else
-            Repo.rollback(:stale_content)
-          end
-      end
-    end)
-    |> normalize_transaction()
+          %HangoutRoom{} = room ->
+            if expected_sequence == :any or expected_sequence == room.content_sequence do
+              advance_locked(room)
+            else
+              Repo.rollback(:stale_content)
+            end
+        end
+      end)
+
+    case result do
+      {:ok, content_state} ->
+        event = if content_state.sequence == 1, do: :content_activated, else: :content_advanced
+
+        Observability.emit_room(room_id, event, %{
+          count: 1,
+          content_sequence: content_state.sequence
+        })
+
+        {:ok, content_state}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
   end
 
   defp advance_locked(room) do
@@ -153,7 +184,4 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
   defp lock_room(room_id) do
     Repo.one(from r in HangoutRoom, where: r.room_id == ^room_id, lock: "FOR UPDATE")
   end
-
-  defp normalize_transaction({:ok, value}), do: {:ok, value}
-  defp normalize_transaction({:error, reason}), do: {:error, reason}
 end
