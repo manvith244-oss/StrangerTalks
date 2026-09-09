@@ -9,7 +9,7 @@ defmodule StrangertalksNew.RetentionCleanup do
 
   alias StrangertalksNew.{Repo, RetentionPolicy}
 
-  @terminal_conversation_statuses ~w(ENDED ABANDONED FAILED COMPLETED)
+  @terminal_conversation_statuses ~w(ENDED ABANDONED FAILED)
   @terminal_match_statuses ~w(ENDED FAILED EXPIRED)
 
   @doc "Runs every approved primary-database cleanup category once."
@@ -346,7 +346,7 @@ defmodule StrangertalksNew.RetentionCleanup do
       USING conversations conversation
       WHERE consent.conversation_id = conversation.conversation_id
         AND consent.created_at <= $1
-        AND conversation.conversation_status IN ('ENDED', 'ABANDONED', 'FAILED', 'COMPLETED')
+        AND conversation.conversation_status IN ('ENDED', 'ABANDONED', 'FAILED')
       """,
       [cutoff]
     )
@@ -406,7 +406,7 @@ defmodule StrangertalksNew.RetentionCleanup do
     delete_count(
       """
       DELETE FROM conversations conversation
-      WHERE conversation.conversation_status IN ('ENDED', 'ABANDONED', 'FAILED', 'COMPLETED')
+      WHERE conversation.conversation_status IN ('ENDED', 'ABANDONED', 'FAILED')
         AND conversation.ended_at IS NOT NULL
         AND conversation.ended_at <= $1
         AND NOT EXISTS (SELECT 1 FROM reports report WHERE report.conversation_id = conversation.conversation_id)
