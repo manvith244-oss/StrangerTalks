@@ -220,7 +220,7 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   end
 
   def handle_call({:vote_skip, participant_id, expected_content_sequence}, _from, state) do
-    with {:ok, membership, snapshot} <-
+    with {:ok, _membership, snapshot} <-
            interaction_context(state.room_id, participant_id, expected_content_sequence),
          {:ok, ratio} <- skip_quorum_ratio() do
       state = align_interactions(state, expected_content_sequence)
