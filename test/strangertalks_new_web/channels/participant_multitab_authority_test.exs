@@ -37,9 +37,24 @@ defmodule StrangertalksNewWeb.ParticipantMultiTabAuthorityTest do
     assert_reply ref, :ok, %{status: "queued", queue_attempt_id: attempt_b}
     assert_push "queue:status", %{status: "queued", queue_attempt_id: ^attempt_b}
 
-    assert_push "match_found", %{status: "matched", conversation_id: conversation_id}
-    assert_push "match_found", %{status: "matched", conversation_id: ^conversation_id}
-    assert_push "match_found", %{status: "matched", conversation_id: ^conversation_id}
+    assert_receive {:channel_push, :a1,
+                    %Phoenix.Socket.Message{
+                      event: "match_found",
+                      payload: %{status: "matched", conversation_id: conversation_id}
+                    }}
+
+    assert_receive {:channel_push, :a2,
+                    %Phoenix.Socket.Message{
+                      event: "match_found",
+                      payload: %{status: "matched", conversation_id: ^conversation_id}
+                    }}
+
+    assert_receive {:channel_push, :b,
+                    %Phoenix.Socket.Message{
+                      event: "match_found",
+                      payload: %{status: "matched", conversation_id: ^conversation_id}
+                    }}
+
     refute_push "match_found", _payload, 50
 
     assert Repo.aggregate(Matching, :count, :match_id) == 1
