@@ -1,0 +1,154 @@
+name: C4 Kept Conversation Route Final Proof
+
+on:
+  push:
+    branches:
+      - convergence/c4-kept-conversation-route-final-2026-09-10
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: c4-kept-conversation-route-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  c4-kept-conversation-route:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      C4_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Prove exact clean checkout
+        run: |
+          test "$(git rev-parse HEAD)" = "$C4_EXPECTED_SHA"
+          git status --porcelain | tee /tmp/c4-initial-status
+          test ! -s /tmp/c4-initial-status
+          echo "C4_INITIAL_SHA=$(git rev-parse HEAD)"
+          echo "C4_INITIAL_TREE=$(git rev-parse HEAD^{tree})"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Node navigation and history proof
+        run: node --test --test-concurrency=1 test/js/navigation_history_test.mjs
+
+      - name: Format proof
+        run: mix format --check-formatted
+
+      - name: Compile warnings proof
+        run: mix compile --warnings-as-errors
+
+      - name: Dependency lock proof
+        run: mix deps.unlock --check-unused
+
+      - name: Prepare isolated C4 browser database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start isolated Phoenix browser server
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/c4-kept-route-browser.log 2>&1 &
+          echo $! > /tmp/c4-kept-route-browser.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS http://localhost:4000/ >/dev/null; then exit 0; fi
+            if ! kill -0 "$(cat /tmp/c4-kept-route-browser.pid)" 2>/dev/null; then
+              cat /tmp/c4-kept-route-browser.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/c4-kept-route-browser.log
+          exit 1
+
+      - name: Real Chromium delete Back Forward reload mobile desktop proof
+        run: node --test --test-concurrency=1 test/js/c4_kept_conversation_route_browser_test.mjs
+
+      - name: Stop isolated Phoenix browser server
+        if: always()
+        run: |
+          if [ -f /tmp/c4-kept-route-browser.pid ]; then
+            pid="$(cat /tmp/c4-kept-route-browser.pid)"
+            kill "$pid" 2>/dev/null || true
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null || true; fi
+          fi
+
+      - name: Browser log on failure
+        if: failure()
+        run: cat /tmp/c4-kept-route-browser.log || true
+
+      - name: Reset browser data before repository gate
+        run: |
+          mix ecto.drop --quiet
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Full repository precommit
+        run: mix precommit
+
+      - name: Final diff clean tree exact SHA tree proof
+        run: |
+          git diff --check
+          git status --porcelain | tee /tmp/c4-final-status
+          test ! -s /tmp/c4-final-status
+          test "$(git rev-parse HEAD)" = "$C4_EXPECTED_SHA"
+          echo "C4_TESTED_SHA=$(git rev-parse HEAD)"
+          echo "C4_TESTED_TREE=$(git rev-parse HEAD^{tree})"
