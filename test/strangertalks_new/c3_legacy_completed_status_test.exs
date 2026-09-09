@@ -3,6 +3,7 @@ defmodule StrangertalksNew.C3LegacyCompletedStatusTest do
 
   alias StrangertalksNew.Conversation
   alias StrangertalksNew.ConversationLifecycle.{ConversationServer, Transitions}
+  alias StrangertalksNew.RetentionCleanup
 
   test "Conversation application authority rejects legacy COMPLETED" do
     changeset = Conversation.changeset(%Conversation{}, %{conversation_status: :COMPLETED})
@@ -16,5 +17,13 @@ defmodule StrangertalksNew.C3LegacyCompletedStatusTest do
 
   test "legacy COMPLETED does not release participant pairing reservations" do
     refute ConversationServer.release_terminal_status?(:COMPLETED)
+  end
+
+  test "legacy COMPLETED is not terminal retention authority" do
+    refute RetentionCleanup.terminal_conversation_expired?(
+             :COMPLETED,
+             ~U[2025-01-01 00:00:00Z],
+             ~U[2026-09-10 00:00:00Z]
+           )
   end
 end
