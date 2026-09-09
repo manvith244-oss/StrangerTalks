@@ -191,6 +191,7 @@ export class LiveCallCoordinator {
     this.conversationSurfaceActive = true
     this.navigationGeneration = 0
     this.navigationBlockedAttemptIds = new Set()
+    this.fatalTerminationPendingAttemptIds = new Set()
     this.fatalTerminatedAttemptIds = new Set()
   }
 
@@ -384,15 +385,39 @@ fatalTerminateCurrentAttempt({callAttemptId, mediaGeneration, peerConnection = t
   const generation = mediaGeneration ?? this.mediaGeneration
   if (!this.mediaAttemptIsCurrent(attemptId, generation, peerConnection)) return false
   if (this.fatalTerminatedAttemptIds.has(attemptId)) return false
+  if (this.fatalTerminationPendingAttemptIds.has(attemptId)) return false
 
-  this.fatalTerminatedAttemptIds.add(attemptId)
-  if (this.fatalTerminatedAttemptIds.size > 32) {
-    const oldest = this.fatalTerminatedAttemptIds.values().next().value
-    this.fatalTerminatedAttemptIds.delete(oldest)
+  this.fatalTerminationPendingAttemptIds.add(attemptId)
+  if (this.fatalTerminationPendingAttemptIds.size > 32) {
+    const oldest = this.fatalTerminationPendingAttemptIds.values().next().value
+    this.fatalTerminationPendingAttemptIds.delete(oldest)
   }
 
   this.teardown(reason)
-  this.channel?.push("call:end", {call_attempt_id: attemptId})
+  const push = this.channel?.push("call:end", {call_attempt_id: attemptId})
+  if (!push?.receive) {
+    this.fatalTerminationPendingAttemptIds.delete(attemptId)
+    return true
+  }
+
+  let settled = false
+  const settleTermination = (acknowledged) => {
+    if (settled) return
+    settled = true
+    this.fatalTerminationPendingAttemptIds.delete(attemptId)
+    if (!acknowledged) return
+
+    this.fatalTerminatedAttemptIds.add(attemptId)
+    if (this.fatalTerminatedAttemptIds.size > 32) {
+      const oldest = this.fatalTerminatedAttemptIds.values().next().value
+      this.fatalTerminatedAttemptIds.delete(oldest)
+    }
+  }
+
+  push
+    .receive("ok", () => settleTermination(true))
+    .receive("error", () => settleTermination(false))
+    .receive("timeout", () => settleTermination(false))
   return true
 }
 
@@ -440,6 +465,14 @@ async handleCallAccepted({ call_attempt_id, callee_session_id, active_at }) {
 
   handleCallEnded({ call_attempt_id, reason }) {
     if (this.callAttemptId && this.callAttemptId !== call_attempt_id) return
+    if (this.fatalTerminationPendingAttemptIds.has(call_attempt_id)) {
+      this.fatalTerminationPendingAttemptIds.delete(call_attempt_id)
+      this.fatalTerminatedAttemptIds.add(call_attempt_id)
+      if (this.fatalTerminatedAttemptIds.size > 32) {
+        const oldest = this.fatalTerminatedAttemptIds.values().next().value
+        this.fatalTerminatedAttemptIds.delete(oldest)
+      }
+    }
     this.teardown(reason || "ended")
   }
 
