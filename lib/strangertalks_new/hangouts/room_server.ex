@@ -2,10 +2,12 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   use GenServer, restart: :transient
 
   alias StrangertalksNew.Hangouts
-  alias StrangertalksNew.Hangouts.{RoomSupervisor, SharedContent}
+  alias StrangertalksNew.Hangouts.{HangoutMembership, RoomSupervisor, SharedContent}
+  alias StrangertalksNew.Repo
 
   @registry StrangertalksNew.Hangouts.Registry
   @pubsub StrangertalksNew.PubSub
+  @allowed_reactions ~w(laugh fire love wow agree)
 
   def child_spec(room_id) do
     %{
@@ -66,6 +68,32 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
 
   def advance_content(_room_id), do: {:error, :invalid_room_request}
 
+  def add_reaction(room_id, participant_id, expected_content_sequence, reaction)
+      when is_binary(room_id) and is_binary(participant_id) and
+             is_integer(expected_content_sequence) and expected_content_sequence >= 0 and
+             is_binary(reaction) do
+    with {:ok, pid} <- ensure_started(room_id) do
+      GenServer.call(
+        pid,
+        {:add_reaction, participant_id, expected_content_sequence, reaction}
+      )
+    end
+  end
+
+  def add_reaction(_room_id, _participant_id, _expected_content_sequence, _reaction),
+    do: {:error, :invalid_reaction_request}
+
+  def vote_skip(room_id, participant_id, expected_content_sequence)
+      when is_binary(room_id) and is_binary(participant_id) and
+             is_integer(expected_content_sequence) and expected_content_sequence >= 0 do
+    with {:ok, pid} <- ensure_started(room_id) do
+      GenServer.call(pid, {:vote_skip, participant_id, expected_content_sequence})
+    end
+  end
+
+  def vote_skip(_room_id, _participant_id, _expected_content_sequence),
+    do: {:error, :invalid_skip_request}
+
   def disconnect(room_id, participant_id)
       when is_binary(room_id) and is_binary(participant_id) do
     with {:ok, pid} <- ensure_started(room_id) do
@@ -104,15 +132,25 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   @impl true
   def init(room_id) do
     case refresh_state(room_id) do
-      {:ok, snapshot} -> {:ok, %{room_id: room_id, snapshot: snapshot}}
-      {:error, reason} -> {:stop, reason}
+      {:ok, snapshot} ->
+        {:ok,
+         %{
+           room_id: room_id,
+           snapshot: snapshot,
+           interaction_sequence: snapshot.content_sequence,
+           reactions: %{},
+           skip_voters: MapSet.new()
+         }}
+
+      {:error, reason} ->
+        {:stop, reason}
     end
   end
 
   @impl true
   def handle_call(:refresh, _from, state) do
     case refresh_state(state.room_id) do
-      {:ok, snapshot} -> {:reply, :ok, %{state | snapshot: snapshot}}
+      {:ok, snapshot} -> {:reply, :ok, refreshed_state(state, snapshot)}
       {:error, :terminal_room} -> {:stop, :normal, {:error, :terminal_room}, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
@@ -120,12 +158,8 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
 
   def handle_call({:snapshot, participant_id}, _from, state) do
     case Hangouts.room_snapshot(state.room_id, participant_id) do
-      {:ok, snapshot} ->
-        snapshot = enrich_snapshot(snapshot)
-        {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+      {:ok, snapshot} -> {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -134,30 +168,105 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   end
 
   def handle_call(:advance_content, _from, state) do
-    case SharedContent.advance(state.room_id) do
-      {:ok, content_state} ->
-        Phoenix.PubSub.broadcast(
-          @pubsub,
-          topic(state.room_id),
-          {:hangout_event, "content:changed", content_state}
-        )
+    case perform_content_advance(state, :any) do
+      {:ok, content_state, next_state} ->
+        {:reply, {:ok, content_state}, next_state}
 
-        snapshot =
-          state.snapshot
-          |> Map.put(:content_sequence, content_state.sequence)
-          |> Map.put(:current_content, content_state.content)
+      {:error, reason, next_state} ->
+        {:reply, {:error, reason}, next_state}
+    end
+  end
 
-        {:reply, {:ok, content_state}, %{state | snapshot: snapshot}}
+  def handle_call(
+        {:add_reaction, participant_id, expected_content_sequence, reaction},
+        _from,
+        state
+      ) do
+    cond do
+      reaction not in @allowed_reactions ->
+        {:reply, {:error, :invalid_reaction}, state}
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+      true ->
+        case interaction_context(state.room_id, participant_id, expected_content_sequence) do
+          {:ok, membership, _snapshot} ->
+            state = align_interactions(state, expected_content_sequence)
+            previous = Map.get(state.reactions, participant_id)
+
+            if previous == reaction do
+              payload = reaction_payload(state, membership, reaction)
+              {:reply, {:ok, payload}, state}
+            else
+              reactions = Map.put(state.reactions, participant_id, reaction)
+              next_state = %{state | reactions: reactions}
+              payload = reaction_payload(next_state, membership, reaction)
+
+              Phoenix.PubSub.broadcast(
+                @pubsub,
+                topic(state.room_id),
+                {:hangout_event, "reaction:updated", payload}
+              )
+
+              {:reply, {:ok, payload}, next_state}
+            end
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
+    end
+  end
+
+  def handle_call({:vote_skip, participant_id, expected_content_sequence}, _from, state) do
+    with {:ok, membership, snapshot} <-
+           interaction_context(state.room_id, participant_id, expected_content_sequence),
+         {:ok, ratio} <- skip_quorum_ratio() do
+      state = align_interactions(state, expected_content_sequence)
+      active_ids = active_participant_ids(snapshot)
+      voters = MapSet.intersection(state.skip_voters, active_ids)
+      already_voted? = MapSet.member?(voters, participant_id)
+      voters = MapSet.put(voters, participant_id)
+      next_state = %{state | skip_voters: voters}
+      required_votes = required_skip_votes(MapSet.size(active_ids), ratio)
+      vote_count = MapSet.size(voters)
+
+      cond do
+        already_voted? ->
+          payload = skip_pending_payload(expected_content_sequence, vote_count, required_votes)
+          {:reply, {:ok, payload}, next_state}
+
+        vote_count < required_votes ->
+          payload = skip_pending_payload(expected_content_sequence, vote_count, required_votes)
+
+          Phoenix.PubSub.broadcast(
+            @pubsub,
+            topic(state.room_id),
+            {:hangout_event, "skip:updated", payload}
+          )
+
+          {:reply, {:ok, payload}, next_state}
+
+        true ->
+          case perform_content_advance(next_state, expected_content_sequence) do
+            {:ok, content_state, advanced_state} ->
+              payload = %{
+                advanced: true,
+                previous_content_sequence: expected_content_sequence,
+                content: content_state
+              }
+
+              {:reply, {:ok, payload}, advanced_state}
+
+            {:error, reason, failed_state} ->
+              {:reply, {:error, reason}, failed_state}
+          end
+      end
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
     end
   end
 
   def handle_call({:disconnect, participant_id}, _from, state) do
     with {:ok, _membership} <- Hangouts.disconnect_member(state.room_id, participant_id),
          {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id) do
-      snapshot = enrich_snapshot(snapshot)
       {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -167,7 +276,6 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   def handle_call({:reconnect, participant_id}, _from, state) do
     with {:ok, _membership} <- Hangouts.reconnect_member(state.room_id, participant_id),
          {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id) do
-      snapshot = enrich_snapshot(snapshot)
       {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -178,7 +286,6 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
     case Hangouts.append_message(state.room_id, participant_id, attrs) do
       {:ok, message} ->
         with {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id),
-             snapshot <- enrich_snapshot(snapshot),
              %{identity: identity} <- Enum.find(snapshot.members, & &1.self) do
           public_message = %{
             message_id: message.message_id,
@@ -231,20 +338,148 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
     end
   end
 
-  defp refresh_state(room_id) do
-    with {:ok, _room} <- Hangouts.activate_if_ready(room_id),
-         {:ok, _content_state} <- SharedContent.ensure_initial(room_id),
-         {:ok, snapshot} <- Hangouts.internal_room_snapshot(room_id) do
-      {:ok, enrich_snapshot(snapshot)}
+  defp interaction_context(room_id, participant_id, expected_content_sequence) do
+    with {:ok, snapshot} <- Hangouts.internal_room_snapshot(room_id),
+         :ok <- interaction_room_available(snapshot),
+         :ok <- expected_sequence_matches(snapshot.content_sequence, expected_content_sequence),
+         {:ok, membership} <- active_membership(room_id, participant_id) do
+      {:ok, membership, snapshot}
     end
   end
 
-  defp enrich_snapshot(snapshot) do
-    case SharedContent.current(snapshot.room_id) do
-      {:ok, nil} -> Map.put(snapshot, :current_content, nil)
-      {:ok, content_state} -> Map.put(snapshot, :current_content, content_state.content)
-      {:error, _reason} -> Map.put(snapshot, :current_content, nil)
+  defp interaction_room_available(%{status: status}) when status in [:ENDING, :ENDED],
+    do: {:error, :terminal_room}
+
+  defp interaction_room_available(%{experiment_arm: :GROUP_NO_CONTENT}),
+    do: {:error, :content_disabled}
+
+  defp interaction_room_available(%{status: :ACTIVE}), do: :ok
+  defp interaction_room_available(_snapshot), do: {:error, :room_not_active}
+
+  defp expected_sequence_matches(sequence, sequence), do: :ok
+  defp expected_sequence_matches(_canonical, _expected), do: {:error, :stale_content}
+
+  defp active_membership(room_id, participant_id) do
+    case Repo.get_by(HangoutMembership, room_id: room_id, participant_id: participant_id) do
+      nil -> {:error, :membership_not_found}
+      %HangoutMembership{status: :ACTIVE} = membership -> {:ok, membership}
+      %HangoutMembership{} -> {:error, :membership_not_active}
     end
+  end
+
+  defp active_participant_ids(snapshot) do
+    snapshot.members
+    |> Enum.filter(&(&1.status == :ACTIVE))
+    |> Enum.map(& &1.participant_id)
+    |> MapSet.new()
+  end
+
+  defp reaction_payload(state, membership, reaction) do
+    %{
+      content_sequence: state.interaction_sequence,
+      reaction: reaction,
+      actor: %{
+        slot: membership.temporary_identity_slot,
+        label: membership.temporary_identity_label,
+        emoji: membership.temporary_identity_emoji
+      },
+      counts: state.reactions |> Map.values() |> Enum.frequencies()
+    }
+  end
+
+  defp skip_pending_payload(content_sequence, votes, required_votes) do
+    %{
+      advanced: false,
+      content_sequence: content_sequence,
+      votes: votes,
+      required_votes: required_votes
+    }
+  end
+
+  defp skip_quorum_ratio do
+    ratio = Application.get_env(:strangertalks_new, :hangout_skip_quorum_ratio, 0.5)
+
+    if is_number(ratio) and ratio > 0 and ratio < 1 do
+      {:ok, ratio}
+    else
+      {:error, :invalid_skip_quorum_ratio}
+    end
+  end
+
+  defp required_skip_votes(active_count, ratio) do
+    floor(active_count * ratio) + 1
+  end
+
+  defp perform_content_advance(state, expected_sequence) do
+    result =
+      case expected_sequence do
+        :any -> SharedContent.advance(state.room_id)
+        sequence -> SharedContent.advance(state.room_id, sequence)
+      end
+
+    case result do
+      {:ok, content_state} ->
+        Phoenix.PubSub.broadcast(
+          @pubsub,
+          topic(state.room_id),
+          {:hangout_event, "content:changed", content_state}
+        )
+
+        snapshot = %{
+          state.snapshot
+          | content_sequence: content_state.sequence,
+            current_content: content_state.content
+        }
+
+        next_state =
+          state
+          |> Map.put(:snapshot, snapshot)
+          |> reset_interactions(content_state.sequence)
+
+        {:ok, content_state, next_state}
+
+      {:error, reason} ->
+        {:error, reason, state}
+    end
+  end
+
+  defp align_interactions(state, content_sequence) do
+    if state.interaction_sequence == content_sequence do
+      state
+    else
+      reset_interactions(state, content_sequence)
+    end
+  end
+
+  defp reset_interactions(state, content_sequence) do
+    %{
+      state
+      | interaction_sequence: content_sequence,
+        reactions: %{},
+        skip_voters: MapSet.new()
+    }
+  end
+
+  defp refreshed_state(state, snapshot) do
+    state = %{state | snapshot: snapshot}
+    align_interactions(state, snapshot.content_sequence)
+  end
+
+  defp refresh_state(room_id) do
+    with {:ok, _room} <- Hangouts.activate_if_ready(room_id),
+         {:ok, _content_state} <- SharedContent.ensure_initial(room_id),
+         {:ok, snapshot} <- Hangouts.internal_room_snapshot(room_id),
+         {:ok, current_content} <- SharedContent.current(room_id) do
+      {:ok, enrich_snapshot(snapshot, current_content)}
+    end
+  end
+
+  defp enrich_snapshot(snapshot, nil), do: Map.put(snapshot, :current_content, nil)
+
+  defp enrich_snapshot(snapshot, content_state) do
+    snapshot
+    |> Map.put(:content_sequence, content_state.sequence)
+    |> Map.put(:current_content, content_state.content)
   end
 
   defp refresh_existing(room_id, pid) do

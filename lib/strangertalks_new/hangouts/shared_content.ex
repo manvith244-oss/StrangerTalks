@@ -59,7 +59,17 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
 
   def current(_room_id), do: {:error, :invalid_room_request}
 
-  def advance(room_id) when is_binary(room_id) do
+  def advance(room_id) when is_binary(room_id), do: advance_with_guard(room_id, :any)
+  def advance(_room_id), do: {:error, :invalid_room_request}
+
+  def advance(room_id, expected_sequence)
+      when is_binary(room_id) and is_integer(expected_sequence) and expected_sequence >= 0 do
+    advance_with_guard(room_id, expected_sequence)
+  end
+
+  def advance(_room_id, _expected_sequence), do: {:error, :invalid_room_request}
+
+  defp advance_with_guard(room_id, expected_sequence) do
     Repo.transaction(fn ->
       case lock_room(room_id) do
         nil ->
@@ -75,13 +85,15 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
           Repo.rollback(:room_not_active)
 
         %HangoutRoom{} = room ->
-          advance_locked(room)
+          if expected_sequence == :any or expected_sequence == room.content_sequence do
+            advance_locked(room)
+          else
+            Repo.rollback(:stale_content)
+          end
       end
     end)
     |> normalize_transaction()
   end
-
-  def advance(_room_id), do: {:error, :invalid_room_request}
 
   defp advance_locked(room) do
     next_sequence = room.content_sequence + 1
