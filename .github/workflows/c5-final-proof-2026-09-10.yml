@@ -1,0 +1,526 @@
+name: C5 Final Proof 2026-09-10
+
+on:
+  push:
+    branches:
+      - evidence/c5-final-proof-2026-09-10-z
+
+permissions:
+  contents: read
+
+env:
+  TARGET_SHA: 535e421840c789f5f4025673290f277c0a4a92ea
+  TARGET_TREE: 5ef6b6fd85c4052e183878808748843629de89d0
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: c5owner
+  STRANGERTALKS_LOCAL_DB_PASSWORD: c5proof
+
+jobs:
+  core:
+    name: Exact-main core + Python + Node
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: c5owner
+          POSTGRES_PASSWORD: c5proof
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U c5owner -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Exact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.15"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          python -m pip install --upgrade pip
+          python -m pip install -e './services/ai[test]'
+          python -m pip check
+      - name: Static Elixir gates
+        run: |
+          mix format --check-formatted
+          mix compile --warnings-as-errors
+          mix deps.unlock --check-unused
+          mix hex.audit
+      - name: Full maintained Python suite
+        run: python -m pytest services/ai/tests -q -ra
+      - name: Maintained Node contract suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test \
+            test/js/route_contract_test.mjs \
+            test/js/navigation_history_test.mjs \
+            test/js/f06_secondary_flow_test.mjs \
+            test/js/reflections_test.mjs \
+            test/js/f07_loading_transitions_test.mjs \
+            test/js/f09_mobile_flow_test.mjs \
+            test/js/instagram_chat_test.mjs \
+            test/js/f11_persistence_contract_test.mjs \
+            test/js/f11_local_data_integration_test.mjs \
+            test/js/f11_retained_cleanup_guard_test.mjs \
+            test/js/team10_expression_surface_test.mjs \
+            test/js/expressive_media_test.mjs \
+            test/js/normal_media_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/terminal_truth_client_test.mjs \
+            test/js/session_reconciliation_guard_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/reply_quote_test.mjs \
+            test/js/reaction_test.mjs \
+            test/js/message_edit_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/pin_test.mjs \
+            test/js/companion_test.mjs \
+            test/js/prompt_cards_test.mjs
+          node --import ./test/js/browser_module_harness.mjs --test test/js/view_once_test.mjs
+          mapfile -t tests < <(find test/js -maxdepth 1 -type f \
+            \( -name '*delivery*test.mjs' -o -name '*reconnect*test.mjs' -o -name '*presence*test.mjs' \
+               -o -name '*message*test.mjs' -o -name '*atomic_restore*test.mjs' -o -name '*ephemeral_conversation*test.mjs' \) \
+            -print | sort)
+          test "${#tests[@]}" -gt 0
+          node --test "${tests[@]}"
+      - name: Pristine DB and focused Conversation Start proof
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          mix test test/strangertalks_new/t02_conversation_start_restart_controls_test.exs test/strangertalks_new/t_a01_002_conversation_start_restart_proof_test.exs
+      - name: Conversation Start harness stress
+        shell: bash
+        run: |
+          set -euo pipefail
+          for seed in 1 2 3 5 8 13 21 34 55 89; do
+            mix test test/strangertalks_new/t02_conversation_start_restart_controls_test.exs --seed "$seed"
+          done
+      - name: Backend domain matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(find test/strangertalks_new test/strangertalks_new_web -type f \
+            \( -name '*match*test.exs' -o -name '*queue*test.exs' -o -name '*conversation*test.exs' \
+               -o -name '*recovery*test.exs' -o -name '*presence*test.exs' -o -name '*participant_channel_test.exs' \
+               -o -name '*session_reconciliation*test.exs' -o -name '*report*test.exs' -o -name '*relationship*test.exs' \
+               -o -name '*safety*test.exs' \) -print | sort)
+          test "${#tests[@]}" -gt 0
+          mix test "${tests[@]}"
+      - name: Full precommit
+        run: mix precommit
+      - name: Clean exact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+
+  browser:
+    name: Chromium ${{ matrix.group }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [f01-shell, f03-history, f06-settings, f07-loading, f09-mobile, f10-desktop, f04-cleanup, f04-hostile, fx05-expression, f11-hostile, f11-corrupt-identity, fx07-terminal, conversation-reliability, composed-e2e]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: c5owner
+          POSTGRES_PASSWORD: c5proof
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U c5owner -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      PORT: "4000"
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Exact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install browser dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Start local TURN for composed E2E
+        if: ${{ matrix.group == 'composed-e2e' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y coturn
+          sudo systemctl stop coturn 2>/dev/null || true
+          sudo pkill -x turnserver 2>/dev/null || true
+          cat >/tmp/c5-turn.conf <<'EOF'
+          listening-ip=127.0.0.1
+          relay-ip=127.0.0.1
+          listening-port=3478
+          min-port=49160
+          max-port=49200
+          fingerprint
+          use-auth-secret
+          static-auth-secret=team6-test-only-coturn-secret
+          realm=strangertalks.test
+          allow-loopback-peers
+          no-multicast-peers
+          no-cli
+          no-tls
+          no-dtls
+          EOF
+          sudo turnserver -c /tmp/c5-turn.conf >/tmp/c5-turn.log 2>&1 &
+          echo $! >/tmp/c5-turn.pid
+          for _ in $(seq 1 30); do sudo ss -lunp | grep ':3478' | grep -Fq turnserver && exit 0; sleep 1; done
+          cat /tmp/c5-turn.log
+          exit 1
+      - name: Prepare browser DB
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start Phoenix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24))
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' >/tmp/c5-phoenix.log 2>&1 &
+          echo $! >/tmp/c5-phoenix.pid
+          for _ in $(seq 1 60); do
+            curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 && exit 0
+            kill -0 "$(cat /tmp/c5-phoenix.pid)" 2>/dev/null || { cat /tmp/c5-phoenix.log; exit 1; }
+            sleep 1
+          done
+          cat /tmp/c5-phoenix.log
+          exit 1
+      - name: Run Chromium authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.group }}" in
+            f01-shell) node --test --test-concurrency=1 test/js/f01_app_shell_browser_test.mjs ;;
+            f03-history) node --test --test-concurrency=1 test/js/navigation_history_browser_test.mjs ;;
+            f06-settings) node --test --test-concurrency=1 test/js/f06_secondary_flow_browser_test.mjs ;;
+            f07-loading) node --test --test-concurrency=1 test/js/f07_loading_transitions_browser_test.mjs ;;
+            f09-mobile) node --test --test-concurrency=1 test/js/f09_mobile_flow_browser_test.mjs ;;
+            f10-desktop) node --test --test-concurrency=1 test/js/f10_desktop_flow_browser_test.mjs ;;
+            f04-cleanup) node --test --test-concurrency=1 test/js/f04_conversation_runtime_cleanup_browser_test.mjs ;;
+            f04-hostile) node --test --test-concurrency=1 test/js/f04_conversation_runtime_hostile_browser_test.mjs ;;
+            fx05-expression) node --test --test-concurrency=1 test/js/fx05_expression_continuity_browser_test.mjs ;;
+            f11-hostile) node --test --test-concurrency=1 test/js/f11_browser_hostile_test.mjs ;;
+            f11-corrupt-identity) node --test --test-concurrency=1 test/js/f11_browser_corrupt_identity_test.mjs ;;
+            fx07-terminal) node --test --test-concurrency=1 test/js/terminal_truth_browser_test.mjs ;;
+            conversation-reliability) node --test --test-concurrency=1 test/js/conversation_reliability_browser_test.mjs ;;
+            composed-e2e) node --test --test-concurrency=1 test/js/browser_e2e_test.mjs ;;
+          esac
+      - name: Cleanup and identity
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/c5-phoenix.pid ]; then kill "$(cat /tmp/c5-phoenix.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/c5-turn.pid ]; then sudo kill "$(cat /tmp/c5-turn.pid)" 2>/dev/null || true; fi
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+  db-rehearsal-backup:
+    name: Seven migrations + security + backup restore
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: c5owner
+          POSTGRES_PASSWORD: c5proof
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U c5owner -d postgres"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      PGPASSWORD: c5proof
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Build production-head baseline
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --to 20260821191324
+          test "$(psql -h localhost -U c5owner -d strangertalks_new_test -Atc 'select max(version) from schema_migrations')" = "20260821191324"
+      - name: Seed representative baseline and Supabase-like roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -h localhost -U c5owner -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF; END $$;
+          DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF; END $$;
+          DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF; END $$;
+          SQL
+          psql -h localhost -U c5owner -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO participants(participant_id) VALUES
+            ('00000000-0000-0000-0000-000000000001'),
+            ('00000000-0000-0000-0000-000000000002'),
+            ('00000000-0000-0000-0000-000000000003');
+          INSERT INTO private_accounts(participant_id,created_at,updated_at)
+            VALUES ('00000000-0000-0000-0000-000000000001',now(),now());
+          INSERT INTO matches(match_id,created_at,door_type,match_status,match_strategy,participant_a_id,participant_b_id,
+            compatibility_score,queue_entry_time,match_found_time,queue_duration_seconds,conversation_duration_seconds,
+            conversation_started,conversation_completed,memory_created,relationship_created,reconnected_later,report_generated,
+            block_generated,safety_review_required,participant_a_door_type,participant_b_door_type,conversation_language)
+          VALUES ('10000000-0000-0000-0000-000000000001',now(),'JUST_TALK','ACTIVE','COMPATIBILITY',
+            '00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',0.9000,
+            now(),now(),0,0,false,false,false,false,false,false,false,false,'JUST_TALK','JUST_TALK','en');
+          INSERT INTO conversations(conversation_id,match_id,participant_a_id,participant_b_id,conversation_status,door_type,
+            message_count,voice_note_count,memory_count,report_count,block_count,duration_seconds)
+          VALUES ('20000000-0000-0000-0000-000000000001','10000000-0000-0000-0000-000000000001',
+            '00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002','ACTIVE','JUST_TALK',0,0,0,0,0,0);
+          INSERT INTO relationships(relationship_id,created_at,updated_at,first_conversation_at,relationship_status,origin_door_type,
+            participant_a_id,participant_b_id,origin_conversation_id,origin_match_id,participant_a_accepted,participant_b_accepted,
+            reconnection_eligible,origin_participant_a_door_type,origin_participant_b_door_type)
+          VALUES ('30000000-0000-0000-0000-000000000001',now(),now(),now(),'ACTIVE','JUST_TALK',
+            '00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',
+            '20000000-0000-0000-0000-000000000001','10000000-0000-0000-0000-000000000001',true,true,true,'JUST_TALK','JUST_TALK');
+          INSERT INTO reports(report_id,created_at,updated_at,reporting_participant_id,reported_participant_id,conversation_id,report_category,report_status)
+          VALUES ('40000000-0000-0000-0000-000000000001',now(),now(),
+            '00000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000002',
+            '20000000-0000-0000-0000-000000000001','SPAM','SUBMITTED');
+          INSERT INTO report_safety_media(safety_media_id,report_id,media_bytes,media_type,byte_size,created_at)
+          VALUES ('50000000-0000-0000-0000-000000000001','40000000-0000-0000-0000-000000000001',decode('01','hex'),'image/jpeg',1,now());
+          GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+          GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+          GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER ON TABLES TO anon,authenticated,service_role;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE,SELECT,UPDATE ON SEQUENCES TO anon,authenticated,service_role;
+          SQL
+      - name: Apply seven pending migrations in order
+        run: mix ecto.migrate
+      - name: Verify migration, backfill, RLS, grants, defaults, constraints
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -h localhost -U c5owner -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$ DECLARE n integer; BEGIN
+            SELECT count(*) INTO n FROM schema_migrations WHERE version IN
+              (20260826142000,20260826143000,20260830044500,20260909181500,20260909182500,20260909183000,20260909183500);
+            IF n <> 7 THEN RAISE EXCEPTION 'expected seven pending migrations, got %', n; END IF;
+            IF (SELECT credential_version FROM participants WHERE participant_id='00000000-0000-0000-0000-000000000001') <> 1 THEN RAISE EXCEPTION 'credential backfill failed'; END IF;
+            IF (SELECT credential_version FROM participants WHERE participant_id='00000000-0000-0000-0000-000000000002') <> 0 THEN RAISE EXCEPTION 'credential default failed'; END IF;
+            IF (SELECT media_origin FROM reports WHERE report_id='40000000-0000-0000-0000-000000000001') <> 'MEDIA_ORIGIN' THEN RAISE EXCEPTION 'media origin backfill failed'; END IF;
+            SELECT count(*) INTO n FROM pg_class c JOIN pg_namespace ns ON ns.oid=c.relnamespace
+              WHERE ns.nspname='public' AND c.relname IN ('account_sessions','account_sync_states','analytics_records','boundary_blocks','composer_grants','conversations','google_account_links','google_oauth_attempts','learning_records','matches','memories','message_reactions','messages','participant_pairing_reservations','participants','private_accounts','queue_states','reflections','relationship_consents','relationship_reconnection_intents','relationships','report_safety_media','reports','safety_events','safety_reviews','source_rate_limits') AND c.relrowsecurity;
+            IF n <> 26 THEN RAISE EXCEPTION 'expected RLS on 26 protected tables, got %', n; END IF;
+          END $$;
+          DO $$ DECLARE role_name text; table_name text; BEGIN
+            FOREACH role_name IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+              FOREACH table_name IN ARRAY ARRAY['account_sessions','account_sync_states','analytics_records','boundary_blocks','composer_grants','conversations','google_account_links','google_oauth_attempts','learning_records','matches','memories','message_reactions','messages','participant_pairing_reservations','participants','private_accounts','queue_states','reflections','relationship_consents','relationship_reconnection_intents','relationships','report_safety_media','reports','safety_events','safety_reviews','source_rate_limits','schema_migrations'] LOOP
+                IF has_table_privilege(role_name,'public.'||table_name,'SELECT') OR has_table_privilege(role_name,'public.'||table_name,'INSERT') OR has_table_privilege(role_name,'public.'||table_name,'UPDATE') OR has_table_privilege(role_name,'public.'||table_name,'DELETE') OR has_table_privilege(role_name,'public.'||table_name,'TRUNCATE') OR has_table_privilege(role_name,'public.'||table_name,'REFERENCES') OR has_table_privilege(role_name,'public.'||table_name,'TRIGGER') THEN
+                  RAISE EXCEPTION 'API role % retained privilege on %', role_name, table_name;
+                END IF;
+              END LOOP;
+            END LOOP;
+          END $$;
+          CREATE TABLE c5_future_probe(id bigserial primary key, payload text);
+          DO $$ DECLARE role_name text; BEGIN
+            FOREACH role_name IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+              IF has_table_privilege(role_name,'public.c5_future_probe','SELECT') THEN RAISE EXCEPTION 'future table grant reopened for %', role_name; END IF;
+              IF has_sequence_privilege(role_name,'public.c5_future_probe_id_seq','USAGE') OR has_sequence_privilege(role_name,'public.c5_future_probe_id_seq','SELECT') OR has_sequence_privilege(role_name,'public.c5_future_probe_id_seq','UPDATE') THEN RAISE EXCEPTION 'future sequence grant reopened for %', role_name; END IF;
+            END LOOP;
+          END $$;
+          INSERT INTO c5_future_probe(payload) VALUES ('owner-still-functional');
+          DROP TABLE c5_future_probe;
+          DO $$ BEGIN
+            BEGIN
+              UPDATE matches SET participant_b_id=participant_a_id WHERE match_id='10000000-0000-0000-0000-000000000001';
+              RAISE EXCEPTION 'self-match unexpectedly accepted';
+            EXCEPTION WHEN check_violation THEN NULL; END;
+            BEGIN
+              UPDATE relationships SET participant_b_id=participant_a_id WHERE relationship_id='30000000-0000-0000-0000-000000000001';
+              RAISE EXCEPTION 'self-relationship unexpectedly accepted';
+            EXCEPTION WHEN check_violation THEN NULL; END;
+            BEGIN
+              UPDATE conversations SET participant_b_id='00000000-0000-0000-0000-000000000003' WHERE conversation_id='20000000-0000-0000-0000-000000000001';
+              RAISE EXCEPTION 'mismatched conversation tuple unexpectedly accepted';
+            EXCEPTION WHEN foreign_key_violation THEN NULL; END;
+          END $$;
+          DO $$ BEGIN
+            IF (SELECT count(*) FROM participants) <> 3 OR (SELECT count(*) FROM matches) <> 1 OR (SELECT count(*) FROM conversations) <> 1 OR (SELECT count(*) FROM relationships) <> 1 OR (SELECT count(*) FROM reports) <> 1 OR (SELECT count(*) FROM report_safety_media) <> 1 OR (SELECT count(*) FROM private_accounts) <> 1 THEN
+              RAISE EXCEPTION 'unexpected destructive row rewrite';
+            END IF;
+          END $$;
+          SQL
+      - name: Application reads migrated owner DB
+        run: |
+          mix run -e 'result = Ecto.Adapters.SQL.query!(StrangertalksNew.Repo, "select count(*) from participants", []); [[3]] = result.rows; IO.puts("C5_APP_OWNER_READ=ok")'
+      - name: Negative fail-closed integrity rehearsal
+        shell: bash
+        run: |
+          set -euo pipefail
+          MIX_TEST_PARTITION=_negative mix ecto.create --quiet
+          MIX_TEST_PARTITION=_negative mix ecto.migrate --to 20260821191324
+          psql -h localhost -U c5owner -d strangertalks_new_test_negative -v ON_ERROR_STOP=1 <<'SQL'
+          INSERT INTO participants(participant_id) VALUES ('90000000-0000-0000-0000-000000000001');
+          INSERT INTO matches(match_id,created_at,door_type,match_status,match_strategy,participant_a_id,participant_b_id,
+            compatibility_score,queue_entry_time,match_found_time,queue_duration_seconds,conversation_duration_seconds,
+            conversation_started,conversation_completed,memory_created,relationship_created,reconnected_later,report_generated,
+            block_generated,safety_review_required,participant_a_door_type,participant_b_door_type,conversation_language)
+          VALUES ('91000000-0000-0000-0000-000000000001',now(),'JUST_TALK','ACTIVE','COMPATIBILITY',
+            '90000000-0000-0000-0000-000000000001','90000000-0000-0000-0000-000000000001',0.9000,
+            now(),now(),0,0,false,false,false,false,false,false,false,false,'JUST_TALK','JUST_TALK','en');
+          SQL
+          set +e
+          MIX_TEST_PARTITION=_negative mix ecto.migrate >/tmp/c5-negative.log 2>&1
+          rc=$?
+          set -e
+          cat /tmp/c5-negative.log
+          test "$rc" -ne 0
+          test "$(psql -h localhost -U c5owner -d strangertalks_new_test_negative -Atc "select count(*) from schema_migrations where version=20260909182500")" = "0"
+          test "$(psql -h localhost -U c5owner -d strangertalks_new_test_negative -Atc "select count(*) from schema_migrations where version=20260909183500")" = "0"
+          grep -F 'Cannot enforce distinct Match participants: self-Matches exist' /tmp/c5-negative.log
+      - name: Synthetic backup, checksum, restore, integrity and app read
+        shell: bash
+        run: |
+          set -euo pipefail
+          pg_dump -h localhost -U c5owner -d strangertalks_new_test --format=custom --no-owner --no-acl --file=/tmp/c5-production-shape.dump
+          sha256sum /tmp/c5-production-shape.dump | tee /tmp/c5-production-shape.dump.sha256
+          test -s /tmp/c5-production-shape.dump
+          createdb -h localhost -U c5owner strangertalks_new_test_restore
+          pg_restore -h localhost -U c5owner -d strangertalks_new_test_restore --exit-on-error --no-owner --no-acl /tmp/c5-production-shape.dump
+          test "$(psql -h localhost -U c5owner -d strangertalks_new_test_restore -Atc 'select max(version) from schema_migrations')" = "20260909183500"
+          test "$(psql -h localhost -U c5owner -d strangertalks_new_test_restore -Atc 'select count(*) from participants')" = "3"
+          test "$(psql -h localhost -U c5owner -d strangertalks_new_test_restore -Atc "select count(*) from matches where participant_a_id=participant_b_id")" = "0"
+          test "$(psql -h localhost -U c5owner -d strangertalks_new_test_restore -Atc "select count(*) from conversations c join matches m on m.match_id=c.match_id where c.participant_a_id is distinct from m.participant_a_id or c.participant_b_id is distinct from m.participant_b_id")" = "0"
+          MIX_TEST_PARTITION=_restore mix run -e 'result = Ecto.Adapters.SQL.query!(StrangertalksNew.Repo, "select count(*) from participants", []); [[3]] = result.rows; IO.puts("C5_RESTORED_APP_READ=ok")'
+      - name: Clean identity
+        run: |
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+  release:
+    name: Exact-main release + Docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Production release assembly
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          MIX_ENV=prod mix deps.get --only prod
+          MIX_ENV=prod mix compile --warnings-as-errors
+          MIX_ENV=prod mix assets.deploy
+          MIX_ENV=prod mix release --overwrite
+          test -x _build/prod/rel/strangertalks_new/bin/migrate
+      - name: Docker build
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --pull -t strangertalks-c5:${GITHUB_RUN_ID} .
+          test "$(docker inspect --format '{{.Config.User}}' strangertalks-c5:${GITHUB_RUN_ID})" = "nobody"
+      - name: Clean exact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+
+  final-freshness:
+    name: Final exact-main freshness
+    needs: [core, browser, db-rehearsal-backup, release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Prove target is still canonical main
+        shell: bash
+        run: |
+          set -euo pipefail
+          tested="$(git rev-parse HEAD)"
+          tree="$(git rev-parse HEAD^{tree})"
+          live="$(git ls-remote --heads origin refs/heads/main | awk '{print $1}')"
+          echo "C5_TESTED_SHA=$tested"
+          echo "C5_TESTED_TREE=$tree"
+          echo "C5_LIVE_MAIN=$live"
+          test "$tested" = "$TARGET_SHA"
+          test "$tree" = "$TARGET_TREE"
+          test "$live" = "$TARGET_SHA"
