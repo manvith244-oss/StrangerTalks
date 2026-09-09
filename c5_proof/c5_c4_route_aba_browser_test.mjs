@@ -17,6 +17,14 @@ function phoenixMessage(payload) {
   }
 }
 
+async function visibleMessageCount(page) {
+  return page.getByText(MESSAGE_TEXT, {exact: true}).evaluateAll(nodes => nodes.filter(node => {
+    const style = getComputedStyle(node)
+    const rect = node.getBoundingClientRect()
+    return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0
+  }).length)
+}
+
 async function seed(page) {
   await page.evaluate(async ({conversationId, messageText}) => {
     const localData = await import("/assets/local_data.mjs")
@@ -49,8 +57,18 @@ async function assertCanonicalChats(page, label) {
   await page.locator('[data-screen="chats"].active').waitFor({state: "visible", timeout: 15_000})
   assert.equal(new URL(page.url()).pathname, "/chats", `${label}: URL must be canonical /chats`)
   assert.equal(await page.locator('[data-screen="history"].active').count(), 0, `${label}: deleted history screen must stay inactive`)
-  assert.equal(await page.getByText(MESSAGE_TEXT, {exact: true}).count(), 0, `${label}: deleted message must not remount`)
+  assert.equal(await visibleMessageCount(page), 0, `${label}: deleted message must not visibly remount`)
   assert.equal(await page.getByRole("button", {name: "Open local copy: Advice"}).count(), 0, `${label}: deleted kept object must not return`)
+
+  const state = await page.evaluate(() => history.state)
+  assert.equal(state?.path, "/chats", `${label}: history state must be canonical /chats`)
+
+  const stillKept = await page.evaluate(async conversationId => {
+    const localData = await import("/assets/local_data.mjs")
+    return localData.keptConversations(await localData.listRecords())
+      .some(record => record?.value?.conversation_id === conversationId)
+  }, CONVERSATION_ID)
+  assert.equal(stillKept, false, `${label}: deleted Conversation must stay absent from kept-local state`)
 }
 
 test("C5 hostile Chromium: an older stale /chats/:id history entry cannot resurrect after deletion", {timeout: 90_000}, async () => {
@@ -78,7 +96,7 @@ test("C5 hostile Chromium: an older stale /chats/:id history entry cannot resurr
     await page.getByRole("button", {name: "Open local copy: Advice"}).click()
     await page.waitForURL(`**/chats/${CONVERSATION_ID}`)
     await page.locator('[data-screen="history"].active').waitFor({state: "visible"})
-    assert.equal(await page.getByText(MESSAGE_TEXT, {exact: true}).count(), 1)
+    assert.equal(await visibleMessageCount(page), 1, "seeded message is visibly mounted before deletion")
 
     // Build a realistic ABA-shaped history stack. The current UI remains on the
     // Conversation while browser history now contains an older copy of the same
