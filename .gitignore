@@ -31,3 +31,6 @@ strangertalks_new-*.tar
 # Local diagnostic logs
 debug.log
 
+# Python bytecode caches
+__pycache__/
+*.py[cod]
