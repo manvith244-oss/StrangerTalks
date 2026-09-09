@@ -2,7 +2,7 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   use GenServer, restart: :transient
 
   alias StrangertalksNew.Hangouts
-  alias StrangertalksNew.Hangouts.RoomSupervisor
+  alias StrangertalksNew.Hangouts.{RoomSupervisor, SharedContent}
 
   @registry StrangertalksNew.Hangouts.Registry
   @pubsub StrangertalksNew.PubSub
@@ -49,6 +49,22 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   end
 
   def snapshot(_room_id, _participant_id), do: {:error, :invalid_snapshot_request}
+
+  def current_content(room_id) when is_binary(room_id) do
+    with {:ok, pid} <- ensure_started(room_id) do
+      GenServer.call(pid, :current_content)
+    end
+  end
+
+  def current_content(_room_id), do: {:error, :invalid_room_request}
+
+  def advance_content(room_id) when is_binary(room_id) do
+    with {:ok, pid} <- ensure_started(room_id) do
+      GenServer.call(pid, :advance_content)
+    end
+  end
+
+  def advance_content(_room_id), do: {:error, :invalid_room_request}
 
   def disconnect(room_id, participant_id)
       when is_binary(room_id) and is_binary(participant_id) do
@@ -104,14 +120,44 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
 
   def handle_call({:snapshot, participant_id}, _from, state) do
     case Hangouts.room_snapshot(state.room_id, participant_id) do
-      {:ok, snapshot} -> {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:ok, snapshot} ->
+        snapshot = enrich_snapshot(snapshot)
+        {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call(:current_content, _from, state) do
+    {:reply, SharedContent.current(state.room_id), state}
+  end
+
+  def handle_call(:advance_content, _from, state) do
+    case SharedContent.advance(state.room_id) do
+      {:ok, content_state} ->
+        Phoenix.PubSub.broadcast(
+          @pubsub,
+          topic(state.room_id),
+          {:hangout_event, "content:changed", content_state}
+        )
+
+        snapshot =
+          state.snapshot
+          |> Map.put(:content_sequence, content_state.sequence)
+          |> Map.put(:current_content, content_state.content)
+
+        {:reply, {:ok, content_state}, %{state | snapshot: snapshot}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
   def handle_call({:disconnect, participant_id}, _from, state) do
     with {:ok, _membership} <- Hangouts.disconnect_member(state.room_id, participant_id),
          {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id) do
+      snapshot = enrich_snapshot(snapshot)
       {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -121,6 +167,7 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
   def handle_call({:reconnect, participant_id}, _from, state) do
     with {:ok, _membership} <- Hangouts.reconnect_member(state.room_id, participant_id),
          {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id) do
+      snapshot = enrich_snapshot(snapshot)
       {:reply, {:ok, snapshot}, %{state | snapshot: snapshot}}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
@@ -131,6 +178,7 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
     case Hangouts.append_message(state.room_id, participant_id, attrs) do
       {:ok, message} ->
         with {:ok, snapshot} <- Hangouts.room_snapshot(state.room_id, participant_id),
+             snapshot <- enrich_snapshot(snapshot),
              %{identity: identity} <- Enum.find(snapshot.members, & &1.self) do
           public_message = %{
             message_id: message.message_id,
@@ -185,8 +233,17 @@ defmodule StrangertalksNew.Hangouts.RoomServer do
 
   defp refresh_state(room_id) do
     with {:ok, _room} <- Hangouts.activate_if_ready(room_id),
+         {:ok, _content_state} <- SharedContent.ensure_initial(room_id),
          {:ok, snapshot} <- Hangouts.internal_room_snapshot(room_id) do
-      {:ok, snapshot}
+      {:ok, enrich_snapshot(snapshot)}
+    end
+  end
+
+  defp enrich_snapshot(snapshot) do
+    case SharedContent.current(snapshot.room_id) do
+      {:ok, nil} -> Map.put(snapshot, :current_content, nil)
+      {:ok, content_state} -> Map.put(snapshot, :current_content, content_state.content)
+      {:error, _reason} -> Map.put(snapshot, :current_content, nil)
     end
   end
 

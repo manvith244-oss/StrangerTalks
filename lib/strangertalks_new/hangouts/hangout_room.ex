@@ -21,6 +21,7 @@ defmodule StrangertalksNew.Hangouts.HangoutRoom do
     field :max_size, :integer, default: 6
     field :message_sequence, :integer, default: 0
     field :content_sequence, :integer, default: 0
+    field :current_content_id, :string
     field :current_content_started_at, :utc_datetime_usec
   end
 
@@ -38,6 +39,7 @@ defmodule StrangertalksNew.Hangouts.HangoutRoom do
       :max_size,
       :message_sequence,
       :content_sequence,
+      :current_content_id,
       :current_content_started_at
     ])
     |> validate_required([
@@ -51,6 +53,7 @@ defmodule StrangertalksNew.Hangouts.HangoutRoom do
     ])
     |> validate_length(:language_tag, min: 2, max: 35)
     |> validate_format(:language_tag, ~r/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/)
+    |> validate_length(:current_content_id, max: 128)
     |> validate_number(:minimum_size, greater_than_or_equal_to: 2, less_than_or_equal_to: 12)
     |> validate_number(:target_size, greater_than_or_equal_to: 2, less_than_or_equal_to: 12)
     |> validate_number(:max_size, greater_than_or_equal_to: 2, less_than_or_equal_to: 12)
