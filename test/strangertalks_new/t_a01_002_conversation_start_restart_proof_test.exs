@@ -9,17 +9,7 @@ defmodule StrangertalksNew.TA01002ConversationStartRestartProofTest do
     fixture = conversation_fixture("en")
     conversation_id = fixture.conversation.conversation_id
 
-    {:ok, old_pid} = ConversationServer.ensure_started(conversation_id)
-
-    on_exit(fn ->
-      case ConversationServer.lookup(conversation_id) do
-        {:ok, pid} ->
-          DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, pid)
-
-        {:error, :not_started} ->
-          :ok
-      end
-    end)
+    old_pid = start_runtime(conversation_id, :initial)
 
     assert {:ok, initial} = ConversationServer.inspect_state(conversation_id)
     assert {:active, identity} = initial.icebreaker
@@ -73,7 +63,7 @@ defmodule StrangertalksNew.TA01002ConversationStartRestartProofTest do
     Process.exit(old_pid, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^old_pid, :killed}
 
-    assert {:ok, replacement_pid} = ConversationServer.ensure_started(conversation_id)
+    replacement_pid = start_runtime(conversation_id, :replacement)
     refute replacement_pid == old_pid
     assert {:ok, ^replacement_pid} = ConversationServer.lookup(conversation_id)
 
@@ -110,6 +100,14 @@ defmodule StrangertalksNew.TA01002ConversationStartRestartProofTest do
     assert replacement.icebreaker == :retired
     assert replacement_sync.icebreaker == %{status: "retired"}
     assert post_restart_fanout == []
+  end
+
+  defp start_runtime(conversation_id, generation) do
+    start_supervised!(
+      {ConversationServer, %{conversation_id: conversation_id}},
+      id: {ConversationServer, conversation_id, generation},
+      restart: :temporary
+    )
   end
 
   defp collect_icebreaker_events(acc) do
