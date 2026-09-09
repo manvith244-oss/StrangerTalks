@@ -9,8 +9,7 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
     fixture = conversation_fixture("en")
     conversation_id = fixture.conversation.conversation_id
 
-    {:ok, old_pid} = ConversationServer.ensure_started(conversation_id)
-    cleanup(conversation_id)
+    old_pid = start_runtime(conversation_id, :initial)
 
     assert {:ok, %{icebreaker: {:active, identity}}} =
              ConversationServer.inspect_state(conversation_id)
@@ -44,8 +43,7 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
     fixture = conversation_fixture(nil)
     conversation_id = fixture.conversation.conversation_id
 
-    {:ok, old_pid} = ConversationServer.ensure_started(conversation_id)
-    cleanup(conversation_id)
+    old_pid = start_runtime(conversation_id, :initial)
 
     assert {:ok, %{icebreaker: :retired}} = ConversationServer.inspect_state(conversation_id)
     assert Matches.get_match(fixture.match.match_id).conversation_started == false
@@ -73,8 +71,7 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
       fixture = conversation_fixture(language)
       conversation_id = fixture.conversation.conversation_id
 
-      {:ok, pid} = ConversationServer.ensure_started(conversation_id)
-      cleanup(conversation_id)
+      _pid = start_runtime(conversation_id, {:language, language})
 
       assert {:ok, %{icebreaker: {:active, identity}}} =
                ConversationServer.inspect_state(conversation_id)
@@ -82,8 +79,6 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
       assert String.starts_with?(identity, language <> "/")
       assert IcebreakerCatalog.approved?(identity)
       assert Matches.get_match(fixture.match.match_id).conversation_started == false
-
-      DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, pid)
     end
   end
 
@@ -91,8 +86,7 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
     fixture = conversation_fixture("en")
     conversation_id = fixture.conversation.conversation_id
 
-    {:ok, _pid} = ConversationServer.ensure_started(conversation_id)
-    cleanup(conversation_id)
+    _pid = start_runtime(conversation_id, :expressive)
 
     assert Matches.get_match(fixture.match.match_id).conversation_started == false
 
@@ -114,8 +108,7 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
     binary = <<"RIFF", 0, 0, 0, 0, "WAVEfmt ">>
     voice_note_id = Ecto.UUID.generate()
 
-    {:ok, _pid} = ConversationServer.ensure_started(conversation_id)
-    cleanup(conversation_id)
+    _pid = start_runtime(conversation_id, :voice)
 
     assert Matches.get_match(fixture.match.match_id).conversation_started == false
 
@@ -137,24 +130,107 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
     assert {:ok, %{icebreaker: :retired}} = ConversationServer.inspect_state(conversation_id)
   end
 
+  test "later accepted content skips durable Match start persistence after the first start" do
+    fixture = conversation_fixture("en")
+    conversation_id = fixture.conversation.conversation_id
+    binary = <<"RIFF", 0, 0, 0, 0, "WAVEfmt ">>
+
+    _pid = start_runtime(conversation_id, :one_time_persistence)
+
+    assert {:ok, %{sequence: 1, status: "sent"}} =
+             ConversationServer.append_message(
+               conversation_id,
+               fixture.a,
+               Ecto.UUID.generate(),
+               "first accepted human message"
+             )
+
+    assert Matches.get_match(fixture.match.match_id).conversation_started == true
+
+    capture = start_match_query_capture!()
+
+    assert {:ok, %{sequence: 2, status: "sent"}} =
+             ConversationServer.append_message(
+               conversation_id,
+               fixture.a,
+               Ecto.UUID.generate(),
+               "later accepted human message"
+             )
+
+    assert {:ok, %{sequence: 3}} =
+             ConversationServer.append_expressive_message(
+               conversation_id,
+               fixture.a,
+               Ecto.UUID.generate(),
+               "warm-wave"
+             )
+
+    voice_note_id = Ecto.UUID.generate()
+
+    assert {:ok, %{voice_note_id: ^voice_note_id, status: "sent_to_server"}} =
+             ConversationServer.append_voice_note(
+               conversation_id,
+               fixture.a,
+               %{
+                 voice_note_id: voice_note_id,
+                 media_type: "audio/wav",
+                 duration_ms: 1_200,
+                 byte_size: byte_size(binary),
+                 content_hash: :crypto.hash(:sha256, binary)
+               },
+               binary
+             )
+
+    assert stop_match_query_capture!(capture) == []
+  end
+
+  defp start_runtime(conversation_id, generation) do
+    start_supervised!(
+      {ConversationServer, %{conversation_id: conversation_id}},
+      id: {ConversationServer, conversation_id, generation},
+      restart: :temporary
+    )
+  end
+
   defp replace_runtime(conversation_id, old_pid) do
     monitor = Process.monitor(old_pid)
     Process.exit(old_pid, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^old_pid, :killed}
-    assert {:ok, replacement_pid} = ConversationServer.ensure_started(conversation_id)
-    replacement_pid
+    start_runtime(conversation_id, :replacement)
   end
 
-  defp cleanup(conversation_id) do
-    on_exit(fn ->
-      case ConversationServer.lookup(conversation_id) do
-        {:ok, pid} ->
-          DynamicSupervisor.terminate_child(StrangertalksNew.ConversationDynamicSupervisor, pid)
+  defp start_match_query_capture! do
+    parent = self()
+    handler_id = {__MODULE__, make_ref()}
 
-        {:error, :not_started} ->
-          :ok
-      end
-    end)
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:strangertalks_new, :repo, :query],
+        fn _event, _measurements, metadata, target ->
+          query = metadata[:query] |> to_string()
+
+          if String.contains?(query, ~s("matches")) do
+            send(target, {:match_query, query})
+          end
+        end,
+        parent
+      )
+
+    handler_id
+  end
+
+  defp stop_match_query_capture!(handler_id) do
+    :ok = :telemetry.detach(handler_id)
+    collect_match_queries([])
+  end
+
+  defp collect_match_queries(acc) do
+    receive do
+      {:match_query, query} -> collect_match_queries([query | acc])
+    after
+      25 -> Enum.reverse(acc)
+    end
   end
 
   defp conversation_fixture(language) do
