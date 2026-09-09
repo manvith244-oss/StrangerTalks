@@ -10,7 +10,7 @@ defmodule StrangertalksNew.AgentSystems.SafetyReviewAssistant do
 
   import Ecto.Query, warn: false
 
-  alias StrangertalksNew.{Report, ReportSafetyMedia, Repo, SafetyReview}
+  alias StrangertalksNew.{Report, Reports, Repo, SafetyReview}
   alias StrangertalksNew.Companion.OpenAIProvider
 
   @max_context_chars 4_096
@@ -22,17 +22,29 @@ defmodule StrangertalksNew.AgentSystems.SafetyReviewAssistant do
       %Report{} = report ->
         case Repo.get_by(SafetyReview, report_id: report.report_id) do
           %SafetyReview{} = review ->
-            media_attached =
-              Repo.exists?(
-                from media in ReportSafetyMedia, where: media.report_id == ^report.report_id
-              )
+            case Reports.media_evidence_state(report.report_id) do
+              {:ok, :NO_MEDIA} ->
+                review(%{
+                  category: report.report_category && Atom.to_string(report.report_category),
+                  status: review.status && Atom.to_string(review.status),
+                  evidence: bounded_context(report.reporter_context),
+                  media_attached: false
+                })
 
-            review(%{
-              category: report.report_category && Atom.to_string(report.report_category),
-              status: review.status && Atom.to_string(review.status),
-              evidence: bounded_context(report.reporter_context),
-              media_attached: media_attached
-            })
+              {:ok, state} when state in [:MEDIA_RETAINED, :MEDIA_OMITTED] ->
+                review(%{
+                  category: report.report_category && Atom.to_string(report.report_category),
+                  status: review.status && Atom.to_string(review.status),
+                  evidence: bounded_context(report.reporter_context),
+                  media_attached: true
+                })
+
+              {:error, reason} ->
+                {:error, reason}
+
+              _ ->
+                {:error, :invalid_media_origin_state}
+            end
 
           nil ->
             {:error, :safety_review_unavailable}
