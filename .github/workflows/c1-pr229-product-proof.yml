@@ -29,24 +29,26 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      RED_SHA: af6a57e55c4472eeda26edaa4130b4c447bd6f07
+      RED_SHA: b8f90cbe05a44a8e34ce49b546045fbaa32f77b5
       BASE_SHA: 71dbc9546ddf7bca46b62953a6fc4ba1f20d5af1
     steps:
-      - name: Checkout exact test-only RED head
+      - name: Checkout exact P1 test-only RED head
         uses: actions/checkout@v4
         with:
           ref: ${{ env.RED_SHA }}
           fetch-depth: 0
-      - name: Prove RED head is test-only against canonical base
+      - name: Prove P1 RED head still has four candidate surfaces
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$RED_SHA"
           mapfile -t changed < <(git diff --name-only "$BASE_SHA" "$RED_SHA" | sort)
           printf '%s\n' "${changed[@]}"
-          test "${#changed[@]}" -eq 2
-          test "${changed[0]}" = "test/strangertalks_new/t02_conversation_start_restart_controls_test.exs"
-          test "${changed[1]}" = "test/strangertalks_new/t_a01_002_conversation_start_restart_proof_test.exs"
+          test "${#changed[@]}" -eq 4
+          test "${changed[0]}" = "lib/strangertalks_new/conversation_lifecycle/conversation_server.ex"
+          test "${changed[1]}" = "lib/strangertalks_new/matches.ex"
+          test "${changed[2]}" = "test/strangertalks_new/t02_conversation_start_restart_controls_test.exs"
+          test "${changed[3]}" = "test/strangertalks_new/t_a01_002_conversation_start_restart_proof_test.exs"
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
         with:
@@ -57,26 +59,18 @@ jobs:
           mix local.hex --force
           mix local.rebar --force
           mix deps.get
-      - name: Prove focused restart controls are RED before production correction
+      - name: Prove one-time Match persistence regression is RED before P1 production repair
         shell: bash
         run: |
           set -euo pipefail
           set +e
-          mix test test/strangertalks_new/t02_conversation_start_restart_controls_test.exs > /tmp/t02-red.log 2>&1
+          mix test test/strangertalks_new/t02_conversation_start_restart_controls_test.exs > /tmp/t02-p1-red.log 2>&1
           status=$?
           set -e
-          cat /tmp/t02-red.log
+          cat /tmp/t02-p1-red.log
           test "$status" -ne 0
-      - name: Prove replacement restart proof is RED before production correction
-        shell: bash
-        run: |
-          set -euo pipefail
-          set +e
-          mix test test/strangertalks_new/t_a01_002_conversation_start_restart_proof_test.exs > /tmp/a01-red.log 2>&1
-          status=$?
-          set -e
-          cat /tmp/a01-red.log
-          test "$status" -ne 0
+          grep -F 'later accepted content skips durable Match start persistence after the first start' /tmp/t02-p1-red.log
+          grep -F 'SELECT' /tmp/t02-p1-red.log
 
   final-green:
     runs-on: ubuntu-latest
@@ -98,11 +92,11 @@ jobs:
       MIX_ENV: test
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-      TARGET_SHA: b6e153920c0c2c01f65c0984ea4a9301a6313606
-      TARGET_TREE: da5adf7cc90a8f27884be28755cf7d26efe2c543
+      TARGET_SHA: 9a52b6da4a1feb0526ff9d55a526ea9954adbec1
+      TARGET_TREE: 24f8d9de05a280c9dc881b41f5bdaa2adef395e2
       BASE_SHA: 71dbc9546ddf7bca46b62953a6fc4ba1f20d5af1
     steps:
-      - name: Checkout exact final candidate
+      - name: Checkout exact repaired candidate
         uses: actions/checkout@v4
         with:
           ref: ${{ env.TARGET_SHA }}
@@ -134,7 +128,7 @@ jobs:
         run: mix compile --warnings-as-errors
       - name: Format clean
         run: mix format --check-formatted
-      - name: Focused T02 restart durability proofs
+      - name: Focused T02 P1 and restart durability proofs
         run: |
           mix test \
             test/strangertalks_new/t02_conversation_start_restart_controls_test.exs \
