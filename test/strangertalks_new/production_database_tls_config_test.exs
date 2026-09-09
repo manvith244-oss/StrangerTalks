@@ -47,7 +47,9 @@ defmodule StrangertalksNew.ProductionDatabaseTLSConfigTest do
     assert is_list(ssl_options)
     assert Keyword.fetch!(ssl_options, :verify) == :verify_peer
     refute Keyword.get(ssl_options, :verify) == :verify_none
-    assert Keyword.fetch!(ssl_options, :server_name_indication) == String.to_charlist(@database_host)
+
+    assert Keyword.fetch!(ssl_options, :server_name_indication) ==
+             String.to_charlist(@database_host)
 
     assert trusted_ca_source?(ssl_options),
            "production TLS must carry either trusted OS CA certificates or an explicit CA file"
@@ -64,7 +66,10 @@ defmodule StrangertalksNew.ProductionDatabaseTLSConfigTest do
   test "an explicitly configured database CA file must exist" do
     System.put_env(
       "DB_CA_CERT_FILE",
-      Path.join(System.tmp_dir!(), "strangertalks-missing-db-ca-#{System.unique_integer([:positive])}.pem")
+      Path.join(
+        System.tmp_dir!(),
+        "strangertalks-missing-db-ca-#{System.unique_integer([:positive])}.pem"
+      )
     )
 
     assert_raise RuntimeError, ~r/DB_CA_CERT_FILE/, fn ->
