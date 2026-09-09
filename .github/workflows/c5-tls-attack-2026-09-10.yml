@@ -1,0 +1,81 @@
+name: C5 TLS Attack 2026-09-10
+
+on:
+  push:
+    branches:
+      - evidence/c5-tls-attack-2026-09-10
+
+permissions:
+  contents: read
+
+env:
+  TARGET_SHA: 1efffd7c7436483e0188cc06a29fd7a15c7aea45
+  TARGET_TREE: 8fec18429d8cca49443021c12daae954c2b6c88b
+
+jobs:
+  tls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Exact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: TLS focused proof
+        run: mix test test/strangertalks_new/production_database_tls_config_test.exs --trace
+      - name: Compile format audit precommit
+        run: |
+          mix format --check-formatted
+          mix compile --warnings-as-errors
+          mix deps.unlock --check-unused
+          mix hex.audit
+          mix precommit
+      - name: Static hostile scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'verify: :verify_peer' config/runtime.exs
+          grep -F 'server_name_indication:' config/runtime.exs
+          grep -Eq 'cacerts:|cacertfile:' config/runtime.exs
+          ! grep -nE 'verify[[:space:]]*:[[:space:]]*:verify_none' config/runtime.exs
+          ! grep -nE 'ssl[[:space:]]*:[[:space:]]*false' config/runtime.exs
+          ! grep -nE 'IO\.(puts|inspect).*DATABASE_URL|Logger\..*DATABASE_URL' config/runtime.exs
+      - name: Production release assembly
+        shell: bash
+        run: |
+          set -euo pipefail
+          MIX_ENV=prod mix deps.get --only prod
+          MIX_ENV=prod mix compile --warnings-as-errors
+          MIX_ENV=prod mix assets.deploy
+          MIX_ENV=prod mix release --overwrite
+          test -x _build/prod/rel/strangertalks_new/bin/migrate
+      - name: Docker compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --pull -t strangertalks-c5-tls:${GITHUB_RUN_ID} .
+          test "$(docker inspect --format '{{.Config.User}}' strangertalks-c5-tls:${GITHUB_RUN_ID})" = "nobody"
+      - name: Clean exact identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
