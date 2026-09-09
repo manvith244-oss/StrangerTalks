@@ -146,6 +146,11 @@ defmodule StrangertalksNew.Relationship do
       :atmosphere_history,
       :relationship_summary
     ])
+    |> validate_distinct_participants()
+    |> check_constraint(:participant_b_id,
+      name: :relationships_distinct_participants_check,
+      message: "must identify two different participants"
+    )
     |> unique_constraint([:participant_a_id, :participant_b_id],
       name: :relationships_canonical_pair_index
     )
@@ -174,6 +179,17 @@ defmodule StrangertalksNew.Relationship do
       :shared_memory_count,
       :private_note_count
     ])
+  end
+
+  defp validate_distinct_participants(changeset) do
+    participant_a_id = get_field(changeset, :participant_a_id)
+    participant_b_id = get_field(changeset, :participant_b_id)
+
+    if participant_a_id && participant_b_id && participant_a_id == participant_b_id do
+      add_error(changeset, :participant_b_id, "must identify two different participants")
+    else
+      changeset
+    end
   end
 
   defp backfill_origin_doors(attrs) do
