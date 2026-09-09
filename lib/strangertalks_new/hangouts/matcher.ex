@@ -192,9 +192,14 @@ defmodule StrangertalksNew.Hangouts.Matcher do
 
   defp put_attempt(state, attempt) do
     queues =
-      Map.update(state.queues, attempt.language_tag, [attempt.participant_id], fn participant_ids ->
-        participant_ids ++ [attempt.participant_id]
-      end)
+      Map.update(
+        state.queues,
+        attempt.language_tag,
+        [attempt.participant_id],
+        fn participant_ids ->
+          participant_ids ++ [attempt.participant_id]
+        end
+      )
 
     %{state | attempts: Map.put(state.attempts, attempt.participant_id, attempt), queues: queues}
   end
