@@ -11,6 +11,7 @@ defmodule StrangertalksNew.Hangouts.Matcher do
 
   alias StrangertalksNew.Hangouts
   alias StrangertalksNew.Hangouts.{HangoutRoom, RoomServer}
+  alias StrangertalksNew.MatchingRules
 
   @default_config [minimum_size: 3, target_size: 4, max_size: 6]
 
@@ -121,57 +122,93 @@ defmodule StrangertalksNew.Hangouts.Matcher do
     if length(participant_ids) < config.minimum_size do
       {{:ok, :waiting}, state}
     else
-      room_size =
-        if length(participant_ids) >= config.target_size do
-          config.target_size
-        else
-          length(participant_ids)
+      selected_ids = select_compatible_group(participant_ids, config)
+
+      if selected_ids == [] do
+        {{:ok, :waiting}, state}
+      else
+        attrs = %{
+          language_tag: language_tag,
+          experiment_arm: :GROUP_WITH_CONTENT,
+          minimum_size: config.minimum_size,
+          target_size: config.target_size,
+          max_size: config.max_size
+        }
+
+        case Hangouts.create_formed_room(selected_ids, attrs) do
+          {:ok, %{room: room}} ->
+            committed_state = Enum.reduce(selected_ids, state, &drop_participant(&2, &1))
+
+            case RoomServer.ensure_started(room.room_id) do
+              {:ok, _pid} ->
+                formed = %{
+                  room_id: room.room_id,
+                  participant_ids: selected_ids,
+                  size: length(selected_ids)
+                }
+
+                {{:ok, formed}, committed_state}
+
+              {:error, reason} ->
+                {{:error, {:room_server_start_failed, reason}}, committed_state}
+            end
+
+          {:error, :already_in_hangout} ->
+            refreshed_state = clean_unavailable(language_tag, state)
+
+            if refreshed_state != state and retry_count < length(participant_ids) do
+              form_room(language_tag, refreshed_state, config, retry_count + 1)
+            else
+              {{:error, :formation_conflict}, state}
+            end
+
+          {:error, reason} ->
+            {{:error, reason}, state}
+
+          {:error, reason, _changeset} ->
+            {{:error, reason}, state}
         end
-
-      selected_ids = Enum.take(participant_ids, min(room_size, config.max_size))
-
-      attrs = %{
-        language_tag: language_tag,
-        experiment_arm: :GROUP_WITH_CONTENT,
-        minimum_size: config.minimum_size,
-        target_size: config.target_size,
-        max_size: config.max_size
-      }
-
-      case Hangouts.create_formed_room(selected_ids, attrs) do
-        {:ok, %{room: room}} ->
-          committed_state = Enum.reduce(selected_ids, state, &drop_participant(&2, &1))
-
-          case RoomServer.ensure_started(room.room_id) do
-            {:ok, _pid} ->
-              formed = %{
-                room_id: room.room_id,
-                participant_ids: selected_ids,
-                size: length(selected_ids)
-              }
-
-              {{:ok, formed}, committed_state}
-
-            {:error, reason} ->
-              {{:error, {:room_server_start_failed, reason}}, committed_state}
-          end
-
-        {:error, :already_in_hangout} ->
-          refreshed_state = clean_unavailable(language_tag, state)
-
-          if refreshed_state != state and retry_count < length(participant_ids) do
-            form_room(language_tag, refreshed_state, config, retry_count + 1)
-          else
-            {{:error, :formation_conflict}, state}
-          end
-
-        {:error, reason} ->
-          {{:error, reason}, state}
-
-        {:error, reason, _changeset} ->
-          {{:error, reason}, state}
       end
     end
+  end
+
+  defp select_compatible_group(participant_ids, config) do
+    desired_size = min(length(participant_ids), min(config.target_size, config.max_size))
+
+    desired_size
+    |> down_to(config.minimum_size)
+    |> Enum.find_value([], fn size ->
+      first_compatible_combination(participant_ids, size, [])
+    end)
+  end
+
+  defp down_to(high, low) when high >= low, do: Enum.to_list(high..low//-1)
+  defp down_to(_high, _low), do: []
+
+  defp first_compatible_combination(_remaining, 0, selected), do: Enum.reverse(selected)
+
+  defp first_compatible_combination(remaining, needed, _selected)
+       when length(remaining) < needed,
+       do: nil
+
+  defp first_compatible_combination([], _needed, _selected), do: nil
+
+  defp first_compatible_combination([candidate | rest], needed, selected) do
+    selected_result =
+      if safe_with_selected?(candidate, selected) do
+        first_compatible_combination(rest, needed - 1, [candidate | selected])
+      end
+
+    case selected_result do
+      nil -> first_compatible_combination(rest, needed, selected)
+      group -> group
+    end
+  end
+
+  defp safe_with_selected?(candidate, selected) do
+    Enum.all?(selected, fn existing ->
+      not MatchingRules.check_safety_veto?(candidate, existing)
+    end)
   end
 
   defp clean_unavailable(language_tag, state) do
