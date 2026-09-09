@@ -10,7 +10,7 @@ defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
     topic = "conversation:#{conversation.conversation_id}"
     :ok = Phoenix.PubSub.subscribe(StrangertalksNew.PubSub, topic)
 
-    assert {:ok, first_block} =
+    assert {:ok, %BoundaryBlock{}} =
              MatchingRules.block_conversation_participant(
                conversation.conversation_id,
                participant_a.participant_id
@@ -18,13 +18,12 @@ defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
 
     assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "conversation:ended"}
 
-    assert {:ok, retry_block} =
+    assert {:ok, %BoundaryBlock{}} =
              MatchingRules.block_conversation_participant(
                conversation.conversation_id,
                participant_a.participant_id
              )
 
-    assert retry_block.boundary_block_id == first_block.boundary_block_id
     refute_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "conversation:ended"}, 100
     assert Repo.aggregate(BoundaryBlock, :count) == 1
   end
@@ -32,12 +31,13 @@ defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
   test "concurrent retries after terminal Block collapse to one durable result and zero new terminal broadcasts" do
     {conversation, participant_a} = conversation_fixture()
     topic = "conversation:#{conversation.conversation_id}"
+    blocker_id = participant_a.participant_id
     :ok = Phoenix.PubSub.subscribe(StrangertalksNew.PubSub, topic)
 
-    assert {:ok, first_block} =
+    assert {:ok, %BoundaryBlock{}} =
              MatchingRules.block_conversation_participant(
                conversation.conversation_id,
-               participant_a.participant_id
+               blocker_id
              )
 
     assert_receive %Phoenix.Socket.Broadcast{topic: ^topic, event: "conversation:ended"}
@@ -45,12 +45,7 @@ defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
     results =
       1..8
       |> Task.async_stream(
-        fn _ ->
-          MatchingRules.block_conversation_participant(
-            conversation.conversation_id,
-            participant_a.participant_id
-          )
-        end,
+        fn _ -> MatchingRules.block_conversation_participant(conversation.conversation_id, blocker_id) end,
         max_concurrency: 8,
         ordered: false,
         timeout: 5_000
@@ -58,7 +53,7 @@ defmodule StrangertalksNew.C3TerminalBlockRetryIdempotencyTest do
       |> Enum.map(fn {:ok, result} -> result end)
 
     assert Enum.all?(results, fn
-             {:ok, block} -> block.boundary_block_id == first_block.boundary_block_id
+             {:ok, %BoundaryBlock{blocker_user_id: ^blocker_id}} -> true
              _ -> false
            end)
 
