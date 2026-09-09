@@ -802,7 +802,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
         {:stop, :unknown_conversation}
 
       %Conversation{conversation_status: status}
-      when status in [:ENDED, :ABANDONED, :FAILED, :COMPLETED] ->
+      when status in @release_terminal_statuses ->
         {:stop, :terminal_conversation}
 
       conversation ->
