@@ -132,7 +132,9 @@ defmodule StrangertalksNew.Hangouts.TelemetryTest do
     assert formed_metadata.experiment_arm == :GROUP_WITH_CONTENT
 
     message_events = events_for(events, [:strangertalks_new, :hangout, :message_accepted])
-    assert Enum.map(message_events, fn {_, measurements, _} -> measurements.message_sequence end) == [1, 2]
+
+    assert Enum.map(message_events, fn {_, measurements, _} -> measurements.message_sequence end) ==
+             [1, 2]
 
     assert {_, ended_measurements, ended_metadata} =
              event!(events, [:strangertalks_new, :hangout, :room_ended])
