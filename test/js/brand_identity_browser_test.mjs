@@ -5,6 +5,7 @@ import {chromium} from "playwright"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
 const OUTPUT_DIR = "tmp/brand-identity-proof"
+const BRAND_COLORS = ["#5b3df6", "#ff6b6b", "#14b8a6", "#f4b942"]
 
 async function proveBrand(browser, name, viewport) {
   const context = await browser.newContext({viewport})
@@ -14,28 +15,33 @@ async function proveBrand(browser, name, viewport) {
     const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
     assert.ok(response?.ok(), `${name}: StrangerTalks root must load`)
 
-    const lockup = page.locator('.site-header .brand img[src="/images/strangertalks-lockup-reversed.svg"]')
-    await lockup.waitFor({state: "visible"})
+    const brand = page.locator(".site-header .brand")
+    const mark = brand.locator('svg[data-brand-mark="strangertalks"]')
+    await mark.waitFor({state: "visible"})
 
-    const identity = await lockup.evaluate(image => ({
-      alt: image.getAttribute("alt"),
-      widthAttribute: image.getAttribute("width"),
-      heightAttribute: image.getAttribute("height"),
-      naturalWidth: image.naturalWidth,
-      naturalHeight: image.naturalHeight,
-      complete: image.complete
+    assert.equal((await brand.innerText()).trim(), "StrangerTalks", `${name}: visible wordmark must be exact`)
+    assert.equal(await page.locator("img").count(), 0, `${name}: app shell must preserve the no-img invariant`)
+
+    const identity = await mark.evaluate(svg => ({
+      widthAttribute: svg.getAttribute("width"),
+      heightAttribute: svg.getAttribute("height"),
+      viewBox: svg.getAttribute("viewBox"),
+      ariaHidden: svg.getAttribute("aria-hidden"),
+      markup: svg.outerHTML.toLowerCase()
     }))
 
-    assert.equal(identity.alt, "StrangerTalks", `${name}: lockup must expose the brand name`)
-    assert.equal(identity.widthAttribute, "110", `${name}: explicit width prevents header layout shift`)
+    assert.equal(identity.widthAttribute, "28", `${name}: explicit width prevents header layout shift`)
     assert.equal(identity.heightAttribute, "28", `${name}: explicit height prevents header layout shift`)
-    assert.equal(identity.complete, true, `${name}: lockup image must complete loading`)
-    assert.ok(identity.naturalWidth > 0 && identity.naturalHeight > 0, `${name}: lockup SVG must decode`)
+    assert.equal(identity.viewBox, "0 0 96 96", `${name}: mark must retain canonical geometry coordinates`)
+    assert.equal(identity.ariaHidden, "true", `${name}: symbol is decorative beside the visible wordmark`)
+    for (const color of BRAND_COLORS) {
+      assert.ok(identity.markup.includes(color), `${name}: inline mark must include ${color}`)
+    }
 
-    const box = await lockup.boundingBox()
-    assert.ok(box, `${name}: lockup must have a rendered box`)
-    assert.ok(box.width > 0 && box.height > 0, `${name}: lockup must render at non-zero size`)
-    assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `${name}: lockup must not clip horizontally`)
+    const box = await brand.boundingBox()
+    assert.ok(box, `${name}: brand lockup must have a rendered box`)
+    assert.ok(box.width > 0 && box.height > 0, `${name}: brand lockup must render at non-zero size`)
+    assert.ok(box.x >= 0 && box.x + box.width <= viewport.width, `${name}: brand lockup must not clip horizontally`)
 
     const faviconHref = await page.locator('link[rel="icon"][type="image/svg+xml"]').getAttribute("href")
     assert.equal(faviconHref, "/images/favicon.svg", `${name}: SVG favicon must be active`)
@@ -61,7 +67,7 @@ async function proveBrand(browser, name, viewport) {
   }
 }
 
-test("brand identity: desktop and mobile app shell render the canonical lockup", async () => {
+test("brand identity: desktop and mobile app shell render the canonical inline mark", async () => {
   await mkdir(OUTPUT_DIR, {recursive: true})
   const browser = await chromium.launch({headless: true})
 
