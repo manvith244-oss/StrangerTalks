@@ -1,0 +1,287 @@
+name: C5 Reattack 535e421
+
+on:
+  push:
+    branches: [evidence/c5-reattack-535e421-2026-09-10]
+
+permissions:
+  contents: read
+
+env:
+  TARGET_SHA: 535e421840c789f5f4025673290f277c0a4a92ea
+  TARGET_TREE: 5ef6b6fd85c4052e183878808748843629de89d0
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: c5owner
+  STRANGERTALKS_LOCAL_DB_PASSWORD: c5proof
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: c5owner
+          POSTGRES_PASSWORD: c5proof
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U c5owner -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ env.TARGET_SHA }}", fetch-depth: 0}
+      - uses: erlef/setup-beam@v1
+        with: {elixir-version: "1.18.4", otp-version: "27.3.4"}
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm}
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13.15"}
+      - name: Exact identity before proof
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+          test -z "$(git status --porcelain)"
+      - name: Install
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+          python -m pip install --upgrade pip
+          python -m pip install -e './services/ai[test]'
+          python -m pip check
+      - name: Static gates
+        run: |
+          mix format --check-formatted
+          mix compile --warnings-as-errors
+          mix deps.unlock --check-unused
+          mix hex.audit
+      - name: Python full maintained suite
+        run: python -m pytest services/ai/tests -q -ra
+      - name: Node maintained contract suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test \
+            test/js/route_contract_test.mjs \
+            test/js/navigation_history_test.mjs \
+            test/js/f06_secondary_flow_test.mjs \
+            test/js/reflections_test.mjs \
+            test/js/f07_loading_transitions_test.mjs \
+            test/js/f09_mobile_flow_test.mjs \
+            test/js/instagram_chat_test.mjs \
+            test/js/f11_persistence_contract_test.mjs \
+            test/js/f11_local_data_integration_test.mjs \
+            test/js/f11_retained_cleanup_guard_test.mjs \
+            test/js/team10_expression_surface_test.mjs \
+            test/js/expressive_media_test.mjs \
+            test/js/normal_media_test.mjs \
+            test/js/voice_notes_test.mjs \
+            test/js/terminal_truth_client_test.mjs \
+            test/js/session_reconciliation_guard_test.mjs \
+            test/js/live_call_test.mjs \
+            test/js/reply_quote_test.mjs \
+            test/js/reaction_test.mjs \
+            test/js/message_edit_test.mjs \
+            test/js/message_unsend_test.mjs \
+            test/js/pin_test.mjs \
+            test/js/companion_test.mjs \
+            test/js/prompt_cards_test.mjs
+          node --import ./test/js/browser_module_harness.mjs --test test/js/view_once_test.mjs
+          mapfile -t tests < <(find test/js -maxdepth 1 -type f \
+            \( -name '*delivery*test.mjs' -o -name '*reconnect*test.mjs' -o -name '*presence*test.mjs' \
+               -o -name '*message*test.mjs' -o -name '*atomic_restore*test.mjs' -o -name '*ephemeral_conversation*test.mjs' \) -print | sort)
+          test "${#tests[@]}" -gt 0
+          node --test "${tests[@]}"
+      - name: Conversation Start exact proof and stress
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          mix test test/strangertalks_new/t02_conversation_start_restart_controls_test.exs test/strangertalks_new/t_a01_002_conversation_start_restart_proof_test.exs
+          for seed in 1 2 3 5 8 13 21 34 55 89; do mix test test/strangertalks_new/t02_conversation_start_restart_controls_test.exs --seed "$seed"; done
+      - name: Backend domain matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tests < <(find test/strangertalks_new test/strangertalks_new_web -type f \
+            \( -name '*match*test.exs' -o -name '*queue*test.exs' -o -name '*conversation*test.exs' \
+               -o -name '*recovery*test.exs' -o -name '*presence*test.exs' -o -name '*participant_channel_test.exs' \
+               -o -name '*session_reconciliation*test.exs' -o -name '*report*test.exs' -o -name '*relationship*test.exs' \
+               -o -name '*safety*test.exs' \) -print | sort)
+          test "${#tests[@]}" -gt 0
+          mix test "${tests[@]}"
+      - name: Full precommit
+        run: mix precommit
+      - name: Tracked diff and final pristine identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -z "$(git diff --name-only)"
+          git reset --hard "$TARGET_SHA"
+          git clean -fdx
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ env.TARGET_SHA }}", fetch-depth: 0}
+      - uses: erlef/setup-beam@v1
+        with: {elixir-version: "1.18.4", otp-version: "27.3.4"}
+      - name: Exact clean identity before build
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+          test -z "$(git status --porcelain)"
+      - name: Production release assembly
+        env: {MIX_ENV: prod}
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --only prod
+          mix compile --warnings-as-errors
+          mix assets.deploy
+          mix release --overwrite
+          test -x _build/prod/rel/strangertalks_new/bin/migrate
+      - name: Docker build
+        run: |
+          docker build --pull -t strangertalks-c5-reattack:${GITHUB_RUN_ID} .
+          test "$(docker inspect --format '{{.Config.User}}' strangertalks-c5-reattack:${GITHUB_RUN_ID})" = "nobody"
+      - name: No tracked product mutation and pristine reset
+        run: |
+          git diff --check
+          test -z "$(git diff --name-only)"
+          git reset --hard "$TARGET_SHA"
+          git clean -fdx
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+
+  browser-reattack:
+    name: Browser reattack ${{ matrix.group }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [composed-e2e, fx07-terminal, f11-hostile, fx05-expression, f03-history, f10-desktop, f04-hostile]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: c5owner
+          POSTGRES_PASSWORD: c5proof
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U c5owner -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      PORT: "4000"
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ env.TARGET_SHA }}", fetch-depth: 0}
+      - uses: erlef/setup-beam@v1
+        with: {elixir-version: "1.18.4", otp-version: "27.3.4"}
+      - uses: actions/setup-node@v4
+        with: {node-version: "22", cache: npm}
+      - name: Exact identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+      - name: Install
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Start local TURN for composed E2E
+        if: ${{ matrix.group == 'composed-e2e' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y coturn
+          sudo systemctl stop coturn 2>/dev/null || true
+          sudo pkill -x turnserver 2>/dev/null || true
+          cat >/tmp/c5-turn.conf <<'EOF'
+          listening-ip=127.0.0.1
+          relay-ip=127.0.0.1
+          listening-port=3478
+          min-port=49160
+          max-port=49200
+          fingerprint
+          use-auth-secret
+          static-auth-secret=team6-test-only-coturn-secret
+          realm=strangertalks.test
+          allow-loopback-peers
+          no-multicast-peers
+          no-cli
+          no-tls
+          no-dtls
+          EOF
+          sudo turnserver -c /tmp/c5-turn.conf >/tmp/c5-turn.log 2>&1 &
+          echo $! >/tmp/c5-turn.pid
+          for _ in $(seq 1 30); do sudo ss -lunp | grep ':3478' | grep -Fq turnserver && exit 0; sleep 1; done
+          cat /tmp/c5-turn.log; exit 1
+      - name: Prepare DB
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start Phoenix with canonical browser-pool shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo) |> Keyword.delete(:pool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' >/tmp/c5-phoenix.log 2>&1 &
+          echo $! >/tmp/c5-phoenix.pid
+          for _ in $(seq 1 60); do
+            curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 && exit 0
+            kill -0 "$(cat /tmp/c5-phoenix.pid)" 2>/dev/null || { cat /tmp/c5-phoenix.log; exit 1; }
+            sleep 1
+          done
+          cat /tmp/c5-phoenix.log; exit 1
+      - name: Run unchanged authority file
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "${{ matrix.group }}" in
+            composed-e2e) node --test --test-concurrency=1 test/js/browser_e2e_test.mjs ;;
+            fx07-terminal) node --test --test-concurrency=1 test/js/terminal_truth_browser_test.mjs ;;
+            f11-hostile) node --test --test-concurrency=1 test/js/f11_browser_hostile_test.mjs ;;
+            fx05-expression) node --test --test-concurrency=1 test/js/fx05_expression_continuity_browser_test.mjs ;;
+            f03-history) node --test --test-concurrency=1 test/js/navigation_history_browser_test.mjs ;;
+            f10-desktop) node --test --test-concurrency=1 test/js/f10_desktop_flow_browser_test.mjs ;;
+            f04-hostile) node --test --test-concurrency=1 test/js/f04_conversation_runtime_hostile_browser_test.mjs ;;
+          esac
+      - name: Cleanup and exact identity
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/c5-phoenix.pid ]; then kill "$(cat /tmp/c5-phoenix.pid)" 2>/dev/null || true; fi
+          if [ -f /tmp/c5-turn.pid ]; then sudo kill "$(cat /tmp/c5-turn.pid)" 2>/dev/null || true; fi
+          git diff --check
+          test -z "$(git diff --name-only)"
+          git reset --hard "$TARGET_SHA"
+          git clean -fdx
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
