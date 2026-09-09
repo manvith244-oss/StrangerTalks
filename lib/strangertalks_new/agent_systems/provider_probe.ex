@@ -1,12 +1,13 @@
 defmodule StrangertalksNew.AgentSystems.ProviderProbe do
   @moduledoc """
-  Opt-in production smoke probe for the bounded Agent provider path.
+  Opt-in release/operator smoke probe for the bounded Agent provider path.
 
-  The probe is disabled by default. When `AGENT_SYSTEMS_PROVIDER_PROBE=true`, application boot
-  performs one synthetic A01 request through generation, critic and moderation before the release
-  is considered healthy. No participant, Conversation, database record or user content is read.
+  The probe is disabled by default. When `AGENT_SYSTEMS_PROVIDER_PROBE=true`, an explicit
+  `run/0` invocation performs one synthetic A01 request through generation, critic and moderation.
+  Normal StrangerTalks application boot does not invoke this probe and does not depend on external
+  Agent-provider health. No participant, Conversation, database record or user content is read.
 
-  Startup logs include only boolean provider-readiness state. Secret values are never logged.
+  Probe logs include only boolean provider-readiness state. Secret values are never logged.
   """
 
   require Logger
