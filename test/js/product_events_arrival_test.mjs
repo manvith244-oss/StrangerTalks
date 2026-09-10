@@ -51,19 +51,22 @@ test("entrance-ready uses only the bounded device-class enum", () => {
 
 test("canonical boot emits entrance-ready only after the actual entrance is made interactive", () => {
   const source = readFileSync(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
-  const start = source.indexOf("function finishBoot(snapshot)")
-  const end = source.indexOf("function armFreshEntranceAfterCancellation()", start)
-  const finishBoot = source.slice(start, end)
+  const finishStart = source.indexOf("function finishBoot(snapshot)")
+  const finishEnd = source.indexOf("function renderBootFailure()", finishStart)
+  const finishBoot = source.slice(finishStart, finishEnd)
+  const helperStart = source.indexOf("function captureCurrentEntrance(")
+  const helperEnd = source.indexOf("function installEntranceAttemptObserver", helperStart)
+  const helper = source.slice(helperStart, helperEnd)
 
-  assert.ok(start >= 0 && end > start, "finishBoot must remain the canonical boot-success boundary")
+  assert.ok(finishStart >= 0 && finishEnd > finishStart, "finishBoot must remain the canonical boot-success boundary")
   const interactiveIndex = finishBoot.indexOf('document.body.classList.remove("flow-booting")')
-  const eventIndex = finishBoot.indexOf("captureEntranceReady(")
+  const entranceIndex = finishBoot.indexOf("captureCurrentEntrance()")
   assert.ok(interactiveIndex >= 0, "finishBoot must make the resolved surface interactive")
-  assert.ok(eventIndex > interactiveIndex, "entrance-ready must be captured after interactivity is restored")
-  assert.equal((finishBoot.match(/captureEntranceReady\(/g) || []).length, 1)
+  assert.ok(entranceIndex > interactiveIndex, "entrance-ready path must run only after interactivity is restored")
   assert.match(
     finishBoot,
-    /if \(resolvedScreen === "doors"\) \{[\s\S]*captureEntranceReady\(/,
+    /if \(resolvedScreen === "doors"\) captureCurrentEntrance\(\)/,
     "restored queue/conversation states must not be counted as a fresh entrance"
   )
+  assert.match(helper, /entranceAttempts\.entranceReady\(/)
 })
