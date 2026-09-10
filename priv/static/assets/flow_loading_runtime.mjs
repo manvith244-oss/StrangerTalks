@@ -1,6 +1,6 @@
 import {Socket} from "/vendor/phoenix.mjs"
 import {FLOW_PHASE, createOperationGuard, loadingPresentation} from "./flow_loading.mjs"
-import {captureEntranceReady, captureFirstMessageAccepted, captureFlowCancelled, productEvents, queueEvents, talkLanguageEvents} from "./product_events.mjs"
+import {captureEntranceReady, captureFlowCancelled, productEvents, queueEvents, talkLanguageEvents} from "./product_events.mjs"
 
 const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"
 const BOOT_WATCHDOG_MS = 15_000
@@ -253,7 +253,7 @@ function withBlockCompletion(push) {
 
 function withFirstMessageAcceptance(push) {
   push.receive("ok", () => {
-    void captureFirstMessageAccepted(productEvents)
+    void queueEvents.firstMessageAccepted()
   })
 }
 
