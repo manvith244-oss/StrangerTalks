@@ -33,7 +33,6 @@ jobs:
       R2_BUCKET: ${{ secrets.R2_BUCKET || vars.R2_BUCKET || secrets.R2_BUCKET_NAME || vars.R2_BUCKET_NAME }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID || vars.R2_ACCESS_KEY_ID || secrets.CLOUDFLARE_R2_ACCESS_KEY_ID || vars.CLOUDFLARE_R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY || vars.R2_SECRET_ACCESS_KEY || secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY || vars.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
-      SUPABASE_CA_URL: https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt
       AWS_DEFAULT_REGION: auto
       AWS_EC2_METADATA_DISABLED: 'true'
     steps:
@@ -69,21 +68,22 @@ jobs:
             exit 2
           fi
 
-      - name: Checkout backup scripts only
+      - name: Checkout exact triggering commit
         uses: actions/checkout@v4
         with:
-          ref: release/prep-2026-08-22
+          ref: ${{ github.sha }}
           fetch-depth: 1
 
-      - name: Prove checkout branch and protected files untouched
+      - name: Prove checkout identity and protected files untouched
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           echo "phase2_checked_out_sha=$(git rev-parse HEAD)"
-          echo "phase2_checked_out_branch=release/prep-2026-08-22"
           git status --porcelain
           test -f ops/postgres_backup.sh
           test -f ops/postgres_restore.sh
+          test -f priv/certs/supabase-prod-ca-2021.crt
 
       - name: Install PostgreSQL 17 client and AWS CLI
         shell: bash
@@ -101,12 +101,17 @@ jobs:
           python3 -m pip install --user --break-system-packages awscli
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Download Supabase root CA
+      - name: Verify bundled Supabase root CA
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --silent --show-error --location "$SUPABASE_CA_URL" -o /tmp/prod-ca-2021.crt
-          openssl x509 -in /tmp/prod-ca-2021.crt -noout -subject -issuer -fingerprint -sha256
+          ca="$GITHUB_WORKSPACE/priv/certs/supabase-prod-ca-2021.crt"
+          test -s "$ca"
+          actual=$(openssl x509 -in "$ca" -outform der | sha256sum | awk '{print toupper($1)}')
+          expected="807025AD50D4ED219D2C9C7D299C004F824EB00CF7F65AFEF607D07B72E6CAFA"
+          test "$actual" = "$expected"
+          openssl x509 -in "$ca" -noout -subject -issuer -fingerprint -sha256
+          echo "PGSSLROOTCERT=$ca" >> "$GITHUB_ENV"
           echo "phase2_supabase_ca_ready=true"
 
       - name: Capture Supabase read-only inventory and create backup
@@ -115,7 +120,6 @@ jobs:
           set -euo pipefail
           export PATH="/usr/lib/postgresql/17/bin:$HOME/.local/bin:$PATH"
           export PGSSLMODE=verify-full
-          export PGSSLROOTCERT=/tmp/prod-ca-2021.crt
           export PGOPTIONS='-c default_transaction_read_only=on'
           echo "phase2_pg_dump_version=$(pg_dump --version)"
           work="$RUNNER_TEMP/phase2"
