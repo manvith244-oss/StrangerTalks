@@ -1,5 +1,8 @@
+import {intentEvents, talkLanguageEvents} from "./product_events.mjs"
+
 const FIRST_MINUTE_FAILURE = "StrangerTalks could not start. Please reload."
 const FIRST_MINUTE_FOCUS_SCREENS = new Set(["doors", "queue", "match", "conversation"])
+const DIRECT_LANGUAGE_KEYS = new Set(["Enter", " ", "ArrowDown", "ArrowUp"])
 
 function appendDescriptionId(element, id) {
   if (!element || !id) return
@@ -45,6 +48,7 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
 
   let joinInFlight = false
   let screenFocusScheduled = false
+  const validLanguageValues = () => Array.from(languageSelect.options).map(({value}) => value).filter(Boolean)
 
   const arrivalLede = doorsScreen.querySelector(":scope > .lede")
   let trustCue = documentRef.querySelector("#arrival-trust-cue")
@@ -125,7 +129,10 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
     const door = event.target.closest?.("button.door")
     if (!door || !doorGrid.contains(door)) return
 
+    void intentEvents.select(door.dataset.door)
+
     if (!languageSelect.value) {
+      void talkLanguageEvents.opened("required_after_intent")
       event.preventDefault()
       event.stopImmediatePropagation()
       setDoorBusy(false)
@@ -145,7 +152,15 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
     setDoorBusy(true)
   }, true)
 
+  languageSelect.addEventListener("pointerdown", () => {
+    void talkLanguageEvents.opened("direct")
+  })
+  languageSelect.addEventListener("keydown", (event) => {
+    if (event.repeat) return
+    if (DIRECT_LANGUAGE_KEYS.has(event.key)) void talkLanguageEvents.opened("direct")
+  })
   languageSelect.addEventListener("change", () => {
+    void talkLanguageEvents.selected(languageSelect.value, validLanguageValues())
     if (languageSelect.value) clearFeedback()
   })
 
