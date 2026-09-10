@@ -41,12 +41,34 @@ test("entrance-ready emits once only when the interactive boundary is explicitly
   }])
 })
 
+test("invalid or manipulated remembered language is not reported as remembered context", async () => {
+  const {events, tracker} = recordingTracker()
+
+  assert.equal(await captureEntranceReady(tracker, {
+    rememberedTalkLanguage: "fr",
+    viewportWidth: 390
+  }), true)
+
+  assert.equal(events[0].properties.remembered_talk_language, false)
+})
+
 test("entrance-ready uses only the bounded device-class enum", () => {
   assert.equal(deviceClassForWidth(390), "mobile")
   assert.equal(deviceClassForWidth(768), "tablet")
   assert.equal(deviceClassForWidth(1024), "desktop")
   assert.equal(deviceClassForWidth(undefined), "unknown")
   assert.equal(deviceClassForWidth(Number.NaN), "unknown")
+})
+
+test("canonical boot passes the remembered language value into the validated readiness boundary", () => {
+  const source = readFileSync(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
+  const helperStart = source.indexOf("function captureCurrentEntrance(")
+  const helperEnd = source.indexOf("function installEntranceAttemptObserver", helperStart)
+  const helper = source.slice(helperStart, helperEnd)
+
+  assert.ok(helperStart >= 0 && helperEnd > helperStart)
+  assert.match(helper, /rememberedTalkLanguage: languageSelect\?\.value \|\| null/)
+  assert.doesNotMatch(helper, /rememberedTalkLanguage: Boolean\(languageSelect\?\.value\)/)
 })
 
 test("canonical boot emits entrance-ready only after the actual entrance is made interactive", () => {
