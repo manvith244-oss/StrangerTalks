@@ -1,0 +1,61 @@
+name: RPR precommit diagnostic
+
+on:
+  push:
+    branches:
+      - release/rpr-public-rpc-default-closure-2026-09-10
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: postgres
+      STRANGERTALKS_LOCAL_DB_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Capture full precommit
+        shell: bash
+        run: |
+          set +e
+          mix precommit > rpr-precommit.log 2>&1
+          code=$?
+          printf '%s\n' "$code" > rpr-precommit-exit.txt
+          tail -n 200 rpr-precommit.log
+          exit 0
+      - name: Upload diagnostic
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpr-precommit-diagnostic-${{ github.sha }}
+          path: |
+            rpr-precommit.log
+            rpr-precommit-exit.txt
+          if-no-files-found: error
