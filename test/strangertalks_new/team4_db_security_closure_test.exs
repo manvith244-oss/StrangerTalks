@@ -124,37 +124,47 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
 
   test "future public functions created by the migration role do not inherit RPC execute authority" do
     current_role = Repo.query!("SELECT current_user").rows |> hd() |> hd()
+    probe_function = "__strangertalks_rpc_default_probe"
 
-    execute_grantees =
-      Repo.query!(
-        """
-        SELECT COALESCE(grantee_role.rolname, 'PUBLIC')
-        FROM pg_roles AS owner_role
-        LEFT JOIN pg_default_acl AS d
-          ON d.defaclrole = owner_role.oid
-         AND d.defaclnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
-         AND d.defaclobjtype = 'f'
-        CROSS JOIN LATERAL aclexplode(
-          COALESCE(d.defaclacl, acldefault('f', owner_role.oid))
-        ) AS acl
-        LEFT JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
-        WHERE owner_role.rolname = $1
-          AND acl.privilege_type = 'EXECUTE'
-        ORDER BY 1
-        """,
-        [current_role]
-      ).rows
-      |> List.flatten()
+    Repo.query!("""
+    CREATE FUNCTION public.#{probe_function}()
+    RETURNS integer
+    LANGUAGE sql
+    AS 'SELECT 1'
+    """)
 
-    assert current_role in execute_grantees,
-           "migration/application owner must retain EXECUTE on future public functions"
+    try do
+      execute_grantees =
+        Repo.query!(
+          """
+          SELECT COALESCE(grantee_role.rolname, 'PUBLIC')
+          FROM pg_proc AS p
+          JOIN pg_namespace AS n ON n.oid = p.pronamespace
+          CROSS JOIN LATERAL aclexplode(
+            COALESCE(p.proacl, acldefault('f', p.proowner))
+          ) AS acl
+          LEFT JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
+          WHERE n.nspname = 'public'
+            AND p.proname = $1
+            AND acl.privilege_type = 'EXECUTE'
+          ORDER BY 1
+          """,
+          [probe_function]
+        ).rows
+        |> List.flatten()
 
-    refute "PUBLIC" in execute_grantees,
-           "future public functions must not inherit EXECUTE for PUBLIC"
+      assert current_role in execute_grantees,
+             "migration/application owner must retain EXECUTE on future public functions"
 
-    for role <- @api_roles do
-      refute role in execute_grantees,
-             "future public functions must not inherit EXECUTE for #{role}"
+      refute "PUBLIC" in execute_grantees,
+             "future public functions must not inherit EXECUTE for PUBLIC"
+
+      for role <- @api_roles do
+        refute role in execute_grantees,
+               "future public functions must not inherit EXECUTE for #{role}"
+      end
+    after
+      Repo.query!("DROP FUNCTION IF EXISTS public.#{probe_function}()")
     end
   end
 
