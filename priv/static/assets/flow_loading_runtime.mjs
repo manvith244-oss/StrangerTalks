@@ -200,6 +200,9 @@ function withQueueCompletion(push, event, payload) {
     const token = queueGuard.begin("session-reconcile")
     push.receive("ok", (result) => {
       if (!queueGuard.current(token)) return
+      if (result?.snapshot?.canonical_state === "CONVERSATION") {
+        void queueEvents.matched()
+      }
       const activeScreen = node("section.screen.active")?.dataset?.screen
       if (activeScreen === "match" || activeScreen === "conversation") return
       if (!applyQueueSnapshot(result?.snapshot)) resetQueuePresentation({retireActive: true})
@@ -255,6 +258,7 @@ function patchParticipantChannel(channel) {
           }
         }
       } else if (event === "match_found") {
+        void queueEvents.matched()
         queueGuard.invalidate()
         retireQueueAttempt()
         renderQueue(FLOW_PHASE.ENTERING_CONVERSATION, {door: selectedDoor})
