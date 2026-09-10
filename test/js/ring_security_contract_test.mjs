@@ -42,7 +42,7 @@ test("Ring accepts only authoritative call state and exposes no amplitude input 
 
   ring.update(
     {status: CALL_STATUS.ACTIVE, selfMuted: false, peerMuted: false},
-    {localEnergy: 1, peerEnergy: 1, reconnecting: true}
+    {localEnergy: 1, peerEnergy: 1, reconnecting: true, hasReactionPulse: true}
   )
 
   assert.equal(element.className, "stranger-call-ring ring-state-active")
@@ -53,7 +53,7 @@ test("Ring accepts only authoritative call state and exposes no amplitude input 
   assert.deepEqual(publicMethods, ["constructor", "destroy", "pulseReaction", "setA11yText", "update"])
 })
 
-test("production browser assets contain no audio-analysis capability that can infer speaking amplitude", () => {
+test("production browser assets contain no amplitude-inference capability", () => {
   const assetsRoot = new URL("../../priv/static/assets/", import.meta.url)
   const files = walkFiles(assetsRoot.pathname)
   const forbiddenCapabilities = [
@@ -62,7 +62,13 @@ test("production browser assets contain no audio-analysis capability that can in
     "getByteFrequencyData(",
     "getByteTimeDomainData(",
     "getFloatFrequencyData(",
-    "getFloatTimeDomainData("
+    "getFloatTimeDomainData(",
+    "audioLevel",
+    "totalAudioEnergy",
+    "AudioWorklet",
+    "audioWorklet",
+    "createScriptProcessor(",
+    "onaudioprocess"
   ]
 
   for (const path of files) {
@@ -71,7 +77,7 @@ test("production browser assets contain no audio-analysis capability that can in
       assert.equal(
         source.includes(capability),
         false,
-        `${path} introduced audio-analysis capability without Ring privacy review: ${capability}`
+        `${path} introduced speaking-amplitude inference without Ring privacy review: ${capability}`
       )
     }
   }
@@ -89,4 +95,17 @@ test("Ring implementation contains no dormant speaking-energy contract", () => {
   ]) {
     assert.equal(source.includes(forbidden), false, `dormant Ring energy seam remains: ${forbidden}`)
   }
+})
+
+test("production Ring wiring passes only coordinator state", () => {
+  const source = readFileSync(new URL("../../priv/static/assets/app.js", import.meta.url), "utf8")
+  assert.match(source, /ring\?\.update\(state\)/)
+  assert.doesNotMatch(source, /ring\?\.update\(state\s*,/)
+})
+
+test("Ring authority gate cannot be bypassed by introducing a new production path", () => {
+  const workflow = readFileSync(new URL("../../.github/workflows/ring-authority-security.yml", import.meta.url), "utf8")
+  assert.match(workflow, /pull_request:\s*\n\s*branches:\s*\n\s*- main/)
+  assert.doesNotMatch(workflow, /^\s*paths:/m)
+  assert.match(workflow, /ring_security_contract_test\.mjs/)
 })
