@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/hangouts-v1
+      - fix/d5-hangouts-durable-interactions-2026-09-11
   pull_request:
     branches:
       - main
@@ -147,6 +148,12 @@ jobs:
         continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/interactions_test.exs
 
+      - name: Hangouts durable interaction contract
+        id: durable-interaction-contract
+        if: ${{ hashFiles('test/strangertalks_new/hangouts/durable_interactions_contract_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/durable_interactions_contract_test.exs
+
       - name: Hangouts safety contract
         id: safety-contract
         if: ${{ hashFiles('test/strangertalks_new/hangouts/safety_test.exs') != '' }}
@@ -221,6 +228,7 @@ jobs:
           if [ "${{ steps.channel-contract.outcome }}" != "skipped" ]; then test "${{ steps.channel-contract.outcome }}" = "success"; fi
           if [ "${{ steps.content-contract.outcome }}" != "skipped" ]; then test "${{ steps.content-contract.outcome }}" = "success"; fi
           if [ "${{ steps.interaction-contract.outcome }}" != "skipped" ]; then test "${{ steps.interaction-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.durable-interaction-contract.outcome }}" != "skipped" ]; then test "${{ steps.durable-interaction-contract.outcome }}" = "success"; fi
           if [ "${{ steps.safety-contract.outcome }}" != "skipped" ]; then test "${{ steps.safety-contract.outcome }}" = "success"; fi
           if [ "${{ steps.telemetry-contract.outcome }}" != "skipped" ]; then test "${{ steps.telemetry-contract.outcome }}" = "success"; fi
           if [ "${{ steps.browser-contract.outcome }}" != "skipped" ]; then test "${{ steps.browser-contract.outcome }}" = "success"; fi
