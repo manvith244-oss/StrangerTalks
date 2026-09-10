@@ -218,7 +218,9 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
         assert owner == creator_role
 
         for role <- existing_roles(@api_roles) do
-          function_execute = has_function_privilege?(role, "public.#{probe_function}()", "EXECUTE")
+          function_execute =
+            has_function_privilege?(role, "public.#{probe_function}()", "EXECUTE")
+
           schema_usage = has_schema_privilege?(role, "USAGE")
 
           refute schema_usage and function_execute,
