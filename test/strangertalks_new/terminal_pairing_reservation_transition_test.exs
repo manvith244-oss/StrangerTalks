@@ -27,23 +27,15 @@ defmodule StrangertalksNew.TerminalPairingReservationTransitionTest do
   test "failed reservation release rolls back the terminal status transition" do
     %{conversation: conversation, match_id: match_id} = pairing_fixture()
 
-    Repo.query!("""
-    CREATE FUNCTION fail_pairing_reservation_release() RETURNS trigger AS $$
-    BEGIN
-      RAISE EXCEPTION 'forced pairing reservation release failure';
-    END;
-    $$ LANGUAGE plpgsql;
-    """)
+    future_acquired_at = DateTime.utc_now() |> DateTime.add(60, :second) |> DateTime.to_naive()
 
-    Repo.query!("""
-    CREATE TRIGGER fail_pairing_reservation_release_trigger
-    BEFORE UPDATE OF released_at ON participant_pairing_reservations
-    FOR EACH ROW
-    WHEN (OLD.released_at IS NULL AND NEW.released_at IS NOT NULL)
-    EXECUTE FUNCTION fail_pairing_reservation_release();
-    """)
+    Repo.query!(
+      "UPDATE participant_pairing_reservations SET acquired_at = $2 WHERE match_id = $1 AND released_at IS NULL",
+      [Ecto.UUID.dump!(match_id), future_acquired_at]
+    )
 
-    assert {:error, %Postgrex.Error{}} = Transitions.transition(conversation, :recovery_timeout)
+    assert {:error, %Postgrex.Error{postgres: %{code: :check_violation}}} =
+             Transitions.transition(conversation, :recovery_timeout)
 
     persisted = Repo.get!(Conversation, conversation.conversation_id)
     assert persisted.conversation_status == :PENDING
