@@ -9,6 +9,7 @@
     <link rel="stylesheet" href="/assets/app.css?v=20260807_v2">
     <link rel="stylesheet" href="/assets/f01_app_shell.css?v=20260828_j2">
     <link rel="stylesheet" href="/assets/expression_surface.css?v=20260824_v2">
+    <link rel="stylesheet" href="/assets/hangouts.css?v=20260910_v1">
     <style id="flow-loading-critical">
       #main { position: relative; }
       #boot-bridge { display: none; }
@@ -39,6 +40,14 @@
       <div id="expressive-composer" class="expressive-composer" hidden><button id="expressive-open" type="button" aria-expanded="false" aria-controls="expressive-picker">Stickers &amp; expressions</button><section id="expressive-picker" class="expressive-picker" role="dialog" aria-label="Stickers and expressions" hidden><div class="expressive-picker-head"><label for="expressive-search">Find an expression</label><input id="expressive-search" type="search" autocomplete="off" maxlength="40"><button id="expressive-close" type="button" aria-label="Close stickers and expressions">Close</button></div><div id="expressive-results" class="expressive-results" role="listbox" aria-label="Expressive media"></div></section></div>
 
       <section data-screen="doors" class="screen active top-level">
+        <div class="hangouts-entry-banner" id="hangout-entry-banner">
+          <div class="hangouts-entry-text">
+            <span class="hangouts-badge">Group Mode</span>
+            <h2>Hang Out</h2>
+            <p>Join a temporary anonymous group for open chat with shared prompts.</p>
+          </div>
+          <button id="btn-enter-hangout" type="button" class="hangouts-entry-button" data-go="hangout-entry">Hang Out →</button>
+        </div>
         <p class="eyebrow">Talk</p><h1>What do you need right now?</h1><p class="lede">Pick what feels closest.</p>
         <div id="doors" class="door-grid"></div>
         <label for="conversation-language">Conversation Language</label><select id="conversation-language"><option value="">Choose a language</option></select>
@@ -131,8 +140,126 @@
       <div id="end-confirmation-backdrop" class="dialog-backdrop" hidden><section id="end-confirmation-dialog" class="end-confirmation-dialog" role="dialog" aria-modal="true" aria-labelledby="end-confirmation-title" aria-describedby="end-confirmation-consequences"><h2 id="end-confirmation-title">End this Conversation?</h2><div id="end-confirmation-consequences"><p>This ends the live temporary Conversation. Its ordinary Conversation history won't remain available as an active chat, and StrangerTalks will remove the server-owned voice-note audio for this Conversation.</p><p>Safety reports are stored separately, and copies already saved on either participant's device can remain.</p></div><div class="dialog-actions"><button id="end-confirm" type="button" class="danger-action">End Conversation</button><button id="end-cancel" type="button">Cancel</button></div></section></div>
       <div id="unsend-confirmation-backdrop" class="dialog-backdrop" hidden><section id="unsend-confirmation-dialog" class="unsend-confirmation-dialog" role="dialog" aria-modal="true" aria-labelledby="unsend-confirmation-title" aria-describedby="unsend-confirmation-consequences"><h2 id="unsend-confirmation-title">Unsend this message?</h2><div id="unsend-confirmation-consequences"><p>It will no longer be available in this StrangerTalks Conversation. The other person may already have seen, copied, or saved it.</p><p>StrangerTalks may temporarily keep a safety copy while this Conversation is active so the message can still be reported. If it is reported, that safety evidence can remain separately.</p></div><div class="dialog-actions"><button id="unsend-confirm" type="button" class="danger-action">Unsend</button><button id="unsend-cancel" type="button">Cancel</button></div></section></div>
       <div id="view-once-viewer-backdrop" class="dialog-backdrop" hidden><section id="view-once-viewer-dialog" class="view-once-viewer-dialog" role="dialog" aria-modal="true" aria-labelledby="view-once-viewer-title"><div class="dialog-heading"><h2 id="view-once-viewer-title">View-Once photo</h2><button id="view-once-viewer-close" type="button" aria-label="Close View-Once photo">Close</button></div><div id="view-once-viewer-container" class="view-once-image-container"></div><p id="view-once-viewer-note" class="view-once-viewer-note">This photo can only be opened once. Closing it closes this view permanently.</p></section></div>
+
+      <!-- Hangouts V1 Screens -->
+      <section data-screen="hangout-entry" class="screen top-level" hidden>
+        <p class="eyebrow">Hang Out</p>
+        <h1>Join a temporary anonymous group</h1>
+        <p class="lede">Drop in for real-time conversation with 3 to 6 people. No profiles, no usernames, completely temporary.</p>
+        <div class="hangout-entry-controls">
+          <label for="hangout-language">Conversation Language</label>
+          <select id="hangout-language">
+            <option value="en">English</option>
+            <option value="es">Español</option>
+            <option value="pt">Português</option>
+            <option value="custom">Custom…</option>
+          </select>
+          <div id="hangout-custom-language-wrap" hidden>
+            <label for="hangout-language-custom">Custom Language Tag</label>
+            <input id="hangout-language-custom" type="text" placeholder="e.g. fr, de, ja, tlh">
+          </div>
+          <button id="hangout-join-queue-btn" type="button" class="primary">Join Hangout</button>
+          <button type="button" class="quiet-action" data-go="doors">Back to Talk</button>
+        </div>
+      </section>
+
+      <section data-screen="hangout-waiting" class="screen focused-screen" aria-busy="true" hidden>
+        <p class="eyebrow">Hang Out</p>
+        <h1>Waiting for group to form…</h1>
+        <p class="lede" id="hangout-waiting-status">Finding 3 to 6 people to join this hangout.</p>
+        <div class="pulse" aria-hidden="true"></div>
+        <button id="hangout-leave-queue-btn" type="button">Leave Queue</button>
+      </section>
+
+      <section data-screen="hangout-room" class="screen hangout-screen focused-screen" hidden>
+        <div id="hangout-reconnecting-banner" class="hangout-reconnecting-banner" role="status" aria-live="assertive" hidden>
+          Connection interrupted. Reconnecting to Hangout…
+        </div>
+        <div class="hangout-head-actions">
+          <div class="hangout-identity">
+            <p class="eyebrow">Temporary Group</p>
+            <h2>Hangout</h2>
+          </div>
+          <div class="hangout-top-controls">
+            <button id="hangout-report-open-btn" type="button" class="quiet-control" aria-label="Report member">Report</button>
+            <button id="hangout-block-open-btn" type="button" class="quiet-control" aria-label="Block member">Block</button>
+            <button id="hangout-leave-room-btn" type="button" class="danger-action">Leave Hangout</button>
+          </div>
+        </div>
+        <div id="hangout-roster" class="hangout-roster" role="group" aria-label="Group members"></div>
+
+        <section id="hangout-stimulus" class="hangout-stimulus-card" aria-label="Shared stimulus" hidden>
+          <p class="eyebrow" id="hangout-stimulus-topic">Shared Topic</p>
+          <h3 id="hangout-stimulus-title"></h3>
+          <p id="hangout-stimulus-text"></p>
+          <div id="hangout-reactions" class="hangout-reactions" role="group" aria-label="Reactions"></div>
+          <button id="hangout-skip-btn" type="button" class="hangout-skip-action">Skip topic (<span id="hangout-skip-count">0</span>/<span id="hangout-skip-required">0</span>)</button>
+        </section>
+
+        <div id="hangout-message-viewport" class="message-viewport" tabindex="0" aria-label="Hangout messages timeline">
+          <ol id="hangout-messages" class="hangout-messages" aria-label="Hangout messages"></ol>
+        </div>
+
+        <form id="hangout-message-form" class="composer">
+          <div class="compose">
+            <textarea id="hangout-message-input" maxlength="4096" required placeholder="Write a message to the group"></textarea>
+            <button id="hangout-send-btn" type="submit" class="primary">Send</button>
+          </div>
+        </form>
+
+        <!-- Safety Report Modal -->
+        <div id="hangout-report-dialog-backdrop" class="dialog-backdrop" hidden>
+          <section class="hangout-safety-dialog" role="dialog" aria-modal="true" aria-labelledby="hangout-report-title">
+            <h2 id="hangout-report-title">Report a member</h2>
+            <p>Target is identified only by their temporary room slot.</p>
+            <label for="hangout-report-target">Member to report</label>
+            <select id="hangout-report-target"></select>
+            <label for="hangout-report-category">Reason</label>
+            <select id="hangout-report-category">
+              <option value="harassment">Harassment</option>
+              <option value="sexual_content">Sexual content</option>
+              <option value="hate">Hate speech</option>
+              <option value="threat">Threats</option>
+              <option value="spam_scam">Spam or scam</option>
+              <option value="personal_information">Personal information</option>
+              <option value="other">Other</option>
+            </select>
+            <label for="hangout-report-evidence">Details (optional)</label>
+            <textarea id="hangout-report-evidence" maxlength="4096" placeholder="Briefly describe what happened"></textarea>
+            <div class="dialog-actions">
+              <button id="hangout-report-submit-btn" type="button" class="primary">Submit report</button>
+              <button id="hangout-report-cancel-btn" type="button">Cancel</button>
+            </div>
+          </section>
+        </div>
+
+        <!-- Safety Block Modal -->
+        <div id="hangout-block-dialog-backdrop" class="dialog-backdrop" hidden>
+          <section class="hangout-safety-dialog" role="dialog" aria-modal="true" aria-labelledby="hangout-block-title">
+            <h2 id="hangout-block-title">Block a member</h2>
+            <p>You won't be grouped with this person in future Hangouts or 1:1 chats. Does not disrupt this current room.</p>
+            <label for="hangout-block-target">Member to block</label>
+            <select id="hangout-block-target"></select>
+            <div class="dialog-actions">
+              <button id="hangout-block-submit-btn" type="button" class="danger-action">Block</button>
+              <button id="hangout-block-cancel-btn" type="button">Cancel</button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section data-screen="hangout-ended" class="screen focused-screen end-screen" hidden>
+        <p class="eyebrow">Hangout ended</p>
+        <h1>This temporary Hangout has ended</h1>
+        <p>Messages and temporary identities from this room have expired.</p>
+        <div class="end-actions">
+          <button id="hangout-ended-new-btn" type="button" class="primary" data-go="hangout-entry">Join another Hangout</button>
+          <button type="button" class="quiet-action" data-go="doors">Back to Talk</button>
+        </div>
+      </section>
     </main>
-    <nav id="bottom-nav" class="bottom-nav" aria-label="Primary"><button data-go="doors">Talk</button><button data-go="chats">Chats</button><button data-go="relationships">Bonds</button><button data-go="settings">You</button></nav>
+    <nav id="bottom-nav" class="bottom-nav" aria-label="Primary"><button data-go="doors">Talk</button><button data-go="hangout-entry">Hang Out</button><button data-go="chats">Chats</button><button data-go="relationships">Bonds</button><button data-go="settings">You</button></nav>
     <script type="module" src="/assets/flow_loading_runtime.mjs?v=20260826_f07_v1"></script>
+    <script type="module" src="/assets/hangouts.mjs?v=20260910_v1"></script>
   </body>
 </html>

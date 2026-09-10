@@ -1,0 +1,245 @@
+/* StrangerTalks Hangouts V1 - Mobile-First Styles */
+
+/* Entry banner on Talk landing */
+.hangouts-entry-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 1.5rem 0;
+  padding: 1rem 1.25rem;
+  background: linear-gradient(135deg, rgba(91, 61, 246, 0.15) 0%, rgba(20, 184, 166, 0.15) 100%);
+  border: 1px solid rgba(91, 61, 246, 0.3);
+  border-radius: 12px;
+}
+
+.hangouts-entry-text h2 {
+  font-size: 1.25rem;
+  margin: 0.25rem 0;
+  color: #fff;
+}
+
+.hangouts-entry-text p {
+  font-size: 0.875rem;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.hangouts-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  background: #5b3df6;
+  color: #fff;
+}
+
+.hangouts-entry-button {
+  padding: 0.6rem 1.2rem;
+  font-weight: 600;
+  border-radius: 8px;
+  background: #5b3df6;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hangouts-entry-button:hover,
+.hangouts-entry-button:focus-visible {
+  background: #4a2ee0;
+}
+
+/* Hangout Screens */
+.hangout-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+  box-sizing: border-box;
+  overflow-x: hidden;
+}
+
+/* Reconnecting banner */
+.hangout-reconnecting-banner {
+  background: #eab308;
+  color: #000;
+  font-weight: 600;
+  font-size: 0.875rem;
+  text-align: center;
+  padding: 0.5rem;
+  border-radius: 6px;
+  margin-bottom: 0.5rem;
+}
+
+/* Roster */
+.hangout-roster {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.hangout-member-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.8125rem;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.hangout-member-badge.self {
+  border: 1px solid rgba(91, 61, 246, 0.6);
+  background: rgba(91, 61, 246, 0.2);
+  font-weight: 600;
+}
+
+.hangout-member-badge.inactive {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+/* Stimulus card */
+.hangout-stimulus-card {
+  margin: 0.75rem 0;
+  padding: 0.875rem 1rem;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border-left: 4px solid #14b8a6;
+}
+
+.hangout-stimulus-card h3 {
+  font-size: 1.1rem;
+  margin: 0.25rem 0;
+  color: #fff;
+}
+
+.hangout-stimulus-card p {
+  font-size: 0.9375rem;
+  margin: 0.25rem 0;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.4;
+}
+
+/* Reactions and Skip */
+.hangout-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.hangout-reaction-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  border-radius: 20px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+
+.hangout-reaction-btn:hover,
+.hangout-reaction-btn:focus-visible {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.hangout-skip-action {
+  margin-top: 0.5rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8125rem;
+  background: transparent;
+  border: 1px dashed rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.hangout-skip-action:hover,
+.hangout-skip-action:focus-visible {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+/* Messages timeline */
+.hangout-messages {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow-y: auto;
+  max-height: 45vh;
+}
+
+.hangout-message {
+  display: flex;
+  flex-direction: column;
+  max-width: 85%;
+  align-self: flex-start;
+  padding: 0.6rem 0.85rem;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  word-break: break-word;
+}
+
+.hangout-message.mine {
+  align-self: flex-end;
+  background: #5b3df6;
+  color: #fff;
+}
+
+.hangout-message-author {
+  font-size: 0.75rem;
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+  opacity: 0.85;
+}
+
+.hangout-message-body {
+  font-size: 0.9375rem;
+  line-height: 1.35;
+}
+
+/* Safety and leave controls */
+.hangout-head-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0;
+}
+
+.hangout-safety-dialog {
+  background: #1e1e24;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  padding: 1.25rem;
+  max-width: 400px;
+  width: 90%;
+  color: #fff;
+}
+
+/* Mobile responsive constraints */
+@media (max-width: 480px) {
+  .hangouts-entry-banner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .hangout-stimulus-card {
+    padding: 0.75rem;
+  }
+
+  .hangout-messages {
+    max-height: 40vh;
+  }
+}
