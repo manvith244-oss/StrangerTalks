@@ -52,7 +52,7 @@ test("entrance-ready uses only the bounded device-class enum", () => {
 test("canonical boot emits entrance-ready only after the actual entrance is made interactive", () => {
   const source = readFileSync(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
   const start = source.indexOf("function finishBoot(snapshot)")
-  const end = source.indexOf("function renderBootFailure()", start)
+  const end = source.indexOf("function armFreshEntranceAfterCancellation()", start)
   const finishBoot = source.slice(start, end)
 
   assert.ok(start >= 0 && end > start, "finishBoot must remain the canonical boot-success boundary")
@@ -63,7 +63,7 @@ test("canonical boot emits entrance-ready only after the actual entrance is made
   assert.equal((finishBoot.match(/captureEntranceReady\(/g) || []).length, 1)
   assert.match(
     finishBoot,
-    /if \(activeScreen === "doors"\) \{[\s\S]*captureEntranceReady\(/,
+    /if \(resolvedScreen === "doors"\) \{[\s\S]*captureEntranceReady\(/,
     "restored queue/conversation states must not be counted as a fresh entrance"
   )
 })
