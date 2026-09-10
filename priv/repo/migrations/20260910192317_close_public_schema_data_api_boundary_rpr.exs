@@ -3,6 +3,7 @@ defmodule StrangertalksNew.Repo.Migrations.ClosePublicSchemaDataApiBoundaryRpr d
 
   @api_roles ~w(anon authenticated service_role)
 
+  # Phoenix connects directly as the database owner; Supabase Data API roles must not traverse public.
   def up do
     execute("REVOKE ALL PRIVILEGES ON SCHEMA public FROM PUBLIC")
 
