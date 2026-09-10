@@ -60,9 +60,9 @@ test("first entrance after booting into a restored non-entrance state gets a fre
 test("runtime tracks screen transitions and starts a new attempt only when Doors becomes active", () => {
   const source = readFileSync(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
 
-  assert.match(source, /createEntranceAttemptCoordinator/)
+  assert.match(source, /entranceAttempts\.entranceReady\(/)
   assert.match(source, /function installEntranceAttemptObserver\(/)
   assert.match(source, /nextScreen === "doors" && previousScreen !== "doors"/)
-  assert.match(source, /entranceAttempts\.entranceReady\([^)]*\{newAttempt: true\}/s)
+  assert.match(source, /captureCurrentEntrance\(\{newAttempt: true\}\)/)
   assert.doesNotMatch(source, /armFreshEntranceAfterCancellation/)
 })
