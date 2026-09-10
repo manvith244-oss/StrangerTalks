@@ -291,7 +291,7 @@ export function deviceClassForWidth(width) {
 
 export function captureEntranceReady(tracker, options = {}) {
   const properties = {
-    remembered_talk_language: Boolean(options.rememberedTalkLanguage),
+    remembered_talk_language: isTalkLanguageCode(options.rememberedTalkLanguage),
     device_class: deviceClassForWidth(options.viewportWidth)
   }
   if (typeof options.buildId === "string" && options.buildId) properties.build_id = options.buildId
