@@ -158,6 +158,13 @@ jobs:
         continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/telemetry_test.exs
 
+      - name: Full precommit regression
+        id: full-precommit
+        continue-on-error: true
+        run: |
+          mix precommit
+          git diff --exit-code
+
       - name: Start Phoenix for Hangouts browser proof
         run: |
           mix run --no-start -e '
@@ -200,13 +207,6 @@ jobs:
           if [ -f /tmp/hangouts-browser.pid ]; then
             kill "$(cat /tmp/hangouts-browser.pid)" 2>/dev/null || true
           fi
-
-      - name: Full precommit regression
-        id: full-precommit
-        continue-on-error: true
-        run: |
-          mix precommit
-          git diff --exit-code
 
       - name: Require Hangouts proofs and precommit
         if: always()

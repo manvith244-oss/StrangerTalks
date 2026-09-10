@@ -121,6 +121,10 @@ if (!BASE_URL) {
           await p.page.click("[data-go='hangout-entry']")
           await p.page.waitForSelector("[data-screen='hangout-entry']:not([hidden])")
           await p.page.click("#hangout-join-queue-btn")
+          await p.page.waitForSelector("[data-screen='hangout-waiting']:not([hidden])")
+        }
+
+        for (const p of [p1, p2, p3]) {
           await p.page.waitForSelector("[data-screen='hangout-room']:not([hidden])", {timeout: TIMEOUT_MS})
         }
 

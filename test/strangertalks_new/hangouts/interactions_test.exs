@@ -4,7 +4,7 @@ defmodule StrangertalksNew.Hangouts.InteractionsTest do
   import Ecto.Query
 
   alias StrangertalksNew.Hangouts
-  alias StrangertalksNew.Hangouts.{HangoutMembership, HangoutRoom, RoomServer}
+  alias StrangertalksNew.Hangouts.{HangoutMembership, RoomServer}
   alias StrangertalksNew.{Participants, Repo}
 
   @pubsub StrangertalksNew.PubSub

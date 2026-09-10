@@ -425,11 +425,24 @@ export function createHangoutClient({
   }
 
   async function joinQueue(languageTag) {
-    const lobby = getLobby()
-    if (!lobby) return
-
     const tag = String(languageTag || "en").trim()
     dispatch({type: "SELECT_LANGUAGE", language_tag: tag})
+    dispatch({type: "QUEUE_ENTER", language_tag: tag})
+
+    let lobby = getLobby()
+    if (!lobby) {
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 100))
+        lobby = getLobby()
+        if (lobby) break
+      }
+    }
+
+    if (!lobby) {
+      dispatch({type: "QUEUE_CANCEL"})
+      if (typeof announce === "function") announce("Could not connect to Hangout service.")
+      return
+    }
 
     lobby.push("queue:join", {language_tag: tag})
       .receive("ok", (reply) => {
@@ -441,6 +454,7 @@ export function createHangoutClient({
       })
       .receive("error", (err) => {
         const reason = err?.reason || "Could not join hangout queue"
+        dispatch({type: "QUEUE_CANCEL"})
         if (typeof announce === "function") announce(reason)
       })
   }
