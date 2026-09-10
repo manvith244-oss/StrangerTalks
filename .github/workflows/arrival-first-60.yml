@@ -99,6 +99,7 @@ jobs:
             test/js/instagram_chat_report_browser_test.mjs
             test/js/navigation_history_browser_test.mjs
             test/js/normal_media_browser_test.mjs
+            test/js/p02_language_queue_lock_browser_test.mjs
             test/js/team10_expression_actions_browser_test.mjs
             test/js/team10_expression_authority_browser_test.mjs
             test/js/team10_expression_browser_test.mjs
@@ -164,6 +165,9 @@ jobs:
           node --test --test-concurrency=1 \
             test/js/arrival_first_minute_browser_test.mjs \
             test/js/arrival_accessibility_browser_test.mjs \
+            test/js/conversation_reliability_browser_test.mjs \
+            test/js/f01_app_shell_browser_test.mjs \
+            test/js/p02_language_queue_lock_browser_test.mjs \
             test/js/team3_conversation_experience_gate_test.mjs \
             test/js/team3_conversation_hostile_test.mjs \
             test/js/browser_e2e_test.mjs
