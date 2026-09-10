@@ -178,7 +178,8 @@ test("runtime milestones are bound to authoritative server outcomes, not optimis
   assert.match(runtime, /queueEvents\.requested\(/)
   assert.match(runtime, /payload\?\.status === "queued"[\s\S]*queueEvents\.joined\(/)
   assert.match(runtime, /event === "match_found"[\s\S]*queueEvents\.matched\(/)
-  assert.match(runtime, /event === "message:send"[\s\S]*push\.receive\("ok"[\s\S]*queueEvents\.firstMessageAccepted\(/)
+  assert.match(runtime, /function withFirstMessageAcceptance\(push\)[\s\S]*push\.receive\("ok"[\s\S]*queueEvents\.firstMessageAccepted\(/)
+  assert.match(runtime, /event === "message:send"\) withFirstMessageAcceptance\(push\)/)
 
   const leaveStart = runtime.indexOf('if (event === "queue:leave")')
   const reconcileStart = runtime.indexOf('if (event === "session:reconcile")', leaveStart)
