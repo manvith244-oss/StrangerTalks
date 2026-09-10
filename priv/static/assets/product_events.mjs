@@ -12,6 +12,7 @@ const EVENT_PROPERTIES = Object.freeze({
 })
 
 const TALK_LANGUAGE_OPEN_TRIGGERS = new Set(["direct", "required_after_intent"])
+const FLOW_CANCELLATIONS = new Set(["queue:user_requested"])
 
 export const PRODUCT_EVENT_NAMES = Object.freeze(Object.keys(EVENT_PROPERTIES))
 
@@ -35,6 +36,15 @@ function sanitizeEvent(name, properties, flowAttemptId, testTraffic) {
   }
 
   return {name, properties: sanitized}
+}
+
+function createFlowSynchronizer(tracker, resetState) {
+  let flowAttemptId = tracker.flowAttemptId
+  return () => {
+    if (flowAttemptId === tracker.flowAttemptId) return
+    flowAttemptId = tracker.flowAttemptId
+    resetState()
+  }
 }
 
 export function createProductEventTracker(options = {}) {
@@ -81,9 +91,14 @@ export function createProductEventTracker(options = {}) {
 export function createIntentSelectionObserver(tracker) {
   let selectedIntent = null
   let queueAdmitted = false
+  const syncFlow = createFlowSynchronizer(tracker, () => {
+    selectedIntent = null
+    queueAdmitted = false
+  })
 
   return {
     async select(intentValue) {
+      syncFlow()
       if (queueAdmitted || typeof intentValue !== "string" || !intentValue) return false
       if (intentValue === selectedIntent) return false
 
@@ -104,6 +119,7 @@ export function createIntentSelectionObserver(tracker) {
       })
     },
     markQueueAdmitted() {
+      syncFlow()
       queueAdmitted = true
     }
   }
@@ -118,13 +134,19 @@ function validLanguageCode(languageCode, validLanguages) {
 export function createTalkLanguageObserver(tracker) {
   let currentLanguage = null
   let rememberedRecorded = false
+  const syncFlow = createFlowSynchronizer(tracker, () => {
+    currentLanguage = null
+    rememberedRecorded = false
+  })
 
   return {
     opened(trigger) {
+      syncFlow()
       if (!TALK_LANGUAGE_OPEN_TRIGGERS.has(trigger)) return Promise.resolve(false)
       return tracker.capture("st_talk_language_opened", {trigger})
     },
     async remembered(languageCode, validLanguages) {
+      syncFlow()
       if (!validLanguageCode(languageCode, validLanguages)) return false
       if (rememberedRecorded && currentLanguage === languageCode) return false
       currentLanguage = languageCode
@@ -135,6 +157,7 @@ export function createTalkLanguageObserver(tracker) {
       })
     },
     async selected(languageCode, validLanguages) {
+      syncFlow()
       if (!validLanguageCode(languageCode, validLanguages)) return false
       if (currentLanguage === languageCode) return false
       const source = currentLanguage ? "changed" : "new"
@@ -150,9 +173,14 @@ export function createTalkLanguageObserver(tracker) {
 export function createQueueEventObserver(tracker) {
   let intentCode = null
   let interactionLanguage = null
+  const syncFlow = createFlowSynchronizer(tracker, () => {
+    intentCode = null
+    interactionLanguage = null
+  })
 
   return {
     requested(nextIntentCode, nextInteractionLanguage) {
+      syncFlow()
       if (typeof nextIntentCode !== "string" || !nextIntentCode) return Promise.resolve(false)
       if (typeof nextInteractionLanguage !== "string" || !nextInteractionLanguage) return Promise.resolve(false)
       intentCode = nextIntentCode
@@ -163,10 +191,12 @@ export function createQueueEventObserver(tracker) {
       })
     },
     admitted() {
+      syncFlow()
       if (!intentCode || !interactionLanguage) return Promise.resolve(false)
       return tracker.captureOnce("st_queue_admitted", {intent_code: intentCode})
     },
     matched() {
+      syncFlow()
       if (!intentCode || !interactionLanguage) return Promise.resolve(false)
       return tracker.captureOnce("st_match_created", {intent_code: intentCode})
     }
@@ -175,6 +205,19 @@ export function createQueueEventObserver(tracker) {
 
 export function captureFirstMessageAccepted(tracker) {
   return tracker.captureOnce("st_first_message_accepted")
+}
+
+export function captureFlowCancelled(tracker, options = {}) {
+  const stage = options.stage
+  const reasonCode = options.reasonCode
+  if (!FLOW_CANCELLATIONS.has(`${stage}:${reasonCode}`)) return Promise.resolve(false)
+
+  const captured = tracker.captureOnce("st_flow_cancelled", {
+    stage,
+    reason_code: reasonCode
+  })
+  tracker.resetFlow()
+  return captured
 }
 
 export function deviceClassForWidth(width) {
