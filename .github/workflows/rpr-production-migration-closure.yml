@@ -1,0 +1,270 @@
+name: RPR Production Migration Closure
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/rpr-production-migration-closure.yml
+      - .github/workflows/postgres-r2-backup.yml
+      - priv/repo/migrations/**
+      - test/strangertalks_new/team4_db_security_closure_test.exs
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type APPLY_STRANGERTALKS_PRODUCTION_MIGRATIONS
+        required: true
+        type: string
+      expected_main_sha:
+        description: Exact canonical main SHA approved for production migration
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rpr-production-migration-closure
+  cancel-in-progress: false
+
+env:
+  EXPECTED_PRODUCTION_HEAD: "20260821191324"
+  EXPECTED_REPOSITORY_HEAD: "20260910192317"
+
+jobs:
+  upgrade-rehearsal:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      PGPASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Prove checkout identity and repository migration head
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          repo_latest=$(find priv/repo/migrations -maxdepth 1 -type f -name '*.exs' -printf '%f\n' \
+            | sed -n 's/^\([0-9]\{14\}\)_.*/\1/p' | sort | tail -1)
+          test "$repo_latest" = "$EXPECTED_REPOSITORY_HEAD"
+          echo "REHEARSAL_COMMIT=$(git rev-parse HEAD)"
+          echo "REPOSITORY_MIGRATION_HEAD=$repo_latest"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex Rebar and dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Create Supabase-like roles
+        run: |
+          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_admin') THEN CREATE ROLE supabase_admin NOLOGIN; END IF;
+          END
+          $$;
+          GRANT CREATE, USAGE ON SCHEMA public TO supabase_admin;
+          SQL
+
+      - name: Reconstruct current production migration head
+        run: |
+          set -euo pipefail
+          mix ecto.migrate --to "$EXPECTED_PRODUCTION_HEAD"
+          actual=$(psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -Atc 'SELECT max(version) FROM schema_migrations')
+          test "$actual" = "$EXPECTED_PRODUCTION_HEAD"
+          echo "REHEARSAL_PRODUCTION_HEAD=$actual"
+
+      - name: Inject current Supabase-like insecure Data API ACL state
+        run: |
+          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+          GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+          GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC, anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC, anon, authenticated, service_role;
+          SQL
+
+      - name: Prove hostile pre-state is actually exposed
+        run: |
+          set -euo pipefail
+          for role in anon authenticated service_role; do
+            psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -Atc "SELECT has_schema_privilege('$role','public','USAGE')" | grep -qx t
+            psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -Atc "SELECT has_table_privilege('$role','public.participants','SELECT')" | grep -qx t
+          done
+
+      - name: Apply exact pending canonical migration chain
+        run: |
+          set -euo pipefail
+          mix ecto.migrate
+          actual=$(psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -Atc 'SELECT max(version) FROM schema_migrations')
+          test "$actual" = "$EXPECTED_REPOSITORY_HEAD"
+          echo "REHEARSAL_FINAL_HEAD=$actual"
+
+      - name: Prove post-upgrade database security contract
+        run: |
+          mix test test/strangertalks_new/team4_db_security_closure_test.exs
+          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE app_count integer; bad_rls integer; api_grants integer; role_name text;
+          BEGIN
+            SELECT count(*) INTO app_count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations';
+            IF app_count <> 30 THEN RAISE EXCEPTION 'expected 30 application tables after upgrade, got %', app_count; END IF;
+            SELECT count(*) INTO bad_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations' AND NOT c.relrowsecurity;
+            IF bad_rls <> 0 THEN RAISE EXCEPTION 'application tables without RLS after upgrade: %', bad_rls; END IF;
+            FOREACH role_name IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+              IF has_schema_privilege(role_name, 'public', 'USAGE') OR has_schema_privilege(role_name, 'public', 'CREATE') THEN RAISE EXCEPTION '% retains public schema authority', role_name; END IF;
+            END LOOP;
+            SELECT count(*) INTO api_grants FROM information_schema.table_privileges WHERE table_schema = 'public' AND grantee IN ('anon','authenticated','service_role');
+            IF api_grants <> 0 THEN RAISE EXCEPTION 'Data API table grants remain after upgrade: %', api_grants; END IF;
+          END
+          $$;
+          SQL
+
+      - name: Final exact-head and clean-tree proof
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -z "$(git status --porcelain)"
+          echo "RPR_REHEARSAL_PROVEN_SHA=$(git rev-parse HEAD)"
+
+  backup-before-live-migration:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm == 'APPLY_STRANGERTALKS_PRODUCTION_MIGRATIONS' }}
+    uses: ./.github/workflows/postgres-r2-backup.yml
+    secrets: inherit
+
+  migrate-production:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm == 'APPLY_STRANGERTALKS_PRODUCTION_MIGRATIONS' }}
+    needs: backup-before-live-migration
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: prod
+      DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || vars.SUPABASE_DATABASE_URL }}
+      SECRET_KEY_BASE: rpr-migration-only-not-used-for-serving
+      PHX_HOST: strangertalks-phoenix.onrender.com
+
+    steps:
+      - name: Checkout exact approved main
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Fail closed unless dispatch authority is exact
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "${{ inputs.confirm }}" = "APPLY_STRANGERTALKS_PRODUCTION_MIGRATIONS"
+          test "${{ inputs.expected_main_sha }}" = "$GITHUB_SHA"
+          git fetch origin main
+          test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
+          repo_latest=$(find priv/repo/migrations -maxdepth 1 -type f -name '*.exs' -printf '%f\n' | sed -n 's/^\([0-9]\{14\}\)_.*/\1/p' | sort | tail -1)
+          test "$repo_latest" = "$EXPECTED_REPOSITORY_HEAD"
+          test -n "$DATABASE_URL"
+          echo "APPROVED_MAIN_SHA=$GITHUB_SHA"
+          echo "APPROVED_MIGRATION_HEAD=$repo_latest"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install PostgreSQL client and BEAM dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --only prod
+
+      - name: Configure verified Supabase TLS
+        run: |
+          set -euo pipefail
+          ca="$GITHUB_WORKSPACE/priv/certs/supabase-prod-ca-2021.crt"
+          test -s "$ca"
+          actual=$(openssl x509 -in "$ca" -outform der | sha256sum | awk '{print toupper($1)}')
+          expected="807025AD50D4ED219D2C9C7D299C004F824EB00CF7F65AFEF607D07B72E6CAFA"
+          test "$actual" = "$expected"
+          echo "DB_CA_CERT_FILE=$ca" >> "$GITHUB_ENV"
+          echo "PGSSLMODE=verify-full" >> "$GITHUB_ENV"
+          echo "PGSSLROOTCERT=$ca" >> "$GITHUB_ENV"
+
+      - name: Production preflight — exact head and integrity only
+        run: |
+          set -euo pipefail
+          actual=$(psql "$DATABASE_URL" -Atc 'SELECT max(version) FROM public.schema_migrations')
+          test "$actual" = "$EXPECTED_PRODUCTION_HEAD"
+          violations=$(psql "$DATABASE_URL" -Atc "SELECT (SELECT count(*) FROM public.matches WHERE participant_a_id = participant_b_id) + (SELECT count(*) FROM public.conversations WHERE participant_a_id = participant_b_id) + (SELECT count(*) FROM public.relationships WHERE participant_a_id = participant_b_id) + (SELECT count(*) FROM public.conversations c JOIN public.matches m ON m.match_id = c.match_id WHERE c.participant_a_id IS DISTINCT FROM m.participant_a_id OR c.participant_b_id IS DISTINCT FROM m.participant_b_id)")
+          test "$violations" = "0"
+          echo "PRODUCTION_PREFLIGHT_HEAD=$actual"
+          echo "PRODUCTION_PREFLIGHT_INTEGRITY_VIOLATIONS=$violations"
+
+      - name: Apply all pending canonical migrations
+        run: |
+          set -euo pipefail
+          mix ecto.migrate
+
+      - name: Production postflight — exact migration and security state
+        run: |
+          set -euo pipefail
+          actual=$(psql "$DATABASE_URL" -Atc 'SELECT max(version) FROM public.schema_migrations')
+          test "$actual" = "$EXPECTED_REPOSITORY_HEAD"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE app_count integer; bad_rls integer; api_grants integer; role_name text;
+          BEGIN
+            SELECT count(*) INTO app_count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations';
+            IF app_count <> 30 THEN RAISE EXCEPTION 'expected 30 application tables after production migration, got %', app_count; END IF;
+            SELECT count(*) INTO bad_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations' AND NOT c.relrowsecurity;
+            IF bad_rls <> 0 THEN RAISE EXCEPTION 'application tables without RLS after production migration: %', bad_rls; END IF;
+            FOREACH role_name IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+              IF has_schema_privilege(role_name, 'public', 'USAGE') OR has_schema_privilege(role_name, 'public', 'CREATE') THEN RAISE EXCEPTION '% retains public schema authority', role_name; END IF;
+            END LOOP;
+            SELECT count(*) INTO api_grants FROM information_schema.table_privileges WHERE table_schema = 'public' AND grantee IN ('anon','authenticated','service_role');
+            IF api_grants <> 0 THEN RAISE EXCEPTION 'Data API table grants remain after production migration: %', api_grants; END IF;
+          END
+          $$;
+          SQL
+          echo "PRODUCTION_MIGRATION_HEAD=$actual"
+          echo "RPR_PRODUCTION_DATABASE_CLOSURE=PASS"
+
+      - name: Final repository identity proof
+        if: ${{ always() }}
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain)"
+          echo "RPR_PRODUCTION_RUNNER_SHA=$(git rev-parse HEAD)"
