@@ -40,6 +40,18 @@ test("queue request is distinct from authoritative join", async () => {
   })
 })
 
+test("invalid request context is rejected without poisoning later authoritative correlation", async () => {
+  const {events, observer} = setup()
+
+  assert.equal(await observer.requested("INVENTED_DOOR", "en"), false)
+  assert.equal(await observer.requested("EXPLORE", "fr"), false)
+  assert.equal(await observer.joined(), false)
+
+  assert.equal(await observer.requested("EXPLORE", "en"), true)
+  assert.equal(await observer.joined(), true)
+  assert.deepEqual(events.map(({name}) => name), ["st_queue_requested", "st_queue_joined"])
+})
+
 test("join cannot be manufactured without a request in the same flow", async () => {
   const {events, observer} = setup()
 
