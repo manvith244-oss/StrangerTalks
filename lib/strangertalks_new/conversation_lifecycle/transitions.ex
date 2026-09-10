@@ -231,29 +231,39 @@ defmodule StrangertalksNew.ConversationLifecycle.Transitions do
           current.conversation_id == ^conv.conversation_id and
             current.conversation_status == ^expected_status
 
+    result =
+      if terminal?(target_status) do
+        Repo.transaction(fn ->
+          case persist_update(query, changeset, conv, event) do
+            {:ok, updated} ->
+              case release_pairing_reservations(updated) do
+                :ok -> updated
+                {:error, reason} -> Repo.rollback(reason)
+              end
+
+            {:error, reason} ->
+              Repo.rollback(reason)
+          end
+        end)
+      else
+        persist_update(query, changeset, conv, event)
+      end
+
+    case result do
+      {:ok, %Conversation{} = updated} ->
+        emit_committed_transition(updated, expected_status, target_status, event)
+        {:ok, updated}
+
+      {:error, reason} ->
+        emit_terminal_persistence_failure(target_status, event, reason)
+        {:error, reason}
+    end
+  end
+
+  defp persist_update(query, changeset, conv, event) do
     case Repo.update_all(query, set: Map.to_list(changeset.changes)) do
       {1, _} ->
-        updated = Repo.get!(Conversation, conv.conversation_id)
-
-        StrangertalksNew.Telemetry.execute(
-          [:conversation, :transitioned],
-          %{count: 1},
-          %{
-            from_status: expected_status,
-            to_status: target_status,
-            lifecycle_event: event
-          }
-        )
-
-        if terminal?(target_status) and updated.ending_type != :BLOCK do
-          StrangertalksNew.Telemetry.execute(
-            [:terminal, :durable_commit],
-            %{count: 1},
-            %{terminal_status: target_status, lifecycle_event: event}
-          )
-        end
-
-        {:ok, updated}
+        {:ok, Repo.get!(Conversation, conv.conversation_id)}
 
       {0, _} ->
         case Repo.get(Conversation, conv.conversation_id) do
@@ -263,6 +273,46 @@ defmodule StrangertalksNew.ConversationLifecycle.Transitions do
           %Conversation{conversation_status: canonical_status} ->
             {:error, {:invalid_transition, canonical_status, event}}
         end
+    end
+  end
+
+  defp release_pairing_reservations(%Conversation{match_id: match_id, ended_at: ended_at}) do
+    released_at = ended_at || DateTime.utc_now()
+
+    with {:ok, dumped_match_id} <- Ecto.UUID.dump(match_id),
+         {:ok, _result} <-
+           Repo.query(
+             """
+             UPDATE participant_pairing_reservations
+             SET released_at = $2
+             WHERE match_id = $1 AND released_at IS NULL
+             """,
+             [dumped_match_id, DateTime.to_naive(released_at)]
+           ) do
+      :ok
+    else
+      :error -> {:error, :invalid_match_id}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp emit_committed_transition(updated, expected_status, target_status, event) do
+    StrangertalksNew.Telemetry.execute(
+      [:conversation, :transitioned],
+      %{count: 1},
+      %{
+        from_status: expected_status,
+        to_status: target_status,
+        lifecycle_event: event
+      }
+    )
+
+    if terminal?(target_status) and updated.ending_type != :BLOCK do
+      StrangertalksNew.Telemetry.execute(
+        [:terminal, :durable_commit],
+        %{count: 1},
+        %{terminal_status: target_status, lifecycle_event: event}
+      )
     end
   end
 end
