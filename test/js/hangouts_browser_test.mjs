@@ -93,13 +93,13 @@ if (!BASE_URL) {
         await p1.page.waitForSelector("#hangout-report-dialog-backdrop:not([hidden])")
         await p1.page.fill("#hangout-report-evidence", "Testing safety report in e2e")
         await p1.page.click("#hangout-report-submit-btn")
-        await p1.page.waitForSelector("#hangout-report-dialog-backdrop[hidden]")
+        await p1.page.waitForSelector("#hangout-report-dialog-backdrop", {state: "hidden"})
 
         // Block
         await p1.page.click("#hangout-block-open-btn")
         await p1.page.waitForSelector("#hangout-block-dialog-backdrop:not([hidden])")
         await p1.page.click("#hangout-block-submit-btn")
-        await p1.page.waitForSelector("#hangout-block-dialog-backdrop[hidden]")
+        await p1.page.waitForSelector("#hangout-block-dialog-backdrop", {state: "hidden"})
 
         // Flow 7: Leave
         await p3.page.click("#hangout-leave-room-btn")
