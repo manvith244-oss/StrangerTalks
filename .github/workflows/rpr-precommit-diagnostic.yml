@@ -49,6 +49,11 @@ jobs:
           mix precommit > rpr-precommit.log 2>&1
           code=$?
           printf '%s\n' "$code" > rpr-precommit-exit.txt
+          git diff -- test/strangertalks_new/team4_db_security_closure_test.exs \
+            priv/repo/migrations/20260910110008_harden_public_rpc_defaults_rpr.exs \
+            > rpr-format.patch
+          cp test/strangertalks_new/team4_db_security_closure_test.exs team4-formatted.exs
+          cp priv/repo/migrations/20260910110008_harden_public_rpc_defaults_rpr.exs rpr-migration-formatted.exs
           tail -n 200 rpr-precommit.log
           exit 0
       - name: Upload diagnostic
@@ -58,4 +63,7 @@ jobs:
           path: |
             rpr-precommit.log
             rpr-precommit-exit.txt
+            rpr-format.patch
+            team4-formatted.exs
+            rpr-migration-formatted.exs
           if-no-files-found: error
