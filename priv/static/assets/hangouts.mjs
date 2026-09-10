@@ -489,16 +489,38 @@ export function createHangoutClient({
       dispatch({type: "MESSAGE_ACCEPTED", message: payload})
     })
 
+    roomChannel.on("message:new", (payload) => {
+      dispatch({type: "MESSAGE_ACCEPTED", message: payload})
+    })
+
     roomChannel.on("content:activated", (payload) => {
-      dispatch({type: "CONTENT_ACTIVATED", content: payload?.content})
+      dispatch({type: "CONTENT_ACTIVATED", content: payload?.content || payload})
+    })
+
+    roomChannel.on("content:changed", (payload) => {
+      dispatch({type: "CONTENT_ADVANCED", content: payload?.content || payload})
     })
 
     roomChannel.on("content:advanced", (payload) => {
-      dispatch({type: "CONTENT_ADVANCED", content: payload?.content})
+      dispatch({type: "CONTENT_ADVANCED", content: payload?.content || payload})
+    })
+
+    roomChannel.on("reaction:updated", (payload) => {
+      dispatch({type: "REACTIONS_UPDATED", reactions: payload?.reactions || payload?.counts})
     })
 
     roomChannel.on("reaction:added", (payload) => {
-      dispatch({type: "REACTIONS_UPDATED", reactions: payload?.reactions})
+      dispatch({type: "REACTIONS_UPDATED", reactions: payload?.reactions || payload?.counts})
+    })
+
+    roomChannel.on("skip:updated", (payload) => {
+      dispatch({
+        type: "SKIP_UPDATED",
+        skip_status: {
+          votes: payload?.votes,
+          required: payload?.required_votes ?? payload?.required
+        }
+      })
     })
 
     roomChannel.on("content:skip_voted", (payload) => {
@@ -674,14 +696,36 @@ export function setupHangoutsBrowser() {
   }
 
   const messageForm = document.getElementById("hangout-message-form")
+  const messageInput = document.getElementById("hangout-message-input")
+  const sendBtn = document.getElementById("hangout-send-btn")
+
+  function submitHangoutMessage() {
+    const body = messageInput?.value?.trim()
+    if (body) {
+      client.sendMessage(body)
+      if (messageInput) messageInput.value = ""
+    }
+  }
+
   if (messageForm) {
     messageForm.addEventListener("submit", (e) => {
       e.preventDefault()
-      const input = document.getElementById("hangout-message-input")
-      const body = input?.value?.trim()
-      if (body) {
-        client.sendMessage(body)
-        if (input) input.value = ""
+      submitHangoutMessage()
+    })
+  }
+
+  if (sendBtn) {
+    sendBtn.addEventListener("click", (e) => {
+      e.preventDefault()
+      submitHangoutMessage()
+    })
+  }
+
+  if (messageInput) {
+    messageInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault()
+        submitHangoutMessage()
       }
     })
   }
