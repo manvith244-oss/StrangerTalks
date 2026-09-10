@@ -676,7 +676,7 @@ test("REACTION-12: Zero persistent storage (pure ephemeral in-RAM events)", () =
 })
 
 // ============================================================================
-// 1Q-DELIGHT-02: StrangerTalks Ring (RING-1 through RING-12)
+// StrangerTalks Ring: state-only presentation contract
 // ============================================================================
 
 function createMockElement() {
@@ -699,102 +699,76 @@ function createMockElement() {
 test("RING-1: Ring initializes in idle state when call is idle", () => {
   const el = createMockElement()
   const ring = new StrangerTalksRing(el)
-
-  ring.update({ status: CALL_STATUS.IDLE })
+  ring.update({status: CALL_STATUS.IDLE})
   assert.equal(el.className, "stranger-call-ring ring-state-idle")
 })
 
-test("RING-2: Ring reflects calling/connecting state during call setup", () => {
+test("RING-2: Ring reflects connecting state", () => {
   const el = createMockElement()
   const ring = new StrangerTalksRing(el)
-
-  ring.update({ status: CALL_STATUS.CONNECTING, selfMuted: false, peerMuted: false })
+  ring.update({status: CALL_STATUS.CONNECTING, selfMuted: false, peerMuted: false})
   assert.equal(el.className, "stranger-call-ring ring-state-calling")
 })
 
-test("RING-3: Ring reflects active call state when call becomes ACTIVE", () => {
+test("RING-3: Ring reflects active call state", () => {
   const el = createMockElement()
   const ring = new StrangerTalksRing(el)
-
-  ring.update({ status: CALL_STATUS.ACTIVE, selfMuted: false, peerMuted: false })
-  assert.ok(el.className.includes("ring-state-active"))
+  ring.update({status: CALL_STATUS.ACTIVE, selfMuted: false, peerMuted: false})
+  assert.equal(el.className, "stranger-call-ring ring-state-active")
 })
 
-test("RING-4: Muted microphone truthfully sets ring-state-muted on Ring", () => {
+test("RING-4: local mute is presented without inferring speech", () => {
   const el = createMockElement()
   const ring = new StrangerTalksRing(el)
-
-  ring.update({ status: CALL_STATUS.ACTIVE, selfMuted: true, peerMuted: false })
+  ring.update({status: CALL_STATUS.ACTIVE, selfMuted: true, peerMuted: false})
   assert.ok(el.className.includes("ring-state-muted"))
 })
 
-test("RING-5: Local audio energy derivation forces 0.0 when muted (cannot imply speech)", () => {
+test("RING-5: peer mute is presented without inferring speech", () => {
   const el = createMockElement()
   const ring = new StrangerTalksRing(el)
-
-  ring.update({ status: CALL_STATUS.ACTIVE, selfMuted: true, peerMuted: false }, { localEnergy: 0.8 })
-  assert.equal(el.style.getPropertyValue("--ring-local-energy"), "0.00")
-  assert.ok(!el.className.includes("ring-state-self-speaking"))
+  ring.update({status: CALL_STATUS.ACTIVE, selfMuted: false, peerMuted: true})
+  assert.ok(el.className.includes("ring-state-peer-muted"))
 })
 
-test("RING-6: Active speaking with microphone unmuted applies speaking animation/energy", () => {
+test("RING-6: untrusted second argument cannot create Ring state", () => {
   const el = createMockElement()
   const ring = new StrangerTalksRing(el)
-
-  ring.update({ status: CALL_STATUS.ACTIVE, selfMuted: false, peerMuted: false }, { localEnergy: 0.75 })
-  assert.equal(el.style.getPropertyValue("--ring-local-energy"), "0.75")
-  assert.ok(el.className.includes("ring-state-self-speaking"))
+  ring.update(
+    {status: CALL_STATUS.ACTIVE, selfMuted: false, peerMuted: false},
+    {localEnergy: 1, peerEnergy: 1, reconnecting: true, hasReactionPulse: true}
+  )
+  assert.equal(el.className, "stranger-call-ring ring-state-active")
+  assert.equal(el.style.getPropertyValue("--ring-local-energy"), undefined)
+  assert.equal(el.style.getPropertyValue("--ring-peer-energy"), undefined)
 })
 
-test("RING-7: Remote speaking applies peer speaking visual on Ring", () => {
+test("RING-7: reaction pulse is an explicit ephemeral presentation action", () => {
   const el = createMockElement()
   const ring = new StrangerTalksRing(el)
-
-  ring.update({ status: CALL_STATUS.ACTIVE, selfMuted: false, peerMuted: false }, { peerEnergy: 0.6 })
-  assert.equal(el.style.getPropertyValue("--ring-peer-energy"), "0.60")
-  assert.ok(el.className.includes("ring-state-peer-speaking"))
-})
-
-test("RING-8: Ephemeral reaction arrival triggers transient ring pulse", () => {
-  const el = createMockElement()
-  const ring = new StrangerTalksRing(el)
-
   ring.pulseReaction()
   assert.ok(el.classList.contains("ring-reaction-pulse"))
 })
 
-test("RING-9: Reconnecting state is truthfully reflected on Ring", () => {
+test("RING-8: terminal state wins", () => {
   const el = createMockElement()
   const ring = new StrangerTalksRing(el)
-
-  ring.update({ status: CALL_STATUS.ACTIVE, selfMuted: false, peerMuted: false }, { reconnecting: true })
-  assert.equal(el.className, "stranger-call-ring ring-state-reconnecting")
-})
-
-test("RING-10: Terminal state immediately overrides active/energy/reaction states", () => {
-  const el = createMockElement()
-  const ring = new StrangerTalksRing(el)
-
-  ring.update({ status: CALL_STATUS.TERMINAL, selfMuted: false, peerMuted: false }, { localEnergy: 0.9, reconnecting: true })
+  ring.update({status: CALL_STATUS.TERMINAL, selfMuted: false, peerMuted: false})
   assert.equal(el.className, "stranger-call-ring ring-state-idle")
 })
 
-test("RING-11: Accessibility status text is updated for screen readers", () => {
+test("RING-9: accessibility status reflects authoritative state", () => {
   const el = createMockElement()
-  const a11y = { textContent: "" }
+  const a11y = {textContent: ""}
   const ring = new StrangerTalksRing(el, a11y)
-
-  ring.update({ status: CALL_STATUS.ACTIVE, selfMuted: false, peerMuted: false })
+  ring.update({status: CALL_STATUS.ACTIVE, selfMuted: false, peerMuted: false})
   assert.equal(a11y.textContent, "Call Active")
-
-  ring.update({ status: CALL_STATUS.ACTIVE, selfMuted: true, peerMuted: false })
+  ring.update({status: CALL_STATUS.ACTIVE, selfMuted: true, peerMuted: false})
   assert.equal(a11y.textContent, "Call Active, Microphone Muted")
 })
 
-test("RING-12: Ring has zero server state and zero DB state (pure browser derivation)", () => {
-  const el = createMockElement()
-  const ring = new StrangerTalksRing(el)
-
+test("RING-10: Ring has zero server or DB state", () => {
+  const ring = new StrangerTalksRing(createMockElement())
   assert.equal(ring.serverSynchronized, undefined)
   assert.equal(ring.databaseRecord, undefined)
 })
