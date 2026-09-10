@@ -1,0 +1,48 @@
+name: Product Event Integrity V2
+
+on:
+  push:
+    branches:
+      - convergence/product-events-v3-main-2026-09-11
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact source SHA to test; defaults to the workflow ref SHA
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-events-v2-${{ github.event_name == 'workflow_dispatch' && inputs.target_sha != '' && inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  product-events:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.target_sha != '' && inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+      - name: Prove checkout identity
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Run product-event contract
+        run: node --test test/js/product_events_contract_test.mjs
+      - name: Final exact-SHA and clean-tree proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git diff --check
+          test -z "$(git status --porcelain)"

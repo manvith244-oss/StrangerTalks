@@ -1,5 +1,6 @@
 import {Socket} from "/vendor/phoenix.mjs"
 import {FLOW_PHASE, createOperationGuard, loadingPresentation} from "./flow_loading.mjs"
+import {captureFlowCancelled, entranceAttempts, intentEvents, productEvents, queueEvents, talkLanguageEvents} from "./product_events.mjs"
 
 const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"
 const BOOT_WATCHDOG_MS = 15_000
@@ -11,8 +12,10 @@ let currentQueuePhase = FLOW_PHASE.MATCHMAKING_ADMISSION
 let selectedDoor = null
 let bootWatchdog = null
 let startupFailureObserver = null
+let entranceAttemptObserver = null
 
 function node(selector) { return document.querySelector(selector) }
+function activeScreen() { return node("section.screen.active")?.dataset?.screen || null }
 
 function announcePhase(message) {
   const status = node("#queue-phase-status")
@@ -83,16 +86,51 @@ function stopBootWatchers() {
   startupFailureObserver = null
 }
 
+function languageValues(select) {
+  return Array.from(select?.options || []).map(({value}) => value).filter(Boolean)
+}
+
+function captureCurrentEntrance({newAttempt = false} = {}) {
+  const languageSelect = node("#conversation-language")
+  void entranceAttempts.entranceReady({
+    rememberedTalkLanguage: languageSelect?.value || null,
+    viewportWidth: globalThis.innerWidth
+  }, {newAttempt})
+  if (languageSelect?.value) {
+    void talkLanguageEvents.remembered(languageSelect.value, languageValues(languageSelect))
+  }
+}
+
+function installEntranceAttemptObserver(initialScreen) {
+  if (entranceAttemptObserver || typeof MutationObserver === "undefined") return
+  let previousScreen = initialScreen
+
+  entranceAttemptObserver = new MutationObserver(() => {
+    const nextScreen = activeScreen()
+    if (!nextScreen || nextScreen === previousScreen) return
+    if (nextScreen === "doors" && previousScreen !== "doors") {
+      captureCurrentEntrance({newAttempt: true})
+    }
+    previousScreen = nextScreen
+  })
+
+  document.querySelectorAll("[data-screen]").forEach((screen) => {
+    entranceAttemptObserver.observe(screen, {attributes: true, attributeFilter: ["class"]})
+  })
+}
+
 function finishBoot(snapshot) {
   stopBootWatchers()
-  const activeScreen = node("section.screen.active")?.dataset?.screen
-  if (activeScreen === "queue") applyQueueSnapshot(snapshot)
+  const resolvedScreen = activeScreen()
+  if (resolvedScreen === "queue") applyQueueSnapshot(snapshot)
   const bridge = node("#boot-bridge")
   if (bridge) {
     bridge.hidden = true
     bridge.setAttribute("aria-busy", "false")
   }
   document.body.classList.remove("flow-booting")
+  if (resolvedScreen === "doors") captureCurrentEntrance()
+  installEntranceAttemptObserver(resolvedScreen)
 }
 
 function renderBootFailure() {
@@ -129,11 +167,8 @@ function installBootWatchers() {
 }
 
 function settleAdmissionFailure() {
-  if (activeQueueAttemptId) {
-    renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
-  } else {
-    resetQueuePresentation()
-  }
+  if (activeQueueAttemptId) renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
+  else resetQueuePresentation()
 }
 
 function withQueueCompletion(push, event, payload) {
@@ -166,6 +201,7 @@ function withQueueCompletion(push, event, payload) {
     push.receive("ok", (result) => {
       if (!queueGuard.current(token)) return
       if (result?.status === "left") {
+        void captureFlowCancelled(productEvents, {stage: "queue", reasonCode: "user_requested"})
         retireQueueAttempt(leavingQueueAttemptId)
         renderQueue(FLOW_PHASE.MATCHMAKING_CANCELLED, {door: selectedDoor})
       }
@@ -185,8 +221,8 @@ function withQueueCompletion(push, event, payload) {
     const token = queueGuard.begin("session-reconcile")
     push.receive("ok", (result) => {
       if (!queueGuard.current(token)) return
-      const activeScreen = node("section.screen.active")?.dataset?.screen
-      if (activeScreen === "match" || activeScreen === "conversation") return
+      const resolvedScreen = activeScreen()
+      if (resolvedScreen === "match" || resolvedScreen === "conversation") return
       if (!applyQueueSnapshot(result?.snapshot)) resetQueuePresentation({retireActive: true})
     })
   }
@@ -207,12 +243,17 @@ function withBlockCompletion(push) {
   push.receive("timeout", restore)
 }
 
+function withFirstMessageAcceptance(push) {
+  push.receive("ok", () => { void queueEvents.firstMessageAccepted() })
+}
+
 function patchParticipantChannel(channel) {
   if (channel.__f07ParticipantPatched) return channel
   channel.__f07ParticipantPatched = true
 
   const originalPush = channel.push.bind(channel)
   channel.push = function(event, payload = {}, timeout) {
+    if (event === "queue:join") void queueEvents.requested(payload?.door_type, payload?.conversation_language)
     const push = originalPush(event, payload, timeout)
     withQueueCompletion(push, event, payload)
     return push
@@ -228,6 +269,8 @@ function patchParticipantChannel(channel) {
             activeQueueAttemptId = payload.queue_attempt_id
             renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
           }
+          void queueEvents.joined()
+          intentEvents.markQueueJoined()
         } else if (["left", "timed_out"].includes(payload?.status)) {
           if (!payload?.queue_attempt_id) return
           if (payload.queue_attempt_id === activeQueueAttemptId) {
@@ -236,6 +279,7 @@ function patchParticipantChannel(channel) {
           }
         }
       } else if (event === "match_found") {
+        void queueEvents.matched()
         queueGuard.invalidate()
         retireQueueAttempt()
         renderQueue(FLOW_PHASE.ENTERING_CONVERSATION, {door: selectedDoor})
@@ -256,20 +300,14 @@ function patchParticipantChannel(channel) {
     push.receive = function(status, callback) {
       if (status === "ok") {
         return originalReceive(status, async (payload) => {
-          try {
-            return await callback(payload)
-          } finally {
-            finishBoot(payload?.snapshot)
-          }
+          try { return await callback(payload) }
+          finally { finishBoot(payload?.snapshot) }
         })
       }
       if (status === "error") {
         return originalReceive(status, async (payload) => {
-          try {
-            return await callback(payload)
-          } finally {
-            renderBootFailure()
-          }
+          try { return await callback(payload) }
+          finally { renderBootFailure() }
         })
       }
       return originalReceive(status, callback)
@@ -286,6 +324,7 @@ function patchConversationChannel(channel) {
   const originalPush = channel.push.bind(channel)
   channel.push = function(event, payload = {}, timeout) {
     const push = originalPush(event, payload, timeout)
+    if (event === "message:send") withFirstMessageAcceptance(push)
     if (event === "conversation:block") withBlockCompletion(push)
     return push
   }
