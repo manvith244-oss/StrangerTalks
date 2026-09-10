@@ -60,7 +60,7 @@ defmodule StrangertalksNew.PublicRpcEffectiveAuthorityTest do
   defp has_function_execute?(role) do
     [[allowed]] =
       Repo.query!(
-        "SELECT has_function_privilege($1, $2, 'EXECUTE')",
+        "SELECT has_function_privilege($1::name, $2::text, 'EXECUTE')",
         [role, @probe]
       ).rows
 
