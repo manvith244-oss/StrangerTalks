@@ -221,7 +221,6 @@ function withQueueCompletion(push, event, payload) {
     const token = queueGuard.begin("session-reconcile")
     push.receive("ok", (result) => {
       if (!queueGuard.current(token)) return
-      if (result?.snapshot?.canonical_state === "CONVERSATION") void queueEvents.matched()
       const resolvedScreen = activeScreen()
       if (resolvedScreen === "match" || resolvedScreen === "conversation") return
       if (!applyQueueSnapshot(result?.snapshot)) resetQueuePresentation({retireActive: true})
