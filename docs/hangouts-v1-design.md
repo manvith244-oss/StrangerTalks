@@ -28,6 +28,7 @@ Hangouts tests whether small groups of anonymous strangers talk more readily and
 7. Phoenix synchronizes room state (`content_id`, sequence, state timestamps, reactions/votes/messages); media bytes are not carried as synchronized room state.
 8. Reporting in Hangouts is a separate Hangout safety path. Existing `Report` is conversation-FK-required and must not be overloaded.
 9. V1 launch policy remains 18+ unless owner/legal authority changes it.
+10. Hangout presence is server/process-owned. Clients do not author presence truth or heartbeat authority.
 
 ## V1 architecture
 
@@ -53,7 +54,9 @@ No table creates a follower/profile/creator relationship.
 - `TemporaryIdentity` — deterministic room-scoped identity-slot allocation from a fixed non-personal vocabulary; identities are persisted only with the room membership.
 - `ContentCatalog` — first-party curated content seed/catalog, language metadata extensible, deterministic feed selection for V1.
 - `RoomServer` — one process per active Hangout, authoritative state machine and monotonically increasing message/content sequence.
-- Dedicated `HangoutRegistry` and `HangoutDynamicSupervisor` supervised by the application.
+- Dedicated Hangout Registry and RoomSupervisor supervised by the application.
+- `PresenceAuthority` plus duplicate `PresenceRegistry` — server-owned channel-lifetime authority for overlapping/replacement connections.
+- `TransportSupervisor` — a `rest_for_one` boundary coupling PresenceRegistry and Phoenix Endpoint so live sockets cannot survive loss of their presence registrations.
 
 ### Matchmaking
 
@@ -65,14 +68,24 @@ Add `channel "hangout:*", StrangertalksNewWeb.HangoutChannel` to the authenticat
 
 Join authorization requires the socket participant to have an active membership for the requested room. Server replies include room lifecycle state, the caller's temporary identity, current members, authoritative current content and latest message/content sequence.
 
+Presence authority follows server process lifetime:
+
+- each joined channel registers its own server-generated lease under room+participant before durable reconnect;
+- multiple simultaneous tabs/replacement channels are represented independently;
+- termination removes only that channel's registration and marks durable membership disconnected only when no other live channel remains;
+- explicit `room:leave` records deliberate leave rather than transport disconnect;
+- client join parameters cannot provide a lease or heartbeat claim;
+- reconnect always begins from authoritative room state;
+- PresenceRegistry failure restarts the Phoenix transport so sockets cannot outlive lost registrations.
+
 Client events:
 
 - `message:send`
 - `reaction:add`
 - `content:skip_vote`
-- `presence:heartbeat`
 - `room:leave`
-- `report:submit`
+- `safety:report`
+- `safety:block`
 
 Server broadcasts:
 
@@ -84,8 +97,6 @@ Server broadcasts:
 - `content:changed`
 - `skip:updated`
 - `room:ended`
-
-Reconnect always begins from an authoritative snapshot, never a client timer.
 
 ### Shared-content progression
 
@@ -104,6 +115,8 @@ For the first implementation, deterministic curated sequencing is preferred over
 - Report categories reuse policy vocabulary where appropriate but persistence is Hangouts-owned because the existing report schema requires a 1:1 conversation FK.
 - Client-visible temporary identity never exposes participant IDs.
 - Analytics use room/content/aggregate event dimensions and participant counts; no extra public identity fields.
+- Ring is presentation-only and may reflect authoritative call lifecycle/mute state; it has no speaking-amplitude or audio-energy authority.
+- See `docs/ring-presence-security-model.md` for the reconstructed current presence/Ring threat model and admission proof.
 
 ### Experiment arms
 
@@ -125,10 +138,11 @@ Hangouts runtime lives in focused JS/CSS modules and reuses the established part
 1. Schema/changeset invariants for room membership, identities, messages and reports.
 2. Context transaction tests for room formation, join/leave, message ordering, content sequence, skip quorum and report authorization.
 3. RoomServer concurrency/reconnect snapshot tests.
-4. Channel authorization and event tests.
-5. JS contract tests for state reconciliation and mobile-safe DOM behavior.
-6. Existing regression via `mix precommit` plus JS tests required by the Hangouts workflow.
-7. Final candidate rebased/merged against fresh canonical main before admission.
+4. Channel authorization/event tests plus hostile overlapping-channel presence proof.
+5. Ring security contract proving state-only inputs, no speaking-amplitude inference seam, and path-independent CI coverage.
+6. JS contract tests for state reconciliation and mobile-safe DOM behavior.
+7. Existing regression via `mix precommit` plus JS tests required by the Hangouts workflow.
+8. Final candidate rebased/merged against fresh canonical main before admission.
 
 ## Delivery sequence
 
