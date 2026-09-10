@@ -299,7 +299,7 @@ defmodule StrangertalksNew.Hangouts.InteractionsTest do
            }
   end
 
-  test "RoomServer restart preserves durable content but intentionally clears ephemeral interactions" do
+  test "RoomServer restart reconstructs durable reactions and skip-vote progress" do
     {room, [first, second | _]} = active_room!(3)
     assert {:ok, pid} = RoomServer.ensure_started(room.room_id)
     assert {:ok, current} = RoomServer.current_content(room.room_id)
@@ -333,14 +333,14 @@ defmodule StrangertalksNew.Hangouts.InteractionsTest do
                "fire"
              )
 
-    assert rebuilt_reaction.counts == %{"fire" => 1}
+    assert rebuilt_reaction.counts == %{"fire" => 1, "laugh" => 1}
 
     assert {:ok, rebuilt_skip} =
              RoomServer.vote_skip(room.room_id, second.participant_id, current.sequence)
 
-    assert rebuilt_skip.advanced == false
-    assert rebuilt_skip.votes == 1
-    assert rebuilt_skip.required_votes == 2
+    assert rebuilt_skip.advanced == true
+    assert rebuilt_skip.previous_content_sequence == current.sequence
+    assert rebuilt_skip.content.sequence == current.sequence + 1
   end
 
   test "skip quorum ratio is configurable and invalid configuration is rejected" do
