@@ -12,6 +12,10 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     conversations
     google_account_links
     google_oauth_attempts
+    hangout_memberships
+    hangout_messages
+    hangout_reports
+    hangout_rooms
     learning_records
     matches
     memories

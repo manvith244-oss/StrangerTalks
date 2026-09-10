@@ -15,6 +15,9 @@ defmodule StrangertalksNew.Application do
       {Registry, keys: :unique, name: StrangertalksNew.DistributedRegistry},
       {DynamicSupervisor,
        strategy: :one_for_one, name: StrangertalksNew.ConversationDynamicSupervisor},
+      {Registry, keys: :unique, name: StrangertalksNew.Hangouts.Registry},
+      StrangertalksNew.Hangouts.RoomSupervisor,
+      StrangertalksNew.Hangouts.Matcher,
       StrangertalksNew.ConversationLifecycle.TerminalObserver,
       StrangertalksNew.ConversationLifecycle.VoiceNoteStore,
       StrangertalksNew.ConversationLifecycle.ViewOnceMediaStore,
@@ -35,7 +38,7 @@ defmodule StrangertalksNew.Application do
       StrangertalksNewWeb.Endpoint
     ]
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
+    # See https://hexdocs.pm/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: StrangertalksNew.Supervisor]
     Supervisor.start_link(children, opts)

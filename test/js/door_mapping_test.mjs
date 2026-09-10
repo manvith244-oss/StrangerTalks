@@ -13,6 +13,13 @@ test("every visible Door maps to its locked canonical backend value", () => {
   assert.equal(doorLabelForBackend("EXPLORE"), "Advice")
 })
 
+test("Hang Out stays outside the canonical pair-matching Door taxonomy", () => {
+  assert.equal(DOORS.length, 4)
+  assert.equal(backendDoorFor("Hang Out"), null)
+  assert.equal(doorLabelForBackend("HANGOUTS"), null)
+  assert.equal(queuePayloadFor("Hang Out", "en"), null)
+})
+
 test("unmapped labels cannot produce a queue value", () => {
   assert.equal(backendDoorFor("Something invented"), null)
   assert.equal(doorLabelForBackend("UNKNOWN"), null)

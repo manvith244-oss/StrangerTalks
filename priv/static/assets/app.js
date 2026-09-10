@@ -113,6 +113,7 @@ const app = {
   reportReturnFocus: null,
   liveCall: null
 }
+window.app = app
 const $ = (selector) => document.querySelector(selector)
 const now = () => new Date().toISOString()
 

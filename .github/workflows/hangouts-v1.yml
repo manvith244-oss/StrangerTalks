@@ -1,0 +1,227 @@
+name: Hangouts V1 Proof
+
+on:
+  push:
+    branches:
+      - feature/hangouts-v1
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "docs/hangouts-v1-design.md"
+      - "docs/superpowers/plans/2026-09-10-hangouts-v1.md"
+      - "lib/strangertalks_new/hangouts.ex"
+      - "lib/strangertalks_new/hangouts/**"
+      - "lib/strangertalks_new/application.ex"
+      - "lib/strangertalks_new_web/hangout_channel.ex"
+      - "lib/strangertalks_new_web/hangout_lobby_channel.ex"
+      - "lib/strangertalks_new_web/user_socket.ex"
+      - "priv/repo/migrations/*hangout*"
+      - "priv/static/index.html"
+      - "priv/static/assets/hangouts.mjs"
+      - "priv/static/assets/hangouts.css"
+      - "priv/static/assets/app.js"
+      - "test/strangertalks_new/hangouts/**"
+      - "test/strangertalks_new/team4_db_security_closure_test.exs"
+      - "test/strangertalks_new_web/hangout_channel_test.exs"
+      - "test/strangertalks_new_web/hangout_lobby_channel_test.exs"
+      - "test/js/door_mapping_test.mjs"
+      - "test/js/hangouts_contract_test.mjs"
+      - "test/js/hangouts_browser_test.mjs"
+      - ".github/workflows/hangouts-v1.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: hangouts-v1-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  hangouts-proof:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4002"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
+
+    steps:
+      - name: Checkout exact Hangouts commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove checkout identity
+        run: |
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "EXPECTED_HANGOUTS_COMMIT=$expected"
+          echo "ACTUAL_HANGOUTS_COMMIT=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$expected"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Hangouts domain contract
+        id: domain-contract
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/domain_contract_test.exs
+
+      - name: Hangouts context contract
+        id: context-contract
+        if: ${{ hashFiles('test/strangertalks_new/hangouts/context_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/context_test.exs
+
+      - name: Canonical Team-4 DB security closure
+        id: db-security-contract
+        continue-on-error: true
+        run: mix test test/strangertalks_new/team4_db_security_closure_test.exs
+
+      - name: Hangouts room authority contract
+        id: room-contract
+        if: ${{ hashFiles('test/strangertalks_new/hangouts/room_server_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/room_server_test.exs
+
+      - name: Hangouts matcher contract
+        id: matcher-contract
+        if: ${{ hashFiles('test/strangertalks_new/hangouts/matcher_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/matcher_test.exs
+
+      - name: Hangouts channel contract
+        id: channel-contract
+        if: ${{ hashFiles('test/strangertalks_new_web/hangout_channel_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new_web/hangout_channel_test.exs test/strangertalks_new_web/hangout_lobby_channel_test.exs
+
+      - name: Hangouts shared-content contract
+        id: content-contract
+        if: ${{ hashFiles('test/strangertalks_new/hangouts/shared_content_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/shared_content_test.exs
+
+      - name: Hangouts interaction contract
+        id: interaction-contract
+        if: ${{ hashFiles('test/strangertalks_new/hangouts/interactions_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/interactions_test.exs
+
+      - name: Hangouts safety contract
+        id: safety-contract
+        if: ${{ hashFiles('test/strangertalks_new/hangouts/safety_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/safety_test.exs
+
+      - name: Hangouts telemetry contract
+        id: telemetry-contract
+        if: ${{ hashFiles('test/strangertalks_new/hangouts/telemetry_test.exs') != '' }}
+        continue-on-error: true
+        run: mix test test/strangertalks_new/hangouts/telemetry_test.exs
+
+      - name: Full precommit regression
+        id: full-precommit
+        continue-on-error: true
+        run: |
+          mix precommit
+          git diff --exit-code
+
+      - name: Start Phoenix for Hangouts browser proof
+        run: |
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/hangouts-browser.log 2>&1 &
+          echo $! > /tmp/hangouts-browser.pid
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$(cat /tmp/hangouts-browser.pid)" 2>/dev/null; then
+              echo "Phoenix exited before becoming ready."
+              cat /tmp/hangouts-browser.log
+              exit 1
+            fi
+            if curl -fsS http://localhost:4002/ >/dev/null; then
+              echo "Phoenix Hangouts browser endpoint is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Phoenix did not become ready."
+          cat /tmp/hangouts-browser.log
+          exit 1
+
+      - name: Hangouts browser contract
+        id: browser-contract
+        if: ${{ hashFiles('test/js/hangouts_contract_test.mjs') != '' }}
+        continue-on-error: true
+        run: |
+          node --test test/js/door_mapping_test.mjs
+          node --test test/js/hangouts_contract_test.mjs
+          node --test --test-concurrency=1 test/js/hangouts_browser_test.mjs
+
+      - name: Stop Phoenix browser server
+        if: always()
+        run: |
+          if [ -f /tmp/hangouts-browser.pid ]; then
+            kill "$(cat /tmp/hangouts-browser.pid)" 2>/dev/null || true
+          fi
+
+      - name: Require Hangouts proofs and precommit
+        if: always()
+        run: |
+          test "${{ steps.domain-contract.outcome }}" = "success"
+          if [ "${{ steps.context-contract.outcome }}" != "skipped" ]; then test "${{ steps.context-contract.outcome }}" = "success"; fi
+          test "${{ steps.db-security-contract.outcome }}" = "success"
+          if [ "${{ steps.room-contract.outcome }}" != "skipped" ]; then test "${{ steps.room-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.matcher-contract.outcome }}" != "skipped" ]; then test "${{ steps.matcher-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.channel-contract.outcome }}" != "skipped" ]; then test "${{ steps.channel-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.content-contract.outcome }}" != "skipped" ]; then test "${{ steps.content-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.interaction-contract.outcome }}" != "skipped" ]; then test "${{ steps.interaction-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.safety-contract.outcome }}" != "skipped" ]; then test "${{ steps.safety-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.telemetry-contract.outcome }}" != "skipped" ]; then test "${{ steps.telemetry-contract.outcome }}" = "success"; fi
+          if [ "${{ steps.browser-contract.outcome }}" != "skipped" ]; then test "${{ steps.browser-contract.outcome }}" = "success"; fi
+          test "${{ steps.full-precommit.outcome }}" = "success"
