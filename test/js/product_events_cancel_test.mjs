@@ -84,3 +84,11 @@ test("runtime emits cancellation only after server confirms queue leave", () => 
   assert.ok(cancelIndex < errorIndex, "error handler must not emit cancellation")
   assert.ok(cancelIndex < timeoutIndex, "timeout handler must not emit cancellation")
 })
+
+test("confirmed cancellation re-arms entrance-ready only after canonical state returns to Doors", () => {
+  const source = readFileSync(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
+
+  assert.match(source, /pendingFreshEntranceAfterCancellation = true/)
+  assert.match(source, /freshEntranceAfterCallback = pendingFreshEntranceAfterCancellation/)
+  assert.match(source, /queueMicrotask\(\(\) => \{[\s\S]*activeScreen === "doors"[\s\S]*captureEntranceReady\(productEvents/)
+})
