@@ -24,13 +24,14 @@ test("creates a fresh flow_attempt_id from an injectable UUID source", () => {
   assert.equal(tracker.flowAttemptId, "flow-2")
 })
 
-test("accepts only allowlisted product event names", async () => {
+test("accepts only the frozen allowlisted product event names", async () => {
   const {events, sink} = recordingSink()
   const tracker = createProductEventTracker({uuid: () => "flow-1", sink})
 
   assert.ok(PRODUCT_EVENT_NAMES.includes("st_entrance_ready"))
   assert.ok(PRODUCT_EVENT_NAMES.includes("st_queue_requested"))
-  assert.ok(PRODUCT_EVENT_NAMES.includes("st_queue_admitted"))
+  assert.ok(PRODUCT_EVENT_NAMES.includes("st_queue_joined"))
+  assert.equal(PRODUCT_EVENT_NAMES.includes("st_queue_admitted"), false)
   assert.ok(PRODUCT_EVENT_NAMES.includes("st_match_created"))
   assert.ok(PRODUCT_EVENT_NAMES.includes("st_first_message_accepted"))
 
