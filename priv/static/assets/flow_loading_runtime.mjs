@@ -1,6 +1,6 @@
 import {Socket} from "/vendor/phoenix.mjs"
 import {FLOW_PHASE, createOperationGuard, loadingPresentation} from "./flow_loading.mjs"
-import {captureEntranceReady, productEvents, queueEvents, talkLanguageEvents} from "./product_events.mjs"
+import {captureEntranceReady, captureFirstMessageAccepted, productEvents, queueEvents, talkLanguageEvents} from "./product_events.mjs"
 
 const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"
 const BOOT_WATCHDOG_MS = 15_000
@@ -225,6 +225,12 @@ function withBlockCompletion(push) {
   push.receive("timeout", restore)
 }
 
+function withFirstMessageAcceptance(push) {
+  push.receive("ok", () => {
+    void captureFirstMessageAccepted(productEvents)
+  })
+}
+
 function patchParticipantChannel(channel) {
   if (channel.__f07ParticipantPatched) return channel
   channel.__f07ParticipantPatched = true
@@ -309,6 +315,7 @@ function patchConversationChannel(channel) {
   const originalPush = channel.push.bind(channel)
   channel.push = function(event, payload = {}, timeout) {
     const push = originalPush(event, payload, timeout)
+    if (event === "message:send") withFirstMessageAcceptance(push)
     if (event === "conversation:block") withBlockCompletion(push)
     return push
   }
