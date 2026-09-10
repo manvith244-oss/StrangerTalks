@@ -281,7 +281,7 @@ function patchParticipantChannel(channel) {
             activeQueueAttemptId = payload.queue_attempt_id
             renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
           }
-          void queueEvents.admitted()
+          void queueEvents.joined()
         } else if (["left", "timed_out"].includes(payload?.status)) {
           if (!payload?.queue_attempt_id) return
           if (payload.queue_attempt_id === activeQueueAttemptId) {
