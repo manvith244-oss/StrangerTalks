@@ -165,6 +165,10 @@ export function createQueueEventObserver(tracker) {
     admitted() {
       if (!intentCode || !interactionLanguage) return Promise.resolve(false)
       return tracker.captureOnce("st_queue_admitted", {intent_code: intentCode})
+    },
+    matched() {
+      if (!intentCode || !interactionLanguage) return Promise.resolve(false)
+      return tracker.captureOnce("st_match_created", {intent_code: intentCode})
     }
   }
 }
