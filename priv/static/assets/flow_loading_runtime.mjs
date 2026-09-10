@@ -1,6 +1,6 @@
 import {Socket} from "/vendor/phoenix.mjs"
 import {FLOW_PHASE, createOperationGuard, loadingPresentation} from "./flow_loading.mjs"
-import {captureEntranceReady, captureFirstMessageAccepted, productEvents, queueEvents, talkLanguageEvents} from "./product_events.mjs"
+import {captureEntranceReady, captureFirstMessageAccepted, captureFlowCancelled, productEvents, queueEvents, talkLanguageEvents} from "./product_events.mjs"
 
 const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"
 const BOOT_WATCHDOG_MS = 15_000
@@ -14,6 +14,7 @@ let bootWatchdog = null
 let startupFailureObserver = null
 
 function node(selector) { return document.querySelector(selector) }
+function activeScreen() { return node("section.screen.active")?.dataset?.screen || null }
 
 function announcePhase(message) {
   const status = node("#queue-phase-status")
@@ -90,15 +91,15 @@ function languageValues(select) {
 
 function finishBoot(snapshot) {
   stopBootWatchers()
-  const activeScreen = node("section.screen.active")?.dataset?.screen
-  if (activeScreen === "queue") applyQueueSnapshot(snapshot)
+  const resolvedScreen = activeScreen()
+  if (resolvedScreen === "queue") applyQueueSnapshot(snapshot)
   const bridge = node("#boot-bridge")
   if (bridge) {
     bridge.hidden = true
     bridge.setAttribute("aria-busy", "false")
   }
   document.body.classList.remove("flow-booting")
-  if (activeScreen === "doors") {
+  if (resolvedScreen === "doors") {
     const languageSelect = node("#conversation-language")
     void captureEntranceReady(productEvents, {
       rememberedTalkLanguage: Boolean(languageSelect?.value),
@@ -108,6 +109,29 @@ function finishBoot(snapshot) {
       void talkLanguageEvents.remembered(languageSelect.value, languageValues(languageSelect))
     }
   }
+}
+
+function armFreshEntranceAfterCancellation() {
+  const doors = node('[data-screen="doors"]')
+  if (!doors || typeof MutationObserver === "undefined") return
+  let observer = null
+
+  const captureWhenReady = () => {
+    if (activeScreen() !== "doors") return
+    observer?.disconnect()
+    const languageSelect = node("#conversation-language")
+    void captureEntranceReady(productEvents, {
+      rememberedTalkLanguage: Boolean(languageSelect?.value),
+      viewportWidth: globalThis.innerWidth
+    })
+    if (languageSelect?.value) {
+      void talkLanguageEvents.remembered(languageSelect.value, languageValues(languageSelect))
+    }
+  }
+
+  observer = new MutationObserver(captureWhenReady)
+  observer.observe(doors, {attributes: true, attributeFilter: ["class"]})
+  queueMicrotask(captureWhenReady)
 }
 
 function renderBootFailure() {
@@ -181,6 +205,8 @@ function withQueueCompletion(push, event, payload) {
     push.receive("ok", (result) => {
       if (!queueGuard.current(token)) return
       if (result?.status === "left") {
+        void captureFlowCancelled(productEvents, {stage: "queue", reasonCode: "user_requested"})
+        armFreshEntranceAfterCancellation()
         retireQueueAttempt(leavingQueueAttemptId)
         renderQueue(FLOW_PHASE.MATCHMAKING_CANCELLED, {door: selectedDoor})
       }
@@ -203,8 +229,8 @@ function withQueueCompletion(push, event, payload) {
       if (result?.snapshot?.canonical_state === "CONVERSATION") {
         void queueEvents.matched()
       }
-      const activeScreen = node("section.screen.active")?.dataset?.screen
-      if (activeScreen === "match" || activeScreen === "conversation") return
+      const resolvedScreen = activeScreen()
+      if (resolvedScreen === "match" || resolvedScreen === "conversation") return
       if (!applyQueueSnapshot(result?.snapshot)) resetQueuePresentation({retireActive: true})
     })
   }
