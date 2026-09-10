@@ -2,7 +2,6 @@ name: StrangerTalks PostgreSQL R2 Backup
 
 on:
   workflow_call:
-  workflow_dispatch:
   schedule:
     - cron: '17 2 * * *'
 
@@ -11,6 +10,7 @@ permissions:
 
 jobs:
   backup-restore-proof:
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.actor == 'manvith244-oss' && github.triggering_actor == 'manvith244-oss' && github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -84,6 +84,24 @@ jobs:
           test -f ops/postgres_backup.sh
           test -f ops/postgres_restore.sh
           test -f priv/certs/supabase-prod-ca-2021.crt
+
+      - name: Reject database URL TLS overrides
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from urllib.parse import parse_qsl, urlsplit
+
+          database_url = os.environ.get("SUPABASE_DATABASE_URL", "")
+          if not database_url:
+              raise SystemExit("SUPABASE_DATABASE_URL is required")
+          keys = {key.lower() for key, _ in parse_qsl(urlsplit(database_url).query, keep_blank_values=True)}
+          forbidden = keys & {"ssl", "sslmode", "sslrootcert", "sslcert", "sslkey", "sslcrl", "sslcrldir"}
+          if forbidden:
+              raise SystemExit("SUPABASE_DATABASE_URL contains forbidden TLS override parameters: " + ", ".join(sorted(forbidden)))
+          PY
+          echo "phase2_database_url_tls_overrides=absent"
 
       - name: Install PostgreSQL 17 client and AWS CLI
         shell: bash
