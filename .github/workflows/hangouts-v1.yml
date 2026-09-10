@@ -25,6 +25,7 @@ on:
       - "test/strangertalks_new/team4_db_security_closure_test.exs"
       - "test/strangertalks_new_web/hangout_channel_test.exs"
       - "test/strangertalks_new_web/hangout_lobby_channel_test.exs"
+      - "test/js/door_mapping_test.mjs"
       - "test/js/hangouts_contract_test.mjs"
       - "test/js/hangouts_browser_test.mjs"
       - ".github/workflows/hangouts-v1.yml"
@@ -198,6 +199,7 @@ jobs:
         if: ${{ hashFiles('test/js/hangouts_contract_test.mjs') != '' }}
         continue-on-error: true
         run: |
+          node --test test/js/door_mapping_test.mjs
           node --test test/js/hangouts_contract_test.mjs
           node --test --test-concurrency=1 test/js/hangouts_browser_test.mjs
 
