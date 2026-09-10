@@ -16,143 +16,308 @@ let entranceAttemptObserver = null
 
 function node(selector) { return document.querySelector(selector) }
 function activeScreen() { return node("section.screen.active")?.dataset?.screen || null }
-function announcePhase(message) { const status = node("#queue-phase-status"); if (status) status.textContent = message }
+
+function announcePhase(message) {
+  const status = node("#queue-phase-status")
+  if (status) status.textContent = message
+}
+
 function renderQueue(phase, context = {}) {
   currentQueuePhase = phase
   const presentation = loadingPresentation(phase, {door: context.door || selectedDoor})
-  const section = node('[data-screen="queue"]'); const title = node("#queue-title"); const lede = node("#queue-lede"); const leave = node("#leave-queue")
+  const section = node('[data-screen="queue"]')
+  const title = node("#queue-title")
+  const lede = node("#queue-lede")
+  const leave = node("#leave-queue")
+
   if (title) title.textContent = presentation.title
   if (lede) lede.textContent = presentation.detail
   if (leave && "leaveEnabled" in presentation) leave.disabled = !presentation.leaveEnabled
   if (section) section.setAttribute("aria-busy", String(presentation.interaction === "blocked"))
   announcePhase(`${presentation.title} ${presentation.detail}`)
 }
+
 function rememberRetiredQueueAttempt(queueAttemptId) {
   if (!queueAttemptId) return
   retiredQueueAttemptIds.add(queueAttemptId)
-  while (retiredQueueAttemptIds.size > MAX_RETIRED_QUEUE_ATTEMPTS) retiredQueueAttemptIds.delete(retiredQueueAttemptIds.values().next().value)
+  while (retiredQueueAttemptIds.size > MAX_RETIRED_QUEUE_ATTEMPTS) {
+    retiredQueueAttemptIds.delete(retiredQueueAttemptIds.values().next().value)
+  }
 }
-function retireQueueAttempt(queueAttemptId = activeQueueAttemptId) { rememberRetiredQueueAttempt(queueAttemptId); if (queueAttemptId && queueAttemptId === activeQueueAttemptId) activeQueueAttemptId = null }
-function restoreCanonicalQueueAttempt(queueAttemptId) { if (!queueAttemptId) return false; retiredQueueAttemptIds.delete(queueAttemptId); activeQueueAttemptId = queueAttemptId; return true }
-function resetQueuePresentation({retireActive = false} = {}) { if (retireActive) retireQueueAttempt(); selectedDoor = null; activeQueueAttemptId = null; queueGuard.invalidate(); renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION) }
-function queuedAttemptCanPresent(queueAttemptId) { return !!queueAttemptId && !retiredQueueAttemptIds.has(queueAttemptId) && (!activeQueueAttemptId || queueAttemptId === activeQueueAttemptId) }
+
+function retireQueueAttempt(queueAttemptId = activeQueueAttemptId) {
+  rememberRetiredQueueAttempt(queueAttemptId)
+  if (queueAttemptId && queueAttemptId === activeQueueAttemptId) activeQueueAttemptId = null
+}
+
+function restoreCanonicalQueueAttempt(queueAttemptId) {
+  if (!queueAttemptId) return false
+  retiredQueueAttemptIds.delete(queueAttemptId)
+  activeQueueAttemptId = queueAttemptId
+  return true
+}
+
+function resetQueuePresentation({retireActive = false} = {}) {
+  if (retireActive) retireQueueAttempt()
+  selectedDoor = null
+  activeQueueAttemptId = null
+  queueGuard.invalidate()
+  renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION)
+}
+
+function queuedAttemptCanPresent(queueAttemptId) {
+  if (!queueAttemptId || retiredQueueAttemptIds.has(queueAttemptId)) return false
+  return !activeQueueAttemptId || queueAttemptId === activeQueueAttemptId
+}
+
 function applyQueueSnapshot(snapshot) {
   const queue = snapshot?.queue
   if (!queue?.queue_attempt_id) return false
   restoreCanonicalQueueAttempt(queue.queue_attempt_id)
   if (queue.display_door) selectedDoor = queue.display_door
-  renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor}); return true
+  renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
+  return true
 }
-function stopBootWatchers() { clearTimeout(bootWatchdog); bootWatchdog = null; startupFailureObserver?.disconnect(); startupFailureObserver = null }
-function languageValues(select) { return Array.from(select?.options || []).map(({value}) => value).filter(Boolean) }
+
+function stopBootWatchers() {
+  clearTimeout(bootWatchdog)
+  bootWatchdog = null
+  startupFailureObserver?.disconnect()
+  startupFailureObserver = null
+}
+
+function languageValues(select) {
+  return Array.from(select?.options || []).map(({value}) => value).filter(Boolean)
+}
+
 function captureCurrentEntrance({newAttempt = false} = {}) {
   const languageSelect = node("#conversation-language")
-  void entranceAttempts.entranceReady({rememberedTalkLanguage: languageSelect?.value || null, viewportWidth: globalThis.innerWidth}, {newAttempt})
-  if (languageSelect?.value) void talkLanguageEvents.remembered(languageSelect.value, languageValues(languageSelect))
+  void entranceAttempts.entranceReady({
+    rememberedTalkLanguage: languageSelect?.value || null,
+    viewportWidth: globalThis.innerWidth
+  }, {newAttempt})
+  if (languageSelect?.value) {
+    void talkLanguageEvents.remembered(languageSelect.value, languageValues(languageSelect))
+  }
 }
+
 function installEntranceAttemptObserver(initialScreen) {
   if (entranceAttemptObserver || typeof MutationObserver === "undefined") return
   let previousScreen = initialScreen
+
   entranceAttemptObserver = new MutationObserver(() => {
     const nextScreen = activeScreen()
     if (!nextScreen || nextScreen === previousScreen) return
-    if (nextScreen === "doors" && previousScreen !== "doors") captureCurrentEntrance({newAttempt: true})
+    if (nextScreen === "doors" && previousScreen !== "doors") {
+      captureCurrentEntrance({newAttempt: true})
+    }
     previousScreen = nextScreen
   })
-  document.querySelectorAll("[data-screen]").forEach((screen) => entranceAttemptObserver.observe(screen, {attributes: true, attributeFilter: ["class"]}))
+
+  document.querySelectorAll("[data-screen]").forEach((screen) => {
+    entranceAttemptObserver.observe(screen, {attributes: true, attributeFilter: ["class"]})
+  })
 }
+
 function finishBoot(snapshot) {
-  stopBootWatchers(); const resolvedScreen = activeScreen(); if (resolvedScreen === "queue") applyQueueSnapshot(snapshot)
-  const bridge = node("#boot-bridge"); if (bridge) { bridge.hidden = true; bridge.setAttribute("aria-busy", "false") }
-  document.body.classList.remove("flow-booting"); if (resolvedScreen === "doors") captureCurrentEntrance(); installEntranceAttemptObserver(resolvedScreen)
+  stopBootWatchers()
+  const resolvedScreen = activeScreen()
+  if (resolvedScreen === "queue") applyQueueSnapshot(snapshot)
+  const bridge = node("#boot-bridge")
+  if (bridge) {
+    bridge.hidden = true
+    bridge.setAttribute("aria-busy", "false")
+  }
+  document.body.classList.remove("flow-booting")
+  if (resolvedScreen === "doors") captureCurrentEntrance()
+  installEntranceAttemptObserver(resolvedScreen)
 }
+
 function renderBootFailure() {
-  stopBootWatchers(); const bridge = node("#boot-bridge"); if (!bridge) return
-  bridge.dataset.state = "error"; bridge.setAttribute("aria-busy", "false")
-  const title = bridge.querySelector("h1"); const detail = bridge.querySelector(".lede")
+  stopBootWatchers()
+  const bridge = node("#boot-bridge")
+  if (!bridge) return
+  bridge.dataset.state = "error"
+  bridge.setAttribute("aria-busy", "false")
+  const title = bridge.querySelector("h1")
+  const detail = bridge.querySelector(".lede")
   if (title) title.textContent = "StrangerTalks can’t confirm your session."
   if (detail) detail.textContent = "Your current state is still unknown. Reload to try restoring it again."
-  if (!bridge.querySelector("button")) { const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Reload StrangerTalks"; retry.addEventListener("click", () => location.reload()); bridge.append(retry) }
+  if (!bridge.querySelector("button")) {
+    const retry = document.createElement("button")
+    retry.type = "button"
+    retry.textContent = "Reload StrangerTalks"
+    retry.addEventListener("click", () => location.reload())
+    bridge.append(retry)
+  }
 }
+
 function installBootWatchers() {
-  bootWatchdog = setTimeout(() => { if (document.body.classList.contains("flow-booting")) renderBootFailure() }, BOOT_WATCHDOG_MS)
-  const status = node("#status"); if (!status) return
-  startupFailureObserver = new MutationObserver(() => { if (document.body.classList.contains("flow-booting") && status.textContent.includes("StrangerTalks could not start")) renderBootFailure() })
+  bootWatchdog = setTimeout(() => {
+    if (document.body.classList.contains("flow-booting")) renderBootFailure()
+  }, BOOT_WATCHDOG_MS)
+
+  const status = node("#status")
+  if (!status) return
+  startupFailureObserver = new MutationObserver(() => {
+    if (!document.body.classList.contains("flow-booting")) return
+    if (status.textContent.includes("StrangerTalks could not start")) renderBootFailure()
+  })
   startupFailureObserver.observe(status, {childList: true, characterData: true, subtree: true})
 }
-function settleAdmissionFailure() { if (activeQueueAttemptId) renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor}); else resetQueuePresentation() }
+
+function settleAdmissionFailure() {
+  if (activeQueueAttemptId) renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
+  else resetQueuePresentation()
+}
+
 function withQueueCompletion(push, event, payload) {
   if (event === "queue:join") {
-    const token = queueGuard.begin("queue-admission"); renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor})
-    push.receive("ok", (result) => { if (!queueGuard.current(token)) return; const queueAttemptId = result?.queue_attempt_id; if (!queueAttemptId || !queuedAttemptCanPresent(queueAttemptId)) return; activeQueueAttemptId = queueAttemptId; renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor}) })
-    push.receive("error", () => { if (queueGuard.current(token)) settleAdmissionFailure() })
-    push.receive("timeout", () => { if (queueGuard.current(token)) settleAdmissionFailure() })
+    const token = queueGuard.begin("queue-admission")
+    renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor})
+    push.receive("ok", (result) => {
+      if (!queueGuard.current(token)) return
+      const queueAttemptId = result?.queue_attempt_id
+      if (!queueAttemptId) return
+      if (!queuedAttemptCanPresent(queueAttemptId)) return
+      activeQueueAttemptId = queueAttemptId
+      renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
+    })
+    push.receive("error", () => {
+      if (!queueGuard.current(token)) return
+      settleAdmissionFailure()
+    })
+    push.receive("timeout", () => {
+      if (!queueGuard.current(token)) return
+      settleAdmissionFailure()
+    })
     return
   }
+
   if (event === "queue:leave") {
-    const token = queueGuard.begin("queue-cancel"); const leavingQueueAttemptId = payload?.queue_attempt_id || activeQueueAttemptId
+    const token = queueGuard.begin("queue-cancel")
+    const leavingQueueAttemptId = payload?.queue_attempt_id || activeQueueAttemptId
     renderQueue(FLOW_PHASE.MATCHMAKING_CANCELLING, {door: selectedDoor})
     push.receive("ok", (result) => {
       if (!queueGuard.current(token)) return
       if (result?.status === "left") {
         void captureFlowCancelled(productEvents, {stage: "queue", reasonCode: "user_requested"})
-        retireQueueAttempt(leavingQueueAttemptId); renderQueue(FLOW_PHASE.MATCHMAKING_CANCELLED, {door: selectedDoor})
+        retireQueueAttempt(leavingQueueAttemptId)
+        renderQueue(FLOW_PHASE.MATCHMAKING_CANCELLED, {door: selectedDoor})
       }
     })
-    push.receive("error", () => { if (queueGuard.current(token)) renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor}) })
-    push.receive("timeout", () => { if (queueGuard.current(token)) renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor}) })
+    push.receive("error", () => {
+      if (!queueGuard.current(token)) return
+      renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
+    })
+    push.receive("timeout", () => {
+      if (!queueGuard.current(token)) return
+      renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
+    })
     return
   }
+
   if (event === "session:reconcile") {
     const token = queueGuard.begin("session-reconcile")
-    push.receive("ok", (result) => { if (!queueGuard.current(token)) return; const resolvedScreen = activeScreen(); if (resolvedScreen === "match" || resolvedScreen === "conversation") return; if (!applyQueueSnapshot(result?.snapshot)) resetQueuePresentation({retireActive: true}) })
+    push.receive("ok", (result) => {
+      if (!queueGuard.current(token)) return
+      const resolvedScreen = activeScreen()
+      if (resolvedScreen === "match" || resolvedScreen === "conversation") return
+      if (!applyQueueSnapshot(result?.snapshot)) resetQueuePresentation({retireActive: true})
+    })
   }
 }
+
 function withBlockCompletion(push) {
-  const button = node("#block"); if (!button) return
-  const priorText = button.textContent; button.disabled = true; button.textContent = "Blocking…"
-  const restore = () => { button.disabled = false; button.textContent = priorText }
-  push.receive("ok", () => { button.textContent = "Blocked" }); push.receive("error", restore); push.receive("timeout", restore)
+  const button = node("#block")
+  if (!button) return
+  const priorText = button.textContent
+  button.disabled = true
+  button.textContent = "Blocking…"
+  const restore = () => {
+    button.disabled = false
+    button.textContent = priorText
+  }
+  push.receive("ok", () => { button.textContent = "Blocked" })
+  push.receive("error", restore)
+  push.receive("timeout", restore)
 }
-function withFirstMessageAcceptance(push) { push.receive("ok", () => { void queueEvents.firstMessageAccepted() }) }
+
+function withFirstMessageAcceptance(push) {
+  push.receive("ok", () => { void queueEvents.firstMessageAccepted() })
+}
+
 function patchParticipantChannel(channel) {
   if (channel.__f07ParticipantPatched) return channel
   channel.__f07ParticipantPatched = true
+
   const originalPush = channel.push.bind(channel)
   channel.push = function(event, payload = {}, timeout) {
     if (event === "queue:join") void queueEvents.requested(payload?.door_type, payload?.conversation_language)
-    const push = originalPush(event, payload, timeout); withQueueCompletion(push, event, payload); return push
+    const push = originalPush(event, payload, timeout)
+    withQueueCompletion(push, event, payload)
+    return push
   }
+
   const originalOn = channel.on.bind(channel)
   channel.on = function(event, callback) {
     return originalOn(event, (payload) => {
       if (event === "queue:status") {
         if (payload?.status === "queued") {
           if (!queuedAttemptCanPresent(payload.queue_attempt_id)) return
-          if (currentQueuePhase !== FLOW_PHASE.MATCHMAKING_CANCELLING) { activeQueueAttemptId = payload.queue_attempt_id; renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor}) }
-          void queueEvents.joined(); intentEvents.markQueueJoined()
+          if (currentQueuePhase !== FLOW_PHASE.MATCHMAKING_CANCELLING) {
+            activeQueueAttemptId = payload.queue_attempt_id
+            renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
+          }
+          void queueEvents.joined()
+          intentEvents.markQueueJoined()
         } else if (["left", "timed_out"].includes(payload?.status)) {
           if (!payload?.queue_attempt_id) return
-          if (payload.queue_attempt_id === activeQueueAttemptId) { retireQueueAttempt(payload.queue_attempt_id); resetQueuePresentation() }
+          if (payload.queue_attempt_id === activeQueueAttemptId) {
+            retireQueueAttempt(payload.queue_attempt_id)
+            resetQueuePresentation()
+          }
         }
       } else if (event === "match_found") {
-        void queueEvents.matched(); queueGuard.invalidate(); retireQueueAttempt(); renderQueue(FLOW_PHASE.ENTERING_CONVERSATION, {door: selectedDoor})
-      } else if (event === "transition:recovery_failed") resetQueuePresentation({retireActive: true})
+        void queueEvents.matched()
+        queueGuard.invalidate()
+        retireQueueAttempt()
+        renderQueue(FLOW_PHASE.ENTERING_CONVERSATION, {door: selectedDoor})
+      } else if (event === "transition:recovery_failed") {
+        resetQueuePresentation({retireActive: true})
+      }
       return callback(payload)
     })
   }
+
   const originalJoin = channel.join.bind(channel)
   channel.join = function(timeout) {
-    const push = originalJoin(timeout); const originalReceive = push.receive.bind(push); originalReceive("timeout", renderBootFailure)
+    const push = originalJoin(timeout)
+    const originalReceive = push.receive.bind(push)
+
+    originalReceive("timeout", renderBootFailure)
+
     push.receive = function(status, callback) {
-      if (status === "ok") return originalReceive(status, async (payload) => { try { return await callback(payload) } finally { finishBoot(payload?.snapshot) } })
-      if (status === "error") return originalReceive(status, async (payload) => { try { return await callback(payload) } finally { renderBootFailure() } })
+      if (status === "ok") {
+        return originalReceive(status, async (payload) => {
+          try { return await callback(payload) }
+          finally { finishBoot(payload?.snapshot) }
+        })
+      }
+      if (status === "error") {
+        return originalReceive(status, async (payload) => {
+          try { return await callback(payload) }
+          finally { renderBootFailure() }
+        })
+      }
       return originalReceive(status, callback)
     }
     return push
   }
+
   return channel
 }
+
 function patchConversationChannel(channel) {
   if (channel.__f07ConversationPatched) return channel
   channel.__f07ConversationPatched = true
@@ -165,6 +330,7 @@ function patchConversationChannel(channel) {
   }
   return channel
 }
+
 const originalSocketChannel = Socket.prototype.channel
 Socket.prototype.channel = function(topic, params) {
   const channel = originalSocketChannel.call(this, topic, params)
@@ -172,12 +338,17 @@ Socket.prototype.channel = function(topic, params) {
   if (typeof topic === "string" && topic.startsWith("conversation:")) return patchConversationChannel(channel)
   return channel
 }
+
 document.addEventListener("click", (event) => {
-  const door = event.target.closest(".door"); if (!door) return
-  const language = node("#conversation-language")?.value; if (!language) return
+  const door = event.target.closest(".door")
+  if (!door) return
+  const language = node("#conversation-language")?.value
+  if (!language) return
   selectedDoor = door.querySelector("strong")?.textContent?.trim() || null
-  renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor}); queueMicrotask(() => renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor}))
+  renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor})
+  queueMicrotask(() => renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor}))
 }, true)
+
 installBootWatchers()
 await import("./session_reconciliation_browser_bootstrap.mjs")
 await import(APP_ENTRY)
