@@ -242,12 +242,21 @@ test("unselected Doors are neutral, hover/focus preview is restrained, and selec
   }
 })
 
-test("keyboard-only focus indicator is visible and fixed across all Doors and language", {timeout: 30_000}, async () => {
+test("keyboard-only focus indicator is visible and fixed across the header language control and all Doors", {timeout: 30_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let app
   try {
     app = await openDoors(browser)
     const indicators = []
+
+    await tabUntil(app.page, () => document.activeElement?.id === "conversation-language", "Conversation Language", 8)
+    const languageIndicator = await app.page.locator("#conversation-language").evaluate(element => {
+      const style = getComputedStyle(element)
+      return {color: style.outlineColor, style: style.outlineStyle, width: style.outlineWidth, height: style.height}
+    })
+    assert.notEqual(languageIndicator.style, "none", "language control has a visible focus outline")
+    assert.ok(Number.parseFloat(languageIndicator.width) >= 3, "language focus outline is at least 3px")
+    assert.ok(Number.parseFloat(languageIndicator.height) >= 44, "language control preserves an adequate touch target")
 
     for (let index = 0; index < 4; index += 1) {
       await tabUntil(app.page, expectedIndex => {
@@ -260,15 +269,6 @@ test("keyboard-only focus indicator is visible and fixed across all Doors and la
       assert.ok(Number.parseFloat(state.outlineWidth) >= 3, `Door ${index + 1} focus outline is at least 3px`)
       indicators.push({color: state.outlineColor, style: state.outlineStyle, width: state.outlineWidth})
     }
-
-    await tabUntil(app.page, () => document.activeElement?.id === "conversation-language", "Conversation Language", 8)
-    const languageIndicator = await app.page.locator("#conversation-language").evaluate(element => {
-      const style = getComputedStyle(element)
-      return {color: style.outlineColor, style: style.outlineStyle, width: style.outlineWidth, height: style.height}
-    })
-    assert.notEqual(languageIndicator.style, "none", "language control has a visible focus outline")
-    assert.ok(Number.parseFloat(languageIndicator.width) >= 3, "language focus outline is at least 3px")
-    assert.ok(Number.parseFloat(languageIndicator.height) >= 44, "language control preserves an adequate touch target")
 
     for (const indicator of indicators) assert.deepEqual(indicator, indicators[0], "Door focus indicators never vary by Door")
     assert.deepEqual(
