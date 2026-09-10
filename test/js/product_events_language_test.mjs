@@ -56,12 +56,23 @@ test("new and changed valid language selections are classified without free text
   ])
 })
 
-test("invalid or free-form language values are never emitted", async () => {
+test("caller-supplied language options cannot widen the frozen measurement contract", async () => {
   const {events, observer} = setup()
+  const tamperedOptions = ["en", "te", "hi", "fr", "<script>"]
 
-  assert.equal(await observer.selected("fr", VALID), false)
-  assert.equal(await observer.remembered("<script>", VALID), false)
-  assert.deepEqual(events, [])
+  assert.equal(await observer.selected("fr", tamperedOptions), false)
+  assert.equal(await observer.remembered("<script>", tamperedOptions), false)
+  assert.equal(await observer.selected("en", VALID), true)
+
+  assert.deepEqual(events, [{
+    name: "st_talk_language_selected",
+    properties: {
+      flow_attempt_id: "flow-language",
+      test_traffic: false,
+      language_code: "en",
+      source: "new"
+    }
+  }])
 })
 
 test("arrival hooks observe existing language control without redesigning it", () => {
