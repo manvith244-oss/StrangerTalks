@@ -38,8 +38,7 @@ defmodule StrangertalksNewWeb.LivingThreadController do
         thread_id: thread.thread_id,
         status: thread.status,
         resolves_at: thread.resolves_at,
-        time_remaining_at_continuation_seconds:
-          thread.time_remaining_at_continuation_seconds
+        time_remaining_at_continuation_seconds: thread.time_remaining_at_continuation_seconds
       })
     else
       {:error, reason} -> error_response(conn, reason)
