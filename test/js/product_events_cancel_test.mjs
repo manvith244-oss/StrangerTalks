@@ -85,10 +85,14 @@ test("runtime emits cancellation only after server confirms queue leave", () => 
   assert.ok(cancelIndex < timeoutIndex, "timeout handler must not emit cancellation")
 })
 
-test("confirmed cancellation re-arms entrance-ready only after canonical state returns to Doors", () => {
+test("confirmed cancellation re-arms entrance-ready only when the existing product returns to Doors", () => {
   const source = readFileSync(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
 
-  assert.match(source, /pendingFreshEntranceAfterCancellation = true/)
-  assert.match(source, /freshEntranceAfterCallback = pendingFreshEntranceAfterCancellation/)
-  assert.match(source, /queueMicrotask\(\(\) => \{[\s\S]*activeScreen === "doors"[\s\S]*captureEntranceReady\(productEvents/)
+  assert.match(source, /function armFreshEntranceAfterCancellation\(\)/)
+  assert.match(source, /activeScreen\(\) === "doors"/)
+  assert.match(source, /captureEntranceReady\(productEvents/)
+
+  const leaveStart = source.indexOf('if (event === "queue:leave")')
+  const leaveEnd = source.indexOf('if (event === "session:reconcile")', leaveStart)
+  assert.match(source.slice(leaveStart, leaveEnd), /armFreshEntranceAfterCancellation\(\)/)
 })
