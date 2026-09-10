@@ -14,6 +14,7 @@ on:
       - "lib/strangertalks_new/hangouts/**"
       - "lib/strangertalks_new/application.ex"
       - "lib/strangertalks_new_web/hangout_channel.ex"
+      - "lib/strangertalks_new_web/hangout_lobby_channel.ex"
       - "lib/strangertalks_new_web/user_socket.ex"
       - "priv/repo/migrations/*hangout*"
       - "priv/static/index.html"
@@ -23,6 +24,7 @@ on:
       - "test/strangertalks_new/hangouts/**"
       - "test/strangertalks_new/team4_db_security_closure_test.exs"
       - "test/strangertalks_new_web/hangout_channel_test.exs"
+      - "test/strangertalks_new_web/hangout_lobby_channel_test.exs"
       - "test/js/hangouts_contract_test.mjs"
       - ".github/workflows/hangouts-v1.yml"
   workflow_dispatch:
@@ -126,7 +128,7 @@ jobs:
         id: channel-contract
         if: ${{ hashFiles('test/strangertalks_new_web/hangout_channel_test.exs') != '' }}
         continue-on-error: true
-        run: mix test test/strangertalks_new_web/hangout_channel_test.exs
+        run: mix test test/strangertalks_new_web/hangout_channel_test.exs test/strangertalks_new_web/hangout_lobby_channel_test.exs
 
       - name: Hangouts shared-content contract
         id: content-contract
