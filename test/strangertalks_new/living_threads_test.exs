@@ -32,8 +32,8 @@ defmodule StrangertalksNew.LivingThreadsTest do
 
     assert thread.status == :WAITING_FOR_B
     assert thread.opened_at == @now
-    assert thread.continuation_deadline_at == DateTime.add(@now, 8, :hour)
-    assert thread.resolves_at == DateTime.add(@now, 24, :hour)
+    assert thread.continuation_deadline_at == DateTime.add(@now, 8 * 60 * 60, :second)
+    assert thread.resolves_at == DateTime.add(@now, 24 * 60 * 60, :second)
 
     assert {:error, :thread_already_exists} =
              LivingThreads.start_thread(participant.participant_id, "A second beginning", now: @now)
@@ -64,7 +64,7 @@ defmodule StrangertalksNew.LivingThreadsTest do
     assign!(b, :CARRIER_B)
 
     assert {:ok, thread} = LivingThreads.start_thread(a.participant_id, "seed", now: @now)
-    continued_at = DateTime.add(@now, 7, :hour)
+    continued_at = DateTime.add(@now, 7 * 60 * 60, :second)
 
     assert {:ok, continued} =
              LivingThreads.continue_next(b.participant_id, "what B carried forward", now: continued_at)
@@ -79,7 +79,7 @@ defmodule StrangertalksNew.LivingThreadsTest do
 
     assert {:ok, before_resolution} =
              LivingThreads.experience_for(a.participant_id,
-               now: DateTime.add(@now, 23, :hour)
+               now: DateTime.add(@now, 23 * 60 * 60, :second)
              )
 
     assert before_resolution.thread_id == thread.thread_id
@@ -89,7 +89,7 @@ defmodule StrangertalksNew.LivingThreadsTest do
 
     assert {:ok, after_resolution} =
              LivingThreads.experience_for(a.participant_id,
-               now: DateTime.add(@now, 24, :hour)
+               now: DateTime.add(@now, 24 * 60 * 60, :second)
              )
 
     assert after_resolution.status == :RESOLVED
@@ -137,7 +137,8 @@ defmodule StrangertalksNew.LivingThreadsTest do
     assign!(blocked_b, :CARRIER_B)
 
     assert {:ok, _thread} = LivingThreads.start_thread(a.participant_id, "seed", now: @now)
-    assert {:ok, _block} = MatchingRules.enforce_block(a.participant_id, blocked_b.participant_id, "LIVING_THREAD_PILOT")
+    assert {:ok, _block} =
+             MatchingRules.enforce_block(a.participant_id, blocked_b.participant_id, "LIVING_THREAD_PILOT")
 
     assert {:error, :no_waiting_thread} =
              LivingThreads.continue_next(blocked_b.participant_id, "must not be routed", now: @now)
@@ -155,7 +156,7 @@ defmodule StrangertalksNew.LivingThreadsTest do
     assert {:error, :thread_not_resolved} =
              LivingThreads.record_known_person_debrief(a.participant_id, "no", nil, now: @now)
 
-    resolved_at = DateTime.add(@now, 24, :hour)
+    resolved_at = DateTime.add(@now, 24 * 60 * 60, :second)
 
     assert {:ok, :recorded} =
              LivingThreads.record_known_person_debrief(
