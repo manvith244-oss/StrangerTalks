@@ -1,4 +1,4 @@
-name: C5 V1 Fresh Media Cleanup Browser Proof
+name: C5 V1 Remaining Browser Closure
 
 on:
   push:
@@ -11,16 +11,16 @@ permissions:
 env:
   TARGET_SHA: b40a44428705ec566949c9bf8eb186cc3f5908c2
   TARGET_TREE: ccfd797914a2c22e9aebe2ca94ddf3a887382051
-  MIX_ENV: test
-  PORT: "4000"
-  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
-  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
-  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
 
 jobs:
-  media-cleanup-fresh:
+  proof:
+    name: browser-${{ matrix.group }}
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [entry-match, sibling, terminal, history, desktop, mobile, media]
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
     services:
       postgres:
         image: postgres:16
@@ -33,27 +33,39 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
           --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
     steps:
       - name: Checkout immutable exact main
         uses: actions/checkout@v4
         with:
           ref: b40a44428705ec566949c9bf8eb186cc3f5908c2
           fetch-depth: 0
+
       - name: Prove immutable subject
+        shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
-          test -z "$(git status --porcelain)"
+          test -z "$(git status --porcelain --untracked-files=all)"
+
       - uses: erlef/setup-beam@v1
         with:
           elixir-version: "1.18.4"
           otp-version: "27.3.4"
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
+
       - name: Install dependencies and Chromium
+        shell: bash
         run: |
           set -euo pipefail
           mix local.hex --force >/dev/null
@@ -61,7 +73,9 @@ jobs:
           mix deps.get >/dev/null
           npm ci --silent
           npx playwright install --with-deps chromium >/tmp/c5-playwright-install.log 2>&1
-      - name: Start fresh isolated database and Phoenix
+
+      - name: Start isolated local database and Phoenix
+        shell: bash
         env:
           STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
         run: |
@@ -73,41 +87,142 @@ jobs:
             Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
             {:ok, _} = Application.ensure_all_started(:strangertalks_new)
             Process.sleep(:infinity)
-          ' >/tmp/c5-media-cleanup-phoenix.log 2>&1 &
-          echo $! >/tmp/c5-media-cleanup-phoenix.pid
+          ' >"/tmp/c5-${{ matrix.group }}-phoenix.log" 2>&1 &
+          echo $! >"/tmp/c5-${{ matrix.group }}-phoenix.pid"
           for attempt in $(seq 1 60); do
             if curl -fsS http://localhost:4000/ >/dev/null; then exit 0; fi
-            if ! kill -0 "$(cat /tmp/c5-media-cleanup-phoenix.pid)" 2>/dev/null; then
-              cat /tmp/c5-media-cleanup-phoenix.log
+            if ! kill -0 "$(cat /tmp/c5-${{ matrix.group }}-phoenix.pid)" 2>/dev/null; then
+              cat "/tmp/c5-${{ matrix.group }}-phoenix.log"
               exit 1
             fi
             sleep 1
           done
-          cat /tmp/c5-media-cleanup-phoenix.log
+          cat "/tmp/c5-${{ matrix.group }}-phoenix.log"
           exit 1
-      - name: Same terminal media-cleanup assertion on uncontaminated runner
+
+      - name: Run single-purpose real-Chromium proof
+        shell: bash
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=10s 90s node --test --test-concurrency=1 \
-            --test-name-pattern='Team 3: terminal state clears staged reply and open expressive surface' \
-            test/js/team3_conversation_experience_gate_test.mjs
-          echo C5_MEDIA_CLEANUP_FRESH=PASS
-      - name: Server log on failure
+          case "${{ matrix.group }}" in
+            entry-match)
+              timeout --signal=TERM --kill-after=10s 90s node --test --test-concurrency=1 \
+                --test-name-pattern='Control A: canonical desktop Matching -> Conversation journey' \
+                test/js/team11_a01_real_browser_proof_test.mjs
+              ;;
+            sibling)
+              timeout --signal=TERM --kill-after=10s 110s node --test --test-concurrency=1 \
+                --test-name-pattern='hostile delayed ACK retry plus sibling tab still converges before terminal stale events' \
+                test/js/conversation_reliability_browser_test.mjs
+              ;;
+            terminal)
+              timeout --signal=TERM --kill-after=10s 100s node --test --test-concurrency=1 \
+                --test-name-pattern='disconnected peer recovers terminal End and cannot recreate runtime' \
+                test/js/terminal_truth_browser_test.mjs
+              ;;
+            history)
+              timeout --signal=TERM --kill-after=10s 80s node --test --test-concurrency=1 \
+                test/js/t03_history_route_browser_test.mjs
+              mkdir -p tmp
+              cat > tmp/c5_history_back_forward_reload.mjs <<'EOF'
+          import assert from "node:assert/strict"
+          import {chromium} from "playwright"
+          const BASE = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const ID = "123e4567-e89b-42d3-a456-4266141740c6"
+          const AT = "2026-09-10T10:00:00.000Z"
+          const browser = await chromium.launch({headless:true})
+          const context = await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true})
+          const page = await context.newPage()
+          const errors = []
+          page.on("pageerror", e => errors.push(e.message))
+          page.on("console", m => { if (m.type() === "error") errors.push(m.text()) })
+          try {
+            const response = await page.goto(BASE,{waitUntil:"domcontentloaded"})
+            assert.ok(response?.ok(), "root page loads")
+            await page.locator("button.door").first().waitFor({state:"visible",timeout:15000})
+            await page.evaluate(async ({id,at}) => {
+              const localData = await import("/assets/local_data.mjs")
+              const conversation = localData.temporaryConversation({conversation_id:id,door_type:"EXPLORE",display_door:"Advice",started_at:at})
+              await localData.putRecord({...conversation,value:{...conversation.value,status:"kept",connection_state:"ended",ended_at:at}})
+              await localData.putRecord(localData.localMessage({conversation_id:id,client_message_id:"c5-history",message_id:"c5-history",type:"text",content:"kept",mine:true,delivery_status:"delivered",sent_at:at,sequence:1}))
+            }, {id:ID,at:AT})
+            await page.locator('#bottom-nav [data-go="chats"]').click()
+            await page.locator('[data-screen="chats"].active').waitFor({state:"visible"})
+            await page.getByRole("button",{name:"Open local copy: Advice"}).click()
+            await page.waitForURL(`**/chats/${ID}`)
+            page.once("dialog", d => d.accept())
+            await page.locator("#history-delete").click()
+            await page.locator('[data-screen="chats"].active').waitFor({state:"visible"})
+            const deletedPath = `/chats/${ID}`
+            assert.equal(new URL(page.url()).pathname,"/chats","delete canonicalizes to /chats")
+            await page.goBack({waitUntil:"domcontentloaded"}).catch(()=>null)
+            await page.waitForTimeout(300)
+            assert.notEqual(new URL(page.url()).pathname,deletedPath,"Back resurrected deleted /chats/:id")
+            assert.equal(await page.locator('[data-screen="history"].active').count(),0,"Back must not reactivate deleted history")
+            await page.goForward({waitUntil:"domcontentloaded"}).catch(()=>null)
+            await page.waitForTimeout(300)
+            assert.notEqual(new URL(page.url()).pathname,deletedPath,"Forward resurrected deleted /chats/:id")
+            assert.equal(await page.locator('[data-screen="history"].active').count(),0,"Forward must remain canonical")
+            await page.reload({waitUntil:"domcontentloaded"})
+            await page.locator("button.door").first().waitFor({state:"attached",timeout:15000})
+            assert.notEqual(new URL(page.url()).pathname,deletedPath,"reload resurrected deleted /chats/:id")
+            assert.equal(await page.locator('[data-screen="history"].active').count(),0,"reload must remain canonical")
+            assert.deepEqual(errors,[],"no page/console errors")
+            console.log("C5_HISTORY_DELETE_BACK_FORWARD_RELOAD=PASS")
+          } finally {
+            await context.close().catch(()=>{})
+            await browser.close().catch(()=>{})
+          }
+          EOF
+              timeout --signal=TERM --kill-after=10s 70s node tmp/c5_history_back_forward_reload.mjs
+              ;;
+            desktop)
+              timeout --signal=TERM --kill-after=10s 100s node --test --test-concurrency=1 \
+                --test-name-pattern='F-10 standard keyboard controls operate Matchmaking and Settings' \
+                test/js/f10_desktop_flow_browser_test.mjs
+              ;;
+            mobile)
+              timeout --signal=TERM --kill-after=10s 110s node --test --test-concurrency=1 \
+                --test-name-pattern='F-09 Conversation preserves draft, safe geometry, keyboard presentation, and lifecycle continuity|F-09 visible coarse-pointer Conversation controls remain accessible touch targets and preserve system-edge scrolling' \
+                test/js/f09_mobile_flow_browser_test.mjs
+              ;;
+            media)
+              timeout --signal=TERM --kill-after=10s 100s node --test --test-concurrency=1 \
+                --test-name-pattern='photo choose → preview → send → peer receive → open → close → reopen → reconnect' \
+                test/js/normal_media_browser_test.mjs
+              timeout --signal=TERM --kill-after=10s 180s node --test --test-concurrency=1 \
+                --test-name-pattern='Feature 1O E2E-1: standard view-once cycle|Feature 1O\.1 E2E-1: standard view-twice cycle' \
+                test/js/browser_e2e_test.mjs
+              ;;
+          esac
+          echo "C5_REMAINING_${{ matrix.group }}=PASS"
+
+      - name: Phoenix log on failure
         if: failure()
-        run: tail -n 250 /tmp/c5-media-cleanup-phoenix.log || true
+        shell: bash
+        run: tail -n 250 "/tmp/c5-${{ matrix.group }}-phoenix.log" || true
+
       - name: Deterministic cleanup
         if: always()
+        shell: bash
         run: |
           set +e
-          if [ -f /tmp/c5-media-cleanup-phoenix.pid ]; then
-            pid="$(cat /tmp/c5-media-cleanup-phoenix.pid)"
+          if [ -f "/tmp/c5-${{ matrix.group }}-phoenix.pid" ]; then
+            pid="$(cat /tmp/c5-${{ matrix.group }}-phoenix.pid)"
             kill "$pid" 2>/dev/null || true
             sleep 1
             kill -9 "$pid" 2>/dev/null || true
           fi
-          rm -rf tmp/team3-conversation-experience tmp/playwright-report tmp/test-results
-      - name: Exact clean subject
+          rm -rf \
+            tmp/team11-a01-proof-screenshots \
+            tmp/chat-ui-screenshots \
+            tmp/f10-desktop-flow-screenshots \
+            tmp/playwright-report tmp/test-results \
+            tmp/c5_history_back_forward_reload.mjs
+
+      - name: Prove exact clean subject after browser proof
         if: always()
+        shell: bash
         run: |
           set -euo pipefail
           git diff --check
@@ -115,4 +230,4 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=all)"
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
-          echo C5_MEDIA_CLEANUP_CLEAN_SUBJECT=PASS
+          echo "C5_REMAINING_${{ matrix.group }}_CLEAN=PASS"
