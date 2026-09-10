@@ -57,6 +57,29 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   def disconnect_if_last(_room_id, _participant_id),
     do: {:error, :invalid_membership_request}
 
+  def revoke_other_channels(room_id, participant_id, leaving_pid)
+      when is_binary(room_id) and is_binary(participant_id) and is_pid(leaving_pid) do
+    case registry_call(fn -> Registry.lookup(@registry, key(room_id, participant_id)) end) do
+      {:ok, registrations} ->
+        Enum.each(registrations, fn
+          {pid, _lease_id} when pid != leaving_pid ->
+            send(pid, {:hangout_presence_revoked, room_id, participant_id})
+
+          _registration ->
+            :ok
+        end)
+
+        :ok
+
+      {:error, :registry_unavailable} ->
+        # Transport restart already revokes every channel in this failure domain.
+        :ok
+    end
+  end
+
+  def revoke_other_channels(_room_id, _participant_id, _leaving_pid),
+    do: {:error, :invalid_presence_revoke}
+
   def live_channel_count(room_id, participant_id)
       when is_binary(room_id) and is_binary(participant_id) do
     case registry_call(fn -> Registry.lookup(@registry, key(room_id, participant_id)) end) do
