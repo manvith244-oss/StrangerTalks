@@ -15,7 +15,7 @@ function setup() {
   return {events, observer: createQueueEventObserver(tracker)}
 }
 
-test("queue request is distinct from authoritative admission", async () => {
+test("queue request is distinct from authoritative join", async () => {
   const {events, observer} = setup()
 
   assert.equal(await observer.requested("EXPLORE", "te"), true)
@@ -29,9 +29,9 @@ test("queue request is distinct from authoritative admission", async () => {
     }
   }])
 
-  assert.equal(await observer.admitted(), true)
+  assert.equal(await observer.joined(), true)
   assert.deepEqual(events[1], {
-    name: "st_queue_admitted",
+    name: "st_queue_joined",
     properties: {
       flow_attempt_id: "flow-queue",
       test_traffic: false,
@@ -40,34 +40,34 @@ test("queue request is distinct from authoritative admission", async () => {
   })
 })
 
-test("admission cannot be manufactured without a request in the same flow", async () => {
+test("join cannot be manufactured without a request in the same flow", async () => {
   const {events, observer} = setup()
 
-  assert.equal(await observer.admitted(), false)
+  assert.equal(await observer.joined(), false)
   assert.deepEqual(events, [])
 })
 
-test("duplicate authoritative queued states do not inflate admission", async () => {
+test("duplicate authoritative queued states do not inflate queue join", async () => {
   const {events, observer} = setup()
 
   await observer.requested("JUST_TALK", "hi")
-  assert.equal(await observer.admitted(), true)
-  assert.equal(await observer.admitted(), false)
-  assert.equal(events.filter(({name}) => name === "st_queue_admitted").length, 1)
+  assert.equal(await observer.joined(), true)
+  assert.equal(await observer.joined(), false)
+  assert.equal(events.filter(({name}) => name === "st_queue_joined").length, 1)
 })
 
 test("queue analytics never need the authoritative queue attempt identifier", async () => {
   const {events, observer} = setup()
 
   await observer.requested("SOMETHING_REAL", "en")
-  await observer.admitted()
+  await observer.joined()
 
   for (const event of events) {
     assert.equal("queue_attempt_id" in event.properties, false)
   }
 })
 
-test("runtime request hook precedes outbound queue push and admission follows canonical queued guard", () => {
+test("runtime request hook precedes outbound queue push and join follows canonical queued guard", () => {
   const source = readFileSync(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
   const pushStart = source.indexOf("channel.push = function(event, payload = {}, timeout)")
   const pushEnd = source.indexOf("const originalOn = channel.on.bind(channel)", pushStart)
@@ -82,8 +82,8 @@ test("runtime request hook precedes outbound queue push and admission follows ca
   const statusEnd = source.indexOf('} else if (event === "match_found")', statusStart)
   const statusBlock = source.slice(statusStart, statusEnd)
   const guardIndex = statusBlock.indexOf("queuedAttemptCanPresent(payload.queue_attempt_id)")
-  const admissionIndex = statusBlock.indexOf("queueEvents.admitted()")
+  const joinIndex = statusBlock.indexOf("queueEvents.joined()")
 
   assert.ok(guardIndex >= 0, "existing stale/duplicate queued-state guard must remain")
-  assert.ok(admissionIndex > guardIndex, "authoritative admission measurement must occur only after the canonical guard")
+  assert.ok(joinIndex > guardIndex, "authoritative queue join measurement must occur only after the canonical guard")
 })
