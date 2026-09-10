@@ -16,7 +16,6 @@ defmodule StrangertalksNew.Application do
       {DynamicSupervisor,
        strategy: :one_for_one, name: StrangertalksNew.ConversationDynamicSupervisor},
       {Registry, keys: :unique, name: StrangertalksNew.Hangouts.Registry},
-      {Registry, keys: :duplicate, name: StrangertalksNew.Hangouts.PresenceRegistry},
       StrangertalksNew.Hangouts.RoomSupervisor,
       StrangertalksNew.Hangouts.Matcher,
       StrangertalksNew.ConversationLifecycle.TerminalObserver,
@@ -32,11 +31,10 @@ defmodule StrangertalksNew.Application do
       StrangertalksNew.QueueEngine.SafetyReceiver,
       StrangertalksNew.ConversationLifecycle.RecoverySweeper,
 
-      # Start a worker by calling: StrangertalksNew.Worker.start_link(arg)
-      # {StrangertalksNew.Worker, arg},
-
-      # Start to serve requests, typically the last entry
-      StrangertalksNewWeb.Endpoint
+      # Presence authority and the Phoenix Endpoint deliberately share a
+      # rest-for-one failure domain so sockets cannot survive loss of their
+      # process-owned presence registrations.
+      StrangertalksNewWeb.TransportSupervisor
     ]
 
     # See https://hexdocs.pm/Supervisor.html
