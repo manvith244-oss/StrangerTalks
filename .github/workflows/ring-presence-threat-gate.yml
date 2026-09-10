@@ -11,10 +11,13 @@ on:
       - "docs/hangouts-v1-design.md"
       - "docs/superpowers/plans/2026-09-10-hangouts-v1.md"
       - "lib/strangertalks_new_web/hangout_channel.ex"
+      - "lib/strangertalks_new/conversation_lifecycle/conversation_server.ex"
+      - "lib/strangertalks_new_web/conversation_channel.ex"
       - "priv/static/assets/live_call.mjs"
       - "priv/static/assets/app.js"
-      - "priv/static/assets/app.css"
       - "test/js/live_call_test.mjs"
+      - "test/strangertalks_new/hangouts/room_server_test.exs"
+      - "test/strangertalks_new_web/hangout_channel_test.exs"
       - "test/strangertalks_new/ring_presence_threat_gate_test.exs"
       - ".github/workflows/ring-presence-threat-gate.yml"
 
@@ -64,4 +67,9 @@ jobs:
           mix ecto.migrate --quiet
 
       - name: B1/B3 threat-model closure tests
-        run: mix test test/strangertalks_new/ring_presence_threat_gate_test.exs
+        run: |
+          mix test \
+            test/strangertalks_new/ring_presence_threat_gate_test.exs \
+            test/strangertalks_new/hangouts/room_server_test.exs \
+            test/strangertalks_new_web/hangout_channel_test.exs
+          node --test test/js/live_call_test.mjs
