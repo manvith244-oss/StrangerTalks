@@ -93,7 +93,7 @@ function languageValues(select) {
 function captureCurrentEntrance({newAttempt = false} = {}) {
   const languageSelect = node("#conversation-language")
   void entranceAttempts.entranceReady({
-    rememberedTalkLanguage: Boolean(languageSelect?.value),
+    rememberedTalkLanguage: languageSelect?.value || null,
     viewportWidth: globalThis.innerWidth
   }, {newAttempt})
   if (languageSelect?.value) {
