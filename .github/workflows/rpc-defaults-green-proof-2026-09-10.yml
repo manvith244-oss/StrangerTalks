@@ -1,0 +1,117 @@
+name: RPC Defaults GREEN Proof 2026-09-10
+
+on:
+  push:
+    branches:
+      - evidence/rpc-defaults-green-26332ed-2026-09-10
+
+permissions:
+  contents: read
+
+env:
+  TARGET_SHA: 26332edd4f65fb976e6ea669cae9af50a3de825f
+  TARGET_TREE: 2fdfc15289642209e6bd993fe9c9317ec0fc9b3a
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  PGPASSWORD: strangertalks_test
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Exact candidate identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+          test -z "$(git status --porcelain)"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+      - name: Emulate Supabase API roles and unsafe function defaults
+        run: |
+          psql -h localhost -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE anon NOLOGIN;
+          CREATE ROLE authenticated NOLOGIN;
+          CREATE ROLE service_role NOLOGIN BYPASSRLS;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public
+            GRANT EXECUTE ON FUNCTIONS TO anon, authenticated, service_role;
+          SQL
+      - name: Apply canonical migrations including RPC closure
+        run: mix ecto.migrate --quiet
+      - name: Structural RPC-default regression
+        run: mix test test/strangertalks_new/public_rpc_default_closure_test.exs
+      - name: Create future function probe and prove exact privileges
+        run: |
+          psql -h localhost -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE FUNCTION public.__rpr_future_probe() RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
+          DO $$
+          DECLARE
+            fn_oid oid := 'public.__rpr_future_probe()'::regprocedure::oid;
+            owner_oid oid;
+          BEGIN
+            SELECT proowner INTO owner_oid FROM pg_proc WHERE oid = fn_oid;
+            IF NOT has_function_privilege(owner_oid, fn_oid, 'EXECUTE') THEN
+              RAISE EXCEPTION 'function owner lost EXECUTE';
+            END IF;
+            IF has_function_privilege('anon', fn_oid, 'EXECUTE') THEN
+              RAISE EXCEPTION 'anon inherited EXECUTE';
+            END IF;
+            IF has_function_privilege('authenticated', fn_oid, 'EXECUTE') THEN
+              RAISE EXCEPTION 'authenticated inherited EXECUTE';
+            END IF;
+            IF has_function_privilege('service_role', fn_oid, 'EXECUTE') THEN
+              RAISE EXCEPTION 'service_role inherited EXECUTE';
+            END IF;
+            IF EXISTS (
+              SELECT 1
+              FROM pg_proc p
+              CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) a
+              WHERE p.oid = fn_oid
+                AND a.grantee = 0
+                AND a.privilege_type = 'EXECUTE'
+            ) THEN
+              RAISE EXCEPTION 'PUBLIC inherited EXECUTE';
+            END IF;
+          END
+          $$;
+          DROP FUNCTION public.__rpr_future_probe();
+          SQL
+      - name: Full precommit
+        run: mix precommit
+      - name: Exact clean identity
+        if: always()
+        run: |
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
