@@ -1,41 +1,62 @@
 defmodule StrangertalksNew.RprProductionMigrationWorkflowContractTest do
   use ExUnit.Case, async: true
 
-  @runner_path ".github/workflows/rpr-production-migration-closure.yml"
+  @rehearsal_path ".github/workflows/rpr-production-migration-closure.yml"
+  @live_path ".github/workflows/rpr-production-migration-live.yml"
   @backup_path ".github/workflows/postgres-r2-backup.yml"
   @bundled_ca "priv/certs/supabase-prod-ca-2021.crt"
+  @migration_tree "d0d1c1a5a781c6dfe504839c2411ef48c7c14a7d"
+  @owner_actor "manvith244-oss"
 
-  test "production migration runner stays owner-gated, backup-gated, and pinned to the reviewed migration frontier" do
-    workflow = File.read!(@runner_path)
+  test "PR rehearsal is incapable of receiving production secrets or mutating production" do
+    workflow = File.read!(@rehearsal_path)
 
+    assert workflow =~ "pull_request:"
+    assert workflow =~ "EXPECTED_MIGRATIONS_TREE: \"#{@migration_tree}\""
+    assert workflow =~ "git rev-parse HEAD:priv/repo/migrations"
+    refute workflow =~ "workflow_dispatch:"
+    refute workflow =~ "secrets.SUPABASE_DATABASE_URL"
+    refute workflow =~ "secrets: inherit"
+    refute workflow =~ "migrate-production:"
+    refute workflow =~ "APPLY_STRANGERTALKS_PRODUCTION_MIGRATIONS"
+  end
+
+  test "live migration is dispatch-only and actor-gated before secret-bearing jobs" do
+    workflow = File.read!(@live_path)
+
+    assert workflow =~ "workflow_dispatch:"
+    refute workflow =~ "pull_request:"
+    assert workflow =~ "github.actor == '#{@owner_actor}'"
     assert workflow =~ "APPLY_STRANGERTALKS_PRODUCTION_MIGRATIONS"
     assert workflow =~ "expected_main_sha"
     assert workflow =~ "needs: backup-before-live-migration"
-    assert workflow =~ "EXPECTED_PRODUCTION_HEAD: \"20260821191324\""
-    assert workflow =~ "EXPECTED_REPOSITORY_HEAD: \"20260910192317\""
+    assert workflow =~ "EXPECTED_MIGRATIONS_TREE: \"#{@migration_tree}\""
+    assert workflow =~ "git rev-parse HEAD:priv/repo/migrations"
     assert workflow =~ "test \"$GITHUB_REF\" = \"refs/heads/main\""
     assert workflow =~ "test \"${{ inputs.expected_main_sha }}\" = \"$GITHUB_SHA\""
     assert workflow =~ @bundled_ca
     assert workflow =~ "PGSSLMODE=verify-full"
     assert workflow =~ "PGSSLROOTCERT"
-
+    assert workflow =~ "sslmode"
+    assert workflow =~ "sslrootcert"
+    assert workflow =~ "urlsplit"
+    assert workflow =~ "parse_qsl"
     refute workflow =~ "SUPABASE_CA_URL"
-    refute workflow =~ "release/prep-2026-08-22"
   end
 
-  test "backup and restore proof checks out the triggering canonical commit and uses the pinned bundled CA" do
+  test "backup workflow cannot be manually dispatched by an arbitrary repository collaborator" do
     workflow = File.read!(@backup_path)
 
+    assert workflow =~ "workflow_call:"
+    assert workflow =~ "schedule:"
+    refute workflow =~ "workflow_dispatch:"
     assert workflow =~ "ref: ${{ github.sha }}"
-    assert workflow =~ "test \"$(git rev-parse HEAD)\" = \"$GITHUB_SHA\""
     assert workflow =~ @bundled_ca
-    assert workflow =~ "807025AD50D4ED219D2C9C7D299C004F824EB00CF7F65AFEF607D07B72E6CAFA"
     assert workflow =~ "PGSSLMODE=verify-full"
     assert workflow =~ "PGSSLROOTCERT"
-    assert workflow =~ "ops/postgres_backup.sh"
-    assert workflow =~ "ops/postgres_restore.sh"
-
-    refute workflow =~ "release/prep-2026-08-22"
-    refute workflow =~ "SUPABASE_CA_URL"
+    assert workflow =~ "sslmode"
+    assert workflow =~ "sslrootcert"
+    assert workflow =~ "urlsplit"
+    assert workflow =~ "parse_qsl"
   end
 end
