@@ -32,20 +32,51 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
     assert_reply first_leave, :ok
     assert_receive {:DOWN, ^first_monitor, :process, _pid, _reason}
 
-    still_active = membership!(room.room_id, participant.participant_id)
-    assert still_active.status == :ACTIVE
-    assert still_active.disconnect_count == 0
-    assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 1
+    eventually(fn ->
+      membership!(room.room_id, participant.participant_id).status == :ACTIVE and
+        PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 1
+    end)
+
+    assert membership!(room.room_id, participant.participant_id).disconnect_count == 0
 
     second_monitor = Process.monitor(second_socket.channel_pid)
     second_leave = leave(second_socket)
     assert_reply second_leave, :ok
     assert_receive {:DOWN, ^second_monitor, :process, _pid, _reason}
 
-    disconnected = membership!(room.room_id, participant.participant_id)
-    assert disconnected.status == :DISCONNECTED
-    assert disconnected.disconnect_count == 1
-    assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 0
+    eventually(fn ->
+      membership!(room.room_id, participant.participant_id).status == :DISCONNECTED and
+        PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 0
+    end)
+
+    assert membership!(room.room_id, participant.participant_id).disconnect_count == 1
+  end
+
+  test "abnormal channel exits are observed even when terminate callback cleanup is unavailable" do
+    Process.flag(:trap_exit, true)
+    {room, [participant | _]} = active_room!()
+
+    assert {:ok, _first_snapshot, first_socket} = join(participant, room.room_id)
+    assert {:ok, _second_snapshot, second_socket} = join(participant, room.room_id)
+    assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 2
+
+    first_monitor = Process.monitor(first_socket.channel_pid)
+    Process.exit(first_socket.channel_pid, :kill)
+    assert_receive {:DOWN, ^first_monitor, :process, _pid, :killed}
+
+    eventually(fn ->
+      membership!(room.room_id, participant.participant_id).status == :ACTIVE and
+        PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 1
+    end)
+
+    second_monitor = Process.monitor(second_socket.channel_pid)
+    Process.exit(second_socket.channel_pid, :kill)
+    assert_receive {:DOWN, ^second_monitor, :process, _pid, :killed}
+
+    eventually(fn ->
+      membership!(room.room_id, participant.participant_id).status == :DISCONNECTED and
+        PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 0
+    end)
   end
 
   test "client cannot author or inject a presence lease" do
@@ -77,9 +108,10 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
     assert_receive {:DOWN, ^first_monitor, :process, _pid, _reason}
     assert_receive {:DOWN, ^second_monitor, :process, _pid, _reason}
 
-    left = membership!(room.room_id, participant.participant_id)
-    assert left.status == :LEFT
-    assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 0
+    eventually(fn ->
+      membership!(room.room_id, participant.participant_id).status == :LEFT and
+        PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 0
+    end)
   end
 
   defp join(participant, room_id) do
@@ -123,5 +155,19 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
       from m in HangoutMembership,
         where: m.room_id == ^room_id and m.participant_id == ^participant_id
     )
+  end
+
+  defp eventually(predicate, attempts \\ 100)
+  defp eventually(predicate, 0), do: assert(predicate.())
+
+  defp eventually(predicate, attempts) do
+    if predicate.() do
+      :ok
+    else
+      receive do
+      after
+        10 -> eventually(predicate, attempts - 1)
+      end
+    end
   end
 end
