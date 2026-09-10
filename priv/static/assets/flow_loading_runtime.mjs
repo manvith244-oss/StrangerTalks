@@ -1,6 +1,6 @@
 import {Socket} from "/vendor/phoenix.mjs"
 import {FLOW_PHASE, createOperationGuard, loadingPresentation} from "./flow_loading.mjs"
-import {captureEntranceReady, productEvents} from "./product_events.mjs"
+import {captureEntranceReady, productEvents, talkLanguageEvents} from "./product_events.mjs"
 
 const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"
 const BOOT_WATCHDOG_MS = 15_000
@@ -84,6 +84,10 @@ function stopBootWatchers() {
   startupFailureObserver = null
 }
 
+function languageValues(select) {
+  return Array.from(select?.options || []).map(({value}) => value).filter(Boolean)
+}
+
 function finishBoot(snapshot) {
   stopBootWatchers()
   const activeScreen = node("section.screen.active")?.dataset?.screen
@@ -94,10 +98,14 @@ function finishBoot(snapshot) {
     bridge.setAttribute("aria-busy", "false")
   }
   document.body.classList.remove("flow-booting")
+  const languageSelect = node("#conversation-language")
   void captureEntranceReady(productEvents, {
-    rememberedTalkLanguage: Boolean(node("#conversation-language")?.value),
+    rememberedTalkLanguage: Boolean(languageSelect?.value),
     viewportWidth: globalThis.innerWidth
   })
+  if (languageSelect?.value) {
+    void talkLanguageEvents.remembered(languageSelect.value, languageValues(languageSelect))
+  }
 }
 
 function renderBootFailure() {
