@@ -3,6 +3,7 @@ name: Team 4 Safety Privacy Agency Gate
 on:
   pull_request:
     branches:
+      - main
       - release/prep-2026-08-22
   workflow_dispatch:
 
@@ -73,6 +74,43 @@ jobs:
       - name: Install Elixir dependencies
         run: mix deps.get
 
+      - name: Provision Supabase-like Data API role fixture before migrations
+        env:
+          PGPASSWORD: strangertalks_test
+        run: |
+          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+              CREATE ROLE anon NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+              CREATE ROLE authenticated NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN
+              CREATE ROLE service_role NOLOGIN;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_admin') THEN
+              CREATE ROLE supabase_admin NOLOGIN;
+            END IF;
+          END
+          $$;
+
+          GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+          GRANT CREATE, USAGE ON SCHEMA public TO supabase_admin;
+
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES
+            TO anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public
+            GRANT USAGE, SELECT, UPDATE ON SEQUENCES
+            TO anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public
+            GRANT EXECUTE ON FUNCTIONS TO PUBLIC, anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public
+            GRANT EXECUTE ON FUNCTIONS TO PUBLIC, anon, authenticated, service_role;
+          SQL
+
       - name: Reject retired or vulnerable Hex dependencies
         run: mix hex.audit
 
@@ -85,6 +123,7 @@ jobs:
       - name: Focused safety privacy agency Elixir attacks
         run: |
           mix test \
+            test/strangertalks_new/team4_db_security_closure_test.exs \
             test/strangertalks_new/relationship_consent_safety_review_test.exs \
             test/strangertalks_new/team4_safety_boundary_test.exs \
             test/strangertalks_new/report_test.exs \
