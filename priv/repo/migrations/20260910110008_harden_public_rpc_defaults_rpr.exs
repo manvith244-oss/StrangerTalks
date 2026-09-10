@@ -10,7 +10,7 @@ defmodule StrangertalksNew.Repo.Migrations.HardenPublicRpcDefaultsRpr do
     DO $$
     BEGIN
       EXECUTE format(
-        'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',
+        'ALTER DEFAULT PRIVILEGES FOR ROLE %I REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',
         current_user
       );
     END
@@ -25,7 +25,7 @@ defmodule StrangertalksNew.Repo.Migrations.HardenPublicRpcDefaultsRpr do
           EXECUTE 'REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM #{role}';
 
           EXECUTE format(
-            'ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM #{role}',
+            'ALTER DEFAULT PRIVILEGES FOR ROLE %I REVOKE EXECUTE ON FUNCTIONS FROM #{role}',
             current_user
           );
         END IF;
