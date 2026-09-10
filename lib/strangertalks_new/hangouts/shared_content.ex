@@ -2,14 +2,21 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
   @moduledoc """
   Durable shared-stimulus authority for a Hangout room.
 
-  The curated catalog is deterministic; the room row owns the current content id,
-  content sequence, and started-at timestamp. Runtime processes may reconstruct
-  this state but do not own it.
+  Content selection remains deterministic, while catalogue truth and every room
+  content sequence are persisted. Runtime processes may cache this state but do
+  not own it.
   """
 
   import Ecto.Query
 
-  alias StrangertalksNew.Hangouts.{ContentCatalog, HangoutRoom, Observability}
+  alias StrangertalksNew.Hangouts.{
+    ContentCatalog,
+    HangoutContentItem,
+    HangoutRoom,
+    HangoutRoomContent,
+    Observability
+  }
+
   alias StrangertalksNew.Repo
 
   def ensure_initial(room_id) when is_binary(room_id) do
@@ -30,20 +37,21 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
 
           %HangoutRoom{status: :ACTIVE} = room ->
             cond do
-              current_content_present?(room) -> {:unchanged, content_state!(room)}
-              room.content_sequence == 0 -> {:activated, advance_locked(room)}
-              true -> {:unchanged, nil}
+              current_content_present?(room) ->
+                {:unchanged, room |> current_record_for_locked_room!() |> content_state()}
+
+              room.content_sequence == 0 ->
+                {:activated, advance_locked(room)}
+
+              true ->
+                {:unchanged, nil}
             end
         end
       end)
 
     case result do
       {:ok, {:activated, content_state}} ->
-        Observability.emit_room(room_id, :content_activated, %{
-          count: 1,
-          content_sequence: content_state.sequence
-        })
-
+        emit_transition(room_id, content_state)
         {:ok, content_state}
 
       {:ok, {:unchanged, value}} ->
@@ -66,7 +74,10 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
 
       %HangoutRoom{} = room ->
         if current_content_present?(room) do
-          {:ok, content_state!(room)}
+          case current_record(room) do
+            %HangoutRoomContent{} = record -> {:ok, content_state(record)}
+            nil -> ensure_initial(room_id)
+          end
         else
           {:ok, nil}
         end
@@ -84,6 +95,56 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
   end
 
   def advance(_room_id, _expected_sequence), do: {:error, :invalid_room_request}
+
+  @doc false
+  def advance_locked(%HangoutRoom{} = room) do
+    next_sequence = room.content_sequence + 1
+    item = item_for_sequence!(room.language_tag, next_sequence)
+    started_at = DateTime.utc_now()
+
+    persist_content_item!(item)
+    record = persist_room_content!(room, item, next_sequence, started_at)
+
+    room
+    |> HangoutRoom.changeset(%{
+      current_content_id: item.id,
+      content_sequence: next_sequence,
+      current_content_started_at: started_at
+    })
+    |> Repo.update()
+    |> case do
+      {:ok, _updated} -> content_state(record)
+      {:error, changeset} -> Repo.rollback({:invalid_room_content, changeset})
+    end
+  end
+
+  @doc false
+  def current_record_for_locked_room!(%HangoutRoom{} = room) do
+    case current_record(room) do
+      %HangoutRoomContent{} = record ->
+        record
+
+      nil ->
+        case ContentCatalog.fetch(room.current_content_id) do
+          {:ok, item} ->
+            persist_content_item!(item)
+            persist_room_content!(room, item, room.content_sequence, room.current_content_started_at)
+
+          {:error, :unknown_content} ->
+            Repo.rollback(:content_unavailable)
+        end
+    end
+  end
+
+  @doc false
+  def emit_transition(room_id, content_state) when is_binary(room_id) and is_map(content_state) do
+    event = if content_state.sequence == 1, do: :content_activated, else: :content_advanced
+
+    Observability.emit_room(room_id, event, %{
+      count: 1,
+      content_sequence: content_state.sequence
+    })
+  end
 
   defp advance_with_guard(room_id, expected_sequence) do
     result =
@@ -112,13 +173,7 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
 
     case result do
       {:ok, content_state} ->
-        event = if content_state.sequence == 1, do: :content_activated, else: :content_advanced
-
-        Observability.emit_room(room_id, event, %{
-          count: 1,
-          content_sequence: content_state.sequence
-        })
-
+        emit_transition(room_id, content_state)
         {:ok, content_state}
 
       {:error, reason} ->
@@ -126,25 +181,75 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
     end
   end
 
-  defp advance_locked(room) do
-    next_sequence = room.content_sequence + 1
-    item = item_for_sequence!(room.language_tag, next_sequence)
-    started_at = DateTime.utc_now()
+  defp persist_content_item!(item) do
+    now = DateTime.utc_now()
 
-    room =
-      room
-      |> HangoutRoom.changeset(%{
-        current_content_id: item.id,
-        content_sequence: next_sequence,
-        current_content_started_at: started_at
-      })
-      |> Repo.update()
-      |> case do
-        {:ok, updated} -> updated
-        {:error, changeset} -> Repo.rollback({:invalid_room_content, changeset})
-      end
+    attrs = %{
+      content_id: item.id,
+      kind: enum_text(item.kind),
+      language_tag: item.language_tag,
+      source: enum_text(item.source),
+      safety_status: enum_text(item.safety_status),
+      publication_status: enum_text(item.publication_status),
+      body: item.body,
+      options: Map.get(item, :options, []),
+      created_at: now,
+      updated_at: now
+    }
 
-    content_state!(room)
+    %HangoutContentItem{}
+    |> HangoutContentItem.changeset(attrs)
+    |> Repo.insert(
+      on_conflict:
+        {:replace,
+         [
+           :kind,
+           :language_tag,
+           :source,
+           :safety_status,
+           :publication_status,
+           :body,
+           :options,
+           :updated_at
+         ]},
+      conflict_target: :content_id
+    )
+    |> case do
+      {:ok, record} -> record
+      {:error, changeset} -> Repo.rollback({:invalid_content_item, changeset})
+    end
+  end
+
+  defp persist_room_content!(room, item, sequence, started_at) do
+    attrs = %{
+      room_id: room.room_id,
+      content_id: item.id,
+      sequence: sequence,
+      started_at: started_at,
+      kind: enum_text(item.kind),
+      language_tag: item.language_tag,
+      source: enum_text(item.source),
+      safety_status: enum_text(item.safety_status),
+      publication_status: enum_text(item.publication_status),
+      body: item.body,
+      options: Map.get(item, :options, []),
+      created_at: DateTime.utc_now()
+    }
+
+    %HangoutRoomContent{}
+    |> HangoutRoomContent.changeset(attrs)
+    |> Repo.insert()
+    |> case do
+      {:ok, record} -> record
+      {:error, changeset} -> Repo.rollback({:invalid_room_content_history, changeset})
+    end
+  end
+
+  defp current_record(room) do
+    Repo.one(
+      from rc in HangoutRoomContent,
+        where: rc.room_id == ^room.room_id and rc.sequence == ^room.content_sequence
+    )
   end
 
   defp item_for_sequence!(language_tag, sequence) do
@@ -162,19 +267,32 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
     end
   end
 
-  defp content_state!(room) do
-    case ContentCatalog.fetch(room.current_content_id) do
-      {:ok, content} ->
-        %{
-          content: content,
-          sequence: room.content_sequence,
-          started_at: room.current_content_started_at
-        }
-
-      {:error, :unknown_content} ->
-        raise "persisted Hangout content id is not present in the curated catalog"
-    end
+  defp content_state(record) do
+    %{
+      content: %{
+        id: record.content_id,
+        kind: known_atom(record.kind),
+        language_tag: record.language_tag,
+        source: known_atom(record.source),
+        safety_status: known_atom(record.safety_status),
+        publication_status: known_atom(record.publication_status),
+        body: record.body,
+        options: record.options
+      },
+      sequence: record.sequence,
+      started_at: record.started_at
+    }
   end
+
+  defp enum_text(value) when is_atom(value), do: Atom.to_string(value)
+  defp enum_text(value) when is_binary(value), do: value
+
+  defp known_atom("QUESTION"), do: :QUESTION
+  defp known_atom("POLL"), do: :POLL
+  defp known_atom("FIRST_PARTY"), do: :FIRST_PARTY
+  defp known_atom("APPROVED"), do: :APPROVED
+  defp known_atom("ACTIVE"), do: :ACTIVE
+  defp known_atom(value), do: value
 
   defp current_content_present?(room) do
     is_binary(room.current_content_id) and room.current_content_id != "" and
