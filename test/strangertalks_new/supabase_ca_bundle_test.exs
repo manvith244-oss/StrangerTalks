@@ -14,8 +14,7 @@ defmodule StrangertalksNew.SupabaseCaBundleTest do
       |> :public_key.pem_decode()
 
     actual_sha256 =
-      der
-      |> :crypto.hash(:sha256)
+      :crypto.hash(:sha256, der)
       |> Base.encode16(case: :upper)
 
     assert actual_sha256 == @expected_sha256
