@@ -19,6 +19,7 @@ defmodule StrangertalksNewWeb.Router do
     get "/you", PageController, :home
     get "/you/memories", PageController, :home
     get "/you/reflections", PageController, :home
+    get "/living-thread", LivingThreadPageController, :show
 
     get "/health/live", HealthController, :live
     get "/health/ready", HealthController, :ready
@@ -40,6 +41,11 @@ defmodule StrangertalksNewWeb.Router do
     get "/account/sync", AccountSyncController, :show
     put "/account/sync", AccountSyncController, :update
     delete "/account/sync", AccountSyncController, :delete
+
+    get "/living-thread", LivingThreadController, :show
+    post "/living-thread/start", LivingThreadController, :start
+    post "/living-thread/continue", LivingThreadController, :continue
+    post "/living-thread/debrief", LivingThreadController, :debrief
 
     post "/conversations/:conversation_id/companion", CompanionController, :create, log: false
 
