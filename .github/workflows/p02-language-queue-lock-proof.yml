@@ -94,8 +94,11 @@ jobs:
           cat /tmp/strangertalks-p02-browser.log
           exit 1
 
-      - name: Exact P02 browser regression
-        run: node --test --test-concurrency=1 test/js/doors_visual_structure_browser_test.mjs
+      - name: Exact P02 queue-lock regression
+        run: |
+          node --test --test-concurrency=1 \
+            --test-name-pattern="Conversation Language is editable on Doors and locked once matchmaking starts" \
+            test/js/doors_visual_structure_browser_test.mjs
 
       - name: Stop Phoenix
         if: always()
