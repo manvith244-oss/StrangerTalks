@@ -1,0 +1,72 @@
+name: RPC Defaults RED Proof 2026-09-10
+
+on:
+  push:
+    branches:
+      - evidence/rpc-defaults-red-e5ea83c-2026-09-10
+
+permissions:
+  contents: read
+
+env:
+  TARGET_SHA: e5ea83c3fc21feb83168eea36b32bd5f5d7a246b
+  TARGET_TREE: 9a38999640694d9f58d770e7f8def0daf6d7a260
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+jobs:
+  red-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Exact candidate identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+          test -z "$(git status --porcelain)"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Prepare isolated database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Regression must fail before RPC-default fix
+        shell: bash
+        run: |
+          set +e
+          mix test test/strangertalks_new/public_rpc_default_closure_test.exs > /tmp/rpc-red.log 2>&1
+          status=$?
+          cat /tmp/rpc-red.log
+          test "$status" -ne 0
+      - name: Exact clean identity
+        if: always()
+        run: |
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
