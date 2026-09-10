@@ -75,3 +75,29 @@ export function createProductEventTracker(options = {}) {
     resetFlow
   }
 }
+
+export function deviceClassForWidth(width) {
+  if (!Number.isFinite(width) || width < 0) return "unknown"
+  if (width < 768) return "mobile"
+  if (width < 1024) return "tablet"
+  return "desktop"
+}
+
+export function captureEntranceReady(tracker, options = {}) {
+  const properties = {
+    remembered_talk_language: Boolean(options.rememberedTalkLanguage),
+    device_class: deviceClassForWidth(options.viewportWidth)
+  }
+  if (typeof options.buildId === "string" && options.buildId) properties.build_id = options.buildId
+  return tracker.captureOnce("st_entrance_ready", properties)
+}
+
+async function runtimeSink(event) {
+  const sink = globalThis.__strangerTalksProductEventSink
+  if (typeof sink === "function") return sink(event)
+}
+
+export const productEvents = createProductEventTracker({
+  sink: runtimeSink,
+  testTraffic: globalThis.__strangerTalksTestTraffic === true
+})
