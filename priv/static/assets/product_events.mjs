@@ -173,6 +173,10 @@ export function createQueueEventObserver(tracker) {
   }
 }
 
+export function captureFirstMessageAccepted(tracker) {
+  return tracker.captureOnce("st_first_message_accepted")
+}
+
 export function deviceClassForWidth(width) {
   if (!Number.isFinite(width) || width < 0) return "unknown"
   if (width < 768) return "mobile"
