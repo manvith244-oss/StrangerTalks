@@ -61,6 +61,27 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
     assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 0
   end
 
+  test "explicit leave revokes every overlapping channel so no left tab keeps receiving room events" do
+    Process.flag(:trap_exit, true)
+    {room, [participant | _]} = active_room!()
+
+    assert {:ok, _first_snapshot, first_socket} = join(participant, room.room_id)
+    assert {:ok, _second_snapshot, second_socket} = join(participant, room.room_id)
+    assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 2
+
+    first_monitor = Process.monitor(first_socket.channel_pid)
+    second_monitor = Process.monitor(second_socket.channel_pid)
+
+    leave_ref = push(first_socket, "room:leave", %{})
+    assert_reply leave_ref, :ok, %{status: "left"}
+    assert_receive {:DOWN, ^first_monitor, :process, _pid, _reason}
+    assert_receive {:DOWN, ^second_monitor, :process, _pid, _reason}
+
+    left = membership!(room.room_id, participant.participant_id)
+    assert left.status == :LEFT
+    assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 0
+  end
+
   defp join(participant, room_id) do
     token = ParticipantToken.sign(participant.participant_id)
     {:ok, socket} = connect(UserSocket, %{}, connect_info: %{auth_token: token})
