@@ -2,7 +2,7 @@ defmodule StrangertalksNew.Hangouts.DurableInteractionsContractTest do
   use StrangertalksNew.DataCase, async: false
 
   alias StrangertalksNew.Hangouts
-  alias StrangertalksNew.Hangouts.RoomServer
+  alias StrangertalksNew.Hangouts.{DurableInteractions, RoomServer, SharedContent}
   alias StrangertalksNew.{Participants, Repo}
 
   @durable_tables ~w(
@@ -35,6 +35,11 @@ defmodule StrangertalksNew.Hangouts.DurableInteractionsContractTest do
     assert {:ok, %{advanced: false, votes: 1, required_votes: 2}} =
              RoomServer.vote_skip(room.room_id, first.participant_id, current.sequence)
 
+    assert {:ok, before_restart} = RoomServer.snapshot(room.room_id, first.participant_id)
+    assert before_restart.interactions.reaction_counts == %{"laugh" => 1}
+    assert before_restart.interactions.skip_votes == 1
+    assert before_restart.interactions.required_skip_votes == 2
+
     monitor = Process.monitor(pid)
     Process.exit(pid, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}
@@ -44,6 +49,11 @@ defmodule StrangertalksNew.Hangouts.DurableInteractionsContractTest do
 
     assert {:ok, rebuilt_content} = RoomServer.current_content(room.room_id)
     assert rebuilt_content == current
+
+    assert {:ok, rebuilt_snapshot} = RoomServer.snapshot(room.room_id, second.participant_id)
+    assert rebuilt_snapshot.interactions.reaction_counts == %{"laugh" => 1}
+    assert rebuilt_snapshot.interactions.skip_votes == 1
+    assert rebuilt_snapshot.interactions.required_skip_votes == 2
 
     assert {:ok, rebuilt_reaction} =
              RoomServer.add_reaction(
@@ -76,6 +86,61 @@ defmodule StrangertalksNew.Hangouts.DurableInteractionsContractTest do
     assert room_content_count(room.room_id, current.sequence) == 1
     assert room_content_count(room.room_id, next.sequence) == 1
     assert durable_content_item?(next.content.id)
+  end
+
+  test "database serialization permits at most one threshold transition for concurrent final votes" do
+    {room, [first, second, third, fourth]} = active_room!(4)
+    assert {:ok, _pid} = RoomServer.ensure_started(room.room_id)
+    assert {:ok, current} = RoomServer.current_content(room.room_id)
+
+    assert {:ok, %{advanced: false, votes: 1}} =
+             RoomServer.vote_skip(room.room_id, first.participant_id, current.sequence)
+
+    assert {:ok, %{advanced: false, votes: 2}} =
+             RoomServer.vote_skip(room.room_id, second.participant_id, current.sequence)
+
+    results =
+      [third, fourth]
+      |> Task.async_stream(
+        fn participant ->
+          DurableInteractions.cast_skip_vote(
+            room.room_id,
+            participant.participant_id,
+            current.sequence,
+            0.5
+          )
+        end,
+        ordered: false,
+        timeout: :infinity
+      )
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert Enum.count(results, &match?({:ok, %{advanced: true}}, &1)) == 1
+    assert Enum.count(results, &match?({:error, :stale_content}, &1)) == 1
+
+    assert {:ok, after_race} = SharedContent.current(room.room_id)
+    assert after_race.sequence == current.sequence + 1
+    assert room_content_count(room.room_id, current.sequence) == 1
+    assert room_content_count(room.room_id, current.sequence + 1) == 1
+  end
+
+  test "duplicate and replacement reactions keep one durable effective row per member and sequence" do
+    {room, [first | _]} = active_room!(3)
+    assert {:ok, _pid} = RoomServer.ensure_started(room.room_id)
+    assert {:ok, current} = RoomServer.current_content(room.room_id)
+
+    assert {:ok, %{counts: %{"laugh" => 1}}} =
+             RoomServer.add_reaction(room.room_id, first.participant_id, current.sequence, "laugh")
+
+    assert {:ok, %{counts: %{"laugh" => 1}}} =
+             RoomServer.add_reaction(room.room_id, first.participant_id, current.sequence, "laugh")
+
+    assert durable_reaction_count(room.room_id, current.sequence) == 1
+
+    assert {:ok, %{counts: %{"fire" => 1}}} =
+             RoomServer.add_reaction(room.room_id, first.participant_id, current.sequence, "fire")
+
+    assert durable_reaction_count(room.room_id, current.sequence) == 1
   end
 
   test "GROUP_NO_CONTENT creates no durable room-content interaction state" do
@@ -126,6 +191,20 @@ defmodule StrangertalksNew.Hangouts.DurableInteractionsContractTest do
   defp room_content_count(room_id, sequence) do
     Repo.query!(
       "SELECT count(*) FROM hangout_room_content WHERE room_id = $1::uuid AND sequence = $2",
+      [room_id, sequence]
+    ).rows
+    |> hd()
+    |> hd()
+  end
+
+  defp durable_reaction_count(room_id, sequence) do
+    Repo.query!(
+      """
+      SELECT count(*)
+      FROM hangout_reactions r
+      JOIN hangout_room_content rc ON rc.room_content_id = r.room_content_id
+      WHERE r.room_id = $1::uuid AND rc.sequence = $2
+      """,
       [room_id, sequence]
     ).rows
     |> hd()
