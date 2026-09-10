@@ -173,9 +173,11 @@ export function createTalkLanguageObserver(tracker) {
 export function createQueueEventObserver(tracker) {
   let intentCode = null
   let interactionLanguage = null
+  let matchedInFlow = false
   const syncFlow = createFlowSynchronizer(tracker, () => {
     intentCode = null
     interactionLanguage = null
+    matchedInFlow = false
   })
 
   return {
@@ -198,13 +200,15 @@ export function createQueueEventObserver(tracker) {
     matched() {
       syncFlow()
       if (!intentCode || !interactionLanguage) return Promise.resolve(false)
+      matchedInFlow = true
       return tracker.captureOnce("st_match_created", {intent_code: intentCode})
+    },
+    firstMessageAccepted() {
+      syncFlow()
+      if (!matchedInFlow) return Promise.resolve(false)
+      return tracker.captureOnce("st_first_message_accepted")
     }
   }
-}
-
-export function captureFirstMessageAccepted(tracker) {
-  return tracker.captureOnce("st_first_message_accepted")
 }
 
 export function captureFlowCancelled(tracker, options = {}) {
