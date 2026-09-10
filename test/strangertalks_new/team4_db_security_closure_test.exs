@@ -125,28 +125,35 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
   test "future public functions created by the migration role do not inherit RPC execute authority" do
     current_role = Repo.query!("SELECT current_user").rows |> hd() |> hd()
 
-    [[acl]] =
+    execute_grantees =
       Repo.query!(
         """
-        SELECT COALESCE(
-          d.defaclacl,
-          acldefault('f', role.oid)
-        )::text
-        FROM pg_roles AS role
+        SELECT COALESCE(grantee_role.rolname, 'PUBLIC')
+        FROM pg_roles AS owner_role
         LEFT JOIN pg_default_acl AS d
-          ON d.defaclrole = role.oid
+          ON d.defaclrole = owner_role.oid
          AND d.defaclnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
          AND d.defaclobjtype = 'f'
-        WHERE role.rolname = $1
+        CROSS JOIN LATERAL aclexplode(
+          COALESCE(d.defaclacl, acldefault('f', owner_role.oid))
+        ) AS acl
+        LEFT JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
+        WHERE owner_role.rolname = $1
+          AND acl.privilege_type = 'EXECUTE'
+        ORDER BY 1
         """,
         [current_role]
       ).rows
+      |> List.flatten()
 
-    refute String.contains?(acl, "=X/"),
+    assert current_role in execute_grantees,
+           "migration/application owner must retain EXECUTE on future public functions"
+
+    refute "PUBLIC" in execute_grantees,
            "future public functions must not inherit EXECUTE for PUBLIC"
 
     for role <- @api_roles do
-      refute String.contains?(acl, "#{role}=X"),
+      refute role in execute_grantees,
              "future public functions must not inherit EXECUTE for #{role}"
     end
   end
