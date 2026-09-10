@@ -122,6 +122,35 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     end
   end
 
+  test "future public functions created by the migration role do not inherit RPC execute authority" do
+    current_role = Repo.query!("SELECT current_user").rows |> hd() |> hd()
+
+    [[acl]] =
+      Repo.query!(
+        """
+        SELECT COALESCE(
+          d.defaclacl,
+          acldefault('f', role.oid)
+        )::text
+        FROM pg_roles AS role
+        LEFT JOIN pg_default_acl AS d
+          ON d.defaclrole = role.oid
+         AND d.defaclnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')
+         AND d.defaclobjtype = 'f'
+        WHERE role.rolname = $1
+        """,
+        [current_role]
+      ).rows
+
+    refute String.contains?(acl, "=X/"),
+           "future public functions must not inherit EXECUTE for PUBLIC"
+
+    for role <- @api_roles do
+      refute String.contains?(acl, "#{role}=X"),
+             "future public functions must not inherit EXECUTE for #{role}"
+    end
+  end
+
   test "direct Phoenix database authority still performs legitimate participant persistence" do
     now = DateTime.utc_now()
 
