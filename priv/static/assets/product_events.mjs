@@ -238,36 +238,99 @@ export function createTalkLanguageObserver(tracker) {
 export function createQueueEventObserver(tracker) {
   let intentCode = null
   let interactionLanguage = null
+  let requestCapturePromise = null
+  let joinedCapturePromise = null
+  let matchedCapturePromise = null
+  let queueJoinedInFlow = false
   let matchedInFlow = false
-  const syncFlow = createFlowSynchronizer(tracker, () => {
+
+  const resetState = () => {
     intentCode = null
     interactionLanguage = null
+    requestCapturePromise = null
+    joinedCapturePromise = null
+    matchedCapturePromise = null
+    queueJoinedInFlow = false
     matchedInFlow = false
-  })
+  }
+  const syncFlow = createFlowSynchronizer(tracker, resetState)
 
   return {
     requested(nextIntentCode, nextInteractionLanguage) {
       syncFlow()
       if (!isIntentCode(nextIntentCode) || !isTalkLanguageCode(nextInteractionLanguage)) return Promise.resolve(false)
+      if (queueJoinedInFlow || joinedCapturePromise) return Promise.resolve(false)
+
       intentCode = nextIntentCode
       interactionLanguage = nextInteractionLanguage
-      return tracker.capture("st_queue_requested", {intent_code: intentCode, interaction_language: interactionLanguage})
+      matchedCapturePromise = null
+      matchedInFlow = false
+
+      const flowAttemptId = tracker.flowAttemptId
+      const capturedIntentCode = nextIntentCode
+      const capturedLanguage = nextInteractionLanguage
+      const capturePromise = tracker.capture("st_queue_requested", {
+        intent_code: capturedIntentCode,
+        interaction_language: capturedLanguage
+      })
+      requestCapturePromise = capturePromise
+      return capturePromise.then((recorded) => {
+        if (tracker.flowAttemptId !== flowAttemptId || requestCapturePromise !== capturePromise) return false
+        return recorded
+      })
     },
     joined() {
       syncFlow()
-      if (!intentCode || !interactionLanguage) return Promise.resolve(false)
-      return tracker.captureOnce("st_queue_joined", {intent_code: intentCode})
+      if (!intentCode || !interactionLanguage || !requestCapturePromise) return Promise.resolve(false)
+      if (queueJoinedInFlow || joinedCapturePromise) return Promise.resolve(false)
+
+      const flowAttemptId = tracker.flowAttemptId
+      const prerequisite = requestCapturePromise
+      const capturedIntentCode = intentCode
+      const capturePromise = (async () => {
+        if (!(await prerequisite)) return false
+        if (tracker.flowAttemptId !== flowAttemptId || requestCapturePromise !== prerequisite) return false
+        const recorded = await tracker.captureOnce("st_queue_joined", {intent_code: capturedIntentCode})
+        if (recorded && tracker.flowAttemptId === flowAttemptId && joinedCapturePromise === capturePromise) {
+          queueJoinedInFlow = true
+        }
+        return recorded
+      })()
+      joinedCapturePromise = capturePromise
+      return capturePromise
     },
     matched() {
       syncFlow()
       if (!intentCode || !interactionLanguage) return Promise.resolve(false)
-      matchedInFlow = true
-      return tracker.captureOnce("st_match_created", {intent_code: intentCode})
+      if ((!queueJoinedInFlow && !joinedCapturePromise) || matchedInFlow || matchedCapturePromise) return Promise.resolve(false)
+
+      const flowAttemptId = tracker.flowAttemptId
+      const prerequisite = joinedCapturePromise
+      const capturedIntentCode = intentCode
+      const capturePromise = (async () => {
+        if (prerequisite && !(await prerequisite)) return false
+        if (tracker.flowAttemptId !== flowAttemptId) return false
+        if (!queueJoinedInFlow) return false
+        const recorded = await tracker.captureOnce("st_match_created", {intent_code: capturedIntentCode})
+        if (recorded && tracker.flowAttemptId === flowAttemptId && matchedCapturePromise === capturePromise) {
+          matchedInFlow = true
+        }
+        return recorded
+      })()
+      matchedCapturePromise = capturePromise
+      return capturePromise
     },
     firstMessageAccepted() {
       syncFlow()
-      if (!matchedInFlow) return Promise.resolve(false)
-      return tracker.captureOnce("st_first_message_accepted")
+      if (!matchedInFlow && !matchedCapturePromise) return Promise.resolve(false)
+
+      const flowAttemptId = tracker.flowAttemptId
+      const prerequisite = matchedCapturePromise
+      return (async () => {
+        if (prerequisite && !(await prerequisite)) return false
+        if (tracker.flowAttemptId !== flowAttemptId || !matchedInFlow) return false
+        return tracker.captureOnce("st_first_message_accepted")
+      })()
     }
   }
 }
