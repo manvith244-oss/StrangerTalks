@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import {readFileSync} from "node:fs"
 import test from "node:test"
 import {
-  captureFirstMessageAccepted,
-  createProductEventTracker
+  createProductEventTracker,
+  createQueueEventObserver
 } from "../../priv/static/assets/product_events.mjs"
 
 function setup() {
@@ -12,16 +12,30 @@ function setup() {
     uuid: () => "flow-message",
     sink: async (event) => events.push(event)
   })
-  return {events, tracker}
+  return {events, tracker, queue: createQueueEventObserver(tracker)}
 }
 
-test("first accepted human message emits once without message content or identifiers", async () => {
-  const {events, tracker} = setup()
+test("first accepted message cannot complete a flow that never observed authoritative match", async () => {
+  const {events, queue} = setup()
 
-  assert.equal(await captureFirstMessageAccepted(tracker), true)
-  assert.equal(await captureFirstMessageAccepted(tracker), false)
+  assert.equal(await queue.firstMessageAccepted(), false)
+  assert.deepEqual(events, [])
 
-  assert.deepEqual(events, [{
+  await queue.requested("SOMETHING_REAL", "en")
+  assert.equal(await queue.firstMessageAccepted(), false)
+  assert.equal(events.some(({name}) => name === "st_first_message_accepted"), false)
+})
+
+test("first server-accepted human message emits once only after same-flow authoritative match", async () => {
+  const {events, queue} = setup()
+
+  await queue.requested("JUST_TALK", "hi")
+  await queue.matched()
+
+  assert.equal(await queue.firstMessageAccepted(), true)
+  assert.equal(await queue.firstMessageAccepted(), false)
+
+  assert.deepEqual(events.filter(({name}) => name === "st_first_message_accepted"), [{
     name: "st_first_message_accepted",
     properties: {
       flow_attempt_id: "flow-message",
@@ -48,16 +62,16 @@ test("message event schema cannot carry body, reply, media text, or message IDs"
   })
 })
 
-test("runtime attaches first-message success only to the message:send ok receiver", () => {
+test("runtime attaches first-message success only to the message:send ok receiver and flow observer", () => {
   const source = readFileSync(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
 
   const helperStart = source.indexOf("function withFirstMessageAcceptance(push)")
   const helperEnd = source.indexOf("function patchParticipantChannel", helperStart)
   const helper = source.slice(helperStart, helperEnd)
   assert.match(helper, /push\.receive\("ok"/)
-  assert.match(helper, /captureFirstMessageAccepted\(productEvents\)/)
-  assert.doesNotMatch(helper, /receive\("error"[\s\S]*captureFirstMessageAccepted/)
-  assert.doesNotMatch(helper, /receive\("timeout"[\s\S]*captureFirstMessageAccepted/)
+  assert.match(helper, /queueEvents\.firstMessageAccepted\(\)/)
+  assert.doesNotMatch(helper, /receive\("error"[\s\S]*firstMessageAccepted/)
+  assert.doesNotMatch(helper, /receive\("timeout"[\s\S]*firstMessageAccepted/)
 
   const conversationStart = source.indexOf("function patchConversationChannel(channel)")
   const conversationEnd = source.indexOf("const originalSocketChannel", conversationStart)
