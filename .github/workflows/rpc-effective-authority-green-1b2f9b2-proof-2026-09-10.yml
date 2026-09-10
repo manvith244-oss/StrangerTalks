@@ -1,0 +1,129 @@
+name: RPC Effective Authority GREEN 1B2F9B2 Proof 2026-09-10
+
+on:
+  push:
+    branches:
+      - evidence/rpc-effective-authority-green-1b2f9b2-2026-09-10
+
+permissions:
+  contents: read
+
+env:
+  TARGET_SHA: 1b2f9b2b703dcb79a1a0d590654be199fac0eb51
+  TARGET_TREE: 31969c49d9fe8ba97fac07696f20e0170299ef01
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  PGPASSWORD: strangertalks_test
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Exact candidate identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+          test -z "$(git status --porcelain)"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+      - name: Create database and Supabase-style API roles
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          psql -h localhost -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE anon NOLOGIN;
+          CREATE ROLE authenticated NOLOGIN;
+          CREATE ROLE service_role NOLOGIN BYPASSRLS;
+          SQL
+      - name: Migrate through current-main head
+        run: mix ecto.migrate --to 20260910004000 --quiet
+      - name: Seed unsafe defaults and existing function
+        run: |
+          psql -h localhost -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public
+            GRANT EXECUTE ON FUNCTIONS TO anon, authenticated, service_role;
+          CREATE FUNCTION public.__rpr_existing_probe() RETURNS integer LANGUAGE sql AS $$ SELECT 1 $$;
+          DO $$
+          BEGIN
+            IF NOT has_function_privilege('anon', 'public.__rpr_existing_probe()', 'EXECUTE') THEN RAISE EXCEPTION 'anon precondition missing'; END IF;
+            IF NOT has_function_privilege('authenticated', 'public.__rpr_existing_probe()', 'EXECUTE') THEN RAISE EXCEPTION 'authenticated precondition missing'; END IF;
+            IF NOT has_function_privilege('service_role', 'public.__rpr_existing_probe()', 'EXECUTE') THEN RAISE EXCEPTION 'service_role precondition missing'; END IF;
+            IF NOT EXISTS (
+              SELECT 1 FROM pg_proc p
+              CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) acl
+              WHERE p.oid='public.__rpr_existing_probe()'::regprocedure
+                AND acl.grantee=0 AND acl.privilege_type='EXECUTE'
+            ) THEN RAISE EXCEPTION 'PUBLIC precondition missing'; END IF;
+          END $$;
+          SQL
+      - name: Apply RPC authority closure
+        run: mix ecto.migrate --quiet
+      - name: Existing public function authority is closed
+        run: |
+          psql -h localhost -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE owner_name text;
+          BEGIN
+            SELECT r.rolname INTO owner_name
+            FROM pg_proc p JOIN pg_roles r ON r.oid=p.proowner
+            WHERE p.oid='public.__rpr_existing_probe()'::regprocedure;
+            IF owner_name <> current_user THEN RAISE EXCEPTION 'existing probe owner changed'; END IF;
+            IF NOT has_function_privilege(current_user, 'public.__rpr_existing_probe()', 'EXECUTE') THEN RAISE EXCEPTION 'owner lost EXECUTE'; END IF;
+            IF has_function_privilege('anon', 'public.__rpr_existing_probe()', 'EXECUTE') THEN RAISE EXCEPTION 'anon still has EXECUTE'; END IF;
+            IF has_function_privilege('authenticated', 'public.__rpr_existing_probe()', 'EXECUTE') THEN RAISE EXCEPTION 'authenticated still has EXECUTE'; END IF;
+            IF has_function_privilege('service_role', 'public.__rpr_existing_probe()', 'EXECUTE') THEN RAISE EXCEPTION 'service_role still has EXECUTE'; END IF;
+            IF EXISTS (
+              SELECT 1 FROM pg_proc p
+              CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) acl
+              WHERE p.oid='public.__rpr_existing_probe()'::regprocedure
+                AND acl.grantee=0 AND acl.privilege_type='EXECUTE'
+            ) THEN RAISE EXCEPTION 'PUBLIC still has EXECUTE'; END IF;
+          END $$;
+          DROP FUNCTION public.__rpr_existing_probe();
+          SQL
+      - name: Future public function effective-authority regression
+        run: mix test test/strangertalks_new/public_rpc_effective_authority_test.exs
+      - name: Static and full precommit
+        run: |
+          mix format --check-formatted
+          mix compile --warnings-as-errors
+          mix deps.unlock --check-unused
+          mix hex.audit
+          mix precommit
+      - name: Exact clean identity
+        if: always()
+        run: |
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
