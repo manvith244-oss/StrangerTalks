@@ -254,10 +254,6 @@ defmodule StrangertalksNew.ConversationLifecycle.Transitions do
         emit_committed_transition(updated, expected_status, target_status, event)
         {:ok, updated}
 
-      {:ok, {:ok, %Conversation{} = updated}} ->
-        emit_committed_transition(updated, expected_status, target_status, event)
-        {:ok, updated}
-
       {:error, reason} ->
         emit_terminal_persistence_failure(target_status, event, reason)
         {:error, reason}
