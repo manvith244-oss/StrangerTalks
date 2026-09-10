@@ -31,7 +31,7 @@ test("first intent emits selected with a stable canonical code", async () => {
   }])
 })
 
-test("changing intent before admission emits a bounded reversal", async () => {
+test("changing intent before queue join emits a bounded reversal", async () => {
   const {events, observer} = setup()
 
   await observer.select("JUST_TALK")
@@ -56,20 +56,33 @@ test("repeating the same Door does not manufacture an intent change", async () =
   assert.equal(events.length, 1)
 })
 
-test("intent changes stop after authoritative queue admission", async () => {
+test("intent changes stop after authoritative queue join", async () => {
   const {events, observer} = setup()
 
   await observer.select("SOMETHING_REAL")
-  observer.markQueueAdmitted()
+  observer.markQueueJoined()
   assert.equal(await observer.select("EXPLORE"), false)
   assert.equal(events.length, 1)
 })
 
-test("arrival instrumentation reads the canonical data-door code rather than visible Door copy", () => {
-  const source = readFileSync(new URL("../../priv/static/assets/arrival_first_minute.mjs", import.meta.url), "utf8")
+test("arrival and queue runtime share one flow-scoped intent observer", () => {
+  const arrival = readFileSync(new URL("../../priv/static/assets/arrival_first_minute.mjs", import.meta.url), "utf8")
+  const runtime = readFileSync(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
 
-  assert.match(source, /createIntentSelectionObserver\(productEvents\)/)
-  assert.match(source, /intentEvents\.select\(door\.dataset\.door\)/)
-  assert.doesNotMatch(source, /intentEvents\.select\([^)]*textContent/)
-  assert.doesNotMatch(source, /Deep Talk person|Vent user|personality/i)
+  assert.match(arrival, /import \{[^}]*intentEvents[^}]*\} from "\.\/product_events\.mjs"/)
+  assert.match(arrival, /intentEvents\.select\(door\.dataset\.door\)/)
+  assert.doesNotMatch(arrival, /createIntentSelectionObserver\(productEvents\)/)
+  assert.doesNotMatch(arrival, /intentEvents\.select\([^)]*textContent/)
+
+  const statusStart = runtime.indexOf('if (event === "queue:status")')
+  const statusEnd = runtime.indexOf('} else if (event === "match_found")', statusStart)
+  const statusBlock = runtime.slice(statusStart, statusEnd)
+  const guardIndex = statusBlock.indexOf("queuedAttemptCanPresent(payload.queue_attempt_id)")
+  const joinedIndex = statusBlock.indexOf("queueEvents.joined()")
+  const intentLockIndex = statusBlock.indexOf("intentEvents.markQueueJoined()")
+
+  assert.ok(guardIndex >= 0)
+  assert.ok(joinedIndex > guardIndex)
+  assert.ok(intentLockIndex > guardIndex, "intent reversal must freeze only after authoritative queue join")
+  assert.doesNotMatch(arrival, /Deep Talk person|Vent user|personality/i)
 })
