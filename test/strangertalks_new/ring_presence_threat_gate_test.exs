@@ -6,7 +6,8 @@ defmodule StrangertalksNew.RingPresenceThreatGateTest do
   @hangout_channel "lib/strangertalks_new_web/hangout_channel.ex"
   @ring_runtime "priv/static/assets/live_call.mjs"
   @app_runtime "priv/static/assets/app.js"
-  @app_css "priv/static/assets/app.css"
+  @conversation_channel "lib/strangertalks_new_web/conversation_channel.ex"
+  @conversation_server "lib/strangertalks_new/conversation_lifecycle/conversation_server.ex"
 
   test "B1: Hangouts documentation and implementation agree that presence is lifecycle-derived, not client heartbeat authority" do
     design = File.read!(@hangout_design)
@@ -15,6 +16,7 @@ defmodule StrangertalksNew.RingPresenceThreatGateTest do
 
     refute design =~ "presence:heartbeat"
     refute plan =~ "presence:heartbeat"
+    refute plan =~ "heartbeat/2"
     refute channel =~ "presence:heartbeat"
 
     assert design =~ "RoomServer.reconnect"
@@ -27,22 +29,26 @@ defmodule StrangertalksNew.RingPresenceThreatGateTest do
     assert channel =~ ~s(handle_in("room:leave")
   end
 
-  test "B3: Ring has no unwired audio-energy fingerprint surface" do
+  test "B3: production Ring wiring has no audio-energy transport or producer" do
     ring = File.read!(@ring_runtime)
     app = File.read!(@app_runtime)
-    css = File.read!(@app_css)
+    channel = File.read!(@conversation_channel)
+    server = File.read!(@conversation_server)
 
-    for forbidden <- [
-          "localEnergy",
-          "peerEnergy",
-          "--ring-local-energy",
-          "--ring-peer-energy",
-          "ring-state-self-speaking",
-          "ring-state-peer-speaking"
-        ] do
-      refute ring =~ forbidden, "unwired Ring energy surface remains in live_call.mjs: #{forbidden}"
-      refute app =~ forbidden, "unexpected production Ring energy producer exists in app.js: #{forbidden}"
-      refute css =~ forbidden, "dead Ring energy styling remains in app.css: #{forbidden}"
+    # The Ring component still contains a dormant options seam from the historical
+    # DELIGHT prototype. B3 closes on the threat-model's Option B: no production
+    # measurement/transport/wiring exists. Any future wiring must change one of
+    # these production owners and trip this gate for fresh security review.
+    assert ring =~ "export class StrangerTalksRing"
+    assert app =~ "ring?.update(state)"
+
+    for forbidden <- ["localEnergy", "peerEnergy"] do
+      refute app =~ forbidden, "production browser energy producer was added without B3 re-review: #{forbidden}"
+    end
+
+    for forbidden <- ["call:energy", "call:speaking", "audio_energy", "peer_energy", "local_energy"] do
+      refute channel =~ forbidden, "conversation channel gained Ring energy transport without B3 re-review: #{forbidden}"
+      refute server =~ forbidden, "conversation authority gained Ring energy state without B3 re-review: #{forbidden}"
     end
   end
 end
