@@ -268,17 +268,24 @@ defmodule StrangertalksNew.Hangouts.SharedContent do
   end
 
   defp content_state(record) do
+    content = %{
+      id: record.content_id,
+      kind: known_atom(record.kind),
+      language_tag: record.language_tag,
+      source: known_atom(record.source),
+      safety_status: known_atom(record.safety_status),
+      publication_status: known_atom(record.publication_status),
+      body: record.body
+    }
+
+    content =
+      case record.options do
+        [] -> content
+        options -> Map.put(content, :options, options)
+      end
+
     %{
-      content: %{
-        id: record.content_id,
-        kind: known_atom(record.kind),
-        language_tag: record.language_tag,
-        source: known_atom(record.source),
-        safety_status: known_atom(record.safety_status),
-        publication_status: known_atom(record.publication_status),
-        body: record.body,
-        options: record.options
-      },
+      content: content,
       sequence: record.sequence,
       started_at: record.started_at
     }
