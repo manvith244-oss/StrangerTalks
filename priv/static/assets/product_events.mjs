@@ -5,7 +5,7 @@ const EVENT_PROPERTIES = Object.freeze({
   st_talk_language_opened: Object.freeze(["trigger"]),
   st_talk_language_selected: Object.freeze(["language_code", "source", "trigger"]),
   st_queue_requested: Object.freeze(["intent_code", "interaction_language"]),
-  st_queue_admitted: Object.freeze(["intent_code"]),
+  st_queue_joined: Object.freeze(["intent_code"]),
   st_match_created: Object.freeze(["intent_code"]),
   st_first_message_accepted: Object.freeze(["message_type"]),
   st_flow_cancelled: Object.freeze(["stage", "reason_code"])
@@ -192,10 +192,10 @@ export function createQueueEventObserver(tracker) {
         interaction_language: interactionLanguage
       })
     },
-    admitted() {
+    joined() {
       syncFlow()
       if (!intentCode || !interactionLanguage) return Promise.resolve(false)
-      return tracker.captureOnce("st_queue_admitted", {intent_code: intentCode})
+      return tracker.captureOnce("st_queue_joined", {intent_code: intentCode})
     },
     matched() {
       syncFlow()
