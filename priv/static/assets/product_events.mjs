@@ -90,16 +90,16 @@ export function createProductEventTracker(options = {}) {
 
 export function createIntentSelectionObserver(tracker) {
   let selectedIntent = null
-  let queueAdmitted = false
+  let queueJoined = false
   const syncFlow = createFlowSynchronizer(tracker, () => {
     selectedIntent = null
-    queueAdmitted = false
+    queueJoined = false
   })
 
   return {
     async select(intentValue) {
       syncFlow()
-      if (queueAdmitted || typeof intentValue !== "string" || !intentValue) return false
+      if (queueJoined || typeof intentValue !== "string" || !intentValue) return false
       if (intentValue === selectedIntent) return false
 
       if (selectedIntent === null) {
@@ -118,9 +118,9 @@ export function createIntentSelectionObserver(tracker) {
         to_intent: intentValue
       })
     },
-    markQueueAdmitted() {
+    markQueueJoined() {
       syncFlow()
-      queueAdmitted = true
+      queueJoined = true
     }
   }
 }
@@ -250,5 +250,6 @@ export const productEvents = createProductEventTracker({
   testTraffic: globalThis.__strangerTalksTestTraffic === true
 })
 
+export const intentEvents = createIntentSelectionObserver(productEvents)
 export const talkLanguageEvents = createTalkLanguageObserver(productEvents)
 export const queueEvents = createQueueEventObserver(productEvents)
