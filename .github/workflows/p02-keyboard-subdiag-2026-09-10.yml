@@ -1,0 +1,103 @@
+name: P02 Keyboard Subdiagnostic 2026-09-10
+
+on:
+  push:
+    branches:
+      - evidence/p02-keyboard-subdiag-fe97649-2026-09-10
+
+permissions:
+  contents: read
+
+env:
+  TARGET_SHA: caad8a9e81aa239b983c8706fa051badd007afa9
+  TARGET_TREE: 3d4f4e78a6af0afbd284535163911b0a69a6815e
+  MIX_ENV: test
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+  STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Exact diagnostic identity
+        run: |
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
+          test -z "$(git status --porcelain)"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Prepare database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start Phoenix
+        shell: bash
+        run: |
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24))
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(endpoint, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' >/tmp/p02-keyboard.log 2>&1 &
+          echo $! >/tmp/p02-keyboard.pid
+          for _ in $(seq 1 60); do
+            curl -fsS "$STRANGERTALKS_BROWSER_BASE_URL/health/live" >/dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          cat /tmp/p02-keyboard.log
+          exit 1
+      - name: Language reachable
+        run: node --test --test-name-pattern="keyboard reachable$" test/js/p02_keyboard_focus_diagnostic_test.mjs
+      - name: Language focus indicator
+        if: always()
+        run: node --test --test-name-pattern="focus indicator and target" test/js/p02_keyboard_focus_diagnostic_test.mjs
+      - name: First Door after language
+        if: always()
+        run: node --test --test-name-pattern="first Door is keyboard reachable" test/js/p02_keyboard_focus_diagnostic_test.mjs
+      - name: All four Doors order
+        if: always()
+        run: node --test --test-name-pattern="all four Doors" test/js/p02_keyboard_focus_diagnostic_test.mjs
+      - name: Fixed indicator equality
+        if: always()
+        run: node --test --test-name-pattern="same visible style" test/js/p02_keyboard_focus_diagnostic_test.mjs
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -f /tmp/p02-keyboard.pid ]; then kill "$(cat /tmp/p02-keyboard.pid)" 2>/dev/null || true; fi
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
