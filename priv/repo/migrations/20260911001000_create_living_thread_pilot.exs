@@ -45,8 +45,7 @@ defmodule StrangertalksNew.Repo.Migrations.CreateLivingThreadPilot do
            )
 
     create constraint(:living_threads, :living_threads_status_check,
-             check:
-               "status IN ('WAITING_FOR_B','CONTINUED','LIQUIDITY_FAILURE','RESOLVED')"
+             check: "status IN ('WAITING_FOR_B','CONTINUED','LIQUIDITY_FAILURE','RESOLVED')"
            )
 
     create constraint(:living_threads, :living_threads_no_self_carry_check,
