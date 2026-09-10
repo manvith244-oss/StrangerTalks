@@ -18,7 +18,9 @@ defmodule StrangertalksNew.LivingThreads do
   @active_report_statuses [:SUBMITTED, :UNDER_REVIEW]
   @max_candidate_scan 20
 
-  def ensure_assignment(participant_id, opts \\ []) when is_binary(participant_id) do
+  def ensure_assignment(participant_id, opts \\ [])
+
+  def ensure_assignment(participant_id, opts) when is_binary(participant_id) do
     now = now(opts)
 
     case Repo.get_by(ExperimentAssignment, participant_id: participant_id) do
@@ -41,6 +43,8 @@ defmodule StrangertalksNew.LivingThreads do
   def ensure_assignment(_participant_id, _opts), do: {:error, :invalid_participant}
 
   def start_thread(participant_id, body, opts \\ [])
+
+  def start_thread(participant_id, body, opts)
       when is_binary(participant_id) and is_binary(body) do
     now = now(opts)
 
@@ -83,6 +87,8 @@ defmodule StrangertalksNew.LivingThreads do
   def start_thread(_participant_id, _body, _opts), do: {:error, :invalid_thread_input}
 
   def continue_next(participant_id, body, opts \\ [])
+
+  def continue_next(participant_id, body, opts)
       when is_binary(participant_id) and is_binary(body) do
     now = now(opts)
 
@@ -158,7 +164,9 @@ defmodule StrangertalksNew.LivingThreads do
 
   def continue_next(_participant_id, _body, _opts), do: {:error, :invalid_continuation_input}
 
-  def experience_for(participant_id, opts \\ []) when is_binary(participant_id) do
+  def experience_for(participant_id, opts \\ [])
+
+  def experience_for(participant_id, opts) when is_binary(participant_id) do
     now = now(opts)
     materialize_deadlines(now)
 
@@ -174,6 +182,8 @@ defmodule StrangertalksNew.LivingThreads do
   def experience_for(_participant_id, _opts), do: {:error, :invalid_participant}
 
   def record_known_person_debrief(participant_id, answer, reason \\ nil, opts \\ [])
+
+  def record_known_person_debrief(participant_id, answer, reason, opts)
       when is_binary(participant_id) and answer in ["no", "maybe", "yes"] do
     now = now(opts)
     materialize_deadlines(now)
@@ -318,6 +328,8 @@ defmodule StrangertalksNew.LivingThreads do
             from t in LivingThread,
               where:
                 t.starter_participant_id != ^assignment.participant_id and
+                  t.status in [:WAITING_FOR_B, :CONTINUED] and
+                  t.resolves_at > ^now and
                   t.thread_id not in ^observed_ids,
               order_by: [asc: t.opened_at, asc: t.thread_id],
               limit: ^@max_candidate_scan,
@@ -443,7 +455,7 @@ defmodule StrangertalksNew.LivingThreads do
       participant_id,
       thread_id
     )
-    |> Repo.insert(on_conflict: :nothing, conflict_target: :deduplication_key)
+    |> Repo.insert(on_conflict: :nothing)
   end
 
   defp insert_event!(participant_id, thread_id, event_type, metadata, occurred_at, dedupe_key) do
