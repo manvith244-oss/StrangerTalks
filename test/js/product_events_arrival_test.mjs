@@ -49,7 +49,7 @@ test("entrance-ready uses only the bounded device-class enum", () => {
   assert.equal(deviceClassForWidth(Number.NaN), "unknown")
 })
 
-test("canonical boot emits entrance-ready only after the entrance is made interactive", () => {
+test("canonical boot emits entrance-ready only after the actual entrance is made interactive", () => {
   const source = readFileSync(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
   const start = source.indexOf("function finishBoot(snapshot)")
   const end = source.indexOf("function renderBootFailure()", start)
@@ -58,7 +58,12 @@ test("canonical boot emits entrance-ready only after the entrance is made intera
   assert.ok(start >= 0 && end > start, "finishBoot must remain the canonical boot-success boundary")
   const interactiveIndex = finishBoot.indexOf('document.body.classList.remove("flow-booting")')
   const eventIndex = finishBoot.indexOf("captureEntranceReady(")
-  assert.ok(interactiveIndex >= 0, "finishBoot must make the entrance interactive")
+  assert.ok(interactiveIndex >= 0, "finishBoot must make the resolved surface interactive")
   assert.ok(eventIndex > interactiveIndex, "entrance-ready must be captured after interactivity is restored")
   assert.equal((finishBoot.match(/captureEntranceReady\(/g) || []).length, 1)
+  assert.match(
+    finishBoot,
+    /if \(activeScreen === "doors"\) \{[\s\S]*captureEntranceReady\(/,
+    "restored queue/conversation states must not be counted as a fresh entrance"
+  )
 })
