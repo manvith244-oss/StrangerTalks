@@ -134,6 +134,16 @@ test("rejects structurally incomplete events instead of emitting ambiguous funne
   assert.deepEqual(events, [])
 })
 
+test("invalid captureOnce attempt does not consume the valid once-only slot", async () => {
+  const {events, sink} = recordingSink()
+  const tracker = createProductEventTracker({uuid: () => "flow-1", sink})
+
+  assert.equal(await tracker.captureOnce("st_queue_joined", {}), false)
+  assert.equal(await tracker.captureOnce("st_queue_joined", {intent_code: "EXPLORE"}), true)
+  assert.equal(events.length, 1)
+  assert.equal(events[0].name, "st_queue_joined")
+})
+
 test("first-message event has no application payload surface beyond flow/test context", async () => {
   const {events, sink} = recordingSink()
   const tracker = createProductEventTracker({uuid: () => "flow-1", sink})
