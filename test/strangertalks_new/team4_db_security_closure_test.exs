@@ -17,6 +17,9 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     hangout_reports
     hangout_rooms
     learning_records
+    living_thread_experiment_assignments
+    living_thread_pilot_events
+    living_threads
     matches
     memories
     message_reactions
