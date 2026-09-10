@@ -1,0 +1,107 @@
+name: P02 Language Queue Lock V2 Proof
+
+on:
+  push:
+    branches:
+      - convergence/p02-language-queue-lock-v2-2026-09-11
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p02-language-queue-lock-v2-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  browser-proof:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+    steps:
+      - name: Checkout exact proof commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Prove checkout identity
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/strangertalks-p02-v2.log 2>&1 &
+          echo $! > /tmp/strangertalks-p02-v2.pid
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$(cat /tmp/strangertalks-p02-v2.pid)" 2>/dev/null; then
+              cat /tmp/strangertalks-p02-v2.log
+              exit 1
+            fi
+            if curl -fsS http://localhost:4000/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/strangertalks-p02-v2.log
+          exit 1
+
+      - name: Exact P02 lifecycle regression
+        run: node --test --test-concurrency=1 test/js/p02_language_queue_lock_browser_test.mjs
+
+      - name: Stop Phoenix
+        if: always()
+        run: |
+          if [ -f /tmp/strangertalks-p02-v2.pid ]; then
+            kill "$(cat /tmp/strangertalks-p02-v2.pid)" 2>/dev/null || true
+          fi
+
+      - name: Browser log on failure
+        if: failure()
+        run: cat /tmp/strangertalks-p02-v2.log || true
