@@ -1,5 +1,6 @@
 import {Socket} from "/vendor/phoenix.mjs"
 import {FLOW_PHASE, createOperationGuard, loadingPresentation} from "./flow_loading.mjs"
+import {captureEntranceReady, productEvents} from "./product_events.mjs"
 
 const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"
 const BOOT_WATCHDOG_MS = 15_000
@@ -93,6 +94,10 @@ function finishBoot(snapshot) {
     bridge.setAttribute("aria-busy", "false")
   }
   document.body.classList.remove("flow-booting")
+  void captureEntranceReady(productEvents, {
+    rememberedTalkLanguage: Boolean(node("#conversation-language")?.value),
+    viewportWidth: globalThis.innerWidth
+  })
 }
 
 function renderBootFailure() {
