@@ -147,6 +147,28 @@ export function createTalkLanguageObserver(tracker) {
   }
 }
 
+export function createQueueEventObserver(tracker) {
+  let intentCode = null
+  let interactionLanguage = null
+
+  return {
+    requested(nextIntentCode, nextInteractionLanguage) {
+      if (typeof nextIntentCode !== "string" || !nextIntentCode) return Promise.resolve(false)
+      if (typeof nextInteractionLanguage !== "string" || !nextInteractionLanguage) return Promise.resolve(false)
+      intentCode = nextIntentCode
+      interactionLanguage = nextInteractionLanguage
+      return tracker.capture("st_queue_requested", {
+        intent_code: intentCode,
+        interaction_language: interactionLanguage
+      })
+    },
+    admitted() {
+      if (!intentCode || !interactionLanguage) return Promise.resolve(false)
+      return tracker.captureOnce("st_queue_admitted", {intent_code: intentCode})
+    }
+  }
+}
+
 export function deviceClassForWidth(width) {
   if (!Number.isFinite(width) || width < 0) return "unknown"
   if (width < 768) return "mobile"
@@ -174,3 +196,4 @@ export const productEvents = createProductEventTracker({
 })
 
 export const talkLanguageEvents = createTalkLanguageObserver(productEvents)
+export const queueEvents = createQueueEventObserver(productEvents)
