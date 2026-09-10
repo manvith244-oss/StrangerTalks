@@ -53,13 +53,13 @@ test("flow-scoped observers forget prior context after a successful cancellation
   await intents.select("JUST_TALK")
   await languages.selected("en", ["en", "te", "hi"])
   await queue.requested("JUST_TALK", "en")
-  await queue.admitted()
+  await queue.joined()
 
   await captureFlowCancelled(tracker, {stage: "queue", reasonCode: "user_requested"})
 
   assert.equal(await intents.select("JUST_TALK"), true)
   assert.equal(await languages.selected("en", ["en", "te", "hi"]), true)
-  assert.equal(await queue.admitted(), false)
+  assert.equal(await queue.joined(), false)
   assert.equal(await queue.requested("JUST_TALK", "en"), true)
 
   const secondFlowEvents = events.filter(({properties}) => properties.flow_attempt_id === "flow-two")
@@ -85,14 +85,14 @@ test("runtime emits cancellation only after server confirms queue leave", () => 
   assert.ok(cancelIndex < timeoutIndex, "timeout handler must not emit cancellation")
 })
 
-test("confirmed cancellation re-arms entrance-ready only when the existing product returns to Doors", () => {
+test("confirmed cancellation relies on the general Doors-transition observer for the next entrance", () => {
   const source = readFileSync(new URL("../../priv/static/assets/flow_loading_runtime.mjs", import.meta.url), "utf8")
 
-  assert.match(source, /function armFreshEntranceAfterCancellation\(\)/)
-  assert.match(source, /activeScreen\(\) === "doors"/)
-  assert.match(source, /captureEntranceReady\(productEvents/)
+  assert.match(source, /function installEntranceAttemptObserver\(/)
+  assert.match(source, /nextScreen === "doors" && previousScreen !== "doors"/)
+  assert.doesNotMatch(source, /armFreshEntranceAfterCancellation/)
 
   const leaveStart = source.indexOf('if (event === "queue:leave")')
   const leaveEnd = source.indexOf('if (event === "session:reconcile")', leaveStart)
-  assert.match(source.slice(leaveStart, leaveEnd), /armFreshEntranceAfterCancellation\(\)/)
+  assert.doesNotMatch(source.slice(leaveStart, leaveEnd), /captureEntranceReady|entranceAttempts\.entranceReady/)
 })
