@@ -53,15 +53,11 @@ const EVENT_SCHEMAS = Object.freeze({
   }),
   st_queue_joined: Object.freeze({
     required: Object.freeze(["intent_code"]),
-    properties: Object.freeze({
-      intent_code: (value) => FOUR_DOOR_INTENTS.has(value)
-    })
+    properties: Object.freeze({intent_code: (value) => FOUR_DOOR_INTENTS.has(value)})
   }),
   st_match_created: Object.freeze({
     required: Object.freeze(["intent_code"]),
-    properties: Object.freeze({
-      intent_code: (value) => FOUR_DOOR_INTENTS.has(value)
-    })
+    properties: Object.freeze({intent_code: (value) => FOUR_DOOR_INTENTS.has(value)})
   }),
   st_first_message_accepted: Object.freeze({
     required: Object.freeze([]),
@@ -97,10 +93,7 @@ function sanitizeEvent(name, properties, flowAttemptId, testTraffic) {
   if (!schema) return null
 
   const source = properties && typeof properties === "object" ? properties : {}
-  const sanitized = {
-    flow_attempt_id: flowAttemptId,
-    test_traffic: testTraffic
-  }
+  const sanitized = {flow_attempt_id: flowAttemptId, test_traffic: testTraffic}
 
   for (const [property, validator] of Object.entries(schema.properties)) {
     if (!Object.hasOwn(source, property)) continue
@@ -162,9 +155,7 @@ export function createProductEventTracker(options = {}) {
   }
 
   return {
-    get flowAttemptId() {
-      return flowAttemptId
-    },
+    get flowAttemptId() { return flowAttemptId },
     capture,
     captureOnce,
     resetFlow
@@ -196,10 +187,7 @@ export function createIntentSelectionObserver(tracker) {
 
       const fromIntent = selectedIntent
       selectedIntent = intentValue
-      return tracker.capture("st_intent_changed", {
-        from_intent: fromIntent,
-        to_intent: intentValue
-      })
+      return tracker.capture("st_intent_changed", {from_intent: fromIntent, to_intent: intentValue})
     },
     markQueueJoined() {
       syncFlow()
@@ -234,10 +222,7 @@ export function createTalkLanguageObserver(tracker) {
       if (rememberedRecorded && currentLanguage === languageCode) return false
       currentLanguage = languageCode
       rememberedRecorded = true
-      return tracker.capture("st_talk_language_selected", {
-        language_code: languageCode,
-        source: "remembered"
-      })
+      return tracker.capture("st_talk_language_selected", {language_code: languageCode, source: "remembered"})
     },
     async selected(languageCode, validLanguages) {
       syncFlow()
@@ -245,10 +230,7 @@ export function createTalkLanguageObserver(tracker) {
       if (currentLanguage === languageCode) return false
       const source = currentLanguage ? "changed" : "new"
       currentLanguage = languageCode
-      return tracker.capture("st_talk_language_selected", {
-        language_code: languageCode,
-        source
-      })
+      return tracker.capture("st_talk_language_selected", {language_code: languageCode, source})
     }
   }
 }
@@ -269,10 +251,7 @@ export function createQueueEventObserver(tracker) {
       if (!isIntentCode(nextIntentCode) || !isTalkLanguageCode(nextInteractionLanguage)) return Promise.resolve(false)
       intentCode = nextIntentCode
       interactionLanguage = nextInteractionLanguage
-      return tracker.capture("st_queue_requested", {
-        intent_code: intentCode,
-        interaction_language: interactionLanguage
-      })
+      return tracker.capture("st_queue_requested", {intent_code: intentCode, interaction_language: interactionLanguage})
     },
     joined() {
       syncFlow()
@@ -298,10 +277,7 @@ export function captureFlowCancelled(tracker, options = {}) {
   const reasonCode = options.reasonCode
   if (!FLOW_CANCELLATIONS.has(`${stage}:${reasonCode}`)) return Promise.resolve(false)
 
-  const captured = tracker.captureOnce("st_flow_cancelled", {
-    stage,
-    reason_code: reasonCode
-  })
+  const captured = tracker.captureOnce("st_flow_cancelled", {stage, reason_code: reasonCode})
   tracker.resetFlow()
   return captured
 }
@@ -322,6 +298,20 @@ export function captureEntranceReady(tracker, options = {}) {
   return tracker.captureOnce("st_entrance_ready", properties)
 }
 
+export function createEntranceAttemptCoordinator(tracker) {
+  let lastEntranceFlowAttemptId = null
+
+  return {
+    entranceReady(options = {}, {newAttempt = false} = {}) {
+      if (newAttempt && (lastEntranceFlowAttemptId === null || tracker.flowAttemptId === lastEntranceFlowAttemptId)) {
+        tracker.resetFlow()
+      }
+      lastEntranceFlowAttemptId = tracker.flowAttemptId
+      return captureEntranceReady(tracker, options)
+    }
+  }
+}
+
 async function runtimeSink(event) {
   const sink = globalThis.__strangerTalksProductEventSink
   if (typeof sink === "function") return sink(event)
@@ -332,6 +322,7 @@ export const productEvents = createProductEventTracker({
   testTraffic: globalThis.__strangerTalksTestTraffic === true
 })
 
+export const entranceAttempts = createEntranceAttemptCoordinator(productEvents)
 export const intentEvents = createIntentSelectionObserver(productEvents)
 export const talkLanguageEvents = createTalkLanguageObserver(productEvents)
 export const queueEvents = createQueueEventObserver(productEvents)
