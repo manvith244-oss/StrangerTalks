@@ -7,6 +7,11 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   presence truth cannot be authored by a browser heartbeat or a client-supplied lease.
   Durable membership is marked disconnected only when the terminating channel was the
   last registered live channel for that participant in that room.
+
+  The Registry and Phoenix Endpoint share a rest-for-one supervisor. If Registry
+  authority is lost, every socket process is torn down with it; termination therefore
+  fails closed to durable disconnect instead of allowing live sockets with missing
+  presence registrations.
   """
 
   alias StrangertalksNew.Hangouts.RoomServer
@@ -15,9 +20,10 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   def register(room_id, participant_id, lease_id)
       when is_binary(room_id) and is_binary(participant_id) and is_binary(lease_id) do
-    case Registry.register(@registry, key(room_id, participant_id), lease_id) do
-      {:ok, _owner} -> :ok
-      {:error, {:already_registered, _owner}} -> {:error, :presence_already_registered}
+    case registry_call(fn -> Registry.register(@registry, key(room_id, participant_id), lease_id) end) do
+      {:ok, {:ok, _owner}} -> :ok
+      {:ok, {:error, {:already_registered, _owner}}} -> {:error, :presence_already_registered}
+      {:error, :registry_unavailable} -> {:error, :presence_authority_unavailable}
     end
   end
 
@@ -25,18 +31,26 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   def unregister(room_id, participant_id)
       when is_binary(room_id) and is_binary(participant_id) do
-    Registry.unregister(@registry, key(room_id, participant_id))
+    _ = registry_call(fn -> Registry.unregister(@registry, key(room_id, participant_id)) end)
     :ok
   end
 
   def disconnect_if_last(room_id, participant_id)
       when is_binary(room_id) and is_binary(participant_id) do
     presence_key = key(room_id, participant_id)
-    Registry.unregister(@registry, presence_key)
 
-    case Registry.lookup(@registry, presence_key) do
-      [] -> RoomServer.disconnect(room_id, participant_id)
-      [_ | _] -> RoomServer.snapshot(room_id, participant_id)
+    with {:ok, _} <- registry_call(fn -> Registry.unregister(@registry, presence_key) end),
+         {:ok, registrations} <- registry_call(fn -> Registry.lookup(@registry, presence_key) end) do
+      case registrations do
+        [] -> RoomServer.disconnect(room_id, participant_id)
+        [_ | _] -> RoomServer.snapshot(room_id, participant_id)
+      end
+    else
+      {:error, :registry_unavailable} ->
+        # Presence Registry failure restarts the Endpoint and therefore all channel
+        # processes. With no transport allowed to survive that failure domain, the
+        # safe durable state during teardown is DISCONNECTED.
+        RoomServer.disconnect(room_id, participant_id)
     end
   end
 
@@ -45,12 +59,21 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   def live_channel_count(room_id, participant_id)
       when is_binary(room_id) and is_binary(participant_id) do
-    @registry
-    |> Registry.lookup(key(room_id, participant_id))
-    |> length()
+    case registry_call(fn -> Registry.lookup(@registry, key(room_id, participant_id)) end) do
+      {:ok, registrations} -> length(registrations)
+      {:error, :registry_unavailable} -> 0
+    end
   end
 
   def live_channel_count(_room_id, _participant_id), do: 0
+
+  defp registry_call(fun) when is_function(fun, 0) do
+    try do
+      {:ok, fun.()}
+    catch
+      :exit, _reason -> {:error, :registry_unavailable}
+    end
+  end
 
   defp key(room_id, participant_id), do: {room_id, participant_id}
 end
