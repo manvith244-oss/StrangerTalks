@@ -38,6 +38,7 @@ function installStyles(documentRef) {
       width: auto;
       min-width: 9.5rem;
       max-width: min(12rem, 44vw);
+      min-height: 2.75rem;
       padding-block: var(--st-space-2, 0.5rem);
       padding-inline: var(--st-space-3, 0.75rem);
     }
