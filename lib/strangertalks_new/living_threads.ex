@@ -11,7 +11,7 @@ defmodule StrangertalksNew.LivingThreads do
 
   alias StrangertalksNew.Hangouts.HangoutReport
   alias StrangertalksNew.LivingThreads.{ExperimentAssignment, LivingThread, PilotEvent}
-  alias StrangertalksNew.{MatchingRules, Repo}
+  alias StrangertalksNew.{MatchingRules, Repo, Report}
 
   @continuation_timeout_seconds 8 * 60 * 60
   @resolution_seconds 24 * 60 * 60
@@ -503,6 +503,23 @@ defmodule StrangertalksNew.LivingThreads do
   end
 
   defp active_report_between?(participant_a_id, participant_b_id) do
+    active_conversation_report_between?(participant_a_id, participant_b_id) or
+      active_hangout_report_between?(participant_a_id, participant_b_id)
+  end
+
+  defp active_conversation_report_between?(participant_a_id, participant_b_id) do
+    Repo.exists?(
+      from r in Report,
+        where:
+          r.report_status in ^@active_report_statuses and
+            ((r.reporting_participant_id == ^participant_a_id and
+                r.reported_participant_id == ^participant_b_id) or
+               (r.reporting_participant_id == ^participant_b_id and
+                  r.reported_participant_id == ^participant_a_id))
+    )
+  end
+
+  defp active_hangout_report_between?(participant_a_id, participant_b_id) do
     Repo.exists?(
       from r in HangoutReport,
         where:
