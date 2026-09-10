@@ -156,6 +156,7 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
     void talkLanguageEvents.opened("direct")
   })
   languageSelect.addEventListener("keydown", (event) => {
+    if (event.repeat) return
     if (DIRECT_LANGUAGE_KEYS.has(event.key)) void talkLanguageEvents.opened("direct")
   })
   languageSelect.addEventListener("change", () => {
