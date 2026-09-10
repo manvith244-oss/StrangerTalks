@@ -26,10 +26,11 @@ test("first accepted message cannot complete a flow that never observed authorit
   assert.equal(events.some(({name}) => name === "st_first_message_accepted"), false)
 })
 
-test("first server-accepted human message emits once only after same-flow authoritative match", async () => {
+test("first server-accepted human message emits once only after joined and matched stages in the same flow", async () => {
   const {events, queue} = setup()
 
   await queue.requested("JUST_TALK", "hi")
+  await queue.joined()
   await queue.matched()
 
   assert.equal(await queue.firstMessageAccepted(), true)
