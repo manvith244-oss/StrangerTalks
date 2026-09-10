@@ -24,6 +24,9 @@ jobs:
           elixir-version: "1.18.4"
           otp-version: "27.3.4"
 
+      - name: Install dependencies required by formatter
+        run: mix deps.get
+
       - name: Format candidate and remove one-shot workflow
         run: |
           mix format test/strangertalks_new/team4_db_security_closure_test.exs priv/repo/migrations/20260910192317_close_public_schema_data_api_boundary_rpr.exs
