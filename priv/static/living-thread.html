@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="robots" content="noindex,nofollow">
+    <title>Something is unfolding — StrangerTalks</title>
+  </head>
+  <body>
+    <main>
+      <p><a href="/">StrangerTalks</a></p>
+      <h1>Something is unfolding</h1>
+      <p id="intro">One small anonymous thing. No profile, score, or audience.</p>
+
+      <section id="pilot" aria-live="polite">
+        <p id="status">Opening…</p>
+        <div id="content"></div>
+      </section>
+
+      <form id="contribution-form" hidden>
+        <label for="contribution">Leave one small piece for another stranger.</label><br>
+        <textarea id="contribution" name="body" maxlength="1000" rows="5" required></textarea><br>
+        <button type="submit">Leave it here</button>
+      </form>
+
+      <form id="continuation-form" hidden>
+        <p>Someone left this:</p>
+        <blockquote id="seed"></blockquote>
+        <label for="continuation">Carry it one step further.</label><br>
+        <textarea id="continuation" name="body" maxlength="1000" rows="5" required></textarea><br>
+        <button type="submit">Carry it forward</button>
+      </form>
+
+      <form id="debrief-form" hidden>
+        <fieldset>
+          <legend>Did you have any reason to think the other person was someone you already knew outside StrangerTalks?</legend>
+          <label><input type="radio" name="answer" value="no" required> No</label>
+          <label><input type="radio" name="answer" value="maybe"> Maybe / unsure</label>
+          <label><input type="radio" name="answer" value="yes"> Yes</label>
+        </fieldset>
+        <label for="debrief-reason">What made you think that? <span>(optional)</span></label><br>
+        <textarea id="debrief-reason" name="reason" maxlength="1000" rows="3"></textarea><br>
+        <button type="submit">Send answer</button>
+      </form>
+    </main>
+
+    <script type="module" src="/assets/living_thread_pilot.mjs"></script>
+  </body>
+</html>
