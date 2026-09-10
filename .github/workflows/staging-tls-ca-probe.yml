@@ -1,0 +1,61 @@
+name: Staging TLS CA Probe
+
+on:
+  push:
+    branches:
+      - release/staging-tls-ca-probe-2026-09-10
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download documented Supabase root CA
+        run: |
+          set -euo pipefail
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --silent --show-error \
+            https://supabase-downloads.s3-ap-southeast-1.amazonaws.com/prod/ssl/prod-ca-2021.crt \
+            --output prod-ca-2021.crt
+          test -s prod-ca-2021.crt
+          openssl x509 -in prod-ca-2021.crt -noout \
+            -subject -issuer -serial -dates -fingerprint -sha256 | tee ca-meta.txt
+          openssl verify -CAfile prod-ca-2021.crt prod-ca-2021.crt | tee -a ca-meta.txt
+
+      - name: Verify Tokyo Supavisor TLS endpoints with downloaded CA
+        run: |
+          set -euo pipefail
+          : > pooler-probe.txt
+          success=0
+          for host in \
+            aws-0-ap-northeast-1.pooler.supabase.com \
+            aws-1-ap-northeast-1.pooler.supabase.com
+          do
+            echo "=== ${host}:5432 ===" | tee -a pooler-probe.txt
+            if timeout 20 openssl s_client \
+              -starttls postgres \
+              -connect "${host}:5432" \
+              -servername "${host}" \
+              -CAfile prod-ca-2021.crt \
+              -verify_return_error \
+              -verify_hostname "${host}" \
+              </dev/null > probe-full.txt 2>&1; then
+              success=1
+            fi
+            grep -E '^(subject=|issuer=|Verification:|Verify return code:)' probe-full.txt \
+              | tee -a pooler-probe.txt || true
+          done
+          test "$success" -eq 1
+
+      - name: Upload public TLS evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-supabase-tls-ca-evidence-${{ github.sha }}
+          path: |
+            prod-ca-2021.crt
+            ca-meta.txt
+            pooler-probe.txt
+          if-no-files-found: error
