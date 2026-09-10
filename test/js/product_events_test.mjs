@@ -28,12 +28,18 @@ test("accepts only the frozen allowlisted product event names", async () => {
   const {events, sink} = recordingSink()
   const tracker = createProductEventTracker({uuid: () => "flow-1", sink})
 
-  assert.ok(PRODUCT_EVENT_NAMES.includes("st_entrance_ready"))
-  assert.ok(PRODUCT_EVENT_NAMES.includes("st_queue_requested"))
-  assert.ok(PRODUCT_EVENT_NAMES.includes("st_queue_joined"))
-  assert.equal(PRODUCT_EVENT_NAMES.includes("st_queue_admitted"), false)
-  assert.ok(PRODUCT_EVENT_NAMES.includes("st_match_created"))
-  assert.ok(PRODUCT_EVENT_NAMES.includes("st_first_message_accepted"))
+  assert.deepEqual(PRODUCT_EVENT_NAMES, [
+    "st_entrance_ready",
+    "st_intent_selected",
+    "st_intent_changed",
+    "st_talk_language_opened",
+    "st_talk_language_selected",
+    "st_queue_requested",
+    "st_queue_joined",
+    "st_match_created",
+    "st_first_message_accepted",
+    "st_flow_cancelled"
+  ])
 
   assert.equal(await tracker.capture("st_not_real", {anything: "value"}), false)
   assert.deepEqual(events, [])
@@ -68,8 +74,17 @@ test("drops unknown payload properties instead of leaking them to the sink", asy
   await tracker.capture("st_queue_requested", {
     intent_code: "EXPLORE",
     interaction_language: "te",
+    content: "private words",
     message_body: "private words",
+    draft: "private draft",
     email: "person@example.test",
+    name: "private name",
+    profile: "private profile",
+    latitude: 17.3,
+    longitude: 78.4,
+    location: "private location",
+    token: "secret",
+    participant_token: "secret",
     arbitrary_dom_dump: {secret: true}
   })
 
@@ -80,6 +95,59 @@ test("drops unknown payload properties instead of leaking them to the sink", asy
       test_traffic: false,
       intent_code: "EXPLORE",
       interaction_language: "te"
+    }
+  })
+})
+
+test("rejects malformed semantic values even when the event and property names are allowlisted", async () => {
+  const {events, sink} = recordingSink()
+  const tracker = createProductEventTracker({uuid: () => "flow-1", sink})
+
+  assert.equal(await tracker.capture("st_intent_selected", {
+    intent_family: "four_doors",
+    intent_value: "INVENTED_DOOR",
+    selection_kind: "first"
+  }), false)
+  assert.equal(await tracker.capture("st_talk_language_selected", {
+    language_code: "fr",
+    source: "new"
+  }), false)
+  assert.equal(await tracker.capture("st_queue_requested", {
+    intent_code: "EXPLORE",
+    interaction_language: "fr"
+  }), false)
+  assert.equal(await tracker.capture("st_flow_cancelled", {
+    stage: "queue",
+    reason_code: "felt_sad"
+  }), false)
+  assert.deepEqual(events, [])
+})
+
+test("rejects structurally incomplete events instead of emitting ambiguous funnel rows", async () => {
+  const {events, sink} = recordingSink()
+  const tracker = createProductEventTracker({uuid: () => "flow-1", sink})
+
+  assert.equal(await tracker.capture("st_entrance_ready", {device_class: "desktop"}), false)
+  assert.equal(await tracker.capture("st_intent_selected", {intent_value: "EXPLORE"}), false)
+  assert.equal(await tracker.capture("st_queue_requested", {intent_code: "EXPLORE"}), false)
+  assert.equal(await tracker.capture("st_queue_joined", {}), false)
+  assert.deepEqual(events, [])
+})
+
+test("first-message event has no application payload surface beyond flow/test context", async () => {
+  const {events, sink} = recordingSink()
+  const tracker = createProductEventTracker({uuid: () => "flow-1", sink})
+
+  assert.equal(await tracker.capture("st_first_message_accepted", {
+    message_type: "text",
+    message_id: "private-id",
+    content: "private"
+  }), true)
+  assert.deepEqual(events[0], {
+    name: "st_first_message_accepted",
+    properties: {
+      flow_attempt_id: "flow-1",
+      test_traffic: false
     }
   })
 })
