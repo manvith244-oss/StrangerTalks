@@ -75,6 +75,17 @@ test("caller-supplied language options cannot widen the frozen measurement contr
   }])
 })
 
+test("arrival keyboard hook suppresses held-key repeats from one chooser invocation", () => {
+  const source = readFileSync(new URL("../../priv/static/assets/arrival_first_minute.mjs", import.meta.url), "utf8")
+  const keyStart = source.indexOf('languageSelect.addEventListener("keydown"')
+  const keyEnd = source.indexOf('languageSelect.addEventListener("change"', keyStart)
+  const keyBlock = source.slice(keyStart, keyEnd)
+
+  assert.ok(keyStart >= 0 && keyEnd > keyStart)
+  assert.match(keyBlock, /if \(event\.repeat\) return/)
+  assert.match(keyBlock, /talkLanguageEvents\.opened\("direct"\)/)
+})
+
 test("arrival hooks observe existing language control without redesigning it", () => {
   const source = readFileSync(new URL("../../priv/static/assets/arrival_first_minute.mjs", import.meta.url), "utf8")
 
