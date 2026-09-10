@@ -1,4 +1,4 @@
-name: RPR Production Migration Closure
+name: RPR Production Migration Rehearsal
 
 on:
   pull_request:
@@ -6,34 +6,26 @@ on:
       - main
     paths:
       - .github/workflows/rpr-production-migration-closure.yml
+      - .github/workflows/rpr-production-migration-live.yml
       - .github/workflows/postgres-r2-backup.yml
       - priv/repo/migrations/**
       - test/strangertalks_new/team4_db_security_closure_test.exs
-  workflow_dispatch:
-    inputs:
-      confirm:
-        description: Type APPLY_STRANGERTALKS_PRODUCTION_MIGRATIONS
-        required: true
-        type: string
-      expected_main_sha:
-        description: Exact canonical main SHA approved for production migration
-        required: true
-        type: string
+      - test/strangertalks_new/rpr_production_migration_workflow_contract_test.exs
 
 permissions:
   contents: read
 
 concurrency:
-  group: rpr-production-migration-closure
-  cancel-in-progress: false
+  group: rpr-production-migration-rehearsal-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
 
 env:
   EXPECTED_PRODUCTION_HEAD: "20260821191324"
   EXPECTED_REPOSITORY_HEAD: "20260910192317"
+  EXPECTED_MIGRATIONS_TREE: "d0d1c1a5a781c6dfe504839c2411ef48c7c14a7d"
 
 jobs:
   upgrade-rehearsal:
-    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-24.04
     services:
       postgres:
@@ -62,14 +54,18 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      - name: Prove checkout identity and repository migration head
+      - name: Prove exact candidate and complete migration tree
+        shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          migration_tree="$(git rev-parse HEAD:priv/repo/migrations)"
+          test "$migration_tree" = "$EXPECTED_MIGRATIONS_TREE"
           repo_latest=$(find priv/repo/migrations -maxdepth 1 -type f -name '*.exs' -printf '%f\n' \
             | sed -n 's/^\([0-9]\{14\}\)_.*/\1/p' | sort | tail -1)
           test "$repo_latest" = "$EXPECTED_REPOSITORY_HEAD"
           echo "REHEARSAL_COMMIT=$(git rev-parse HEAD)"
+          echo "REPOSITORY_MIGRATIONS_TREE=$migration_tree"
           echo "REPOSITORY_MIGRATION_HEAD=$repo_latest"
 
       - name: Set up BEAM
@@ -129,6 +125,7 @@ jobs:
       - name: Apply exact pending canonical migration chain
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD:priv/repo/migrations)" = "$EXPECTED_MIGRATIONS_TREE"
           mix ecto.migrate
           actual=$(psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -Atc 'SELECT max(version) FROM schema_migrations')
           test "$actual" = "$EXPECTED_REPOSITORY_HEAD"
@@ -157,114 +154,7 @@ jobs:
       - name: Final exact-head and clean-tree proof
         run: |
           set -euo pipefail
+          test "$(git rev-parse HEAD:priv/repo/migrations)" = "$EXPECTED_MIGRATIONS_TREE"
           git diff --check
           test -z "$(git status --porcelain)"
           echo "RPR_REHEARSAL_PROVEN_SHA=$(git rev-parse HEAD)"
-
-  backup-before-live-migration:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm == 'APPLY_STRANGERTALKS_PRODUCTION_MIGRATIONS' }}
-    uses: ./.github/workflows/postgres-r2-backup.yml
-    secrets: inherit
-
-  migrate-production:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.confirm == 'APPLY_STRANGERTALKS_PRODUCTION_MIGRATIONS' }}
-    needs: backup-before-live-migration
-    runs-on: ubuntu-24.04
-    env:
-      MIX_ENV: prod
-      DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL || vars.SUPABASE_DATABASE_URL }}
-      SECRET_KEY_BASE: rpr-migration-only-not-used-for-serving
-      PHX_HOST: strangertalks-phoenix.onrender.com
-
-    steps:
-      - name: Checkout exact approved main
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-
-      - name: Fail closed unless dispatch authority is exact
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/main"
-          test "${{ inputs.confirm }}" = "APPLY_STRANGERTALKS_PRODUCTION_MIGRATIONS"
-          test "${{ inputs.expected_main_sha }}" = "$GITHUB_SHA"
-          git fetch origin main
-          test "$GITHUB_SHA" = "$(git rev-parse origin/main)"
-          repo_latest=$(find priv/repo/migrations -maxdepth 1 -type f -name '*.exs' -printf '%f\n' | sed -n 's/^\([0-9]\{14\}\)_.*/\1/p' | sort | tail -1)
-          test "$repo_latest" = "$EXPECTED_REPOSITORY_HEAD"
-          test -n "$DATABASE_URL"
-          echo "APPROVED_MAIN_SHA=$GITHUB_SHA"
-          echo "APPROVED_MIGRATION_HEAD=$repo_latest"
-
-      - name: Set up BEAM
-        uses: erlef/setup-beam@v1
-        with:
-          elixir-version: "1.18.4"
-          otp-version: "27.3.4"
-
-      - name: Install PostgreSQL client and BEAM dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
-          mix local.hex --force
-          mix local.rebar --force
-          mix deps.get --only prod
-
-      - name: Configure verified Supabase TLS
-        run: |
-          set -euo pipefail
-          ca="$GITHUB_WORKSPACE/priv/certs/supabase-prod-ca-2021.crt"
-          test -s "$ca"
-          actual=$(openssl x509 -in "$ca" -outform der | sha256sum | awk '{print toupper($1)}')
-          expected="807025AD50D4ED219D2C9C7D299C004F824EB00CF7F65AFEF607D07B72E6CAFA"
-          test "$actual" = "$expected"
-          echo "DB_CA_CERT_FILE=$ca" >> "$GITHUB_ENV"
-          echo "PGSSLMODE=verify-full" >> "$GITHUB_ENV"
-          echo "PGSSLROOTCERT=$ca" >> "$GITHUB_ENV"
-
-      - name: Production preflight — exact head and integrity only
-        run: |
-          set -euo pipefail
-          actual=$(psql "$DATABASE_URL" -Atc 'SELECT max(version) FROM public.schema_migrations')
-          test "$actual" = "$EXPECTED_PRODUCTION_HEAD"
-          violations=$(psql "$DATABASE_URL" -Atc "SELECT (SELECT count(*) FROM public.matches WHERE participant_a_id = participant_b_id) + (SELECT count(*) FROM public.conversations WHERE participant_a_id = participant_b_id) + (SELECT count(*) FROM public.relationships WHERE participant_a_id = participant_b_id) + (SELECT count(*) FROM public.conversations c JOIN public.matches m ON m.match_id = c.match_id WHERE c.participant_a_id IS DISTINCT FROM m.participant_a_id OR c.participant_b_id IS DISTINCT FROM m.participant_b_id)")
-          test "$violations" = "0"
-          echo "PRODUCTION_PREFLIGHT_HEAD=$actual"
-          echo "PRODUCTION_PREFLIGHT_INTEGRITY_VIOLATIONS=$violations"
-
-      - name: Apply all pending canonical migrations
-        run: |
-          set -euo pipefail
-          mix ecto.migrate
-
-      - name: Production postflight — exact migration and security state
-        run: |
-          set -euo pipefail
-          actual=$(psql "$DATABASE_URL" -Atc 'SELECT max(version) FROM public.schema_migrations')
-          test "$actual" = "$EXPECTED_REPOSITORY_HEAD"
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
-          DO $$
-          DECLARE app_count integer; bad_rls integer; api_grants integer; role_name text;
-          BEGIN
-            SELECT count(*) INTO app_count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations';
-            IF app_count <> 30 THEN RAISE EXCEPTION 'expected 30 application tables after production migration, got %', app_count; END IF;
-            SELECT count(*) INTO bad_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations' AND NOT c.relrowsecurity;
-            IF bad_rls <> 0 THEN RAISE EXCEPTION 'application tables without RLS after production migration: %', bad_rls; END IF;
-            FOREACH role_name IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
-              IF has_schema_privilege(role_name, 'public', 'USAGE') OR has_schema_privilege(role_name, 'public', 'CREATE') THEN RAISE EXCEPTION '% retains public schema authority', role_name; END IF;
-            END LOOP;
-            SELECT count(*) INTO api_grants FROM information_schema.table_privileges WHERE table_schema = 'public' AND grantee IN ('anon','authenticated','service_role');
-            IF api_grants <> 0 THEN RAISE EXCEPTION 'Data API table grants remain after production migration: %', api_grants; END IF;
-          END
-          $$;
-          SQL
-          echo "PRODUCTION_MIGRATION_HEAD=$actual"
-          echo "RPR_PRODUCTION_DATABASE_CLOSURE=PASS"
-
-      - name: Final repository identity proof
-        if: ${{ always() }}
-        run: |
-          git diff --check
-          test -z "$(git status --porcelain)"
-          echo "RPR_PRODUCTION_RUNNER_SHA=$(git rev-parse HEAD)"
