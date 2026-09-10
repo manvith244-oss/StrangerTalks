@@ -28,7 +28,9 @@ defmodule StrangertalksNew.LivingThreadsTest do
     assign!(participant, :CONSEQUENCE_A)
 
     assert {:ok, thread} =
-             LivingThreads.start_thread(participant.participant_id, "A small beginning", now: @now)
+             LivingThreads.start_thread(participant.participant_id, "A small beginning",
+               now: @now
+             )
 
     assert thread.status == :WAITING_FOR_B
     assert thread.opened_at == @now
@@ -36,7 +38,9 @@ defmodule StrangertalksNew.LivingThreadsTest do
     assert thread.resolves_at == DateTime.add(@now, 24 * 60 * 60, :second)
 
     assert {:error, :thread_already_exists} =
-             LivingThreads.start_thread(participant.participant_id, "A second beginning", now: @now)
+             LivingThreads.start_thread(participant.participant_id, "A second beginning",
+               now: @now
+             )
   end
 
   test "a waiting thread becomes liquidity failure after 8h and cannot be rescued" do
@@ -67,7 +71,9 @@ defmodule StrangertalksNew.LivingThreadsTest do
     continued_at = DateTime.add(@now, 7 * 60 * 60, :second)
 
     assert {:ok, continued} =
-             LivingThreads.continue_next(b.participant_id, "what B carried forward", now: continued_at)
+             LivingThreads.continue_next(b.participant_id, "what B carried forward",
+               now: continued_at
+             )
 
     assert continued.thread_id == thread.thread_id
     assert continued.status == :CONTINUED
@@ -137,11 +143,18 @@ defmodule StrangertalksNew.LivingThreadsTest do
     assign!(blocked_b, :CARRIER_B)
 
     assert {:ok, _thread} = LivingThreads.start_thread(a.participant_id, "seed", now: @now)
+
     assert {:ok, _block} =
-             MatchingRules.enforce_block(a.participant_id, blocked_b.participant_id, "LIVING_THREAD_PILOT")
+             MatchingRules.enforce_block(
+               a.participant_id,
+               blocked_b.participant_id,
+               "LIVING_THREAD_PILOT"
+             )
 
     assert {:error, :no_waiting_thread} =
-             LivingThreads.continue_next(blocked_b.participant_id, "must not be routed", now: @now)
+             LivingThreads.continue_next(blocked_b.participant_id, "must not be routed",
+               now: @now
+             )
   end
 
   test "known-person debrief is accepted only after a resolved exposure" do
