@@ -55,6 +55,22 @@ defmodule StrangertalksNew.ProductionDatabaseTLSConfigTest do
            "production TLS must carry either trusted OS CA certificates or an explicit CA file"
   end
 
+  test "bundled Supabase CA is accepted as an explicit verified production trust source" do
+    ca_path =
+      Application.app_dir(:strangertalks_new, "priv/certs/supabase-prod-ca-2021.crt")
+
+    assert File.regular?(ca_path)
+    System.put_env("DB_CA_CERT_FILE", ca_path)
+
+    ssl_options = production_repo_config() |> Keyword.fetch!(:ssl)
+
+    assert Keyword.fetch!(ssl_options, :verify) == :verify_peer
+    assert Keyword.fetch!(ssl_options, :cacertfile) == ca_path
+
+    assert Keyword.fetch!(ssl_options, :server_name_indication) ==
+             String.to_charlist(@database_host)
+  end
+
   test "production Repo fails closed when DATABASE_URL cannot supply a hostname for certificate identity" do
     System.put_env("DATABASE_URL", "ecto:///postgres")
 

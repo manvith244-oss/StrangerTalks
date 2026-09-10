@@ -38,6 +38,7 @@ function installStyles(documentRef) {
       width: auto;
       min-width: 9.5rem;
       max-width: min(12rem, 44vw);
+      min-height: 2.75rem;
       padding-block: var(--st-space-2, 0.5rem);
       padding-inline: var(--st-space-3, 0.75rem);
     }
@@ -76,6 +77,13 @@ function moveSupportText(documentRef, control) {
   return Boolean(help && feedback)
 }
 
+function syncLanguageAvailability(documentRef, control, languageSelect) {
+  const doorsScreen = documentRef.querySelector('section[data-screen="doors"]')
+  const available = Boolean(doorsScreen?.classList.contains("active") && !doorsScreen.hidden)
+  languageSelect.disabled = !available
+  control.dataset.languageSelectionAvailable = available ? "true" : "false"
+}
+
 export function installInterfaceLanguagePlacement(documentRef = globalThis.document) {
   if (!documentRef || documentRef.documentElement?.dataset.interfaceLanguagePlacementInstalled === "true") return null
 
@@ -98,6 +106,13 @@ export function installInterfaceLanguagePlacement(documentRef = globalThis.docum
   control.append(languageLabel, languageSelect)
   moveSupportText(documentRef, control)
   header.append(control)
+  syncLanguageAvailability(documentRef, control, languageSelect)
+
+  const doorsScreen = documentRef.querySelector('section[data-screen="doors"]')
+  if (doorsScreen && typeof MutationObserver !== "undefined") {
+    const screenObserver = new MutationObserver(() => syncLanguageAvailability(documentRef, control, languageSelect))
+    screenObserver.observe(doorsScreen, {attributes: true, attributeFilter: ["class", "hidden"]})
+  }
 
   if (!moveSupportText(documentRef, control) && typeof MutationObserver !== "undefined") {
     const observer = new MutationObserver(() => {

@@ -91,6 +91,21 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     end
   end
 
+  test "Data API roles cannot use or create in public while the direct migration owner retains schema authority" do
+    current_role = Repo.query!("SELECT current_user").rows |> hd() |> hd()
+
+    assert has_schema_privilege?(current_role, "USAGE"),
+           "migration/application owner must retain USAGE on public"
+
+    assert has_schema_privilege?(current_role, "CREATE"),
+           "migration/application owner must retain CREATE on public"
+
+    for role <- existing_roles(@api_roles), privilege <- ~w(USAGE CREATE) do
+      refute has_schema_privilege?(role, privilege),
+             "expected #{role} to lack #{privilege} on schema public"
+    end
+  end
+
   test "future public tables created by the migration role do not inherit Data API table grants" do
     current_role = Repo.query!("SELECT current_user").rows |> hd() |> hd()
 
@@ -168,6 +183,55 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     end
   end
 
+  test "a public function created by another permitted owner is still unreachable to Data API roles" do
+    creator_role = "supabase_admin"
+
+    if creator_role in existing_roles([creator_role]) and
+         has_schema_privilege?(creator_role, "CREATE") and can_set_role?(creator_role) do
+      probe_function = "__strangertalks_other_owner_rpc_probe"
+
+      Repo.query!("SET ROLE #{creator_role}")
+
+      try do
+        Repo.query!("""
+        CREATE FUNCTION public.#{probe_function}()
+        RETURNS integer
+        LANGUAGE sql
+        AS 'SELECT 1'
+        """)
+      after
+        Repo.query!("RESET ROLE")
+      end
+
+      try do
+        [[owner]] =
+          Repo.query!(
+            """
+            SELECT pg_get_userbyid(p.proowner)
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = $1
+            """,
+            [probe_function]
+          ).rows
+
+        assert owner == creator_role
+
+        for role <- existing_roles(@api_roles) do
+          function_execute =
+            has_function_privilege?(role, "public.#{probe_function}()", "EXECUTE")
+
+          schema_usage = has_schema_privilege?(role, "USAGE")
+
+          refute schema_usage and function_execute,
+                 "#{role} must not be able to reach a public function merely because another owner granted EXECUTE"
+        end
+      after
+        Repo.query!("DROP FUNCTION IF EXISTS public.#{probe_function}()")
+      end
+    end
+  end
+
   test "direct Phoenix database authority still performs legitimate participant persistence" do
     now = DateTime.utc_now()
 
@@ -211,6 +275,30 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
       Repo.query!(
         "SELECT has_table_privilege($1, $2, $3)",
         [role, "public.#{table}", privilege]
+      ).rows
+
+    allowed
+  end
+
+  defp has_schema_privilege?(role, privilege) do
+    [[allowed]] =
+      Repo.query!("SELECT has_schema_privilege($1, 'public', $2)", [role, privilege]).rows
+
+    allowed
+  end
+
+  defp has_function_privilege?(role, function, privilege) do
+    [[allowed]] =
+      Repo.query!("SELECT has_function_privilege($1, $2, $3)", [role, function, privilege]).rows
+
+    allowed
+  end
+
+  defp can_set_role?(role) do
+    [[allowed]] =
+      Repo.query!(
+        "SELECT current_setting('is_superuser') = 'on' OR pg_has_role(current_user, $1, 'MEMBER')",
+        [role]
       ).rows
 
     allowed

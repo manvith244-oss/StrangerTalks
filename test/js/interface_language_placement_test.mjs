@@ -16,6 +16,10 @@ assert.match(placement, /header\.append\(control\)/)
 assert.match(placement, /data-interface-language-placement", "global-secondary"/)
 assert.match(placement, /conversation-language-help/)
 assert.match(placement, /arrival-feedback/)
+assert.match(placement, /languageSelect\.disabled = !available/)
+assert.match(placement, /languageSelectionAvailable = available \? "true" : "false"/)
+assert.match(placement, /attributeFilter: \["class", "hidden"\]/)
+assert.match(placement, /min-height: 2\.75rem/)
 
 assert.doesNotMatch(
   placement,
