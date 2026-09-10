@@ -1,3 +1,5 @@
+import {createIntentSelectionObserver, productEvents} from "./product_events.mjs"
+
 const FIRST_MINUTE_FAILURE = "StrangerTalks could not start. Please reload."
 const FIRST_MINUTE_FOCUS_SCREENS = new Set(["doors", "queue", "match", "conversation"])
 
@@ -45,6 +47,7 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
 
   let joinInFlight = false
   let screenFocusScheduled = false
+  const intentEvents = createIntentSelectionObserver(productEvents)
 
   const arrivalLede = doorsScreen.querySelector(":scope > .lede")
   let trustCue = documentRef.querySelector("#arrival-trust-cue")
@@ -124,6 +127,8 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
   doorGrid.addEventListener("click", (event) => {
     const door = event.target.closest?.("button.door")
     if (!door || !doorGrid.contains(door)) return
+
+    void intentEvents.select(door.dataset.door)
 
     if (!languageSelect.value) {
       event.preventDefault()
