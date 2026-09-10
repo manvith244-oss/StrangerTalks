@@ -21,20 +21,20 @@ test("match cannot skip a missing authoritative queue-joined stage", async () =>
   assert.deepEqual(events.map(({name}) => name), ["st_queue_requested"])
 })
 
-test("first accepted message cannot skip a missing successfully recorded match stage", async () => {
+test("failed queue-request delivery truncates analytics rather than allowing downstream success", async () => {
   const events = []
   const {observer} = setup({
     sink: async (event) => {
-      if (event.name === "st_match_created") throw new Error("measurement sink unavailable")
+      if (event.name === "st_queue_requested") throw new Error("measurement sink unavailable")
       events.push(event)
     }
   })
 
-  assert.equal(await observer.requested("JUST_TALK", "hi"), true)
-  assert.equal(await observer.joined(), true)
+  assert.equal(await observer.requested("EXPLORE", "en"), false)
+  assert.equal(await observer.joined(), false)
   assert.equal(await observer.matched(), false)
   assert.equal(await observer.firstMessageAccepted(), false)
-  assert.deepEqual(events.map(({name}) => name), ["st_queue_requested", "st_queue_joined"])
+  assert.deepEqual(events, [])
 })
 
 test("failed queue-joined delivery truncates analytics rather than allowing downstream success", async () => {
@@ -51,6 +51,22 @@ test("failed queue-joined delivery truncates analytics rather than allowing down
   assert.equal(await observer.matched(), false)
   assert.equal(await observer.firstMessageAccepted(), false)
   assert.deepEqual(events.map(({name}) => name), ["st_queue_requested"])
+})
+
+test("first accepted message cannot skip a missing successfully recorded match stage", async () => {
+  const events = []
+  const {observer} = setup({
+    sink: async (event) => {
+      if (event.name === "st_match_created") throw new Error("measurement sink unavailable")
+      events.push(event)
+    }
+  })
+
+  assert.equal(await observer.requested("JUST_TALK", "hi"), true)
+  assert.equal(await observer.joined(), true)
+  assert.equal(await observer.matched(), false)
+  assert.equal(await observer.firstMessageAccepted(), false)
+  assert.deepEqual(events.map(({name}) => name), ["st_queue_requested", "st_queue_joined"])
 })
 
 test("session reconciliation restores product state but never fabricates missing funnel timestamps", () => {
