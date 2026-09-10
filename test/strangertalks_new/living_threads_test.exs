@@ -3,7 +3,7 @@ defmodule StrangertalksNew.LivingThreadsTest do
 
   alias StrangertalksNew.LivingThreads
   alias StrangertalksNew.LivingThreads.{ExperimentAssignment, LivingThread, PilotEvent}
-  alias StrangertalksNew.{MatchingRules, Participants, Repo}
+  alias StrangertalksNew.{MatchingRules, Participants, Repo, Reports}
 
   @now ~U[2026-09-11 00:00:00.000000Z]
 
@@ -157,6 +157,36 @@ defmodule StrangertalksNew.LivingThreadsTest do
              )
   end
 
+  test "active conversation report prevents a reported carrier from being assigned the thread" do
+    a = participant!()
+    reported_b = participant!()
+    assign!(a, :CONSEQUENCE_A)
+    assign!(reported_b, :CARRIER_B)
+
+    conversation = conversation_between!(a, reported_b)
+
+    assert {:ok, _report} =
+             Reports.create_report(%{
+               created_at: @now,
+               updated_at: @now,
+               reporting_participant_id: a.participant_id,
+               reported_participant_id: reported_b.participant_id,
+               conversation_id: conversation.conversation_id,
+               report_category: :HARASSMENT,
+               report_status: :SUBMITTED,
+               reporter_context: "pilot separation test",
+               deduplication_key: "living-thread-report-#{a.participant_id}",
+               media_origin: :NO_MEDIA
+             })
+
+    assert {:ok, _thread} = LivingThreads.start_thread(a.participant_id, "seed", now: @now)
+
+    assert {:error, :no_waiting_thread} =
+             LivingThreads.continue_next(reported_b.participant_id, "must not be routed",
+               now: @now
+             )
+  end
+
   test "known-person debrief is accepted only after a resolved exposure" do
     a = participant!()
     b = participant!()
@@ -193,6 +223,61 @@ defmodule StrangertalksNew.LivingThreadsTest do
   defp participant! do
     {:ok, participant} = Participants.create_participant(%{})
     participant
+  end
+
+  defp conversation_between!(a, b) do
+    {:ok, match} =
+      StrangertalksNew.Matches.create_match(%{
+        created_at: @now,
+        door_type: :JUST_TALK,
+        match_status: :CREATED,
+        match_strategy: :COMPATIBILITY,
+        participant_a_id: a.participant_id,
+        participant_b_id: b.participant_id,
+        conversation_language: "en",
+        compatibility_score: Decimal.new("1.0"),
+        queue_entry_time: @now,
+        match_found_time: @now,
+        queue_duration_seconds: 0,
+        conversation_duration_seconds: 0,
+        conversation_started: false,
+        conversation_completed: false,
+        memory_created: false,
+        relationship_created: false,
+        reconnected_later: false,
+        report_generated: false,
+        block_generated: false,
+        safety_review_required: false,
+        learning_processed: false
+      })
+
+    {:ok, conversation} =
+      StrangertalksNew.Conversations.create_conversation(%{
+        created_at: @now,
+        match_id: match.match_id,
+        participant_a_id: a.participant_id,
+        participant_b_id: b.participant_id,
+        conversation_status: :PENDING,
+        door_type: :JUST_TALK,
+        message_count: 0,
+        voice_note_count: 0,
+        bridge_shown: false,
+        bridge_used: false,
+        bridge_ignored: false,
+        conversation_completed: false,
+        memory_created: false,
+        relationship_created: false,
+        reconnected_later: false,
+        memory_count: 0,
+        relationship_created_at_end: false,
+        report_count: 0,
+        block_count: 0,
+        safety_flagged: false,
+        learning_processed: false,
+        duration_seconds: 0
+      })
+
+    conversation
   end
 
   defp assign!(participant, role) do
