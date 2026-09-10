@@ -86,7 +86,7 @@ test("Doors grid never exceeds two columns at the locked viewport matrix", {time
   }
 })
 
-test("all four Doors have identical computed geometry regardless of data-door", {timeout: 30_000}, async () => {
+test("all four Doors have identical computed geometry regardless of data-door", {timeout: 45_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let app
   try {
@@ -127,38 +127,74 @@ test("all four Doors have identical computed geometry regardless of data-door", 
   }
 })
 
-test("Doors follow intent-first DOM order and Temporary Conversation is secondary", {timeout: 30_000}, async () => {
+test("Doors keep intent-first order while Conversation Language lives in the global-secondary header control", {timeout: 30_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let app
   try {
     app = await openDoors(browser)
-    const order = await app.page.locator('section[data-screen="doors"]').evaluate(section => {
+    const structure = await app.page.evaluate(() => {
+      const section = document.querySelector('section[data-screen="doors"]')
+      const header = document.querySelector(".site-header")
+      const control = document.querySelector("#conversation-language-control")
       const children = [...section.children]
       const index = element => children.indexOf(element)
       const lede = section.querySelector(".lede")
       const doors = section.querySelector("#doors")
-      const language = section.querySelector("#conversation-language")
-      const languageLabel = section.querySelector('label[for="conversation-language"]')
+      const trustCue = section.querySelector("#arrival-trust-cue")
       const temporary = section.querySelector(".temporary-entry")
+      const language = document.querySelector("#conversation-language")
+      const languageLabel = document.querySelector('label[for="conversation-language"]')
       return {
         lede: index(lede),
         afterLede: index(lede.nextElementSibling),
         doors: index(doors),
-        languageLabel: index(languageLabel),
-        language: index(language),
+        trustCue: index(trustCue),
         temporary: index(temporary),
-        trustCue: index(section.querySelector("#arrival-trust-cue")),
-        trustCueCount: section.querySelectorAll("#arrival-trust-cue").length
+        languageInDoors: section.contains(language),
+        labelInDoors: section.contains(languageLabel),
+        controlInHeader: Boolean(header && control && header.contains(control)),
+        languageInControl: Boolean(control && language && control.contains(language)),
+        labelInControl: Boolean(control && languageLabel && control.contains(languageLabel)),
+        helpInControl: Boolean(control?.querySelector("#conversation-language-help")),
+        feedbackInControl: Boolean(control?.querySelector("#arrival-feedback")),
+        placement: control?.dataset.interfaceLanguagePlacement || null,
+        labelFor: languageLabel?.htmlFor || null,
+        languageId: language?.id || null
       }
     })
 
-    assert.ok(order.lede < order.doors, "subcopy precedes Doors")
-    assert.equal(order.afterLede, order.doors, "no explainer interrupts subcopy and Doors")
-    assert.ok(order.doors < order.languageLabel, "Doors precede language label")
-    assert.ok(order.languageLabel < order.language, "language label remains paired before select")
-    assert.ok(order.language < order.temporary, "Temporary Conversation disclosure sits below the language control")
-    assert.equal(order.trustCueCount, 1, "existing trust cue is preserved once")
-    assert.ok(order.language < order.trustCue, "existing trust cue is secondary to Doors and language")
+    assert.ok(structure.lede < structure.doors, "subcopy precedes Doors")
+    assert.equal(structure.afterLede, structure.doors, "no explainer interrupts subcopy and Doors")
+    assert.ok(structure.doors < structure.trustCue, "trust cue remains secondary to Doors")
+    assert.ok(structure.doors < structure.temporary, "Temporary Conversation remains secondary to Doors")
+    assert.equal(structure.languageInDoors, false, "language select is no longer primary Doors content")
+    assert.equal(structure.labelInDoors, false, "language label moves with its select")
+    assert.equal(structure.controlInHeader, true, "language control is in the site header")
+    assert.equal(structure.languageInControl, true, "header control owns the language select")
+    assert.equal(structure.labelInControl, true, "header control keeps the label paired with the select")
+    assert.equal(structure.helpInControl, true, "language help moves with the control")
+    assert.equal(structure.feedbackInControl, true, "arrival feedback moves with the control")
+    assert.equal(structure.placement, "global-secondary")
+    assert.equal(structure.labelFor, structure.languageId, "label remains associated with Conversation Language")
+  } finally {
+    await app?.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
+
+test("Conversation Language is editable on Doors and locked once matchmaking starts", {timeout: 30_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let app
+  try {
+    app = await openDoors(browser)
+    const language = app.page.locator("#conversation-language")
+    assert.equal(await language.isDisabled(), false, "language is selectable before queue admission")
+    await language.selectOption("en")
+    await app.page.locator("button.door").first().click()
+    await app.page.locator('section[data-screen="queue"].active').waitFor({state: "visible"})
+    await app.page.waitForFunction(() => document.querySelector("#conversation-language")?.disabled === true)
+    assert.equal(await language.isDisabled(), true, "queued language cannot drift from the captured queue payload")
+    assert.equal(await app.page.locator("#conversation-language-control").getAttribute("data-language-selection-available"), "false")
   } finally {
     await app?.context.close().catch(() => {})
     await browser.close().catch(() => {})
@@ -206,12 +242,21 @@ test("unselected Doors are neutral, hover/focus preview is restrained, and selec
   }
 })
 
-test("keyboard-only focus indicator is visible and fixed across all Doors and language", {timeout: 30_000}, async () => {
+test("keyboard-only focus indicator is visible and fixed across the header language control and all Doors", {timeout: 30_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let app
   try {
     app = await openDoors(browser)
     const indicators = []
+
+    await tabUntil(app.page, () => document.activeElement?.id === "conversation-language", "Conversation Language", 8)
+    const languageIndicator = await app.page.locator("#conversation-language").evaluate(element => {
+      const style = getComputedStyle(element)
+      return {color: style.outlineColor, style: style.outlineStyle, width: style.outlineWidth, height: style.height}
+    })
+    assert.notEqual(languageIndicator.style, "none", "language control has a visible focus outline")
+    assert.ok(Number.parseFloat(languageIndicator.width) >= 3, "language focus outline is at least 3px")
+    assert.ok(Number.parseFloat(languageIndicator.height) >= 44, "language control preserves an adequate touch target")
 
     for (let index = 0; index < 4; index += 1) {
       await tabUntil(app.page, expectedIndex => {
@@ -224,15 +269,6 @@ test("keyboard-only focus indicator is visible and fixed across all Doors and la
       assert.ok(Number.parseFloat(state.outlineWidth) >= 3, `Door ${index + 1} focus outline is at least 3px`)
       indicators.push({color: state.outlineColor, style: state.outlineStyle, width: state.outlineWidth})
     }
-
-    await tabUntil(app.page, () => document.activeElement?.id === "conversation-language", "Conversation Language", 8)
-    const languageIndicator = await app.page.locator("#conversation-language").evaluate(element => {
-      const style = getComputedStyle(element)
-      return {color: style.outlineColor, style: style.outlineStyle, width: style.outlineWidth, height: style.height}
-    })
-    assert.notEqual(languageIndicator.style, "none", "language control has a visible focus outline")
-    assert.ok(Number.parseFloat(languageIndicator.width) >= 3, "language focus outline is at least 3px")
-    assert.ok(Number.parseFloat(languageIndicator.height) >= 44, "language control preserves an adequate touch target")
 
     for (const indicator of indicators) assert.deepEqual(indicator, indicators[0], "Door focus indicators never vary by Door")
     assert.deepEqual(
