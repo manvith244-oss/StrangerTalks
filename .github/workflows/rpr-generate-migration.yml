@@ -1,0 +1,39 @@
+name: RPR one-shot migration generator
+
+on:
+  push:
+    branches:
+      - release/rpr-public-rpc-default-closure-2026-09-10
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/rpr-public-rpc-default-closure-2026-09-10
+          fetch-depth: 0
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Generate migration exactly once
+        shell: bash
+        run: |
+          set -euo pipefail
+          if compgen -G 'priv/repo/migrations/*_harden_public_rpc_defaults_rpr.exs' >/dev/null; then
+            echo 'migration already generated'
+            exit 0
+          fi
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          mix ecto.gen.migration harden_public_rpc_defaults_rpr
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add priv/repo/migrations/*_harden_public_rpc_defaults_rpr.exs
+          git commit -m 'chore: generate RPR RPC hardening migration'
+          git push origin HEAD:release/rpr-public-rpc-default-closure-2026-09-10
