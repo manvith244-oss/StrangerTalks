@@ -192,10 +192,14 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     do: safety_error(socket, :invalid_block_intent)
 
   def handle_in("room:leave", params, socket) when params == %{} do
-    case Hangouts.leave_room(room_id(socket), socket.assigns.participant_id) do
+    room_id = room_id(socket)
+    participant_id = socket.assigns.participant_id
+
+    case Hangouts.leave_room(room_id, participant_id) do
       {:ok, _membership} ->
-        _ = PresenceAuthority.unregister(room_id(socket), socket.assigns.participant_id)
-        {:reply, {:ok, %{status: "left"}}, assign(socket, :hangout_explicit_leave, true)}
+        :ok = PresenceAuthority.revoke_other_channels(room_id, participant_id, self())
+        leaving_socket = assign(socket, :hangout_explicit_leave, true)
+        {:stop, :normal, {:ok, %{status: "left"}}, leaving_socket}
 
       {:error, :membership_not_found} ->
         {:reply, {:error, %{reason: "not_hangout_member"}}, socket}
@@ -218,6 +222,12 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     do: {:reply, {:error, %{reason: "invalid_request"}}, socket}
 
   @impl true
+  def handle_info({:hangout_presence_revoked, room_id, participant_id}, socket)
+      when room_id == socket.assigns.hangout_room_id and
+             participant_id == socket.assigns.participant_id do
+    {:stop, :normal, assign(socket, :hangout_explicit_leave, true)}
+  end
+
   def handle_info({:hangout_event, event, payload}, socket) when is_binary(event) do
     push(socket, event, payload)
     {:noreply, socket}
