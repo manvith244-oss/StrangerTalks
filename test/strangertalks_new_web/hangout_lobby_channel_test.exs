@@ -25,13 +25,23 @@ defmodule StrangertalksNewWeb.HangoutLobbyChannelTest do
     alice_socket = connected_socket(alice)
 
     assert {:ok, reply, socket} =
-             subscribe_and_join(alice_socket, HangoutLobbyChannel, "hangout_lobby:#{alice.participant_id}", %{})
+             subscribe_and_join(
+               alice_socket,
+               HangoutLobbyChannel,
+               "hangout_lobby:#{alice.participant_id}",
+               %{}
+             )
 
     assert socket.assigns.participant_id == alice.participant_id
     assert reply.status == "connected"
 
     assert {:error, %{reason: "participant_mismatch"}} =
-             subscribe_and_join(alice_socket, HangoutLobbyChannel, "hangout_lobby:#{bob.participant_id}", %{})
+             subscribe_and_join(
+               alice_socket,
+               HangoutLobbyChannel,
+               "hangout_lobby:#{bob.participant_id}",
+               %{}
+             )
   end
 
   test "queue:join accepts only expected intent fields and supports extensible language tags" do
@@ -54,7 +64,12 @@ defmodule StrangertalksNewWeb.HangoutLobbyChannelTest do
     _ = push(socket, "queue:cancel", %{})
 
     # Spoofed participant_id in intent rejected
-    spoofed_ref = push(socket, "queue:join", %{"language_tag" => "en", "participant_id" => Ecto.UUID.generate()})
+    spoofed_ref =
+      push(socket, "queue:join", %{
+        "language_tag" => "en",
+        "participant_id" => Ecto.UUID.generate()
+      })
+
     assert_reply spoofed_ref, :error, %{reason: "invalid_intent"}
 
     # Missing language_tag rejected
@@ -130,8 +145,15 @@ defmodule StrangertalksNewWeb.HangoutLobbyChannelTest do
 
     room = Repo.get!(HangoutRoom, room_id1)
     assert room.status == :ACTIVE
-    memberships = Repo.all(from m in HangoutMembership, where: m.room_id == ^room_id1, select: m.participant_id)
-    assert MapSet.new(memberships) == MapSet.new([p1.participant_id, p2.participant_id, p3.participant_id])
+
+    memberships =
+      Repo.all(
+        from m in HangoutMembership, where: m.room_id == ^room_id1, select: m.participant_id
+      )
+
+    assert MapSet.new(memberships) ==
+             MapSet.new([p1.participant_id, p2.participant_id, p3.participant_id])
+
     refute outsider.participant_id in memberships
   end
 
@@ -154,7 +176,8 @@ defmodule StrangertalksNewWeb.HangoutLobbyChannelTest do
     language = "en-BLOCK-01"
     [a, b, c, d] = participants!(4)
 
-    assert {:ok, _block} = MatchingRules.enforce_block(a.participant_id, b.participant_id, "HANGOUT")
+    assert {:ok, _block} =
+             MatchingRules.enforce_block(a.participant_id, b.participant_id, "HANGOUT")
 
     {:ok, _reply, sa} = join_lobby(a)
     {:ok, _reply, sb} = join_lobby(b)
@@ -174,15 +197,23 @@ defmodule StrangertalksNewWeb.HangoutLobbyChannelTest do
     track_room(room_id)
 
     room_members =
-      Repo.all(from m in HangoutMembership, where: m.room_id == ^room_id, select: m.participant_id)
+      Repo.all(
+        from m in HangoutMembership, where: m.room_id == ^room_id, select: m.participant_id
+      )
 
     assert length(room_members) == 3
-    refute (a.participant_id in room_members and b.participant_id in room_members)
+    refute a.participant_id in room_members and b.participant_id in room_members
   end
 
   defp join_lobby(participant) do
     socket = connected_socket(participant)
-    subscribe_and_join(socket, HangoutLobbyChannel, "hangout_lobby:#{participant.participant_id}", %{})
+
+    subscribe_and_join(
+      socket,
+      HangoutLobbyChannel,
+      "hangout_lobby:#{participant.participant_id}",
+      %{}
+    )
   end
 
   defp connected_socket(participant) do

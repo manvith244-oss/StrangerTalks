@@ -26,6 +26,7 @@ on:
       - "test/strangertalks_new_web/hangout_channel_test.exs"
       - "test/strangertalks_new_web/hangout_lobby_channel_test.exs"
       - "test/js/hangouts_contract_test.mjs"
+      - "test/js/hangouts_browser_test.mjs"
       - ".github/workflows/hangouts-v1.yml"
   workflow_dispatch:
 
@@ -56,8 +57,10 @@ jobs:
 
     env:
       MIX_ENV: test
+      PORT: "4002"
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4002
 
     steps:
       - name: Checkout exact Hangouts commit
@@ -90,6 +93,7 @@ jobs:
           mix local.rebar --force
           mix deps.get
           npm ci
+          npx playwright install --with-deps chromium
 
       - name: Prepare database
         run: |
@@ -154,11 +158,48 @@ jobs:
         continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/telemetry_test.exs
 
+      - name: Start Phoenix for Hangouts browser proof
+        run: |
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/hangouts-browser.log 2>&1 &
+          echo $! > /tmp/hangouts-browser.pid
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$(cat /tmp/hangouts-browser.pid)" 2>/dev/null; then
+              echo "Phoenix exited before becoming ready."
+              cat /tmp/hangouts-browser.log
+              exit 1
+            fi
+            if curl -fsS http://localhost:4002/ >/dev/null; then
+              echo "Phoenix Hangouts browser endpoint is ready."
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Phoenix did not become ready."
+          cat /tmp/hangouts-browser.log
+          exit 1
+
       - name: Hangouts browser contract
         id: browser-contract
         if: ${{ hashFiles('test/js/hangouts_contract_test.mjs') != '' }}
         continue-on-error: true
-        run: node --test test/js/hangouts_contract_test.mjs
+        run: |
+          node --test test/js/hangouts_contract_test.mjs
+          node --test --test-concurrency=1 test/js/hangouts_browser_test.mjs
+
+      - name: Stop Phoenix browser server
+        if: always()
+        run: |
+          if [ -f /tmp/hangouts-browser.pid ]; then
+            kill "$(cat /tmp/hangouts-browser.pid)" 2>/dev/null || true
+          fi
 
       - name: Full precommit regression
         id: full-precommit
