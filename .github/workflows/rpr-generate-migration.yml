@@ -1,0 +1,47 @@
+name: RPR Generate Migration Shell
+
+on:
+  push:
+    branches:
+      - release/rpr-public-schema-data-api-boundary-2026-09-11
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@v4
+        with:
+          ref: release/rpr-public-schema-data-api-boundary-2026-09-11
+          fetch-depth: 0
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Generate migration using repository-required Ecto task
+        run: mix ecto.gen.migration close_public_schema_data_api_boundary_rpr
+
+      - name: Commit generated shell only
+        run: |
+          generated="$(git status --porcelain -- priv/repo/migrations | awk '{print $2}')"
+          test -n "$generated"
+          test "$(printf '%s\n' "$generated" | wc -l)" -eq 1
+          git add "$generated"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(db): generate RPR public schema boundary migration"
+          git push origin HEAD:release/rpr-public-schema-data-api-boundary-2026-09-11
