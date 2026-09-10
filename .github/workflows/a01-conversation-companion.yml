@@ -119,6 +119,9 @@ jobs:
       - name: Focused Agent Systems browser logic
         run: node --test test/js/companion_test.mjs test/js/prompt_cards_test.mjs
 
+      - name: Focused Language Team product-event integrity
+        run: node --test test/js/product_events*.mjs
+
       - name: Full precommit
         run: mix precommit
 
