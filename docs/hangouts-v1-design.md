@@ -28,6 +28,7 @@ Hangouts tests whether small groups of anonymous strangers talk more readily and
 7. Phoenix synchronizes room state (`content_id`, sequence, state timestamps, reactions/votes/messages); media bytes are not carried as synchronized room state.
 8. Reporting in Hangouts is a separate Hangout safety path. Existing `Report` is conversation-FK-required and must not be overloaded.
 9. V1 launch policy remains 18+ unless owner/legal authority changes it.
+10. Hangout presence is lifecycle-derived from authoritative membership/channel transitions. V1 has no client-authored presence event or heartbeat authority.
 
 ## V1 architecture
 
@@ -65,14 +66,16 @@ Add `channel "hangout:*", StrangertalksNewWeb.HangoutChannel` to the authenticat
 
 Join authorization requires the socket participant to have an active membership for the requested room. Server replies include room lifecycle state, the caller's temporary identity, current members, authoritative current content and latest message/content sequence.
 
+Presence authority follows the shipped room lifecycle: joining or rejoining obtains the authoritative snapshot through `RoomServer.reconnect`; unexpected channel termination calls `RoomServer.disconnect`; explicit `room:leave` persists the member's deliberate leave. There is no client-authored presence event in V1. Reconnect always begins from authoritative room state rather than a client timer or heartbeat claim.
+
 Client events:
 
 - `message:send`
 - `reaction:add`
 - `content:skip_vote`
-- `presence:heartbeat`
 - `room:leave`
-- `report:submit`
+- `safety:report`
+- `safety:block`
 
 Server broadcasts:
 
