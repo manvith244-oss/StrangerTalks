@@ -161,19 +161,23 @@ defmodule StrangertalksNewWeb.HangoutLobbyChannelTest do
     {:ok, _reply, sc} = join_lobby(c)
     {:ok, _reply, sd} = join_lobby(d)
 
-    push(sa, "queue:join", %{"language_tag" => language})
-    push(sb, "queue:join", %{"language_tag" => language})
-    push(sc, "queue:join", %{"language_tag" => language})
-    push(sd, "queue:join", %{"language_tag" => language})
+    ref_a = push(sa, "queue:join", %{"language_tag" => language})
+    assert_reply ref_a, :ok, _
+    ref_b = push(sb, "queue:join", %{"language_tag" => language})
+    assert_reply ref_b, :ok, _
+    ref_c = push(sc, "queue:join", %{"language_tag" => language})
+    assert_reply ref_c, :ok, _
+    ref_d = push(sd, "queue:join", %{"language_tag" => language})
+    assert_reply ref_d, :ok, _
 
-    case Matcher.try_form(language) do
-      {:ok, formed} when is_map(formed) ->
-        track_room(formed.room_id)
-        assert formed.size == 3
-        refute (a.participant_id in formed.participant_ids and b.participant_id in formed.participant_ids)
-      _ ->
-        flunk("Expected room formation with 3 compatible participants")
-    end
+    assert_push "room:formed", %{room_id: room_id, status: "formed"}
+    track_room(room_id)
+
+    room_members =
+      Repo.all(from m in HangoutMembership, where: m.room_id == ^room_id, select: m.participant_id)
+
+    assert length(room_members) == 3
+    refute (a.participant_id in room_members and b.participant_id in room_members)
   end
 
   defp join_lobby(participant) do
