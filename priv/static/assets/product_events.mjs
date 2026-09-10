@@ -1,29 +1,100 @@
-const EVENT_PROPERTIES = Object.freeze({
-  st_entrance_ready: Object.freeze(["remembered_talk_language", "device_class", "build_id"]),
-  st_intent_selected: Object.freeze(["intent_family", "intent_value", "selection_kind"]),
-  st_intent_changed: Object.freeze(["from_intent", "to_intent"]),
-  st_talk_language_opened: Object.freeze(["trigger"]),
-  st_talk_language_selected: Object.freeze(["language_code", "source", "trigger"]),
-  st_queue_requested: Object.freeze(["intent_code", "interaction_language"]),
-  st_queue_joined: Object.freeze(["intent_code"]),
-  st_match_created: Object.freeze(["intent_code"]),
-  st_first_message_accepted: Object.freeze(["message_type"]),
-  st_flow_cancelled: Object.freeze(["stage", "reason_code"])
-})
-
+const FOUR_DOOR_INTENTS = new Set(["SOMETHING_REAL", "JUST_TALK", "KEEP_IT_LIGHT", "EXPLORE"])
+const TALK_LANGUAGE_CODES = new Set(["en", "te", "hi"])
 const TALK_LANGUAGE_OPEN_TRIGGERS = new Set(["direct", "required_after_intent"])
+const TALK_LANGUAGE_SOURCES = new Set(["remembered", "new", "changed"])
+const DEVICE_CLASSES = new Set(["mobile", "tablet", "desktop", "unknown"])
 const FLOW_CANCELLATIONS = new Set(["queue:user_requested"])
 
-export const PRODUCT_EVENT_NAMES = Object.freeze(Object.keys(EVENT_PROPERTIES))
+const EVENT_SCHEMAS = Object.freeze({
+  st_entrance_ready: Object.freeze({
+    required: Object.freeze(["remembered_talk_language", "device_class"]),
+    properties: Object.freeze({
+      remembered_talk_language: (value) => typeof value === "boolean",
+      device_class: (value) => DEVICE_CLASSES.has(value),
+      build_id: (value) => typeof value === "string" && value.length > 0
+    })
+  }),
+  st_intent_selected: Object.freeze({
+    required: Object.freeze(["intent_family", "intent_value", "selection_kind"]),
+    properties: Object.freeze({
+      intent_family: (value) => value === "four_doors",
+      intent_value: (value) => FOUR_DOOR_INTENTS.has(value),
+      selection_kind: (value) => value === "first"
+    })
+  }),
+  st_intent_changed: Object.freeze({
+    required: Object.freeze(["from_intent", "to_intent"]),
+    properties: Object.freeze({
+      from_intent: (value) => FOUR_DOOR_INTENTS.has(value),
+      to_intent: (value) => FOUR_DOOR_INTENTS.has(value)
+    }),
+    validate: (properties) => properties.from_intent !== properties.to_intent
+  }),
+  st_talk_language_opened: Object.freeze({
+    required: Object.freeze(["trigger"]),
+    properties: Object.freeze({
+      trigger: (value) => TALK_LANGUAGE_OPEN_TRIGGERS.has(value)
+    })
+  }),
+  st_talk_language_selected: Object.freeze({
+    required: Object.freeze(["language_code", "source"]),
+    properties: Object.freeze({
+      language_code: (value) => TALK_LANGUAGE_CODES.has(value),
+      source: (value) => TALK_LANGUAGE_SOURCES.has(value),
+      trigger: (value) => TALK_LANGUAGE_OPEN_TRIGGERS.has(value)
+    })
+  }),
+  st_queue_requested: Object.freeze({
+    required: Object.freeze(["intent_code", "interaction_language"]),
+    properties: Object.freeze({
+      intent_code: (value) => FOUR_DOOR_INTENTS.has(value),
+      interaction_language: (value) => TALK_LANGUAGE_CODES.has(value)
+    })
+  }),
+  st_queue_joined: Object.freeze({
+    required: Object.freeze(["intent_code"]),
+    properties: Object.freeze({
+      intent_code: (value) => FOUR_DOOR_INTENTS.has(value)
+    })
+  }),
+  st_match_created: Object.freeze({
+    required: Object.freeze(["intent_code"]),
+    properties: Object.freeze({
+      intent_code: (value) => FOUR_DOOR_INTENTS.has(value)
+    })
+  }),
+  st_first_message_accepted: Object.freeze({
+    required: Object.freeze([]),
+    properties: Object.freeze({})
+  }),
+  st_flow_cancelled: Object.freeze({
+    required: Object.freeze(["stage", "reason_code"]),
+    properties: Object.freeze({
+      stage: (value) => value === "queue",
+      reason_code: (value) => value === "user_requested"
+    }),
+    validate: (properties) => FLOW_CANCELLATIONS.has(`${properties.stage}:${properties.reason_code}`)
+  })
+})
+
+export const PRODUCT_EVENT_NAMES = Object.freeze(Object.keys(EVENT_SCHEMAS))
 
 function defaultUuid() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
   return `flow-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 
+function isIntentCode(value) {
+  return FOUR_DOOR_INTENTS.has(value)
+}
+
+function isTalkLanguageCode(value) {
+  return TALK_LANGUAGE_CODES.has(value)
+}
+
 function sanitizeEvent(name, properties, flowAttemptId, testTraffic) {
-  const allowedProperties = EVENT_PROPERTIES[name]
-  if (!allowedProperties) return null
+  const schema = EVENT_SCHEMAS[name]
+  if (!schema) return null
 
   const source = properties && typeof properties === "object" ? properties : {}
   const sanitized = {
@@ -31,10 +102,18 @@ function sanitizeEvent(name, properties, flowAttemptId, testTraffic) {
     test_traffic: testTraffic
   }
 
-  for (const property of allowedProperties) {
-    if (Object.hasOwn(source, property)) sanitized[property] = source[property]
+  for (const [property, validator] of Object.entries(schema.properties)) {
+    if (!Object.hasOwn(source, property)) continue
+    const value = source[property]
+    if (!validator(value)) return null
+    sanitized[property] = value
   }
 
+  for (const property of schema.required) {
+    if (!Object.hasOwn(sanitized, property)) return null
+  }
+
+  if (schema.validate && !schema.validate(sanitized)) return null
   return {name, properties: sanitized}
 }
 
@@ -54,10 +133,7 @@ export function createProductEventTracker(options = {}) {
   const capturedOnce = new Set()
   let flowAttemptId = uuid()
 
-  async function capture(name, properties = {}) {
-    const event = sanitizeEvent(name, properties, flowAttemptId, testTraffic)
-    if (!event) return false
-
+  async function deliver(event) {
     try {
       await sink(event)
       return true
@@ -66,10 +142,17 @@ export function createProductEventTracker(options = {}) {
     }
   }
 
+  async function capture(name, properties = {}) {
+    const event = sanitizeEvent(name, properties, flowAttemptId, testTraffic)
+    if (!event) return false
+    return deliver(event)
+  }
+
   async function captureOnce(name, properties = {}) {
-    if (!EVENT_PROPERTIES[name] || capturedOnce.has(name)) return false
+    const event = sanitizeEvent(name, properties, flowAttemptId, testTraffic)
+    if (!event || capturedOnce.has(name)) return false
     capturedOnce.add(name)
-    return capture(name, properties)
+    return deliver(event)
   }
 
   function resetFlow() {
@@ -99,7 +182,7 @@ export function createIntentSelectionObserver(tracker) {
   return {
     async select(intentValue) {
       syncFlow()
-      if (queueJoined || typeof intentValue !== "string" || !intentValue) return false
+      if (queueJoined || !isIntentCode(intentValue)) return false
       if (intentValue === selectedIntent) return false
 
       if (selectedIntent === null) {
@@ -126,7 +209,7 @@ export function createIntentSelectionObserver(tracker) {
 }
 
 function validLanguageCode(languageCode, validLanguages) {
-  if (typeof languageCode !== "string" || !languageCode) return false
+  if (!isTalkLanguageCode(languageCode)) return false
   if (validLanguages instanceof Set) return validLanguages.has(languageCode)
   return Array.isArray(validLanguages) && validLanguages.includes(languageCode)
 }
@@ -183,8 +266,7 @@ export function createQueueEventObserver(tracker) {
   return {
     requested(nextIntentCode, nextInteractionLanguage) {
       syncFlow()
-      if (typeof nextIntentCode !== "string" || !nextIntentCode) return Promise.resolve(false)
-      if (typeof nextInteractionLanguage !== "string" || !nextInteractionLanguage) return Promise.resolve(false)
+      if (!isIntentCode(nextIntentCode) || !isTalkLanguageCode(nextInteractionLanguage)) return Promise.resolve(false)
       intentCode = nextIntentCode
       interactionLanguage = nextInteractionLanguage
       return tracker.capture("st_queue_requested", {
