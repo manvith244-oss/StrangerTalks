@@ -31,6 +31,23 @@ test("first intent emits selected with a stable canonical code", async () => {
   }])
 })
 
+test("invented intent code is rejected without poisoning later valid selection state", async () => {
+  const {events, observer} = setup()
+
+  assert.equal(await observer.select("INVENTED_DOOR"), false)
+  assert.equal(await observer.select("EXPLORE"), true)
+  assert.deepEqual(events, [{
+    name: "st_intent_selected",
+    properties: {
+      flow_attempt_id: "flow-intent",
+      test_traffic: false,
+      intent_family: "four_doors",
+      intent_value: "EXPLORE",
+      selection_kind: "first"
+    }
+  }])
+})
+
 test("changing intent before queue join emits a bounded reversal", async () => {
   const {events, observer} = setup()
 
