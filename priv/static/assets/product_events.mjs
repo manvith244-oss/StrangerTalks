@@ -76,6 +76,37 @@ export function createProductEventTracker(options = {}) {
   }
 }
 
+export function createIntentSelectionObserver(tracker) {
+  let selectedIntent = null
+  let queueAdmitted = false
+
+  return {
+    async select(intentValue) {
+      if (queueAdmitted || typeof intentValue !== "string" || !intentValue) return false
+      if (intentValue === selectedIntent) return false
+
+      if (selectedIntent === null) {
+        selectedIntent = intentValue
+        return tracker.capture("st_intent_selected", {
+          intent_family: "four_doors",
+          intent_value: intentValue,
+          selection_kind: "first"
+        })
+      }
+
+      const fromIntent = selectedIntent
+      selectedIntent = intentValue
+      return tracker.capture("st_intent_changed", {
+        from_intent: fromIntent,
+        to_intent: intentValue
+      })
+    },
+    markQueueAdmitted() {
+      queueAdmitted = true
+    }
+  }
+}
+
 export function deviceClassForWidth(width) {
   if (!Number.isFinite(width) || width < 0) return "unknown"
   if (width < 768) return "mobile"
