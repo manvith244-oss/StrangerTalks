@@ -1,4 +1,4 @@
-import {createIntentSelectionObserver, productEvents, talkLanguageEvents} from "./product_events.mjs"
+import {intentEvents, talkLanguageEvents} from "./product_events.mjs"
 
 const FIRST_MINUTE_FAILURE = "StrangerTalks could not start. Please reload."
 const FIRST_MINUTE_FOCUS_SCREENS = new Set(["doors", "queue", "match", "conversation"])
@@ -48,7 +48,6 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
 
   let joinInFlight = false
   let screenFocusScheduled = false
-  const intentEvents = createIntentSelectionObserver(productEvents)
   const validLanguageValues = () => Array.from(languageSelect.options).map(({value}) => value).filter(Boolean)
 
   const arrivalLede = doorsScreen.querySelector(":scope > .lede")
