@@ -1,6 +1,6 @@
 import {Socket} from "/vendor/phoenix.mjs"
 import {FLOW_PHASE, createOperationGuard, loadingPresentation} from "./flow_loading.mjs"
-import {captureEntranceReady, captureFlowCancelled, productEvents, queueEvents, talkLanguageEvents} from "./product_events.mjs"
+import {captureEntranceReady, captureFlowCancelled, intentEvents, productEvents, queueEvents, talkLanguageEvents} from "./product_events.mjs"
 
 const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"
 const BOOT_WATCHDOG_MS = 15_000
@@ -282,6 +282,7 @@ function patchParticipantChannel(channel) {
             renderQueue(FLOW_PHASE.MATCHMAKING_WAITING, {door: selectedDoor})
           }
           void queueEvents.joined()
+          intentEvents.markQueueJoined()
         } else if (["left", "timed_out"].includes(payload?.status)) {
           if (!payload?.queue_attempt_id) return
           if (payload.queue_attempt_id === activeQueueAttemptId) {
