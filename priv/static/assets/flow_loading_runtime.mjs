@@ -98,13 +98,15 @@ function finishBoot(snapshot) {
     bridge.setAttribute("aria-busy", "false")
   }
   document.body.classList.remove("flow-booting")
-  const languageSelect = node("#conversation-language")
-  void captureEntranceReady(productEvents, {
-    rememberedTalkLanguage: Boolean(languageSelect?.value),
-    viewportWidth: globalThis.innerWidth
-  })
-  if (languageSelect?.value) {
-    void talkLanguageEvents.remembered(languageSelect.value, languageValues(languageSelect))
+  if (activeScreen === "doors") {
+    const languageSelect = node("#conversation-language")
+    void captureEntranceReady(productEvents, {
+      rememberedTalkLanguage: Boolean(languageSelect?.value),
+      viewportWidth: globalThis.innerWidth
+    })
+    if (languageSelect?.value) {
+      void talkLanguageEvents.remembered(languageSelect.value, languageValues(languageSelect))
+    }
   }
 }
 
