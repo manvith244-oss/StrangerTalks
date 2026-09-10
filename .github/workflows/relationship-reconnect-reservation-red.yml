@@ -1,0 +1,43 @@
+name: Relationship Reconnect Reservation RED
+
+on:
+  pull_request:
+    paths:
+      - "test/strangertalks_new/relationship_reconnection_pairing_reservation_test.exs"
+      - ".github/workflows/relationship-reconnect-reservation-red.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  red:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - run: mix local.hex --force && mix local.rebar --force
+      - run: mix deps.get
+      - run: mix test test/strangertalks_new/relationship_reconnection_pairing_reservation_test.exs
