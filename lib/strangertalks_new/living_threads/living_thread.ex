@@ -74,7 +74,9 @@ defmodule StrangertalksNew.LivingThreads.LivingThread do
     |> unique_constraint(:carrier_participant_id, name: :living_threads_one_per_carrier_index)
     |> check_constraint(:carrier_participant_id, name: :living_threads_no_self_carry_check)
     |> check_constraint(:continuation_body, name: :living_threads_body_size_check)
-    |> check_constraint(:carrier_participant_id, name: :living_threads_continuation_integrity_check)
+    |> check_constraint(:carrier_participant_id,
+      name: :living_threads_continuation_integrity_check
+    )
   end
 
   def status_changeset(thread, attrs) do
