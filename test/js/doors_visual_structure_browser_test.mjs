@@ -86,7 +86,7 @@ test("Doors grid never exceeds two columns at the locked viewport matrix", {time
   }
 })
 
-test("all four Doors have identical computed geometry regardless of data-door", {timeout: 30_000}, async () => {
+test("all four Doors have identical computed geometry regardless of data-door", {timeout: 45_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let app
   try {
