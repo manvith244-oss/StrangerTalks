@@ -67,11 +67,21 @@ defmodule StrangertalksNew.LivingThreads do
           |> Repo.insert()
           |> unwrap_or_rollback(:invalid_thread)
 
-        insert_event!(participant_id, thread.thread_id, :THREAD_CONTRIBUTED, %{}, now,
+        insert_event!(
+          participant_id,
+          thread.thread_id,
+          :THREAD_CONTRIBUTED,
+          %{},
+          now,
           "contributed:#{participant_id}:#{thread.thread_id}:a"
         )
 
-        insert_event!(participant_id, thread.thread_id, :NEW_THREAD_JOINED, %{role: "a"}, now,
+        insert_event!(
+          participant_id,
+          thread.thread_id,
+          :NEW_THREAD_JOINED,
+          %{role: "a"},
+          now,
           "joined:#{participant_id}:#{thread.thread_id}:a"
         )
 
@@ -148,7 +158,12 @@ defmodule StrangertalksNew.LivingThreads do
               "contributed:#{participant_id}:#{thread.thread_id}:b"
             )
 
-            insert_event!(participant_id, thread.thread_id, :NEW_THREAD_JOINED, %{role: "b"}, now,
+            insert_event!(
+              participant_id,
+              thread.thread_id,
+              :NEW_THREAD_JOINED,
+              %{role: "b"},
+              now,
               "joined:#{participant_id}:#{thread.thread_id}:b"
             )
 
@@ -232,7 +247,10 @@ defmodule StrangertalksNew.LivingThreads do
     :ok
   end
 
-  defp consequence_experience(%ExperimentAssignment{participant_id: participant_id} = assignment, now) do
+  defp consequence_experience(
+         %ExperimentAssignment{participant_id: participant_id} = assignment,
+         now
+       ) do
     case Repo.get_by(LivingThread, starter_participant_id: participant_id) do
       nil ->
         {:ok, %{role: assignment.role, state: :NEEDS_CONTRIBUTION}}
@@ -336,7 +354,10 @@ defmodule StrangertalksNew.LivingThreads do
               lock: "FOR UPDATE SKIP LOCKED"
           )
 
-        case Enum.find(candidates, &eligible_pair?(&1.starter_participant_id, assignment.participant_id)) do
+        case Enum.find(
+               candidates,
+               &eligible_pair?(&1.starter_participant_id, assignment.participant_id)
+             ) do
           nil ->
             Repo.rollback(:no_observable_thread)
 
@@ -406,7 +427,10 @@ defmodule StrangertalksNew.LivingThreads do
     |> then(&{:ok, &1})
   end
 
-  defp assigned_a_thread(%ExperimentAssignment{role: :CONSEQUENCE_A, participant_id: participant_id}) do
+  defp assigned_a_thread(%ExperimentAssignment{
+         role: :CONSEQUENCE_A,
+         participant_id: participant_id
+       }) do
     case Repo.get_by(LivingThread, starter_participant_id: participant_id) do
       %LivingThread{} = thread -> {:ok, thread}
       nil -> {:error, :thread_not_found}
@@ -493,8 +517,9 @@ defmodule StrangertalksNew.LivingThreads do
   defp require_role(%ExperimentAssignment{role: role}, role), do: :ok
   defp require_role(_assignment, _role), do: {:error, :wrong_role}
 
-  defp require_a_role(%ExperimentAssignment{role: role}) when role in [:CONSEQUENCE_A, :SPECTATOR_A],
-    do: :ok
+  defp require_a_role(%ExperimentAssignment{role: role})
+       when role in [:CONSEQUENCE_A, :SPECTATOR_A],
+       do: :ok
 
   defp require_a_role(_assignment), do: {:error, :wrong_role}
 
