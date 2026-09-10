@@ -43,12 +43,22 @@ defmodule StrangertalksNew.RingPresenceThreatGateTest do
     assert app =~ "ring?.update(state)"
 
     for forbidden <- ["localEnergy", "peerEnergy"] do
-      refute app =~ forbidden, "production browser energy producer was added without B3 re-review: #{forbidden}"
+      refute app =~ forbidden,
+             "production browser energy producer was added without B3 re-review: #{forbidden}"
     end
 
-    for forbidden <- ["call:energy", "call:speaking", "audio_energy", "peer_energy", "local_energy"] do
-      refute channel =~ forbidden, "conversation channel gained Ring energy transport without B3 re-review: #{forbidden}"
-      refute server =~ forbidden, "conversation authority gained Ring energy state without B3 re-review: #{forbidden}"
+    for forbidden <- [
+          "call:energy",
+          "call:speaking",
+          "audio_energy",
+          "peer_energy",
+          "local_energy"
+        ] do
+      refute channel =~ forbidden,
+             "conversation channel gained Ring energy transport without B3 re-review: #{forbidden}"
+
+      refute server =~ forbidden,
+             "conversation authority gained Ring energy state without B3 re-review: #{forbidden}"
     end
   end
 end
