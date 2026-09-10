@@ -11,6 +11,8 @@ const EVENT_PROPERTIES = Object.freeze({
   st_flow_cancelled: Object.freeze(["stage", "reason_code"])
 })
 
+const TALK_LANGUAGE_OPEN_TRIGGERS = new Set(["direct", "required_after_intent"])
+
 export const PRODUCT_EVENT_NAMES = Object.freeze(Object.keys(EVENT_PROPERTIES))
 
 function defaultUuid() {
@@ -107,6 +109,44 @@ export function createIntentSelectionObserver(tracker) {
   }
 }
 
+function validLanguageCode(languageCode, validLanguages) {
+  if (typeof languageCode !== "string" || !languageCode) return false
+  if (validLanguages instanceof Set) return validLanguages.has(languageCode)
+  return Array.isArray(validLanguages) && validLanguages.includes(languageCode)
+}
+
+export function createTalkLanguageObserver(tracker) {
+  let currentLanguage = null
+  let rememberedRecorded = false
+
+  return {
+    opened(trigger) {
+      if (!TALK_LANGUAGE_OPEN_TRIGGERS.has(trigger)) return Promise.resolve(false)
+      return tracker.capture("st_talk_language_opened", {trigger})
+    },
+    async remembered(languageCode, validLanguages) {
+      if (!validLanguageCode(languageCode, validLanguages)) return false
+      if (rememberedRecorded && currentLanguage === languageCode) return false
+      currentLanguage = languageCode
+      rememberedRecorded = true
+      return tracker.capture("st_talk_language_selected", {
+        language_code: languageCode,
+        source: "remembered"
+      })
+    },
+    async selected(languageCode, validLanguages) {
+      if (!validLanguageCode(languageCode, validLanguages)) return false
+      if (currentLanguage === languageCode) return false
+      const source = currentLanguage ? "changed" : "new"
+      currentLanguage = languageCode
+      return tracker.capture("st_talk_language_selected", {
+        language_code: languageCode,
+        source
+      })
+    }
+  }
+}
+
 export function deviceClassForWidth(width) {
   if (!Number.isFinite(width) || width < 0) return "unknown"
   if (width < 768) return "mobile"
@@ -132,3 +172,5 @@ export const productEvents = createProductEventTracker({
   sink: runtimeSink,
   testTraffic: globalThis.__strangerTalksTestTraffic === true
 })
+
+export const talkLanguageEvents = createTalkLanguageObserver(productEvents)
