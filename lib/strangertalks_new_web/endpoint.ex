@@ -16,6 +16,13 @@ defmodule StrangertalksNewWeb.Endpoint do
     websocket: [connect_info: [:auth_token], max_frame_size: 32_768],
     longpoll: false
 
+  socket "/hearth_socket", StrangertalksNewWeb.HearthSocket,
+    auth_token: true,
+    websocket: [connect_info: [:auth_token], max_frame_size: 32_768],
+    longpoll: false
+
+  plug StrangertalksNewWeb.HearthStandaloneGate
+
   plug Plug.Static,
     at: "/vendor",
     from: {:phoenix, "priv/static"},
