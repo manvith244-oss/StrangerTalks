@@ -4,12 +4,14 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   The authority is one supervised process that serializes registration, replacement,
   termination and liveness decisions for every Hangout channel. Each channel owns one
-  server-generated lease and is monitored by process identity; browsers cannot author
-  presence truth.
+  server-generated lease and is linked to this authority by process identity; browsers
+  cannot author presence truth.
 
-  PresenceAuthority and Phoenix Endpoint share a rest-for-one supervisor. If this
-  authority process is lost, the Endpoint and all channel processes are torn down with
-  it so no live transport can survive missing presence state.
+  The link is deliberate and bidirectional. PresenceAuthority traps channel exits so an
+  abnormal channel death cannot kill the authority, while loss of PresenceAuthority
+  tears down every linked Hangout channel. The Phoenix Endpoint also follows the
+  authority under a rest-for-one supervisor so new transports cannot survive or start
+  against missing presence state.
   """
 
   use GenServer
@@ -22,7 +24,8 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   @impl true
   def init(_init_arg) do
-    {:ok, %{registrations: %{}, refs: %{}}}
+    Process.flag(:trap_exit, true)
+    {:ok, %{registrations: %{}}}
   end
 
   def register(room_id, participant_id, lease_id)
@@ -72,15 +75,9 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   def handle_call({:register, room_id, participant_id, lease_id}, {pid, _tag}, state) do
     case Map.get(state.registrations, pid) do
       nil ->
-        ref = Process.monitor(pid)
-        registration = %{key: {room_id, participant_id}, lease_id: lease_id, ref: ref}
-
-        new_state = %{
-          registrations: Map.put(state.registrations, pid, registration),
-          refs: Map.put(state.refs, ref, pid)
-        }
-
-        {:reply, :ok, new_state}
+        Process.link(pid)
+        registration = %{key: {room_id, participant_id}, lease_id: lease_id}
+        {:reply, :ok, put_in(state.registrations[pid], registration)}
 
       %{key: {^room_id, ^participant_id}, lease_id: ^lease_id} ->
         {:reply, :ok, state}
@@ -128,22 +125,16 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   end
 
   @impl true
-  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-    case Map.get(state.refs, ref) do
-      ^pid ->
-        case Map.get(state.registrations, pid) do
-          %{key: {room_id, participant_id} = key} ->
-            {_removed?, new_state} = remove_registration(state, pid, key, demonitor?: false)
+  def handle_info({:EXIT, pid, _reason}, state) when is_pid(pid) do
+    case Map.get(state.registrations, pid) do
+      %{key: {room_id, participant_id} = key} ->
+        {_removed?, new_state} = remove_registration(state, pid, key, unlink?: false)
 
-            if not any_registered?(new_state, key) do
-              _ = RoomServer.disconnect(room_id, participant_id)
-            end
-
-            {:noreply, new_state}
-
-          _ ->
-            {:noreply, %{state | refs: Map.delete(state.refs, ref)}}
+        if not any_registered?(new_state, key) do
+          _ = RoomServer.disconnect(room_id, participant_id)
         end
+
+        {:noreply, new_state}
 
       _ ->
         {:noreply, state}
@@ -154,14 +145,9 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   defp remove_registration(state, pid, key, opts \\ []) do
     case Map.get(state.registrations, pid) do
-      %{key: ^key, ref: ref} ->
-        if Keyword.get(opts, :demonitor?, true), do: Process.demonitor(ref, [:flush])
-
-        {true,
-         %{
-           registrations: Map.delete(state.registrations, pid),
-           refs: Map.delete(state.refs, ref)
-         }}
+      %{key: ^key} ->
+        if Keyword.get(opts, :unlink?, true), do: Process.unlink(pid)
+        {true, %{state | registrations: Map.delete(state.registrations, pid)}}
 
       _ ->
         {false, state}
