@@ -5,10 +5,16 @@ on:
     branches:
       - main
     paths:
+      - 'config/runtime.exs'
       - 'lib/strangertalks_new/experiments/hearth/**'
       - 'lib/strangertalks_new_web/hearth_channel.ex'
+      - 'lib/strangertalks_new_web/hearth_socket.ex'
+      - 'lib/strangertalks_new_web/hearth_token.ex'
+      - 'lib/strangertalks_new_web/hearth_standalone_gate.ex'
       - 'lib/strangertalks_new_web/user_socket.ex'
+      - 'lib/strangertalks_new_web/endpoint.ex'
       - 'lib/strangertalks_new_web/controllers/hearth_lab_controller.ex'
+      - 'lib/strangertalks_new_web/controllers/hearth_participant_controller.ex'
       - 'lib/strangertalks_new_web/router.ex'
       - 'lib/strangertalks_new/application.ex'
       - 'priv/static/hearth_lab.html'
@@ -16,6 +22,7 @@ on:
       - 'test/strangertalks_new/experiments/hearth/**'
       - 'test/strangertalks_new_web/hearth_channel_test.exs'
       - 'test/strangertalks_new_web/controllers/hearth_lab_controller_test.exs'
+      - 'test/strangertalks_new_web/controllers/hearth_standalone_surface_test.exs'
       - '.github/workflows/hearth-third-thing-p1.yml'
   workflow_dispatch:
 
@@ -86,6 +93,9 @@ jobs:
       - name: Hearth lab route contract
         run: mix test test/strangertalks_new_web/controllers/hearth_lab_controller_test.exs
 
+      - name: H-01a standalone surface contracts
+        run: mix test test/strangertalks_new_web/controllers/hearth_standalone_surface_test.exs
+
       - name: Compile warnings-as-errors
         run: mix compile --warnings-as-errors
 
@@ -97,7 +107,49 @@ jobs:
       - name: Format proof
         run: mix format --check-formatted
 
+      - name: Standalone release boots without DATABASE_URL
+        env:
+          MIX_ENV: prod
+          EXPERIMENT_HEARTH_STANDALONE: "true"
+          EXPERIMENT_HEARTH_ENABLED: "true"
+          PHX_SERVER: "true"
+          PHX_HOST: "127.0.0.1"
+          PORT: "4101"
+          SECRET_KEY_BASE: "h01a-ci-only-secret-key-base-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+          GOOGLE_CONTINUITY_ENABLED: "false"
+        run: |
+          unset DATABASE_URL
+          mix release --overwrite
+          _build/prod/rel/strangertalks_new/bin/strangertalks_new start > /tmp/hearth-standalone.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true' EXIT
+
+          lab_code=""
+          for _attempt in $(seq 1 30); do
+            lab_code=$(curl -sS -o /tmp/hearth-lab.html -w '%{http_code}' http://127.0.0.1:4101/lab/hearth || true)
+            if [ "$lab_code" = "200" ]; then
+              break
+            fi
+            sleep 1
+          done
+
+          cat /tmp/hearth-standalone.log
+          test "$lab_code" = "200"
+          grep -q "StrangerTalks Hearth Lab" /tmp/hearth-lab.html
+
+          curl -fsS \
+            -H 'content-type: application/json' \
+            -d '{}' \
+            http://127.0.0.1:4101/api/hearth/participants \
+            | jq -e '.participant_id | type == "string"' >/dev/null
+
+          root_code=$(curl -sS -o /tmp/hearth-root.txt -w '%{http_code}' http://127.0.0.1:4101/ || true)
+          test "$root_code" = "404"
+          ! grep -q "DATABASE_URL is missing" /tmp/hearth-standalone.log
+
       - name: Full regression
+        env:
+          MIX_ENV: test
         run: mix test
 
       - name: Clean tree
