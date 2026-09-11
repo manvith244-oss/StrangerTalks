@@ -88,8 +88,8 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   end
 
   def handle_call({:unregister, room_id, participant_id}, {pid, _tag}, state) do
-    {removed?, new_state} = remove_registration(state, pid, {room_id, participant_id})
-    {:reply, if(removed?, do: :ok, else: :ok), new_state}
+    {_removed?, new_state} = remove_registration(state, pid, {room_id, participant_id})
+    {:reply, :ok, new_state}
   end
 
   def handle_call({:disconnect_if_last, room_id, participant_id}, {pid, _tag}, state) do
@@ -100,7 +100,7 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
       if any_registered?(new_state, key) do
         RoomServer.snapshot(room_id, participant_id)
       else
-        RoomServer.disconnect_authoritatively(room_id, participant_id)
+        RoomServer.disconnect(room_id, participant_id)
       end
 
     {:reply, reply, new_state}
@@ -133,7 +133,7 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
             {_removed?, new_state} = remove_registration(state, pid, key, demonitor?: false)
 
             if not any_registered?(new_state, key) do
-              _ = RoomServer.disconnect_authoritatively(room_id, participant_id)
+              _ = RoomServer.disconnect(room_id, participant_id)
             end
 
             {:noreply, new_state}
