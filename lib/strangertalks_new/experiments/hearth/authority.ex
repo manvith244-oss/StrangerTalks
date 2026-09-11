@@ -69,7 +69,18 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
          false <- active_participant?(state, participant_id),
          true <- active_participant_count(state) < state.max_active_participants do
       now = now_ms()
-      state = %{state | recent: Enum.take([contribution | state.recent], @max_recent)}
+
+      state = %{
+        state
+        | recent:
+            Enum.take(
+              [
+                %{text: contribution, expires_at: now + state.submission_ttl_ms}
+                | state.recent
+              ],
+              @max_recent
+            )
+      }
 
       case next_waiting(state) do
         nil ->
@@ -127,7 +138,8 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
   def handle_call({:recent, limit}, _from, state) do
     state = prune(state)
     safe_limit = if is_integer(limit), do: min(max(limit, 0), @max_recent), else: @max_recent
-    {:reply, Enum.take(state.recent, safe_limit), state}
+    recent = state.recent |> Enum.take(safe_limit) |> Enum.map(& &1.text)
+    {:reply, recent, state}
   end
 
   def handle_call({:offer, participant_id}, _from, state) do
@@ -204,7 +216,10 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
       %{participants: participants} when is_list(participants) ->
         if participant_id in participants do
           partner = partner_id(participants, participant_id)
-          {:reply, {:ok, %{status: :bridge_dissolved, partner_id: partner}},
+
+          {:reply,
+           {:ok,
+            %{status: :bridge_dissolved, bridge_id: bridge_id, partner_id: partner}},
            dissolve_bridge(state, bridge_id)}
         else
           {:reply, {:ok, %{status: :none}}, state}
@@ -225,7 +240,9 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
         bridge = Map.fetch!(state.bridges, bridge_id)
         partner = partner_id(bridge.participants, participant_id)
 
-        {:reply, {:ok, %{status: :bridge_dissolved, partner_id: partner}},
+        {:reply,
+         {:ok,
+          %{status: :bridge_dissolved, bridge_id: bridge_id, partner_id: partner}},
          dissolve_bridge(state, bridge_id)}
 
       Map.has_key?(state.waiting, participant_id) ->
@@ -259,7 +276,8 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
   def handle_call({:route_message, participant_id, room_id}, _from, state) do
     case Map.get(state.rooms, room_id) do
       %{participants: participants} = room ->
-        if participant_id in participants and Map.get(state.participant_room, participant_id) == room_id do
+        if participant_id in participants and
+             Map.get(state.participant_room, participant_id) == room_id do
           partner = partner_id(participants, participant_id)
           turn_number = room.turn_count + 1
           state = put_in(state, [:rooms, room_id, :turn_count], turn_number)
@@ -277,7 +295,8 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
   def handle_call({:leave_room, participant_id, room_id}, _from, state) do
     case Map.get(state.rooms, room_id) do
       %{participants: participants} when is_list(participants) ->
-        if participant_id in participants and Map.get(state.participant_room, participant_id) == room_id do
+        if participant_id in participants and
+             Map.get(state.participant_room, participant_id) == room_id do
           {effect, state} = dissolve_room_with_effect(state, room_id, participant_id)
           {:reply, {:ok, effect}, state}
         else
@@ -370,7 +389,9 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
         %{state | bridges: bridges}
 
       {%{participants: participants}, bridges} ->
-        participant_bridge = Enum.reduce(participants, state.participant_bridge, &Map.delete(&2, &1))
+        participant_bridge =
+          Enum.reduce(participants, state.participant_bridge, &Map.delete(&2, &1))
+
         %{state | bridges: bridges, participant_bridge: participant_bridge}
     end
   end
@@ -397,7 +418,9 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
         %{state | rooms: rooms}
 
       {%{participants: participants}, rooms} ->
-        participant_room = Enum.reduce(participants, state.participant_room, &Map.delete(&2, &1))
+        participant_room =
+          Enum.reduce(participants, state.participant_room, &Map.delete(&2, &1))
+
         %{state | rooms: rooms, participant_room: participant_room}
     end
   end
@@ -410,14 +433,25 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
       |> Enum.filter(fn {_id, %{at: at}} -> at + state.submission_ttl_ms <= now end)
       |> Enum.map(&elem(&1, 0))
 
-    state = Enum.reduce(expired_waiting, state, &remove_waiting_only(&2, &1))
+    state =
+      Enum.reduce(expired_waiting, state, fn participant_id, acc ->
+        notify(acc.notifier, {:hearth_waiting_expired, participant_id})
+        remove_waiting_only(acc, participant_id)
+      end)
 
     expired_bridges =
       state.bridges
       |> Enum.filter(fn {_id, bridge} -> bridge.expires_at <= now end)
       |> Enum.map(&elem(&1, 0))
 
-    Enum.reduce(expired_bridges, state, &dissolve_bridge(&2, &1))
+    state =
+      Enum.reduce(expired_bridges, state, fn bridge_id, acc ->
+        bridge = Map.fetch!(acc.bridges, bridge_id)
+        notify(acc.notifier, {:hearth_bridge_expired, bridge_id, bridge.participants})
+        dissolve_bridge(acc, bridge_id)
+      end)
+
+    %{state | recent: Enum.filter(state.recent, &(&1.expires_at > now))}
   end
 
   defp remove_waiting_only(state, participant_id) do
