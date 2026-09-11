@@ -56,6 +56,7 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
        participant_bridge: %{},
        rooms: %{},
        participant_room: %{},
+       consumed_participants: MapSet.new(),
        recent: [],
        bridge_ttl_ms: Keyword.get(opts, :bridge_ttl_ms, @default_bridge_ttl_ms),
        submission_ttl_ms: Keyword.get(opts, :submission_ttl_ms, @default_submission_ttl_ms),
@@ -72,6 +73,7 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
     with {:ok, contribution} <- normalize_contribution(contribution),
          :ok <- validate_entry(state, participant_id) do
       now = now_ms()
+      state = mark_consumed(state, participant_id)
 
       state = %{
         state
@@ -138,6 +140,7 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
     case validate_entry(state, participant_id) do
       :ok ->
         now = now_ms()
+        state = mark_consumed(state, participant_id)
 
         case next_waiting(state.control_order, state.control_waiting) do
           nil ->
@@ -369,6 +372,7 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
       bridge_count: map_size(state.bridges),
       room_count: map_size(state.rooms),
       recent_count: length(state.recent),
+      consumed_participant_count: MapSet.size(state.consumed_participants),
       active_participant_count: active_participant_count(state),
       turn_count: Enum.reduce(state.rooms, 0, fn {_id, room}, acc -> acc + room.turn_count end)
     }
@@ -414,9 +418,14 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
     cond do
       not valid_participant?(participant_id) -> {:error, :invalid_participant}
       active_participant?(state, participant_id) -> {:error, :already_active}
+      MapSet.member?(state.consumed_participants, participant_id) -> {:error, :already_participated}
       active_participant_count(state) >= state.max_active_participants -> {:error, :capacity}
       true -> :ok
     end
+  end
+
+  defp mark_consumed(state, participant_id) do
+    %{state | consumed_participants: MapSet.put(state.consumed_participants, participant_id)}
   end
 
   defp normalize_contribution(value) when is_binary(value) do
