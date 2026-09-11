@@ -7,16 +7,18 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   server-generated lease and is linked to this authority by process identity; browsers
   cannot author presence truth.
 
-  The link is deliberate and bidirectional. PresenceAuthority traps channel exits so an
-  abnormal channel death cannot kill the authority, while loss of PresenceAuthority
-  tears down every linked Hangout channel. The Phoenix Endpoint also follows the
-  authority under a rest-for-one supervisor so new transports cannot survive or start
-  against missing presence state.
+  A small VM-local ETS crash ledger survives an authority-process restart by transferring
+  to the application supervisor. A replacement authority drains that ledger before it
+  accepts new registrations, failing stale durable memberships closed before any new
+  channel can reconnect. The ledger is not product persistence and disappears with the
+  application VM.
   """
 
   use GenServer
 
   alias StrangertalksNew.Hangouts.RoomServer
+
+  @ledger :strangertalks_hangout_presence_crash_ledger
 
   def start_link(init_arg) do
     GenServer.start_link(__MODULE__, init_arg, name: __MODULE__)
@@ -25,6 +27,8 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   @impl true
   def init(_init_arg) do
     Process.flag(:trap_exit, true)
+    ensure_ledger!()
+    reconcile_stale_ledger!()
     {:ok, %{registrations: %{}}}
   end
 
@@ -75,8 +79,9 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   def handle_call({:register, room_id, participant_id, lease_id}, {pid, _tag}, state) do
     case Map.get(state.registrations, pid) do
       nil ->
-        Process.link(pid)
         registration = %{key: {room_id, participant_id}, lease_id: lease_id}
+        :true = :ets.insert(@ledger, {pid, room_id, participant_id, lease_id})
+        Process.link(pid)
         {:reply, :ok, put_in(state.registrations[pid], registration)}
 
       %{key: {^room_id, ^participant_id}, lease_id: ^lease_id} ->
@@ -147,6 +152,7 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
     case Map.get(state.registrations, pid) do
       %{key: ^key} ->
         if Keyword.get(opts, :unlink?, true), do: Process.unlink(pid)
+        :ets.delete(@ledger, pid)
         {true, %{state | registrations: Map.delete(state.registrations, pid)}}
 
       _ ->
@@ -158,6 +164,40 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   defp count_registered(state, key) do
     Enum.count(state.registrations, fn {_pid, registration} -> registration.key == key end)
+  end
+
+  defp ensure_ledger! do
+    case :ets.whereis(@ledger) do
+      :undefined ->
+        heir = Process.whereis(StrangertalksNew.Supervisor)
+
+        options =
+          [:named_table, :public, :set, read_concurrency: true, write_concurrency: true]
+          |> maybe_add_heir(heir)
+
+        :ets.new(@ledger, options)
+
+      _table ->
+        @ledger
+    end
+  end
+
+  defp maybe_add_heir(options, heir) when is_pid(heir), do: [{:heir, heir, :presence_ledger} | options]
+  defp maybe_add_heir(options, _heir), do: options
+
+  defp reconcile_stale_ledger! do
+    stale_keys =
+      @ledger
+      |> :ets.tab2list()
+      |> Enum.map(fn {_pid, room_id, participant_id, _lease_id} -> {room_id, participant_id} end)
+      |> Enum.uniq()
+
+    Enum.each(stale_keys, fn {room_id, participant_id} ->
+      _ = RoomServer.disconnect(room_id, participant_id)
+    end)
+
+    :ets.delete_all_objects(@ledger)
+    :ok
   end
 
   defp safe_call(message, fallback) do
