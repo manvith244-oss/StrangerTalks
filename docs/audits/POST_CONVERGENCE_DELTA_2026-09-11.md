@@ -16,9 +16,10 @@ GitHub PR convergence is complete at this checkpoint:
 - PR #265 was squash-admitted as that commit;
 - PR #248 was closed unmerged as superseded;
 - GitHub reports **0 open pull requests** after that closure;
-- issues #259 and #260 remain intentionally open because they are product decisions / experiment briefs, not missing convergence code.
+- final main push CI re-proved Agent Systems, Python security, browser logic, product-event integrity, full `mix precommit`, exact SHA and clean tree on the squash commit;
+- issues #259, #260 and #266 are intentionally open product decisions / experiment briefs, not missing convergence code.
 
-The repository still carries a large historical branch namespace. That branch count must not be interpreted as hundreds of unfinished features. Most refs are proof, evidence, diagnostics, checkpoints, superseded release candidates, stale team branches, or historical implementation packets.
+The live branch search returned **364 branch refs**. That count must not be interpreted as hundreds of unfinished features. Most refs are proof, evidence, diagnostics, checkpoints, superseded release candidates, stale team branches, or historical implementation packets. A machine-readable disposition ledger now exists at `docs/audits/BRANCH_DISPOSITION_LEDGER_2026-09-11.json` on this audit branch.
 
 ## What the earlier audit called “live” that is now resolved
 
@@ -85,7 +86,38 @@ Final exact candidate before admission: `7c2b8cf48b7069c89be2c03564583df5e5aff49
 
 All associated PR workflows on that exact SHA were green: Team 6 Media, Product Event Integrity V2, RPR V4 Contract Proof, Ring Authority Security, Team 6 Agent Registry, Team 4 Safety Privacy Agency, Agent Systems Closure, and Hangouts V1 Proof.
 
+After squash admission, the push-triggered Agent Systems Closure gate on canonical `main@d69fd488...` also completed successfully, including full precommit and exact-SHA/clean-tree proof.
+
 PR #248 is now closed unmerged and explicitly marked **SUPERSEDED — DO NOT MERGE**.
+
+## Newly discovered unique outside-main packets
+
+### D5 Hangouts durable interactions — PRESERVE / PRODUCT-PRIVACY DECISION
+
+Branch: `fix/d5-hangouts-durable-interactions-2026-09-11`  
+Head: `76afe490f26b67a94d81de3f1760f796d6ff6880`
+
+Against final main it is diverged: **11 commits ahead, 15 behind**, merge base `1e23977246f42e2e4c918a89170156fc58dd5da5`.
+
+It adds real runtime/database behavior:
+
+- durable `hangout_content_items`;
+- durable `hangout_room_content`;
+- durable `hangout_reactions`;
+- durable `hangout_skip_votes`;
+- `Hangouts.DurableInteractions`;
+- restart reconstruction and database-serialized skip-threshold behavior;
+- Supabase-like Data API closure tests for those new tables.
+
+This is not safe to classify as a routine reliability fix because it changes anonymous interaction data-at-rest semantics and the audit did not establish a canonical retention/deletion law bounding the new history. Issue **#266** now preserves the decision explicitly. Do not merge the historical branch. Reconstruct from current main only after deciding whether interactions remain ephemeral, become short-lived recovery state, or become durable room history with an explicit retention/privacy contract.
+
+### Language P01 measurement specification — PRESERVE DOCUMENTATION
+
+Branch: `language/p01-measurement-spec-2026-09-11` is **9 commits ahead / 16 behind** final main from merge base `65b6bf...`. Its diff is documentation/research protocol only: measurement contract, privacy gate, entrance comprehension study, instrumentation audit/review and baseline analysis. Preserve it as research provenance. It is not missing runtime code and should not be wholesale-merged as stale planning documentation.
+
+### Historical construction system — PRESERVE DOCUMENTATION
+
+Branch: `architecture/construction-system-2026-09-02` is **26 commits ahead / 386 behind** final main. Its unique content is the old construction charter, repository-truth protocol, team operating contracts, orchestration/governance docs and team packets. Preserve for archaeology; current repository authority has evolved too far to merge the old system wholesale.
 
 ## Intentionally preserved product decisions — NOT convergence defects
 
@@ -97,11 +129,40 @@ Keep open. The current bounded presentation-capacity behavior is not a demonstra
 
 Keep open. This is a product hypothesis / experiment brief, not canonical architecture. Historical PR #251 remains closed unmerged. If scheduled later, reconstruct the smallest experiment from then-current main rather than merging the old branch.
 
+### Issue #266 — Hangouts durable reactions / skip votes
+
+Keep open. This is the explicit preservation point for the D5 branch described above. It is a product/privacy retention decision, not an automatic convergence merge.
+
 ## Unique future R&D preserved outside main
 
-The earlier audit identified Circle formation/capacity work on historical T08 branches as unique future-social R&D. No later admission in the convergence sequence makes those old branches merge candidates.
+The earlier audit identified Circle formation/capacity work on historical T08 branches as unique future-social R&D:
 
-Preserve the ideas/tests as source archaeology. If Circles become an approved StrangerTalks World feature, reconstruct accepted invariants from current main. Do not directly merge the old September-base branches.
+- `t08/future-001-circle-formation-kernel`;
+- `t08/future-002-circle-capacity-liquidity`.
+
+No later admission makes those old branches merge candidates. Preserve the ideas/tests as source archaeology. If Circles become an approved StrangerTalks World feature, reconstruct accepted invariants from current main. Do not directly merge the old September-base branches.
+
+## Branch-freshness sweep
+
+A search for branch names containing `2026-09-11` returned exactly 20 refs. They are all accounted for as one of:
+
+- current/frozen audit branches;
+- already admitted or superseded convergence/release/security packets;
+- RED/evidence validation branches;
+- Living Thread issue #260;
+- D5 issue #266;
+- P01 language research docs.
+
+No second unclassified September 11 runtime packet was found.
+
+Spot checks also established:
+
+- `construction/issue-184-durable-terminal-restart`: 0 ahead / 232 behind — fully ancestral;
+- `full-source-recovery`: 0 ahead / 1276 behind — fully ancestral;
+- `staging/candidate-2026-09-10`: 0 ahead / 19 behind — fully ancestral;
+- `reconcile/complete-strangertalks-2026-09-01`: 0 ahead / 264 behind — fully ancestral;
+- `adopt/unified-strangertalks-into-main-2026-09-02`: 0 ahead / 244 behind — fully ancestral;
+- `master`: no common ancestor with canonical main — disconnected historical root, never an integration source.
 
 ## Historical branch namespace policy
 
@@ -116,7 +177,7 @@ The repository continues to contain many refs under namespaces such as:
 - historical team branches;
 - superseded convergence candidates.
 
-These branches should **not** be bulk-deleted merely to make GitHub look tidy. A branch can be deleted only after its unique product/R&D/provenance value is classified. Prefer a machine-readable disposition ledger before mass cleanup.
+These branches should **not** be bulk-deleted merely to make GitHub look tidy. The new JSON ledger classifies explicit semantic exceptions and namespace provenance. It intentionally marks **no branch SAFE_DELETE** because destructive cleanup requires one more ancestry/reference pass for the branch being deleted.
 
 At this checkpoint, the important repository truth is: **0 open PRs does not mean 0 historical branches; historical branches do not mean pending merges.**
 
@@ -171,5 +232,8 @@ Canonical GitHub state for the next agent:
 - #248: closed, unmerged, superseded
 - #259: open product decision — preserve
 - #260: open experiment/product decision — preserve
-- historical branch namespace: still large, mostly archival/evidence/superseded; do not equate branch count with unfinished product work
+- #266: open Hangouts persistence/product-privacy decision — preserve
+- branch refs observed: `364`
+- unique runtime packets intentionally outside main: D5 durable Hangout interactions + two Circle R&D branches
+- unique non-runtime packets intentionally preserved: P01 measurement/research docs + historical construction-system docs
 - next destructive operation on branches or the Windows clone requires a fresh provenance/local-state check
