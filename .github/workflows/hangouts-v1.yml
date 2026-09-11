@@ -119,9 +119,13 @@ jobs:
         if: ${{ hashFiles('test/strangertalks_new/hangouts/matcher_test.exs') != '' }}
         run: mix test test/strangertalks_new/hangouts/matcher_test.exs
 
-      - name: Hangouts channel contract
+      - name: Hangouts room channel contract
         if: ${{ hashFiles('test/strangertalks_new_web/hangout_channel_test.exs') != '' }}
-        run: mix test test/strangertalks_new_web/hangout_channel_test.exs test/strangertalks_new_web/hangout_lobby_channel_test.exs
+        run: mix test test/strangertalks_new_web/hangout_channel_test.exs
+
+      - name: Hangouts lobby channel contract
+        if: ${{ hashFiles('test/strangertalks_new_web/hangout_lobby_channel_test.exs') != '' }}
+        run: mix test test/strangertalks_new_web/hangout_lobby_channel_test.exs
 
       - name: Hangouts shared-content contract
         if: ${{ hashFiles('test/strangertalks_new/hangouts/shared_content_test.exs') != '' }}
