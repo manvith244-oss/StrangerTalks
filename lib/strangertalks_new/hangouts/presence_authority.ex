@@ -80,7 +80,7 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
     case Map.get(state.registrations, pid) do
       nil ->
         registration = %{key: {room_id, participant_id}, lease_id: lease_id}
-        :true = :ets.insert(@ledger, {pid, room_id, participant_id, lease_id})
+        true = :ets.insert(@ledger, {pid, room_id, participant_id, lease_id})
         Process.link(pid)
         {:reply, :ok, put_in(state.registrations[pid], registration)}
 
@@ -182,7 +182,9 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
     end
   end
 
-  defp maybe_add_heir(options, heir) when is_pid(heir), do: [{:heir, heir, :presence_ledger} | options]
+  defp maybe_add_heir(options, heir) when is_pid(heir),
+    do: [{:heir, heir, :presence_ledger} | options]
+
   defp maybe_add_heir(options, _heir), do: options
 
   defp reconcile_stale_ledger! do
