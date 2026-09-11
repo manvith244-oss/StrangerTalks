@@ -8,9 +8,14 @@ on:
       - 'lib/strangertalks_new/experiments/hearth/**'
       - 'lib/strangertalks_new_web/hearth_channel.ex'
       - 'lib/strangertalks_new_web/user_socket.ex'
+      - 'lib/strangertalks_new_web/controllers/hearth_lab_controller.ex'
+      - 'lib/strangertalks_new_web/router.ex'
       - 'lib/strangertalks_new/application.ex'
+      - 'priv/static/hearth_lab.html'
+      - 'priv/static/assets/hearth_lab.*'
       - 'test/strangertalks_new/experiments/hearth/**'
       - 'test/strangertalks_new_web/hearth_channel_test.exs'
+      - 'test/strangertalks_new_web/controllers/hearth_lab_controller_test.exs'
       - '.github/workflows/hearth-third-thing-p1.yml'
   workflow_dispatch:
 
@@ -73,11 +78,13 @@ jobs:
       - run: mix ecto.migrate --quiet
 
       - name: Hearth authority contracts
-        run: mix test test/strangertalks_new/experiments/hearth/authority_test.exs
+        run: mix test test/strangertalks_new/experiments/hearth/
 
       - name: Hearth channel contracts
-        if: ${{ hashFiles('test/strangertalks_new_web/hearth_channel_test.exs') != '' }}
         run: mix test test/strangertalks_new_web/hearth_channel_test.exs
+
+      - name: Hearth lab route contract
+        run: mix test test/strangertalks_new_web/controllers/hearth_lab_controller_test.exs
 
       - name: Compile warnings-as-errors
         run: mix compile --warnings-as-errors
@@ -94,4 +101,7 @@ jobs:
         run: mix test
 
       - name: Clean tree
-        run: git diff --exit-code
+        run: |
+          git diff --check
+          test -z "$(git status --porcelain)"
+          git diff --exit-code
