@@ -34,6 +34,11 @@
       "confidence": "verified",
       "note": "Post-convergence delta/ledger branch based exactly on canonical main d69fd48889ba9c79a66a5653acd44ad329c97969."
     },
+    "audit/team2-final-closure": {
+      "status": "KEEP_AUDIT",
+      "confidence": "namespace_provenance",
+      "note": "Historical Team 2 closure audit packet. Preserve as audit provenance; do not treat as an integration branch."
+    },
     "fix/d5-hangouts-durable-interactions-2026-09-11": {
       "status": "PRESERVE_PRODUCT_DECISION",
       "confidence": "verified_semantic_exception",
