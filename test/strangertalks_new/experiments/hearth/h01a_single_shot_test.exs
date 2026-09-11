@@ -21,7 +21,9 @@ defmodule StrangertalksNew.Experiments.Hearth.H01aSingleShotTest do
     %{authority: name}
   end
 
-  test "treatment participant cannot begin a second attempt after passing", %{authority: authority} do
+  test "treatment participant cannot begin a second attempt after passing", %{
+    authority: authority
+  } do
     assert {:ok, %{status: :waiting}} = Authority.submit(authority, "alice", "Air fryer")
 
     assert {:ok, %{status: :bridge_offered, bridge_id: bridge_id}} =
@@ -54,7 +56,9 @@ defmodule StrangertalksNew.Experiments.Hearth.H01aSingleShotTest do
              Authority.submit(authority, "bob", "Guitar")
   end
 
-  test "control participant cannot begin a second attempt after disconnect", %{authority: authority} do
+  test "control participant cannot begin a second attempt after disconnect", %{
+    authority: authority
+  } do
     assert {:ok, %{status: :waiting}} = Authority.connect_control(authority, "control-a")
     assert {:ok, %{status: :waiting_removed}} = Authority.disconnect(authority, "control-a")
 
