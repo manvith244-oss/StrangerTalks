@@ -6,6 +6,7 @@ defmodule StrangertalksNewWeb.HearthChannel do
   alias StrangertalksNew.RateLimiter
 
   @pubsub StrangertalksNew.PubSub
+  @feedback_reasons ~w(ran_out one_sided good_chat uncomfortable passing_through)
 
   @impl true
   def join("hearth:" <> participant_id, params, socket) when params == %{} do
@@ -19,7 +20,14 @@ defmodule StrangertalksNewWeb.HearthChannel do
       true ->
         :ok = Phoenix.PubSub.subscribe(@pubsub, topic(participant_id))
         emit(:hearth_viewed, %{variant: :treatment})
-        {:ok, %{status: "hearth_viewed"}, assign(socket, :hearth_participant_id, participant_id)}
+
+        socket =
+          socket
+          |> assign(:hearth_participant_id, participant_id)
+          |> assign(:hearth_room_started_at, nil)
+          |> assign(:hearth_first_message_sent, false)
+
+        {:ok, %{status: "hearth_viewed", recent: Authority.recent(Authority, 3)}, socket}
     end
   end
 
@@ -120,6 +128,7 @@ defmodule StrangertalksNewWeb.HearthChannel do
       )
 
       emit(:experiment_turn, %{variant: :treatment, turn_number: turn_number})
+      socket = maybe_emit_first_message(socket)
       {:reply, {:ok, %{status: "delivered", turn_number: turn_number}}, socket}
     else
       {:error, :experiment_disabled} ->
@@ -148,11 +157,17 @@ defmodule StrangertalksNewWeb.HearthChannel do
       {:ok, effect} ->
         notify_room_ended(effect.partner_id, effect.room_id)
         emit_room_ended(effect, :explicit_leave)
-        {:reply, {:ok, %{status: "ended"}}, socket}
+        {:reply, {:ok, %{status: "ended"}}, reset_room_clock(socket)}
 
       {:error, :no_room} ->
         {:reply, {:error, %{reason: "no_room"}}, socket}
     end
+  end
+
+  def handle_in("experiment:feedback", %{"reason" => reason} = params, socket)
+      when map_size(params) == 1 and reason in @feedback_reasons do
+    emit(:experiment_exit_reason, %{variant: :treatment, reason: reason})
+    {:reply, {:ok, %{status: "recorded"}}, socket}
   end
 
   def handle_in(_event, _params, socket),
@@ -181,17 +196,22 @@ defmodule StrangertalksNewWeb.HearthChannel do
   end
 
   def handle_info({:room_ready, room_id}, socket) do
-    case Authority.room(Authority, socket.assigns.participant_id) do
-      {:ok, room} ->
-        push(socket, "room:ready", %{
-          room_id: room_id,
-          own_anchor: room.own_anchor,
-          partner_anchor: room.partner_anchor
-        })
+    socket =
+      case Authority.room(Authority, socket.assigns.participant_id) do
+        {:ok, room} ->
+          push(socket, "room:ready", %{
+            room_id: room_id,
+            own_anchor: room.own_anchor,
+            partner_anchor: room.partner_anchor
+          })
 
-      _ ->
-        :ok
-    end
+          socket
+          |> assign(:hearth_room_started_at, System.monotonic_time(:millisecond))
+          |> assign(:hearth_first_message_sent, false)
+
+        _ ->
+          socket
+      end
 
     {:noreply, socket}
   end
@@ -203,7 +223,7 @@ defmodule StrangertalksNewWeb.HearthChannel do
 
   def handle_info({:room_partner_disconnected, room_id}, socket) do
     push(socket, "room:partner_disconnected", %{room_id: room_id})
-    {:noreply, socket}
+    {:noreply, reset_room_clock(socket)}
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
@@ -294,6 +314,30 @@ defmodule StrangertalksNewWeb.HearthChannel do
       :ok -> :ok
       {:error, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
     end
+  end
+
+  defp maybe_emit_first_message(%{assigns: %{hearth_first_message_sent: true}} = socket), do: socket
+
+  defp maybe_emit_first_message(socket) do
+    started_at = socket.assigns[:hearth_room_started_at]
+
+    if is_integer(started_at) do
+      elapsed_ms = max(System.monotonic_time(:millisecond) - started_at, 0)
+
+      :telemetry.execute(
+        [:strangertalks_new, :experiment, :hearth, :experiment_first_message],
+        %{count: 1, elapsed_ms: elapsed_ms, monotonic_time: System.monotonic_time()},
+        %{variant: :treatment}
+      )
+    end
+
+    assign(socket, :hearth_first_message_sent, true)
+  end
+
+  defp reset_room_clock(socket) do
+    socket
+    |> assign(:hearth_room_started_at, nil)
+    |> assign(:hearth_first_message_sent, false)
   end
 
   defp emit_room_ended(effect, reason) do
