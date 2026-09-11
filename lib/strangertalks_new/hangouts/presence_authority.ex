@@ -27,7 +27,10 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   def register(room_id, participant_id, lease_id)
       when is_binary(room_id) and is_binary(participant_id) and is_binary(lease_id) do
-    safe_call({:register, room_id, participant_id, lease_id}, {:error, :presence_authority_unavailable})
+    safe_call(
+      {:register, room_id, participant_id, lease_id},
+      {:error, :presence_authority_unavailable}
+    )
   end
 
   def register(_room_id, _participant_id, _lease_id), do: {:error, :invalid_presence_lease}
