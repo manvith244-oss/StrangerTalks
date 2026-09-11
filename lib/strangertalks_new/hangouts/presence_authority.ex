@@ -12,6 +12,12 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   accepts new registrations, failing stale durable memberships closed before any new
   channel can reconnect. The ledger is not product persistence and disappears with the
   application VM.
+
+  Channel teardown can race a transient database-owner or connection loss. In that case
+  the dead channel stays in the crash ledger until durable disconnect succeeds. The
+  authority retries without crashing; if a replacement channel registers first, that
+  replacement wins and the stale disconnect is cancelled rather than falsifying current
+  presence.
   """
 
   use GenServer
@@ -19,6 +25,7 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   alias StrangertalksNew.Hangouts.RoomServer
 
   @ledger :strangertalks_hangout_presence_crash_ledger
+  @disconnect_retry_ms 50
 
   def start_link(init_arg) do
     GenServer.start_link(__MODULE__, init_arg, name: __MODULE__)
@@ -99,13 +106,24 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   def handle_call({:disconnect_if_last, room_id, participant_id}, {pid, _tag}, state) do
     key = {room_id, participant_id}
-    {_removed?, new_state} = remove_registration(state, pid, key)
+
+    {_removed?, new_state} =
+      remove_registration(state, pid, key, delete_ledger?: false)
 
     reply =
       if any_registered?(new_state, key) do
+        clear_ledger(pid)
         RoomServer.snapshot(room_id, participant_id)
       else
-        RoomServer.disconnect(room_id, participant_id)
+        case durable_disconnect(room_id, participant_id) do
+          {:ok, result} ->
+            clear_ledger(pid)
+            result
+
+          :retry ->
+            schedule_disconnect_retry(pid, key)
+            {:error, :presence_disconnect_pending}
+        end
       end
 
     {:reply, reply, new_state}
@@ -133,10 +151,16 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   def handle_info({:EXIT, pid, _reason}, state) when is_pid(pid) do
     case Map.get(state.registrations, pid) do
       %{key: {room_id, participant_id} = key} ->
-        {_removed?, new_state} = remove_registration(state, pid, key, unlink?: false)
+        {_removed?, new_state} =
+          remove_registration(state, pid, key, unlink?: false, delete_ledger?: false)
 
-        if not any_registered?(new_state, key) do
-          _ = RoomServer.disconnect(room_id, participant_id)
+        if any_registered?(new_state, key) do
+          clear_ledger(pid)
+        else
+          case durable_disconnect(room_id, participant_id) do
+            {:ok, _result} -> clear_ledger(pid)
+            :retry -> schedule_disconnect_retry(pid, key)
+          end
         end
 
         {:noreply, new_state}
@@ -146,18 +170,52 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
     end
   end
 
+  def handle_info({:retry_disconnect, pid, {room_id, participant_id} = key}, state)
+      when is_pid(pid) do
+    if any_registered?(state, key) do
+      clear_ledger(pid)
+    else
+      case durable_disconnect(room_id, participant_id) do
+        {:ok, _result} -> clear_ledger(pid)
+        :retry -> schedule_disconnect_retry(pid, key)
+      end
+    end
+
+    {:noreply, state}
+  end
+
   def handle_info(_message, state), do: {:noreply, state}
 
   defp remove_registration(state, pid, key, opts \\ []) do
     case Map.get(state.registrations, pid) do
       %{key: ^key} ->
         if Keyword.get(opts, :unlink?, true), do: Process.unlink(pid)
-        :ets.delete(@ledger, pid)
+        if Keyword.get(opts, :delete_ledger?, true), do: clear_ledger(pid)
         {true, %{state | registrations: Map.delete(state.registrations, pid)}}
 
       _ ->
         {false, state}
     end
+  end
+
+  defp durable_disconnect(room_id, participant_id) do
+    try do
+      {:ok, RoomServer.disconnect(room_id, participant_id)}
+    rescue
+      _error -> :retry
+    catch
+      :exit, _reason -> :retry
+    end
+  end
+
+  defp schedule_disconnect_retry(pid, key) do
+    Process.send_after(self(), {:retry_disconnect, pid, key}, @disconnect_retry_ms)
+    :ok
+  end
+
+  defp clear_ledger(pid) do
+    :ets.delete(@ledger, pid)
+    :ok
   end
 
   defp any_registered?(state, key), do: count_registered(state, key) > 0
