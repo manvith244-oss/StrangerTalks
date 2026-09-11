@@ -4,6 +4,21 @@ import {join} from "node:path"
 import test from "node:test"
 import {CALL_STATUS, StrangerTalksRing} from "../../priv/static/assets/live_call.mjs"
 
+const forbiddenCapabilities = [
+  "createAnalyser(",
+  "AnalyserNode",
+  "getByteFrequencyData(",
+  "getByteTimeDomainData(",
+  "getFloatFrequencyData(",
+  "getFloatTimeDomainData(",
+  "audioLevel",
+  "totalAudioEnergy",
+  "AudioWorklet",
+  "audioWorklet",
+  "createScriptProcessor(",
+  "onaudioprocess"
+]
+
 function createMockStyle() {
   const values = new Map()
   return {
@@ -36,6 +51,10 @@ function walkFiles(root) {
   return output
 }
 
+function sourceHasAmplitudeCapability(source) {
+  return forbiddenCapabilities.some((capability) => source.includes(capability))
+}
+
 test("Ring accepts only authoritative call state and exposes no amplitude input surface", () => {
   const element = createMockElement()
   const ring = new StrangerTalksRing(element)
@@ -53,33 +72,56 @@ test("Ring accepts only authoritative call state and exposes no amplitude input 
   assert.deepEqual(publicMethods, ["constructor", "destroy", "pulseReaction", "setA11yText", "update"])
 })
 
+test("Ring state reads are restricted to the explicit lifecycle and mute capability surface", () => {
+  const element = createMockElement()
+  const ring = new StrangerTalksRing(element)
+  const allowed = new Set(["status", "selfMuted", "peerMuted"])
+
+  const state = new Proxy(
+    {status: CALL_STATUS.ACTIVE, selfMuted: false, peerMuted: true},
+    {
+      get(target, property, receiver) {
+        assert.equal(
+          allowed.has(property),
+          true,
+          `Ring attempted to read non-authoritative state capability: ${String(property)}`
+        )
+        return Reflect.get(target, property, receiver)
+      }
+    }
+  )
+
+  ring.update(state)
+  assert.equal(element.className, "stranger-call-ring ring-state-active ring-state-peer-muted")
+})
+
+test("amplitude capability detector rejects computed-property aliases", () => {
+  const bypasses = [
+    'const analyser = ctx["create" + "Analyser"]()',
+    'node["getByte" + "TimeDomainData"](buffer)',
+    'const field = "total" + "AudioEnergy"; report[field]'
+  ]
+
+  for (const source of bypasses) {
+    assert.equal(
+      sourceHasAmplitudeCapability(source),
+      true,
+      `computed capability alias escaped Ring privacy detection: ${source}`
+    )
+  }
+})
+
 test("production browser assets contain no amplitude-inference capability", () => {
   const assetsRoot = new URL("../../priv/static/assets/", import.meta.url)
   const files = walkFiles(assetsRoot.pathname)
-  const forbiddenCapabilities = [
-    "createAnalyser(",
-    "AnalyserNode",
-    "getByteFrequencyData(",
-    "getByteTimeDomainData(",
-    "getFloatFrequencyData(",
-    "getFloatTimeDomainData(",
-    "audioLevel",
-    "totalAudioEnergy",
-    "AudioWorklet",
-    "audioWorklet",
-    "createScriptProcessor(",
-    "onaudioprocess"
-  ]
 
   for (const path of files) {
     const source = readFileSync(path, "utf8")
-    for (const capability of forbiddenCapabilities) {
-      assert.equal(
-        source.includes(capability),
-        false,
-        `${path} introduced speaking-amplitude inference without Ring privacy review: ${capability}`
-      )
-    }
+    assert.equal(
+      sourceHasAmplitudeCapability(source),
+      false,
+      `${path} introduced speaking-amplitude inference without Ring privacy review`
+    )
   }
 })
 
