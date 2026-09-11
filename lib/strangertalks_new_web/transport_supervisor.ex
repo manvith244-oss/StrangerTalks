@@ -10,18 +10,13 @@ defmodule StrangertalksNewWeb.TransportSupervisor do
   @impl true
   def init(_init_arg) do
     children = [
-      StrangertalksNew.Hangouts.PresenceObserver,
-      {Registry,
-       keys: :duplicate,
-       name: StrangertalksNew.Hangouts.PresenceRegistry,
-       listeners: [StrangertalksNew.Hangouts.PresenceObserver]},
+      StrangertalksNew.Hangouts.PresenceAuthority,
       StrangertalksNewWeb.Endpoint
     ]
 
-    # Observer state, Registry registrations and the socket processes that own
-    # them form one ordered failure domain. Registry loss restarts the Endpoint;
-    # observer loss restarts both Registry and Endpoint. No transport is allowed
-    # to survive loss of the authority that accounts for its presence.
+    # PresenceAuthority and socket processes share one ordered failure domain.
+    # If presence authority is lost, rest_for_one tears down and restarts the
+    # Endpoint so no transport survives missing server-owned presence state.
     Supervisor.init(children, strategy: :rest_for_one)
   end
 end
