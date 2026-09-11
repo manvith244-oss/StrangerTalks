@@ -85,7 +85,12 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
       case next_waiting(state) do
         nil ->
           token = make_ref()
-          Process.send_after(self(), {:expire_waiting, participant_id, token}, state.submission_ttl_ms)
+
+          Process.send_after(
+            self(),
+            {:expire_waiting, participant_id, token},
+            state.submission_ttl_ms
+          )
 
           waiting =
             Map.put(state.waiting, participant_id, %{
@@ -217,9 +222,7 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
         if participant_id in participants do
           partner = partner_id(participants, participant_id)
 
-          {:reply,
-           {:ok,
-            %{status: :bridge_dissolved, bridge_id: bridge_id, partner_id: partner}},
+          {:reply, {:ok, %{status: :bridge_dissolved, bridge_id: bridge_id, partner_id: partner}},
            dissolve_bridge(state, bridge_id)}
         else
           {:reply, {:ok, %{status: :none}}, state}
@@ -240,9 +243,7 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
         bridge = Map.fetch!(state.bridges, bridge_id)
         partner = partner_id(bridge.participants, participant_id)
 
-        {:reply,
-         {:ok,
-          %{status: :bridge_dissolved, bridge_id: bridge_id, partner_id: partner}},
+        {:reply, {:ok, %{status: :bridge_dissolved, bridge_id: bridge_id, partner_id: partner}},
          dissolve_bridge(state, bridge_id)}
 
       Map.has_key?(state.waiting, participant_id) ->
@@ -377,7 +378,8 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
   end
 
   defp active_participant_count(state) do
-    map_size(state.waiting) + map_size(state.participant_bridge) + map_size(state.participant_room)
+    map_size(state.waiting) + map_size(state.participant_bridge) +
+      map_size(state.participant_room)
   end
 
   defp partner_id([a, b], participant_id) when participant_id == a, do: b
