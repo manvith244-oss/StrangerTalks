@@ -15,8 +15,8 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
     Process.flag(:trap_exit, true)
     {room, [participant | _]} = active_room!()
 
-    assert {:ok, _first_snapshot, first_socket} = join(participant, room.room_id)
-    assert {:ok, _second_snapshot, second_socket} = join(participant, room.room_id)
+    assert {:ok, _first_snapshot, first_socket} = join_hangout(participant, room.room_id)
+    assert {:ok, _second_snapshot, second_socket} = join_hangout(participant, room.room_id)
 
     first_lease = first_socket.assigns.hangout_presence_lease_id
     second_lease = second_socket.assigns.hangout_presence_lease_id
@@ -56,8 +56,8 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
     Process.flag(:trap_exit, true)
     {room, [participant | _]} = active_room!()
 
-    assert {:ok, _first_snapshot, first_socket} = join(participant, room.room_id)
-    assert {:ok, _second_snapshot, second_socket} = join(participant, room.room_id)
+    assert {:ok, _first_snapshot, first_socket} = join_hangout(participant, room.room_id)
+    assert {:ok, _second_snapshot, second_socket} = join_hangout(participant, room.room_id)
     assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 2
 
     first_monitor = Process.monitor(first_socket.channel_pid)
@@ -96,8 +96,8 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
     Process.flag(:trap_exit, true)
     {room, [participant | _]} = active_room!()
 
-    assert {:ok, _first_snapshot, first_socket} = join(participant, room.room_id)
-    assert {:ok, _second_snapshot, second_socket} = join(participant, room.room_id)
+    assert {:ok, _first_snapshot, first_socket} = join_hangout(participant, room.room_id)
+    assert {:ok, _second_snapshot, second_socket} = join_hangout(participant, room.room_id)
     assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 2
 
     first_monitor = Process.monitor(first_socket.channel_pid)
@@ -114,7 +114,7 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
     end)
   end
 
-  defp join(participant, room_id) do
+  defp join_hangout(participant, room_id) do
     token = ParticipantToken.sign(participant.participant_id)
     {:ok, socket} = connect(UserSocket, %{}, connect_info: %{auth_token: token})
     subscribe_and_join(socket, HangoutChannel, "hangout:#{room_id}", %{})
