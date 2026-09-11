@@ -43,17 +43,46 @@ defmodule StrangertalksNewWeb.HearthChannelTest do
     participant = participant_for_variant!(:control)
 
     assert {:ok, %{status: "control_ready", variant: "control"}, socket} =
-             subscribe_and_join(
-               connected_socket(participant),
-               HearthChannel,
-               "hearth:#{participant.participant_id}",
-               %{"variant" => "auto"}
-             )
+             join_auto(participant)
 
     assert socket.assigns.hearth_variant == :control
   end
 
-  test "authenticated participants submit, receive bridge offers, and require mutual Step In" do
+  test "control participants pair directly into a blank room without bridge or residue exposure" do
+    alice = participant_for_variant!(:control)
+    bob = participant_for_variant!(:control)
+
+    assert {:ok, alice_reply, alice_socket} = join_auto(alice)
+    assert {:ok, bob_reply, bob_socket} = join_auto(bob)
+    assert alice_reply == %{status: "control_ready", variant: "control"}
+    assert bob_reply == %{status: "control_ready", variant: "control"}
+    refute Map.has_key?(alice_reply, :recent)
+    refute Map.has_key?(bob_reply, :recent)
+
+    ref = push(alice_socket, "control:connect", %{})
+    assert_reply ref, :ok, %{status: "waiting"}
+
+    ref = push(bob_socket, "control:connect", %{})
+    assert_reply ref, :ok, %{status: "room_ready", room_id: room_id}
+
+    assert_push "room:ready", %{
+      room_id: ^room_id,
+      variant: "control",
+      own_anchor: nil,
+      partner_anchor: nil
+    }
+
+    assert_push "room:ready", %{
+      room_id: ^room_id,
+      variant: "control",
+      own_anchor: nil,
+      partner_anchor: nil
+    }
+
+    refute_push "bridge:offered", _payload, 20
+  end
+
+  test "authenticated treatment participants receive bridge offers and require mutual Step In" do
     {alice_socket, bob_socket, bridge_id} = create_bridge()
 
     ref1 = push(alice_socket, "bridge:step_in", %{"bridge_id" => bridge_id})
@@ -120,6 +149,9 @@ defmodule StrangertalksNewWeb.HearthChannelTest do
 
   test "channel terminate dissolves participant bridge state and neutrally resets survivor" do
     {alice_socket, _bob_socket, bridge_id} = create_bridge()
+    previous_trap_exit = Process.flag(:trap_exit, true)
+    on_exit(fn -> Process.flag(:trap_exit, previous_trap_exit) end)
+
     close(alice_socket)
 
     assert_push "bridge:dissolved", %{bridge_id: ^bridge_id}
@@ -128,27 +160,9 @@ defmodule StrangertalksNewWeb.HearthChannelTest do
              Authority.step_in(Authority, participant_id_from_bridge_survivor(), bridge_id)
   end
 
-  test "telemetry never captures raw Hearth contribution or room message text" do
-    handler_id = "hearth-privacy-#{System.unique_integer([:positive])}"
-    test_pid = self()
-
-    events = [
-      [:strangertalks_new, :experiment, :hearth, :hearth_submitted],
-      [:strangertalks_new, :experiment, :hearth, :experiment_turn],
-      [:strangertalks_new, :experiment, :hearth, :experiment_room_ended]
-    ]
-
-    :ok =
-      :telemetry.attach_many(
-        handler_id,
-        events,
-        fn event, measurements, metadata, _config ->
-          send(test_pid, {:telemetry_seen, event, measurements, metadata})
-        end,
-        nil
-      )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
+  test "treatment telemetry omits participant ids, Hearth inputs, and chat bodies" do
+    events = privacy_events()
+    attach_telemetry(events)
 
     alice = participant!()
     bob = participant!()
@@ -179,9 +193,64 @@ defmodule StrangertalksNewWeb.HearthChannelTest do
 
     telemetry = collect_telemetry([])
     rendered = inspect(telemetry)
+    refute rendered =~ alice.participant_id
+    refute rendered =~ bob.participant_id
     refute rendered =~ secret_anchor
     refute rendered =~ secret_message
     assert Enum.any?(telemetry, fn {event, _, _} -> List.last(event) == :experiment_turn end)
+  end
+
+  test "control telemetry omits participant ids and chat bodies" do
+    attach_telemetry(privacy_events())
+
+    alice = participant_for_variant!(:control)
+    bob = participant_for_variant!(:control)
+    {:ok, _reply, alice_socket} = join_auto(alice)
+    {:ok, _reply, bob_socket} = join_auto(bob)
+
+    ref = push(alice_socket, "control:connect", %{})
+    assert_reply ref, :ok, %{status: "waiting"}
+    ref = push(bob_socket, "control:connect", %{})
+    assert_reply ref, :ok, %{room_id: room_id}
+    flush_room_ready()
+
+    secret_message = "CONTROL_SECRET_MESSAGE_66217"
+    ref = push(alice_socket, "room:message", %{"room_id" => room_id, "content" => secret_message})
+    assert_reply ref, :ok, %{status: "delivered"}
+
+    ref = push(alice_socket, "room:leave", %{"room_id" => room_id})
+    assert_reply ref, :ok, %{status: "ended"}
+
+    telemetry = collect_telemetry([])
+    rendered = inspect(telemetry)
+    refute rendered =~ alice.participant_id
+    refute rendered =~ bob.participant_id
+    refute rendered =~ secret_message
+
+    assert Enum.any?(telemetry, fn {event, _, metadata} ->
+             List.last(event) == :experiment_turn and metadata.variant == :control
+           end)
+  end
+
+  test "exit feedback accepts only frozen categorical reasons without identity metadata" do
+    event = [:strangertalks_new, :experiment, :hearth, :experiment_exit_reason]
+    attach_telemetry([event])
+
+    participant = participant!()
+    {:ok, _reply, socket} = join_hearth(participant)
+
+    invalid_ref = push(socket, "experiment:feedback", %{"reason" => "SECRET_FREE_TEXT"})
+    assert_reply invalid_ref, :error, %{reason: "invalid_request"}
+    refute_receive {:telemetry_seen, ^event, _, _}, 20
+
+    valid_ref = push(socket, "experiment:feedback", %{"reason" => "good_chat"})
+    assert_reply valid_ref, :ok, %{status: "recorded"}
+
+    assert_receive {:telemetry_seen, ^event, measurements, metadata}
+    assert measurements.count == 1
+    assert metadata == %{variant: :treatment, reason: "good_chat"}
+    refute inspect({measurements, metadata}) =~ participant.participant_id
+    refute inspect({measurements, metadata}) =~ "SECRET_FREE_TEXT"
   end
 
   defp create_bridge do
@@ -225,6 +294,15 @@ defmodule StrangertalksNewWeb.HearthChannelTest do
     )
   end
 
+  defp join_auto(participant) do
+    subscribe_and_join(
+      connected_socket(participant),
+      HearthChannel,
+      "hearth:#{participant.participant_id}",
+      %{"variant" => "auto"}
+    )
+  end
+
   defp connected_socket(participant) do
     token = ParticipantToken.sign(participant.participant_id)
     {:ok, socket} = connect(UserSocket, %{}, connect_info: %{auth_token: token})
@@ -263,6 +341,36 @@ defmodule StrangertalksNewWeb.HearthChannelTest do
 
   defp participant_id_from_bridge_survivor do
     Process.get(:hearth_bridge_survivor_id)
+  end
+
+  defp privacy_events do
+    [
+      [:strangertalks_new, :experiment, :hearth, :experiment_assigned],
+      [:strangertalks_new, :experiment, :hearth, :hearth_submitted],
+      [:strangertalks_new, :experiment, :hearth, :bridge_offered],
+      [:strangertalks_new, :experiment, :hearth, :bridge_step_in],
+      [:strangertalks_new, :experiment, :hearth, :experiment_room_started],
+      [:strangertalks_new, :experiment, :hearth, :experiment_turn],
+      [:strangertalks_new, :experiment, :hearth, :experiment_first_message],
+      [:strangertalks_new, :experiment, :hearth, :experiment_room_ended]
+    ]
+  end
+
+  defp attach_telemetry(events) do
+    handler_id = "hearth-privacy-#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach_many(
+        handler_id,
+        events,
+        fn event, measurements, metadata, _config ->
+          send(test_pid, {:telemetry_seen, event, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
   end
 
   defp collect_telemetry(acc) do
