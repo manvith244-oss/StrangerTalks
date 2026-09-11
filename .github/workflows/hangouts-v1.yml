@@ -213,15 +213,15 @@ jobs:
       - name: Require Hangouts proofs and precommit
         if: always()
         run: |
-          test "${{ steps.domain-contract.outcome }}" = "success"
-          if [ "${{ steps.context-contract.outcome }}" != "skipped" ]; then test "${{ steps.context-contract.outcome }}" = "success"; fi
-          test "${{ steps.db-security-contract.outcome }}" = "success"
-          if [ "${{ steps.room-contract.outcome }}" != "skipped" ]; then test "${{ steps.room-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.matcher-contract.outcome }}" != "skipped" ]; then test "${{ steps.matcher-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.channel-contract.outcome }}" != "skipped" ]; then test "${{ steps.channel-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.content-contract.outcome }}" != "skipped" ]; then test "${{ steps.content-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.interaction-contract.outcome }}" != "skipped" ]; then test "${{ steps.interaction-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.safety-contract.outcome }}" != "skipped" ]; then test "${{ steps.safety-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.telemetry-contract.outcome }}" != "skipped" ]; then test "${{ steps.telemetry-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.browser-contract.outcome }}" != "skipped" ]; then test "${{ steps.browser-contract.outcome }}" = "success"; fi
-          test "${{ steps.full-precommit.outcome }}" = "success"
+          test "${{ steps['domain-contract'].outcome }}" = "success"
+          if [ "${{ steps['context-contract'].outcome }}" != "skipped" ]; then test "${{ steps['context-contract'].outcome }}" = "success"; fi
+          test "${{ steps['db-security-contract'].outcome }}" = "success"
+          if [ "${{ steps['room-contract'].outcome }}" != "skipped" ]; then test "${{ steps['room-contract'].outcome }}" = "success"; fi
+          if [ "${{ steps['matcher-contract'].outcome }}" != "skipped" ]; then test "${{ steps['matcher-contract'].outcome }}" = "success"; fi
+          if [ "${{ steps['channel-contract'].outcome }}" != "skipped" ]; then test "${{ steps['channel-contract'].outcome }}" = "success"; fi
+          if [ "${{ steps['content-contract'].outcome }}" != "skipped" ]; then test "${{ steps['content-contract'].outcome }}" = "success"; fi
+          if [ "${{ steps['interaction-contract'].outcome }}" != "skipped" ]; then test "${{ steps['interaction-contract'].outcome }}" = "success"; fi
+          if [ "${{ steps['safety-contract'].outcome }}" != "skipped" ]; then test "${{ steps['safety-contract'].outcome }}" = "success"; fi
+          if [ "${{ steps['telemetry-contract'].outcome }}" != "skipped" ]; then test "${{ steps['telemetry-contract'].outcome }}" = "success"; fi
+          if [ "${{ steps['browser-contract'].outcome }}" != "skipped" ]; then test "${{ steps['browser-contract'].outcome }}" = "success"; fi
+          test "${{ steps['full-precommit'].outcome }}" = "success"
