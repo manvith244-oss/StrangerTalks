@@ -96,7 +96,7 @@ defmodule StrangertalksNew.Experiments.Hearth.TelemetryRecorderTest do
   end
 
   test "detaches its telemetry handler when stopped" do
-    pid = start_supervised!({TelemetryRecorder, name: TelemetryRecorder})
+    {:ok, pid} = TelemetryRecorder.start_link(name: TelemetryRecorder)
     GenServer.stop(pid)
 
     log =
