@@ -235,9 +235,11 @@ defmodule StrangertalksNewWeb.HearthChannel do
   end
 
   def handle_info({:room_ready, room_id}, socket) do
+    expected_variant = variant(socket)
+
     socket =
       case Authority.room(Authority, socket.assigns.participant_id) do
-        {:ok, room} when room.variant == variant(socket) ->
+        {:ok, %{variant: ^expected_variant} = room} ->
           push(socket, "room:ready", %{
             room_id: room_id,
             variant: Atom.to_string(room.variant),
