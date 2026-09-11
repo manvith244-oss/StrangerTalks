@@ -175,8 +175,8 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
               |> put_in([:participant_room, participant_id], room_id)
 
             {:reply,
-             {:ok,
-              %{status: :room_ready, room_id: room_id, participant_ids: participants}}, state}
+             {:ok, %{status: :room_ready, room_id: room_id, participant_ids: participants}},
+             state}
         end
 
       {:error, reason} ->
@@ -288,8 +288,7 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
         bridge = Map.fetch!(state.bridges, bridge_id)
         partner = partner_id(bridge.participants, participant_id)
 
-        {:reply,
-         {:ok, %{status: :bridge_dissolved, bridge_id: bridge_id, partner_id: partner}},
+        {:reply, {:ok, %{status: :bridge_dissolved, bridge_id: bridge_id, partner_id: partner}},
          dissolve_bridge(state, bridge_id)}
 
       Map.has_key?(state.waiting, participant_id) ->
@@ -334,8 +333,8 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
           turn_number = room.turn_count + 1
           state = put_in(state, [:rooms, room_id, :turn_count], turn_number)
 
-          {:reply,
-           {:ok, %{partner_id: partner, turn_number: turn_number, variant: room.variant}}, state}
+          {:reply, {:ok, %{partner_id: partner, turn_number: turn_number, variant: room.variant}},
+           state}
         else
           {:reply, {:error, :no_room}, state}
         end
