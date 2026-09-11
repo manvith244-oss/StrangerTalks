@@ -134,42 +134,46 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
     now = now_ms()
 
     case Map.get(state.bridges, bridge_id) do
-      %{expires_at: expires_at} = bridge when expires_at <= now ->
+      %{expires_at: expires_at} when expires_at <= now ->
         state = dissolve_bridge(state, bridge_id)
         {:reply, {:error, :expired}, state}
 
-      %{participants: participants} = bridge when participant_id in participants ->
-        stepped_in = MapSet.put(bridge.stepped_in, participant_id)
-        bridge = %{bridge | stepped_in: stepped_in}
+      %{participants: participants} = bridge ->
+        if participant_id in participants do
+          stepped_in = MapSet.put(bridge.stepped_in, participant_id)
+          bridge = %{bridge | stepped_in: stepped_in}
 
-        if MapSet.size(stepped_in) == 2 do
-          room_id = Ecto.UUID.generate()
-          [a, b] = bridge.participants
+          if MapSet.size(stepped_in) == 2 do
+            room_id = Ecto.UUID.generate()
+            [a, b] = bridge.participants
 
-          room = %{
-            id: room_id,
-            participants: bridge.participants,
-            contributions: bridge.contributions,
-            started_at: now
-          }
+            room = %{
+              id: room_id,
+              participants: bridge.participants,
+              contributions: bridge.contributions,
+              started_at: now
+            }
 
-          state =
-            state
-            |> dissolve_bridge(bridge_id)
-            |> put_in([:rooms, room_id], room)
-            |> put_in([:participant_room, a], room_id)
-            |> put_in([:participant_room, b], room_id)
+            state =
+              state
+              |> dissolve_bridge(bridge_id)
+              |> put_in([:rooms, room_id], room)
+              |> put_in([:participant_room, a], room_id)
+              |> put_in([:participant_room, b], room_id)
 
-          {:reply,
-           {:ok,
-            %{
-              status: :room_ready,
-              room_id: room_id,
-              participant_ids: bridge.participants
-            }}, state}
+            {:reply,
+             {:ok,
+              %{
+                status: :room_ready,
+                room_id: room_id,
+                participant_ids: bridge.participants
+              }}, state}
+          else
+            {:reply, {:ok, %{status: :waiting_for_partner}},
+             put_in(state, [:bridges, bridge_id], bridge)}
+          end
         else
-          {:reply, {:ok, %{status: :waiting_for_partner}},
-           put_in(state, [:bridges, bridge_id], bridge)}
+          {:reply, {:error, :no_offer}, prune(state)}
         end
 
       _ ->
@@ -179,8 +183,12 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
 
   def handle_call({:pass, participant_id, bridge_id}, _from, state) do
     case Map.get(state.bridges, bridge_id) do
-      %{participants: participants} when participant_id in participants ->
-        {:reply, :ok, dissolve_bridge(state, bridge_id)}
+      %{participants: participants} ->
+        if participant_id in participants do
+          {:reply, :ok, dissolve_bridge(state, bridge_id)}
+        else
+          {:reply, :ok, state}
+        end
 
       _ ->
         {:reply, :ok, state}
@@ -269,7 +277,9 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
 
   defp dissolve_bridge(state, bridge_id) do
     case Map.pop(state.bridges, bridge_id) do
-      {nil, bridges} -> %{state | bridges: bridges}
+      {nil, bridges} ->
+        %{state | bridges: bridges}
+
       {%{participants: participants}, bridges} ->
         participant_bridge = Enum.reduce(participants, state.participant_bridge, &Map.delete(&2, &1))
         %{state | bridges: bridges, participant_bridge: participant_bridge}
@@ -278,7 +288,9 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
 
   defp dissolve_room(state, room_id) do
     case Map.pop(state.rooms, room_id) do
-      {nil, rooms} -> %{state | rooms: rooms}
+      {nil, rooms} ->
+        %{state | rooms: rooms}
+
       {%{participants: participants}, rooms} ->
         participant_room = Enum.reduce(participants, state.participant_room, &Map.delete(&2, &1))
         %{state | rooms: rooms, participant_room: participant_room}
