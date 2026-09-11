@@ -39,6 +39,20 @@ defmodule StrangertalksNewWeb.HearthChannelTest do
              )
   end
 
+  test "auto variant follows deterministic participant assignment instead of the empty-map fallback" do
+    participant = participant_for_variant!(:control)
+
+    assert {:ok, %{status: "control_ready", variant: "control"}, socket} =
+             subscribe_and_join(
+               connected_socket(participant),
+               HearthChannel,
+               "hearth:#{participant.participant_id}",
+               %{"variant" => "auto"}
+             )
+
+    assert socket.assigns.hearth_variant == :control
+  end
+
   test "authenticated participants submit, receive bridge offers, and require mutual Step In" do
     {alice_socket, bob_socket, bridge_id} = create_bridge()
 
@@ -221,6 +235,21 @@ defmodule StrangertalksNewWeb.HearthChannelTest do
     {:ok, participant} = Participants.create_participant(%{})
     participant
   end
+
+  defp participant_for_variant!(variant, attempts \\ 30)
+
+  defp participant_for_variant!(variant, attempts) when attempts > 0 do
+    participant = participant!()
+
+    if HearthChannel.assigned_variant(participant.participant_id) == variant do
+      participant
+    else
+      participant_for_variant!(variant, attempts - 1)
+    end
+  end
+
+  defp participant_for_variant!(variant, 0),
+    do: flunk("could not issue a participant assigned to #{inspect(variant)}")
 
   defp flush_bridge_offers do
     assert_push "bridge:offered", _
