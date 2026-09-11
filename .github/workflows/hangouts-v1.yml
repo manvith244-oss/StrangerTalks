@@ -143,10 +143,22 @@ jobs:
         if: ${{ hashFiles('test/strangertalks_new/hangouts/telemetry_test.exs') != '' }}
         run: mix test test/strangertalks_new/hangouts/telemetry_test.exs
 
-      - name: Full precommit regression
+      - name: Precommit compile proof
+        run: mix compile --warnings-as-errors
+
+      - name: Precommit dependency-lock proof
         run: |
-          mix precommit
-          git diff --exit-code
+          mix deps.unlock --unused
+          git diff --exit-code mix.lock
+
+      - name: Precommit format proof
+        run: mix format --check-formatted
+
+      - name: Precommit full Elixir test proof
+        run: mix test
+
+      - name: Precommit clean-tree proof
+        run: git diff --exit-code
 
       - name: Start Phoenix for Hangouts browser proof
         run: |
