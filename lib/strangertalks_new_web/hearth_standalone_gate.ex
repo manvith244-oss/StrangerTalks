@@ -19,7 +19,11 @@ defmodule StrangertalksNewWeb.HearthStandaloneGate do
 
   defp allowed?("GET", ["lab", "hearth"]), do: true
   defp allowed?("POST", ["api", "hearth", "participants"]), do: true
-  defp allowed?("GET", ["assets", asset]) when asset in ["hearth_lab.css", "hearth_lab.mjs"], do: true
+
+  defp allowed?("GET", ["assets", asset])
+       when asset in ["hearth_lab.css", "hearth_lab.mjs"],
+       do: true
+
   defp allowed?("GET", ["vendor", "phoenix.mjs"]), do: true
   defp allowed?(_method, _path), do: false
 end
