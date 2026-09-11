@@ -9,8 +9,12 @@ defmodule StrangertalksNew.Experiments.Hearth.TelemetryRecorderTest do
   @bridge_id "efdc86ee-027c-4ead-8053-414f040d75cb"
 
   setup do
+    previous_level = Logger.level()
+    Logger.configure(level: :info)
+
     on_exit(fn ->
       if pid = Process.whereis(TelemetryRecorder), do: GenServer.stop(pid)
+      Logger.configure(level: previous_level)
     end)
 
     :ok
