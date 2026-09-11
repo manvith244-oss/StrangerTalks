@@ -79,6 +79,38 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
     end)
   end
 
+  test "stale disconnect cannot mark a participant disconnected while a channel is registered" do
+    {room, [participant | _]} = active_room!()
+
+    assert {:ok, _snapshot, socket} = join_hangout(participant, room.room_id)
+    assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 1
+
+    assert {:ok, _snapshot} = RoomServer.disconnect(room.room_id, participant.participant_id)
+    assert membership!(room.room_id, participant.participant_id).status == :ACTIVE
+    assert membership!(room.room_id, participant.participant_id).disconnect_count == 0
+
+    leave_ref = leave(socket)
+    assert_reply leave_ref, :ok
+  end
+
+  test "presence Registry partition loss tears down live channels and fails durable presence closed" do
+    Process.flag(:trap_exit, true)
+    {room, [participant | _]} = active_room!()
+
+    assert {:ok, _snapshot, socket} = join_hangout(participant, room.room_id)
+    assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 1
+
+    [partition_pid | _] = presence_partition_pids!()
+    channel_monitor = Process.monitor(socket.channel_pid)
+    Process.exit(partition_pid, :kill)
+
+    assert_receive {:DOWN, ^channel_monitor, :process, _pid, _reason}, 1_000
+
+    eventually(fn ->
+      membership!(room.room_id, participant.participant_id).status == :DISCONNECTED
+    end)
+  end
+
   test "client cannot author or inject a presence lease" do
     {room, [participant | _]} = active_room!()
     token = ParticipantToken.sign(participant.participant_id)
@@ -155,6 +187,15 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
       from m in HangoutMembership,
         where: m.room_id == ^room_id and m.participant_id == ^participant_id
     )
+  end
+
+  defp presence_partition_pids! do
+    StrangertalksNew.Hangouts.PresenceRegistry
+    |> Supervisor.which_children()
+    |> Enum.flat_map(fn
+      {_id, pid, _type, _modules} when is_pid(pid) -> [pid]
+      _child -> []
+    end)
   end
 
   defp eventually(predicate, attempts \\ 100)
