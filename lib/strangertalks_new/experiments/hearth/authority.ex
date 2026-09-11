@@ -418,7 +418,9 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
     cond do
       not valid_participant?(participant_id) -> {:error, :invalid_participant}
       active_participant?(state, participant_id) -> {:error, :already_active}
-      MapSet.member?(state.consumed_participants, participant_id) -> {:error, :already_participated}
+      MapSet.member?(state.consumed_participants, participant_id) ->
+        {:error, :already_participated}
+
       active_participant_count(state) >= state.max_active_participants -> {:error, :capacity}
       true -> :ok
     end
