@@ -122,7 +122,9 @@ At this checkpoint, the important repository truth is: **0 open PRs does not mea
 
 ## Remaining non-code / external verification boundaries
 
-The earlier audit also recorded several checks that are not solved by merging historical code:
+The frozen audit's dependency-advisory warning is no longer a current blocker: the final exact-head workflows ran `mix hex.audit` successfully and reported no retired or security-advisory packages. Do not reopen dependency-hardening work from that stale finding unless a fresh audit on current main reports a new advisory.
+
+The remaining checks below are not solved by merging historical code:
 
 - real production/staging deployment proof;
 - real provider/OAuth and cross-device provider verification where applicable;
