@@ -1,11 +1,12 @@
 import {Socket} from "/vendor/phoenix.mjs"
 
 const $ = (id) => document.getElementById(id)
-const screens = ["hearth-screen", "bridge-screen", "room-screen", "feedback-screen"]
+const screens = ["control-screen", "hearth-screen", "bridge-screen", "room-screen", "feedback-screen"]
 
 const state = {
   socket: null,
   channel: null,
+  variant: null,
   bridgeId: null,
   roomId: null,
   ownAnchor: "",
@@ -61,18 +62,28 @@ function enterRoom(payload) {
   state.roomId = payload.room_id
   state.ownAnchor = payload.own_anchor || state.ownAnchor
   state.partnerAnchor = payload.partner_anchor || state.partnerAnchor
-  $("room-own-anchor").textContent = state.ownAnchor
-  $("room-partner-anchor").textContent = state.partnerAnchor
+  const anchored = state.variant === "treatment"
+  $("room-anchor").hidden = !anchored
+  $("room-own-anchor").textContent = anchored ? state.ownAnchor : ""
+  $("room-partner-anchor").textContent = anchored ? state.partnerAnchor : ""
   $("messages").replaceChildren()
   show("room-screen")
   $("message-input").focus()
 }
 
-function returnToHearth(message = "") {
+function returnToEntry(message = "") {
   state.bridgeId = null
   state.roomId = null
-  setStatus("hearth-status", message)
-  show("hearth-screen")
+  state.ownAnchor = ""
+  state.partnerAnchor = ""
+
+  if (state.variant === "control") {
+    setStatus("control-status", message)
+    show("control-screen")
+  } else {
+    setStatus("hearth-status", message)
+    show("hearth-screen")
+  }
 }
 
 function showFeedback() {
@@ -100,12 +111,12 @@ async function bootstrap() {
   state.socket = socket
   socket.connect()
 
-  const channel = socket.channel(`hearth:${identity.participant_id}`, {})
+  const channel = socket.channel(`hearth:${identity.participant_id}`, {variant: "auto"})
   state.channel = channel
 
   channel.on("bridge:offered", enterBridge)
-  channel.on("bridge:dissolved", () => returnToHearth("The moment passed. You can place another thing here."))
-  channel.on("hearth:reset", () => returnToHearth("That moment dissolved. You can try again."))
+  channel.on("bridge:dissolved", () => returnToEntry("The moment passed. You can try again."))
+  channel.on("experiment:reset", () => returnToEntry("That moment dissolved. You can try again."))
   channel.on("room:ready", enterRoom)
   channel.on("room:message", ({room_id: roomId, content}) => {
     if (roomId === state.roomId && typeof content === "string") appendMessage("them", content)
@@ -116,16 +127,34 @@ async function bootstrap() {
 
   channel.join(5000)
     .receive("ok", (payload) => {
-      renderRecent(payload.recent)
-      setStatus("hearth-status", "")
+      state.variant = payload.variant
+
+      if (payload.variant === "control") {
+        setStatus("control-status", "")
+        show("control-screen")
+      } else {
+        renderRecent(payload.recent)
+        setStatus("hearth-status", "")
+        show("hearth-screen")
+      }
     })
     .receive("error", () => {
-      setStatus("hearth-status", "This lab is not available right now.")
+      document.body.textContent = "This lab is not available right now."
     })
     .receive("timeout", () => {
-      setStatus("hearth-status", "Could not open the Hearth.")
+      document.body.textContent = "This lab could not open."
     })
 }
+
+$("control-connect").addEventListener("click", async () => {
+  setStatus("control-status", "Connecting…")
+  try {
+    const reply = await push("control:connect", {})
+    if (reply.status === "waiting") setStatus("control-status", "Waiting for someone else…")
+  } catch (error) {
+    setStatus("control-status", error?.reason === "capacity" ? "No room right now." : "Could not connect.")
+  }
+})
 
 $("hearth-input").addEventListener("input", (event) => {
   $("char-count").textContent = String(event.target.value.length)
@@ -153,14 +182,14 @@ $("step-in").addEventListener("click", async () => {
   try {
     await push("bridge:step_in", {bridge_id: state.bridgeId})
   } catch {
-    returnToHearth("That moment passed.")
+    returnToEntry("That moment passed.")
   }
 })
 
 $("pass").addEventListener("click", async () => {
-  if (!state.bridgeId) returnToHearth()
+  if (!state.bridgeId) returnToEntry()
   try { await push("bridge:pass", {bridge_id: state.bridgeId}) } catch {}
-  returnToHearth()
+  returnToEntry()
 })
 
 $("message-form").addEventListener("submit", async (event) => {
@@ -189,9 +218,11 @@ $("feedback-actions").addEventListener("click", async (event) => {
   const reason = event.target?.dataset?.reason
   if (!reason) return
   try { await push("experiment:feedback", {reason}) } catch {}
-  returnToHearth("Thanks. The next encounter starts clean.")
+  returnToEntry("Thanks. The next encounter starts clean.")
 })
 
-$("close-feedback").addEventListener("click", () => returnToHearth())
+$("close-feedback").addEventListener("click", () => returnToEntry())
 
-bootstrap().catch(() => setStatus("hearth-status", "This lab could not start."))
+bootstrap().catch(() => {
+  document.body.textContent = "This lab could not start."
+})
