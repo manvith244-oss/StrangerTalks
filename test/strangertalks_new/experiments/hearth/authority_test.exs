@@ -6,13 +6,12 @@ defmodule StrangertalksNew.Experiments.Hearth.AuthorityTest do
   setup do
     name = String.to_atom("hearth_authority_#{System.unique_integer([:positive])}")
 
-    start_supervised!(
-      {Authority,
-       name: name,
-       bridge_ttl_ms: 50,
-       submission_ttl_ms: 100,
-       max_active_participants: 8,
-       notifier: self()}
+    start_authority!(
+      name,
+      bridge_ttl_ms: 50,
+      submission_ttl_ms: 100,
+      max_active_participants: 8,
+      notifier: self()
     )
 
     %{authority: name}
@@ -59,7 +58,9 @@ defmodule StrangertalksNew.Experiments.Hearth.AuthorityTest do
              Authority.room(authority, "alice")
   end
 
-  test "control cohort pairs directly into the same ephemeral room transport", %{authority: authority} do
+  test "control cohort pairs directly into the same ephemeral room transport", %{
+    authority: authority
+  } do
     assert {:ok, %{status: :waiting}} = Authority.connect_control(authority, "control-a")
 
     assert {:ok, %{status: :room_ready, room_id: room_id, participant_ids: participants}} =
@@ -155,9 +156,11 @@ defmodule StrangertalksNew.Experiments.Hearth.AuthorityTest do
   test "active participant state has a hard configurable bound" do
     name = String.to_atom("hearth_bounded_#{System.unique_integer([:positive])}")
 
-    start_supervised!(
-      {Authority,
-       name: name, bridge_ttl_ms: 1_000, submission_ttl_ms: 1_000, max_active_participants: 2}
+    start_authority!(
+      name,
+      bridge_ttl_ms: 1_000,
+      submission_ttl_ms: 1_000,
+      max_active_participants: 2
     )
 
     assert {:ok, %{status: :waiting}} = Authority.submit(name, "p1", "One")
@@ -178,5 +181,15 @@ defmodule StrangertalksNew.Experiments.Hearth.AuthorityTest do
       Authority.step_in(authority, "bob", bridge_id)
 
     room_id
+  end
+
+  defp start_authority!(name, opts) do
+    child_spec =
+      Supervisor.child_spec(
+        {Authority, Keyword.put(opts, :name, name)},
+        id: {:hearth_authority, name}
+      )
+
+    start_supervised!(child_spec)
   end
 end
