@@ -4,6 +4,7 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
   @default_bridge_ttl_ms 20_000
   @default_submission_ttl_ms 120_000
   @default_max_active_participants 2_000
+  @default_max_consumed_participants 2_000
   @max_recent 3
   @max_contribution 100
 
@@ -62,6 +63,8 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
        submission_ttl_ms: Keyword.get(opts, :submission_ttl_ms, @default_submission_ttl_ms),
        max_active_participants:
          Keyword.get(opts, :max_active_participants, @default_max_active_participants),
+       max_consumed_participants:
+         Keyword.get(opts, :max_consumed_participants, @default_max_consumed_participants),
        notifier: Keyword.get(opts, :notifier)
      }}
   end
@@ -424,6 +427,9 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
 
       MapSet.member?(state.consumed_participants, participant_id) ->
         {:error, :already_participated}
+
+      MapSet.size(state.consumed_participants) >= state.max_consumed_participants ->
+        {:error, :capacity}
 
       active_participant_count(state) >= state.max_active_participants ->
         {:error, :capacity}
