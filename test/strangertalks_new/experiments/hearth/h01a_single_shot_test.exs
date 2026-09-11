@@ -73,4 +73,31 @@ defmodule StrangertalksNew.Experiments.Hearth.H01aSingleShotTest do
     assert {:error, :already_participated} =
              Authority.submit(authority, "alice", "Kindle")
   end
+
+  test "consumed participant history is hard bounded and fails closed at capacity" do
+    name = String.to_atom("hearth_h01a_consumed_bound_#{System.unique_integer([:positive])}")
+
+    child_spec =
+      Supervisor.child_spec(
+        {Authority,
+         name: name,
+         bridge_ttl_ms: 1_000,
+         submission_ttl_ms: 1_000,
+         max_active_participants: 16,
+         max_consumed_participants: 2},
+        id: {:hearth_h01a_consumed_bound, name}
+      )
+
+    start_supervised!(child_spec)
+
+    assert {:ok, %{status: :waiting}} = Authority.connect_control(name, "control-a")
+    assert {:ok, %{status: :waiting_removed}} = Authority.disconnect(name, "control-a")
+
+    assert {:ok, %{status: :waiting}} = Authority.connect_control(name, "control-b")
+    assert {:ok, %{status: :waiting_removed}} = Authority.disconnect(name, "control-b")
+
+    assert Authority.snapshot(name).consumed_participant_count == 2
+    assert {:error, :capacity} = Authority.connect_control(name, "control-c")
+    assert Authority.snapshot(name).consumed_participant_count == 2
+  end
 end
