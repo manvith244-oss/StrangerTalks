@@ -59,6 +59,26 @@ defmodule StrangertalksNew.Experiments.Hearth.AuthorityTest do
              Authority.room(authority, "alice")
   end
 
+  test "control cohort pairs directly into the same ephemeral room transport", %{authority: authority} do
+    assert {:ok, %{status: :waiting}} = Authority.connect_control(authority, "control-a")
+
+    assert {:ok, %{status: :room_ready, room_id: room_id, participant_ids: participants}} =
+             Authority.connect_control(authority, "control-b")
+
+    assert Enum.sort(participants) == ["control-a", "control-b"]
+
+    assert {:ok,
+            %{
+              room_id: ^room_id,
+              variant: :control,
+              own_anchor: nil,
+              partner_anchor: nil
+            }} = Authority.room(authority, "control-a")
+
+    assert {:ok, %{partner_id: "control-b", turn_number: 1}} =
+             Authority.route_message(authority, "control-a", room_id)
+  end
+
   test "room routing increments structural turns without accepting or retaining message bodies",
        %{authority: authority} do
     room_id = create_room(authority)
