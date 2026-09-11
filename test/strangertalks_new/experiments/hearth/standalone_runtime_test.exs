@@ -58,8 +58,7 @@ defmodule StrangertalksNew.Experiments.Hearth.StandaloneRuntimeTest do
     source_fingerprint = :crypto.hash(:sha256, "h01a-source")
     token = apply(@token, :sign, [participant_id, source_fingerprint])
 
-    assert {:ok,
-            %{participant_id: ^participant_id, source_fingerprint: ^source_fingerprint}} =
+    assert {:ok, %{participant_id: ^participant_id, source_fingerprint: ^source_fingerprint}} =
              apply(@token, :verify_authority, [token])
   end
 
