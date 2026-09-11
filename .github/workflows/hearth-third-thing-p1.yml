@@ -21,6 +21,7 @@ on:
       - 'priv/static/assets/hearth_lab.*'
       - 'test/strangertalks_new/experiments/hearth/**'
       - 'test/strangertalks_new_web/hearth_channel_test.exs'
+      - 'test/strangertalks_new_web/hearth_h01a_single_shot_boundary_test.exs'
       - 'test/strangertalks_new_web/controllers/hearth_lab_controller_test.exs'
       - 'test/strangertalks_new_web/controllers/hearth_standalone_surface_test.exs'
       - '.github/workflows/hearth-third-thing-p1.yml'
@@ -88,7 +89,10 @@ jobs:
         run: mix test test/strangertalks_new/experiments/hearth/
 
       - name: Hearth channel contracts
-        run: mix test test/strangertalks_new_web/hearth_channel_test.exs
+        run: |
+          mix test \
+            test/strangertalks_new_web/hearth_channel_test.exs \
+            test/strangertalks_new_web/hearth_h01a_single_shot_boundary_test.exs
 
       - name: Hearth lab route contract
         run: mix test test/strangertalks_new_web/controllers/hearth_lab_controller_test.exs
