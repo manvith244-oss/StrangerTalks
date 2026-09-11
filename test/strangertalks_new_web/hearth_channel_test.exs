@@ -13,7 +13,10 @@ defmodule StrangertalksNewWeb.HearthChannelTest do
     previous = Application.get_env(:strangertalks_new, :experiment_hearth_enabled, false)
     Application.put_env(:strangertalks_new, :experiment_hearth_enabled, true)
 
-    on_exit(fn -> Application.put_env(:strangertalks_new, :experiment_hearth_enabled, previous) end)
+    on_exit(fn ->
+      Application.put_env(:strangertalks_new, :experiment_hearth_enabled, previous)
+    end)
+
     :ok
   end
 
@@ -28,7 +31,12 @@ defmodule StrangertalksNewWeb.HearthChannelTest do
     Application.put_env(:strangertalks_new, :experiment_hearth_enabled, false)
 
     assert {:error, %{reason: "experiment_disabled"}} =
-             subscribe_and_join(socket, HearthChannel, "hearth:#{participant.participant_id}", %{})
+             subscribe_and_join(
+               socket,
+               HearthChannel,
+               "hearth:#{participant.participant_id}",
+               %{}
+             )
   end
 
   test "authenticated participants submit, receive bridge offers, and require mutual Step In" do
@@ -101,7 +109,9 @@ defmodule StrangertalksNewWeb.HearthChannelTest do
     close(alice_socket)
 
     assert_push "bridge:dissolved", %{bridge_id: ^bridge_id}
-    assert {:error, :no_offer} = Authority.step_in(Authority, participant_id_from_bridge_survivor(), bridge_id)
+
+    assert {:error, :no_offer} =
+             Authority.step_in(Authority, participant_id_from_bridge_survivor(), bridge_id)
   end
 
   test "telemetry never captures raw Hearth contribution or room message text" do
