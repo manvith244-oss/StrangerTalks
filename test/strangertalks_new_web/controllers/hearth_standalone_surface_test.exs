@@ -7,7 +7,8 @@ defmodule StrangertalksNewWeb.HearthStandaloneSurfaceTest do
     previous_standalone =
       Application.get_env(:strangertalks_new, :experiment_hearth_standalone, :missing)
 
-    previous_enabled = Application.get_env(:strangertalks_new, :experiment_hearth_enabled, :missing)
+    previous_enabled =
+      Application.get_env(:strangertalks_new, :experiment_hearth_enabled, :missing)
 
     on_exit(fn ->
       restore_env(:experiment_hearth_standalone, previous_standalone)
