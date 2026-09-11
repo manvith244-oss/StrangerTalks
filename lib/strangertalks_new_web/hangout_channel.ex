@@ -242,8 +242,17 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     else
       case Map.get(socket.assigns, :hangout_room_id) do
         room_id when is_binary(room_id) ->
-          _ = PresenceAuthority.disconnect_if_last(room_id, socket.assigns.participant_id)
-          :ok
+          case PresenceAuthority.disconnect_if_last(room_id, socket.assigns.participant_id) do
+            {:error, :presence_authority_unavailable} ->
+              # PresenceAuthority and Endpoint share a rest-for-one failure domain.
+              # If authority is unavailable while this channel is terminating, all
+              # sibling transports are being torn down too, so fail durable presence closed.
+              _ = RoomServer.disconnect(room_id, socket.assigns.participant_id)
+              :ok
+
+            _result ->
+              :ok
+          end
 
         _ ->
           :ok
