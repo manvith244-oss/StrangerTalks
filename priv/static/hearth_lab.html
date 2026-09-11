@@ -11,7 +11,15 @@
     <main class="lab-shell" aria-live="polite">
       <header class="lab-header"><strong>StrangerTalks</strong><span>Prototype 1</span></header>
 
-      <section id="hearth-screen" class="lab-screen">
+      <section id="control-screen" class="lab-screen" hidden>
+        <p class="eyebrow">Talk</p>
+        <h1>Talk to a stranger.</h1>
+        <p class="status">No profile. No prompt.</p>
+        <button id="control-connect" type="button">Connect</button>
+        <p id="control-status" class="status"></p>
+      </section>
+
+      <section id="hearth-screen" class="lab-screen" hidden>
         <p class="eyebrow">The Hearth</p>
         <h1>What did you buy thinking, “I’m definitely using this,” and then barely touched?</h1>
         <form id="hearth-form">
@@ -38,7 +46,7 @@
       </section>
 
       <section id="room-screen" class="lab-screen" hidden>
-        <div class="room-head"><div class="room-anchor"><span id="room-own-anchor"></span><span aria-hidden="true">—</span><span id="room-partner-anchor"></span></div><button id="leave-room" type="button" class="secondary">Leave</button></div>
+        <div class="room-head"><div id="room-anchor" class="room-anchor"><span id="room-own-anchor"></span><span aria-hidden="true">—</span><span id="room-partner-anchor"></span></div><button id="leave-room" type="button" class="secondary">Leave</button></div>
         <ol id="messages" class="messages" aria-live="polite"></ol>
         <form id="message-form" class="message-form"><label class="sr-only" for="message-input">Message</label><input id="message-input" autocomplete="off" placeholder="Say something…" required><button type="submit">Send</button></form>
       </section>
