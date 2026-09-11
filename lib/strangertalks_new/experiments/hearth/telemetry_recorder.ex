@@ -50,6 +50,8 @@ defmodule StrangertalksNew.Experiments.Hearth.TelemetryRecorder do
 
   @impl true
   def init(_opts) do
+    Process.flag(:trap_exit, true)
+
     case :telemetry.attach_many(@handler_id, @events, &__MODULE__.handle_event/4, nil) do
       :ok -> {:ok, %{handler_id: @handler_id}}
       {:error, :already_exists} -> {:stop, :telemetry_handler_already_attached}
