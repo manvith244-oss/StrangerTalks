@@ -37,6 +37,7 @@ defmodule StrangertalksNew.Experiments.Hearth.TelemetryRecorder do
   @variants ~w(control treatment)
   @room_end_reasons ~w(explicit_leave disconnect)
   @feedback_reasons ~w(ran_out one_sided good_chat uncomfortable passing_through)
+  @reasons @room_end_reasons ++ @feedback_reasons
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -95,8 +96,7 @@ defmodule StrangertalksNew.Experiments.Hearth.TelemetryRecorder do
   defp sanitize(:reason, value) when is_atom(value),
     do: sanitize(:reason, Atom.to_string(value))
 
-  defp sanitize(:reason, value) when value in @room_end_reasons ++ @feedback_reasons,
-    do: {:ok, value}
+  defp sanitize(:reason, value) when value in @reasons, do: {:ok, value}
 
   defp sanitize(key, value) when key in [:room_id, :bridge_id] and is_binary(value) do
     case Ecto.UUID.cast(value) do
