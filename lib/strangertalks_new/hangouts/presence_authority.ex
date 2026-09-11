@@ -20,7 +20,9 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   def register(room_id, participant_id, lease_id)
       when is_binary(room_id) and is_binary(participant_id) and is_binary(lease_id) do
-    case registry_call(fn -> Registry.register(@registry, key(room_id, participant_id), lease_id) end) do
+    case registry_call(fn ->
+           Registry.register(@registry, key(room_id, participant_id), lease_id)
+         end) do
       {:ok, {:ok, _owner}} -> :ok
       {:ok, {:error, {:already_registered, _owner}}} -> {:error, :presence_already_registered}
       {:error, :registry_unavailable} -> {:error, :presence_authority_unavailable}
