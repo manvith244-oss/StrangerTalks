@@ -79,18 +79,44 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
     end)
   end
 
-  test "stale disconnect cannot mark a participant disconnected while a channel is registered" do
+  test "replacement join racing an older termination stays under one serialized authority" do
+    Process.flag(:trap_exit, true)
     {room, [participant | _]} = active_room!()
 
-    assert {:ok, _snapshot, socket} = join_hangout(participant, room.room_id)
-    assert PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 1
+    authority_pid = Process.whereis(PresenceAuthority)
+    assert is_pid(authority_pid)
 
-    assert {:ok, _snapshot} = RoomServer.disconnect(room.room_id, participant.participant_id)
-    assert membership!(room.room_id, participant.participant_id).status == :ACTIVE
-    assert membership!(room.room_id, participant.participant_id).disconnect_count == 0
+    assert {:ok, _snapshot, first_socket} = join_hangout(participant, room.room_id)
 
-    leave_ref = leave(socket)
-    assert_reply leave_ref, :ok
+    final_socket =
+      Enum.reduce(1..8, first_socket, fn _iteration, older_socket ->
+        leave_task =
+          Task.async(fn ->
+            leave_ref = leave(older_socket)
+            assert_reply leave_ref, :ok
+            :ok
+          end)
+
+        assert {:ok, _snapshot, replacement_socket} =
+                 join_hangout(participant, room.room_id)
+
+        assert :ok = Task.await(leave_task)
+
+        eventually(fn ->
+          membership!(room.room_id, participant.participant_id).status == :ACTIVE and
+            PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 1
+        end)
+
+        replacement_socket
+      end)
+
+    final_leave = leave(final_socket)
+    assert_reply final_leave, :ok
+
+    eventually(fn ->
+      membership!(room.room_id, participant.participant_id).status == :DISCONNECTED and
+        PresenceAuthority.live_channel_count(room.room_id, participant.participant_id) == 0
+    end)
   end
 
   test "presence authority loss tears down live channels and fails durable presence closed" do
