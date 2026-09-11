@@ -49,7 +49,10 @@ defmodule StrangertalksNew.Hangouts.PresenceObserver do
     end
   end
 
-  def handle_info({:DOWN, ref, :process, pid, _reason}, %{registry_ref: ref, registry_pid: pid} = state) do
+  def handle_info(
+        {:DOWN, ref, :process, pid, _reason},
+        %{registry_ref: ref, registry_pid: pid} = state
+      ) do
     # Registry and Endpoint share a rest-for-one failure domain. Registry loss
     # means every tracked transport registration is invalid and the Endpoint is
     # being restarted, so fail closed for every participant we knew was live.
