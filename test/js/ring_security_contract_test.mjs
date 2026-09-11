@@ -5,17 +5,17 @@ import test from "node:test"
 import {CALL_STATUS, StrangerTalksRing} from "../../priv/static/assets/live_call.mjs"
 
 const forbiddenCapabilities = [
-  "createAnalyser(",
+  "createAnalyser",
   "AnalyserNode",
-  "getByteFrequencyData(",
-  "getByteTimeDomainData(",
-  "getFloatFrequencyData(",
-  "getFloatTimeDomainData(",
+  "getByteFrequencyData",
+  "getByteTimeDomainData",
+  "getFloatFrequencyData",
+  "getFloatTimeDomainData",
   "audioLevel",
   "totalAudioEnergy",
   "AudioWorklet",
   "audioWorklet",
-  "createScriptProcessor(",
+  "createScriptProcessor",
   "onaudioprocess"
 ]
 
@@ -51,8 +51,23 @@ function walkFiles(root) {
   return output
 }
 
+function foldStaticStringConcats(source) {
+  let current = source
+  const staticConcat = /(["'])([A-Za-z0-9_$]+)\1\s*\+\s*(["'])([A-Za-z0-9_$]+)\3/g
+
+  while (true) {
+    const next = current.replace(staticConcat, (_match, _leftQuote, left, _rightQuote, right) =>
+      JSON.stringify(left + right)
+    )
+
+    if (next === current) return current
+    current = next
+  }
+}
+
 function sourceHasAmplitudeCapability(source) {
-  return forbiddenCapabilities.some((capability) => source.includes(capability))
+  const normalized = foldStaticStringConcats(source)
+  return forbiddenCapabilities.some((capability) => normalized.includes(capability))
 }
 
 test("Ring accepts only authoritative call state and exposes no amplitude input surface", () => {
