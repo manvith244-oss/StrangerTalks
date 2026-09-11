@@ -25,7 +25,9 @@ defmodule StrangertalksNewWeb.HearthH01aSingleShotBoundaryTest do
 
     first_ref = push(socket, "hearth:submit", %{"contribution" => "Air fryer"})
     assert_reply first_ref, :ok, %{status: "waiting"}
-    assert {:ok, %{status: :waiting_removed}} = Authority.disconnect(Authority, participant.participant_id)
+
+    assert {:ok, %{status: :waiting_removed}} =
+             Authority.disconnect(Authority, participant.participant_id)
 
     retry_ref = push(socket, "hearth:submit", %{"contribution" => "Kindle"})
     assert_reply retry_ref, :error, %{reason: "already_participated"}
@@ -37,7 +39,9 @@ defmodule StrangertalksNewWeb.HearthH01aSingleShotBoundaryTest do
 
     first_ref = push(socket, "control:connect", %{})
     assert_reply first_ref, :ok, %{status: "waiting"}
-    assert {:ok, %{status: :waiting_removed}} = Authority.disconnect(Authority, participant.participant_id)
+
+    assert {:ok, %{status: :waiting_removed}} =
+             Authority.disconnect(Authority, participant.participant_id)
 
     retry_ref = push(socket, "control:connect", %{})
     assert_reply retry_ref, :error, %{reason: "already_participated"}
