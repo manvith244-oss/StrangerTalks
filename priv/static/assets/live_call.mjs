@@ -1489,28 +1489,24 @@ async handleIceFailure() {
   }
 }
 
-// --- StrangerTalks Ring Live Presence Component (Defect 3: 1Q-DELIGHT-02) ---
+// --- StrangerTalks Ring: state-only presentation authority ---
 
 export class StrangerTalksRing {
   constructor(element, a11yStatusElement = null) {
     this.element = element
     this.a11yStatus = a11yStatusElement
     this.reactionPulseTimer = null
-    this.localEnergy = 0.0
-    this.peerEnergy = 0.0
     this.state = "idle"
   }
 
-  update(callState, options = {}) {
-    if (!this.element) return
+  update(callState) {
+    if (!this.element || !callState) return
 
-    const { status, selfMuted, peerMuted } = callState
+    const {status, selfMuted, peerMuted} = callState
     const isTerminal = status === CALL_STATUS.TERMINAL || status === CALL_STATUS.IDLE
     const isConnecting = status === CALL_STATUS.CONNECTING || status === CALL_STATUS.PENDING_OUTGOING
     const isActive = status === CALL_STATUS.ACTIVE
-    const isReconnecting = options.reconnecting || false
 
-    // Precedence: Terminal state always wins
     if (isTerminal) {
       this.state = "idle"
       this.element.className = "stranger-call-ring ring-state-idle"
@@ -1522,13 +1518,6 @@ export class StrangerTalksRing {
       return
     }
 
-    if (isReconnecting) {
-      this.state = "reconnecting"
-      this.element.className = "stranger-call-ring ring-state-reconnecting"
-      this.setA11yText("Call Reconnecting")
-      return
-    }
-
     if (isConnecting) {
       this.state = "calling"
       this.element.className = "stranger-call-ring ring-state-calling"
@@ -1537,37 +1526,17 @@ export class StrangerTalksRing {
     }
 
     if (isActive) {
-      let ringClasses = ["stranger-call-ring", "ring-state-active"]
+      const ringClasses = ["stranger-call-ring", "ring-state-active"]
       let a11yMessage = "Call Active"
 
       if (selfMuted) {
         ringClasses.push("ring-state-muted")
         a11yMessage += ", Microphone Muted"
       }
+      if (peerMuted) ringClasses.push("ring-state-peer-muted")
 
-      if (peerMuted) {
-        ringClasses.push("ring-state-peer-muted")
-      }
-
-      // Audio Energy derivation: If human selfMuted = true, local energy cannot imply peer hears speech
-      const effectiveLocalEnergy = selfMuted ? 0.0 : (options.localEnergy || 0.0)
-      const peerEnergy = options.peerEnergy || 0.0
-
-      if (effectiveLocalEnergy > 0.2) {
-        ringClasses.push("ring-state-self-speaking")
-      }
-      if (peerEnergy > 0.2) {
-        ringClasses.push("ring-state-peer-speaking")
-      }
-
-      if (options.hasReactionPulse) {
-        ringClasses.push("ring-reaction-pulse")
-      }
-
+      this.state = "active"
       this.element.className = ringClasses.join(" ")
-      this.element.style.setProperty("--ring-local-energy", effectiveLocalEnergy.toFixed(2))
-      this.element.style.setProperty("--ring-peer-energy", peerEnergy.toFixed(2))
-
       this.setA11yText(a11yMessage)
     }
   }
@@ -1577,9 +1546,7 @@ export class StrangerTalksRing {
     this.element.classList.add("ring-reaction-pulse")
     if (this.reactionPulseTimer) clearTimeout(this.reactionPulseTimer)
     this.reactionPulseTimer = setTimeout(() => {
-      if (this.element) {
-        this.element.classList.remove("ring-reaction-pulse")
-      }
+      if (this.element) this.element.classList.remove("ring-reaction-pulse")
       this.reactionPulseTimer = null
     }, 800)
   }
@@ -1595,8 +1562,6 @@ export class StrangerTalksRing {
       clearTimeout(this.reactionPulseTimer)
       this.reactionPulseTimer = null
     }
-    if (this.element) {
-      this.element.className = "stranger-call-ring ring-state-idle"
-    }
+    if (this.element) this.element.className = "stranger-call-ring ring-state-idle"
   }
 }

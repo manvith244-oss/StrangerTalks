@@ -1,0 +1,88 @@
+name: Ring Authority Security
+
+on:
+  push:
+    branches:
+      - security/ring-authority-reconstruction-2026-09-11
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Exact source SHA to test; defaults to the workflow ref SHA
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ring-authority-${{ github.event_name == 'workflow_dispatch' && inputs.target_sha != '' && inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  ring-authority:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.target_sha != '' && inputs.target_sha || github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Prove checkout identity
+        run: test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Prepare database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Prove server-owned multi-channel presence authority
+        run: mix test test/strangertalks_new_web/hangout_presence_lease_security_test.exs
+      - name: Prove Ring has no speaking-amplitude authority surface
+        run: node --test test/js/ring_security_contract_test.mjs
+      - name: Regression proof for Hangout RoomServer
+        run: mix test test/strangertalks_new/hangouts/room_server_test.exs
+      - name: Regression proof for Hangout channel
+        run: mix test test/strangertalks_new_web/hangout_channel_test.exs
+      - name: Regression proof for live-call behavior
+        run: node --test test/js/live_call_test.mjs
+      - name: Final exact-SHA and clean-tree proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          git diff --check
+          test -z "$(git status --porcelain)"

@@ -102,69 +102,63 @@ jobs:
           mix ecto.migrate --quiet
 
       - name: Hangouts domain contract
-        id: domain-contract
-        continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/domain_contract_test.exs
 
       - name: Hangouts context contract
-        id: context-contract
         if: ${{ hashFiles('test/strangertalks_new/hangouts/context_test.exs') != '' }}
-        continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/context_test.exs
 
       - name: Canonical Team-4 DB security closure
-        id: db-security-contract
-        continue-on-error: true
         run: mix test test/strangertalks_new/team4_db_security_closure_test.exs
 
       - name: Hangouts room authority contract
-        id: room-contract
         if: ${{ hashFiles('test/strangertalks_new/hangouts/room_server_test.exs') != '' }}
-        continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/room_server_test.exs
 
       - name: Hangouts matcher contract
-        id: matcher-contract
         if: ${{ hashFiles('test/strangertalks_new/hangouts/matcher_test.exs') != '' }}
-        continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/matcher_test.exs
 
-      - name: Hangouts channel contract
-        id: channel-contract
+      - name: Hangouts room channel contract
         if: ${{ hashFiles('test/strangertalks_new_web/hangout_channel_test.exs') != '' }}
-        continue-on-error: true
-        run: mix test test/strangertalks_new_web/hangout_channel_test.exs test/strangertalks_new_web/hangout_lobby_channel_test.exs
+        run: mix test test/strangertalks_new_web/hangout_channel_test.exs
+
+      - name: Hangouts lobby channel contract
+        if: ${{ hashFiles('test/strangertalks_new_web/hangout_lobby_channel_test.exs') != '' }}
+        run: mix test test/strangertalks_new_web/hangout_lobby_channel_test.exs
 
       - name: Hangouts shared-content contract
-        id: content-contract
         if: ${{ hashFiles('test/strangertalks_new/hangouts/shared_content_test.exs') != '' }}
-        continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/shared_content_test.exs
 
       - name: Hangouts interaction contract
-        id: interaction-contract
         if: ${{ hashFiles('test/strangertalks_new/hangouts/interactions_test.exs') != '' }}
-        continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/interactions_test.exs
 
       - name: Hangouts safety contract
-        id: safety-contract
         if: ${{ hashFiles('test/strangertalks_new/hangouts/safety_test.exs') != '' }}
-        continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/safety_test.exs
 
       - name: Hangouts telemetry contract
-        id: telemetry-contract
         if: ${{ hashFiles('test/strangertalks_new/hangouts/telemetry_test.exs') != '' }}
-        continue-on-error: true
         run: mix test test/strangertalks_new/hangouts/telemetry_test.exs
 
-      - name: Full precommit regression
-        id: full-precommit
-        continue-on-error: true
+      - name: Precommit compile proof
+        run: mix compile --warnings-as-errors
+
+      - name: Precommit dependency-lock proof
         run: |
-          mix precommit
-          git diff --exit-code
+          mix deps.unlock --unused
+          git diff --exit-code mix.lock
+
+      - name: Precommit format proof
+        run: mix format --check-formatted
+
+      - name: Precommit full Elixir test proof
+        run: mix test
+
+      - name: Precommit clean-tree proof
+        run: git diff --exit-code
 
       - name: Start Phoenix for Hangouts browser proof
         run: |
@@ -195,9 +189,7 @@ jobs:
           exit 1
 
       - name: Hangouts browser contract
-        id: browser-contract
         if: ${{ hashFiles('test/js/hangouts_contract_test.mjs') != '' }}
-        continue-on-error: true
         run: |
           node --test test/js/door_mapping_test.mjs
           node --test test/js/hangouts_contract_test.mjs
@@ -209,19 +201,3 @@ jobs:
           if [ -f /tmp/hangouts-browser.pid ]; then
             kill "$(cat /tmp/hangouts-browser.pid)" 2>/dev/null || true
           fi
-
-      - name: Require Hangouts proofs and precommit
-        if: always()
-        run: |
-          test "${{ steps.domain-contract.outcome }}" = "success"
-          if [ "${{ steps.context-contract.outcome }}" != "skipped" ]; then test "${{ steps.context-contract.outcome }}" = "success"; fi
-          test "${{ steps.db-security-contract.outcome }}" = "success"
-          if [ "${{ steps.room-contract.outcome }}" != "skipped" ]; then test "${{ steps.room-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.matcher-contract.outcome }}" != "skipped" ]; then test "${{ steps.matcher-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.channel-contract.outcome }}" != "skipped" ]; then test "${{ steps.channel-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.content-contract.outcome }}" != "skipped" ]; then test "${{ steps.content-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.interaction-contract.outcome }}" != "skipped" ]; then test "${{ steps.interaction-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.safety-contract.outcome }}" != "skipped" ]; then test "${{ steps.safety-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.telemetry-contract.outcome }}" != "skipped" ]; then test "${{ steps.telemetry-contract.outcome }}" = "success"; fi
-          if [ "${{ steps.browser-contract.outcome }}" != "skipped" ]; then test "${{ steps.browser-contract.outcome }}" = "success"; fi
-          test "${{ steps.full-precommit.outcome }}" = "success"

@@ -2,42 +2,28 @@ defmodule StrangertalksNewWeb.HangoutChannel do
   use Phoenix.Channel, log_join: false, log_handle_in: false
 
   alias StrangertalksNew.Hangouts
-  alias StrangertalksNew.Hangouts.{RoomServer, Safety}
+  alias StrangertalksNew.Hangouts.{PresenceAuthority, RoomServer, Safety}
 
   @pubsub StrangertalksNew.PubSub
 
   @impl true
   def join("hangout:" <> room_id, params, socket) when params == %{} do
     participant_id = socket.assigns.participant_id
+    presence_lease_id = Ecto.UUID.generate()
 
     with {:ok, _uuid} <- Ecto.UUID.cast(room_id),
+         :ok <- PresenceAuthority.register(room_id, participant_id, presence_lease_id),
          {:ok, snapshot} <- RoomServer.reconnect(room_id, participant_id),
          :ok <- Phoenix.PubSub.subscribe(@pubsub, topic(room_id)) do
       {:ok, snapshot,
        socket
        |> assign(:hangout_room_id, room_id)
+       |> assign(:hangout_presence_lease_id, presence_lease_id)
        |> assign(:hangout_explicit_leave, false)}
     else
-      :error ->
-        join_error(:not_hangout_member)
-
-      {:error, :terminal_room} ->
-        join_error(:hangout_ended)
-
-      {:error, reason}
-      when reason in [
-             :membership_not_found,
-             :membership_not_active,
-             :membership_removed,
-             :membership_terminal
-           ] ->
-        join_error(:not_hangout_member)
-
-      {:error, :room_not_found} ->
-        join_error(:not_hangout_member)
-
-      {:error, _reason} ->
-        join_error(:not_hangout_member)
+      error ->
+        _ = PresenceAuthority.unregister(room_id, participant_id)
+        translate_join_error(error)
     end
   end
 
@@ -206,9 +192,14 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     do: safety_error(socket, :invalid_block_intent)
 
   def handle_in("room:leave", params, socket) when params == %{} do
-    case Hangouts.leave_room(room_id(socket), socket.assigns.participant_id) do
+    room_id = room_id(socket)
+    participant_id = socket.assigns.participant_id
+
+    case Hangouts.leave_room(room_id, participant_id) do
       {:ok, _membership} ->
-        {:reply, {:ok, %{status: "left"}}, assign(socket, :hangout_explicit_leave, true)}
+        :ok = PresenceAuthority.revoke_other_channels(room_id, participant_id, self())
+        leaving_socket = assign(socket, :hangout_explicit_leave, true)
+        {:stop, :normal, {:ok, %{status: "left"}}, leaving_socket}
 
       {:error, :membership_not_found} ->
         {:reply, {:error, %{reason: "not_hangout_member"}}, socket}
@@ -231,6 +222,12 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     do: {:reply, {:error, %{reason: "invalid_request"}}, socket}
 
   @impl true
+  def handle_info({:hangout_presence_revoked, room_id, participant_id}, socket)
+      when room_id == socket.assigns.hangout_room_id and
+             participant_id == socket.assigns.participant_id do
+    {:stop, :normal, assign(socket, :hangout_explicit_leave, true)}
+  end
+
   def handle_info({:hangout_event, event, payload}, socket) when is_binary(event) do
     push(socket, event, payload)
     {:noreply, socket}
@@ -245,14 +242,39 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     else
       case Map.get(socket.assigns, :hangout_room_id) do
         room_id when is_binary(room_id) ->
-          _ = RoomServer.disconnect(room_id, socket.assigns.participant_id)
-          :ok
+          case PresenceAuthority.disconnect_if_last(room_id, socket.assigns.participant_id) do
+            {:error, :presence_authority_unavailable} ->
+              # PresenceAuthority and Endpoint share a rest-for-one failure domain.
+              # If authority is unavailable while this channel is terminating, all
+              # sibling transports are being torn down too, so fail durable presence closed.
+              _ = RoomServer.disconnect(room_id, socket.assigns.participant_id)
+              :ok
+
+            _result ->
+              :ok
+          end
 
         _ ->
           :ok
       end
     end
   end
+
+  defp translate_join_error(:error), do: join_error(:not_hangout_member)
+  defp translate_join_error({:error, :terminal_room}), do: join_error(:hangout_ended)
+
+  defp translate_join_error({:error, reason})
+       when reason in [
+              :membership_not_found,
+              :membership_not_active,
+              :membership_removed,
+              :membership_terminal,
+              :room_not_found
+            ],
+       do: join_error(:not_hangout_member)
+
+  defp translate_join_error({:error, _reason}), do: join_error(:not_hangout_member)
+  defp translate_join_error(_error), do: join_error(:not_hangout_member)
 
   defp allowed_keys?(params, allowed) do
     params
