@@ -30,7 +30,9 @@ defmodule StrangertalksNewWeb.HearthLabControllerTest do
     assert response(conn, 404) == "Not Found"
   end
 
-  test "GET /lab/hearth serves only the isolated lab bundle when explicitly enabled", %{conn: conn} do
+  test "GET /lab/hearth serves only the isolated lab bundle when explicitly enabled", %{
+    conn: conn
+  } do
     Application.put_env(:strangertalks_new, :experiment_hearth_enabled, true)
 
     conn = get(conn, "/lab/hearth")
