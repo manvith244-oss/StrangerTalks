@@ -1,5 +1,5 @@
 defmodule StrangertalksNew.Application do
-  # See https://elixir.hexdocs.pm/Application.html
+  # See https://elixir-lang.org/getting-started/mix-otp/supervisor-and-application.html
   # for more information on OTP Applications
   @moduledoc false
 
@@ -31,13 +31,18 @@ defmodule StrangertalksNew.Application do
       StrangertalksNew.QueueEngine.SafetyReceiver,
       StrangertalksNew.ConversationLifecycle.RecoverySweeper,
 
+      # Prototype 1 is intentionally isolated under its own one-for-one supervisor.
+      # The authority is in-memory only and cannot take canonical queue or Hangout
+      # processes down if it crashes.
+      StrangertalksNew.Experiments.Hearth.Supervisor,
+
       # Presence authority and the Phoenix Endpoint deliberately share a
       # rest-for-one failure domain so sockets cannot survive loss of their
       # process-owned presence registrations.
       StrangertalksNewWeb.TransportSupervisor
     ]
 
-    # See https://hexdocs.pm/Supervisor.html
+    # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: StrangertalksNew.Supervisor]
     Supervisor.start_link(children, opts)
