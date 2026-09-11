@@ -9,7 +9,7 @@ defmodule StrangertalksNewWeb.HearthChannel do
   @feedback_reasons ~w(ran_out one_sided good_chat uncomfortable passing_through)
 
   @impl true
-  def join("hearth:" <> participant_id, params, socket) when params == %{} do
+  def join("hearth:" <> participant_id, params, socket) when is_map(params) do
     cond do
       not enabled?() ->
         {:error, %{reason: "experiment_disabled"}}
@@ -18,95 +18,130 @@ defmodule StrangertalksNewWeb.HearthChannel do
         {:error, %{reason: "participant_mismatch"}}
 
       true ->
-        :ok = Phoenix.PubSub.subscribe(@pubsub, topic(participant_id))
-        emit(:hearth_viewed, %{variant: :treatment})
+        with {:ok, variant} <- resolve_variant(params, participant_id) do
+          :ok = Phoenix.PubSub.subscribe(@pubsub, topic(participant_id))
+          emit(:hearth_viewed, %{variant: variant})
+          emit(:experiment_assigned, %{variant: variant})
 
-        socket =
-          socket
-          |> assign(:hearth_participant_id, participant_id)
-          |> assign(:hearth_room_started_at, nil)
-          |> assign(:hearth_first_message_sent, false)
+          socket =
+            socket
+            |> assign(:hearth_participant_id, participant_id)
+            |> assign(:hearth_variant, variant)
+            |> assign(:hearth_room_started_at, nil)
+            |> assign(:hearth_first_message_sent, false)
 
-        {:ok, %{status: "hearth_viewed", recent: Authority.recent(Authority, 3)}, socket}
+          {:ok, join_reply(variant), socket}
+        else
+          _ -> {:error, %{reason: "invalid_variant"}}
+        end
     end
   end
 
-  def join("hearth:" <> _participant_id, _params, _socket),
-    do: {:error, %{reason: "invalid_request"}}
-
   @impl true
-  def handle_in("hearth:submit", %{"contribution" => contribution} = params, socket)
-      when map_size(params) == 1 do
-    with :ok <- require_enabled(),
-         {:ok, result} <- Authority.submit(Authority, socket.assigns.participant_id, contribution) do
-      emit(:hearth_submitted, %{variant: :treatment})
+  def handle_in("control:connect", params, socket) when params == %{} do
+    if variant(socket) == :control do
+      with :ok <- require_enabled(),
+           {:ok, result} <- Authority.connect_control(Authority, socket.assigns.participant_id) do
+        case result do
+          %{status: :waiting} ->
+            {:reply, {:ok, %{status: "waiting"}}, socket}
 
-      case result do
-        %{status: :waiting} ->
-          {:reply, {:ok, %{status: "waiting"}}, socket}
-
-        %{status: :bridge_offered, bridge_id: bridge_id, partner_id: partner_id} ->
-          emit(:bridge_offered, %{variant: :treatment})
-          notify_offer(socket.assigns.participant_id)
-          notify_offer(partner_id)
-
-          {:reply, {:ok, %{status: "bridge_offered", bridge_id: bridge_id}}, socket}
+          %{status: :room_ready, room_id: room_id, participant_ids: participant_ids} ->
+            notify_room_ready(participant_ids, room_id)
+            emit(:experiment_room_started, %{variant: :control})
+            {:reply, {:ok, %{status: "room_ready", room_id: room_id}}, socket}
+        end
+      else
+        {:error, :capacity} -> {:reply, {:error, %{reason: "capacity"}}, socket}
+        {:error, :already_active} -> {:reply, {:error, %{reason: "already_active"}}, socket}
+        _ -> {:reply, {:error, %{reason: "invalid_request"}}, socket}
       end
     else
-      {:error, :experiment_disabled} ->
-        {:reply, {:error, %{reason: "experiment_disabled"}}, socket}
+      {:reply, {:error, %{reason: "wrong_variant"}}, socket}
+    end
+  end
 
-      {:error, :invalid_contribution} ->
-        {:reply, {:error, %{reason: "invalid_contribution"}}, socket}
+  def handle_in("hearth:submit", %{"contribution" => contribution} = params, socket)
+      when map_size(params) == 1 do
+    if variant(socket) == :treatment do
+      with :ok <- require_enabled(),
+           {:ok, result} <- Authority.submit(Authority, socket.assigns.participant_id, contribution) do
+        emit(:hearth_submitted, %{variant: :treatment})
 
-      {:error, :capacity} ->
-        {:reply, {:error, %{reason: "capacity"}}, socket}
+        case result do
+          %{status: :waiting} ->
+            {:reply, {:ok, %{status: "waiting"}}, socket}
 
-      {:error, :already_active} ->
-        {:reply, {:error, %{reason: "already_active"}}, socket}
+          %{status: :bridge_offered, bridge_id: bridge_id, partner_id: partner_id} ->
+            emit(:bridge_offered, %{variant: :treatment})
+            notify_offer(socket.assigns.participant_id)
+            notify_offer(partner_id)
 
-      _ ->
-        {:reply, {:error, %{reason: "invalid_request"}}, socket}
+            {:reply, {:ok, %{status: "bridge_offered", bridge_id: bridge_id}}, socket}
+        end
+      else
+        {:error, :experiment_disabled} ->
+          {:reply, {:error, %{reason: "experiment_disabled"}}, socket}
+
+        {:error, :invalid_contribution} ->
+          {:reply, {:error, %{reason: "invalid_contribution"}}, socket}
+
+        {:error, :capacity} ->
+          {:reply, {:error, %{reason: "capacity"}}, socket}
+
+        {:error, :already_active} ->
+          {:reply, {:error, %{reason: "already_active"}}, socket}
+
+        _ ->
+          {:reply, {:error, %{reason: "invalid_request"}}, socket}
+      end
+    else
+      {:reply, {:error, %{reason: "wrong_variant"}}, socket}
     end
   end
 
   def handle_in("bridge:step_in", %{"bridge_id" => bridge_id} = params, socket)
       when map_size(params) == 1 and is_binary(bridge_id) do
-    with :ok <- require_enabled(),
-         {:ok, result} <- Authority.step_in(Authority, socket.assigns.participant_id, bridge_id) do
-      emit(:bridge_step_in, %{variant: :treatment})
+    if variant(socket) == :treatment do
+      with :ok <- require_enabled(),
+           {:ok, result} <- Authority.step_in(Authority, socket.assigns.participant_id, bridge_id) do
+        emit(:bridge_step_in, %{variant: :treatment})
 
-      case result do
-        %{status: :waiting_for_partner} ->
-          {:reply, {:ok, %{status: "waiting_for_partner"}}, socket}
+        case result do
+          %{status: :waiting_for_partner} ->
+            {:reply, {:ok, %{status: "waiting_for_partner"}}, socket}
 
-        %{status: :room_ready, room_id: room_id, participant_ids: participant_ids} ->
-          Enum.each(participant_ids, fn participant_id ->
-            Phoenix.PubSub.broadcast(@pubsub, topic(participant_id), {:room_ready, room_id})
-          end)
+          %{status: :room_ready, room_id: room_id, participant_ids: participant_ids} ->
+            notify_room_ready(participant_ids, room_id)
+            emit(:experiment_room_started, %{variant: :treatment})
+            {:reply, {:ok, %{status: "room_ready", room_id: room_id}}, socket}
+        end
+      else
+        {:error, :experiment_disabled} ->
+          {:reply, {:error, %{reason: "experiment_disabled"}}, socket}
 
-          emit(:experiment_room_started, %{variant: :treatment})
-          {:reply, {:ok, %{status: "room_ready", room_id: room_id}}, socket}
+        _ ->
+          {:reply, {:error, %{reason: "no_offer"}}, socket}
       end
     else
-      {:error, :experiment_disabled} ->
-        {:reply, {:error, %{reason: "experiment_disabled"}}, socket}
-
-      _ ->
-        {:reply, {:error, %{reason: "no_offer"}}, socket}
+      {:reply, {:error, %{reason: "wrong_variant"}}, socket}
     end
   end
 
   def handle_in("bridge:pass", %{"bridge_id" => bridge_id} = params, socket)
       when map_size(params) == 1 and is_binary(bridge_id) do
-    case Authority.pass(Authority, socket.assigns.participant_id, bridge_id) do
-      {:ok, %{status: :bridge_dissolved, partner_id: partner_id}} ->
-        notify_bridge_dissolved(partner_id, bridge_id)
-        emit(:bridge_passed, %{variant: :treatment})
-        {:reply, {:ok, %{status: "hearth_viewed"}}, socket}
+    if variant(socket) == :treatment do
+      case Authority.pass(Authority, socket.assigns.participant_id, bridge_id) do
+        {:ok, %{status: :bridge_dissolved, partner_id: partner_id}} ->
+          notify_bridge_dissolved(partner_id, bridge_id)
+          emit(:bridge_passed, %{variant: :treatment})
+          {:reply, {:ok, %{status: "hearth_viewed"}}, socket}
 
-      _ ->
-        {:reply, {:ok, %{status: "hearth_viewed"}}, socket}
+        _ ->
+          {:reply, {:ok, %{status: "hearth_viewed"}}, socket}
+      end
+    else
+      {:reply, {:error, %{reason: "wrong_variant"}}, socket}
     end
   end
 
@@ -119,15 +154,16 @@ defmodule StrangertalksNewWeb.HearthChannel do
     with :ok <- require_enabled(),
          :ok <- validate_message_content(content),
          :ok <- rate_limit(socket, :message_send, 20, 10_000),
-         {:ok, %{partner_id: partner_id, turn_number: turn_number}} <-
-           Authority.route_message(Authority, socket.assigns.participant_id, room_id) do
+         {:ok, %{partner_id: partner_id, turn_number: turn_number, variant: room_variant}} <-
+           Authority.route_message(Authority, socket.assigns.participant_id, room_id),
+         true <- room_variant == variant(socket) do
       Phoenix.PubSub.broadcast(
         @pubsub,
         topic(partner_id),
         {:room_message, %{room_id: room_id, content: content, turn_number: turn_number}}
       )
 
-      emit(:experiment_turn, %{variant: :treatment, turn_number: turn_number})
+      emit(:experiment_turn, %{variant: room_variant, turn_number: turn_number})
       socket = maybe_emit_first_message(socket)
       {:reply, {:ok, %{status: "delivered", turn_number: turn_number}}, socket}
     else
@@ -166,7 +202,7 @@ defmodule StrangertalksNewWeb.HearthChannel do
 
   def handle_in("experiment:feedback", %{"reason" => reason} = params, socket)
       when map_size(params) == 1 and reason in @feedback_reasons do
-    emit(:experiment_exit_reason, %{variant: :treatment, reason: reason})
+    emit(:experiment_exit_reason, %{variant: variant(socket), reason: reason})
     {:reply, {:ok, %{status: "recorded"}}, socket}
   end
 
@@ -180,13 +216,16 @@ defmodule StrangertalksNewWeb.HearthChannel do
   end
 
   def handle_info({:hearth_bridge_expired, bridge_id}, socket) do
-    emit(:bridge_expired, %{variant: :treatment})
-    push(socket, "bridge:dissolved", %{bridge_id: bridge_id, status: "hearth_viewed"})
+    if variant(socket) == :treatment do
+      emit(:bridge_expired, %{variant: :treatment})
+      push(socket, "bridge:dissolved", %{bridge_id: bridge_id, status: "hearth_viewed"})
+    end
+
     {:noreply, socket}
   end
 
   def handle_info(:hearth_waiting_expired, socket) do
-    push(socket, "hearth:reset", %{status: "hearth_viewed"})
+    push(socket, "experiment:reset", %{status: "ready", variant: Atom.to_string(variant(socket))})
     {:noreply, socket}
   end
 
@@ -198,9 +237,10 @@ defmodule StrangertalksNewWeb.HearthChannel do
   def handle_info({:room_ready, room_id}, socket) do
     socket =
       case Authority.room(Authority, socket.assigns.participant_id) do
-        {:ok, room} ->
+        {:ok, room} when room.variant == variant(socket) ->
           push(socket, "room:ready", %{
             room_id: room_id,
+            variant: Atom.to_string(room.variant),
             own_anchor: room.own_anchor,
             partner_anchor: room.partner_anchor
           })
@@ -246,8 +286,30 @@ defmodule StrangertalksNewWeb.HearthChannel do
       System.get_env("EXPERIMENT_HEARTH_ENABLED", "false") in ["true", "1"]
   end
 
+  def assigned_variant(participant_id) when is_binary(participant_id) do
+    if :erlang.phash2(participant_id, 2) == 0, do: :control, else: :treatment
+  end
+
+  defp resolve_variant(%{}, _participant_id), do: {:ok, :treatment}
+  defp resolve_variant(%{"variant" => "auto"}, participant_id), do: {:ok, assigned_variant(participant_id)}
+  defp resolve_variant(_params, _participant_id), do: {:error, :invalid_variant}
+
+  defp join_reply(:treatment) do
+    %{status: "hearth_viewed", variant: "treatment", recent: Authority.recent(Authority, 3)}
+  end
+
+  defp join_reply(:control), do: %{status: "control_ready", variant: "control"}
+
+  defp variant(socket), do: socket.assigns.hearth_variant
+
   defp require_enabled do
     if enabled?(), do: :ok, else: {:error, :experiment_disabled}
+  end
+
+  defp notify_room_ready(participant_ids, room_id) do
+    Enum.each(participant_ids, fn participant_id ->
+      Phoenix.PubSub.broadcast(@pubsub, topic(participant_id), {:room_ready, room_id})
+    end)
   end
 
   defp notify_offer(participant_id) do
@@ -288,7 +350,7 @@ defmodule StrangertalksNewWeb.HearthChannel do
   end
 
   defp notify_disconnect_effect({:ok, %{status: :bridge_dissolved} = effect}) do
-    notify_bridge_dissolved(effect.partner_id, Map.get(effect, :bridge_id))
+    notify_bridge_dissolved(effect.partner_id, effect.bridge_id)
   end
 
   defp notify_disconnect_effect({:ok, %{status: :room_dissolved} = effect}) do
@@ -327,7 +389,7 @@ defmodule StrangertalksNewWeb.HearthChannel do
       :telemetry.execute(
         [:strangertalks_new, :experiment, :hearth, :experiment_first_message],
         %{count: 1, elapsed_ms: elapsed_ms, monotonic_time: System.monotonic_time()},
-        %{variant: :treatment}
+        %{variant: variant(socket)}
       )
     end
 
@@ -349,7 +411,7 @@ defmodule StrangertalksNewWeb.HearthChannel do
         turn_count: effect.turn_count,
         monotonic_time: System.monotonic_time()
       },
-      %{variant: :treatment, reason: reason}
+      %{variant: effect.variant, reason: reason}
     )
   end
 
