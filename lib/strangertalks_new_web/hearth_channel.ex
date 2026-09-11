@@ -54,6 +54,10 @@ defmodule StrangertalksNewWeb.HearthChannel do
       else
         {:error, :capacity} -> {:reply, {:error, %{reason: "capacity"}}, socket}
         {:error, :already_active} -> {:reply, {:error, %{reason: "already_active"}}, socket}
+
+        {:error, :already_participated} ->
+          {:reply, {:error, %{reason: "already_participated"}}, socket}
+
         _ -> {:reply, {:error, %{reason: "invalid_request"}}, socket}
       end
     else
@@ -92,6 +96,9 @@ defmodule StrangertalksNewWeb.HearthChannel do
 
         {:error, :already_active} ->
           {:reply, {:error, %{reason: "already_active"}}, socket}
+
+        {:error, :already_participated} ->
+          {:reply, {:error, %{reason: "already_participated"}}, socket}
 
         _ ->
           {:reply, {:error, %{reason: "invalid_request"}}, socket}
