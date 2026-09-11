@@ -19,6 +19,7 @@ defmodule StrangertalksNewWeb.Router do
     get "/you", PageController, :home
     get "/you/memories", PageController, :home
     get "/you/reflections", PageController, :home
+    get "/lab/hearth", HearthLabController, :show
 
     get "/health/live", HealthController, :live
     get "/health/ready", HealthController, :ready

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="dark">
+    <title>StrangerTalks Hearth Lab</title>
+    <link rel="stylesheet" href="/assets/hearth_lab.css?v=20260911_p1">
+  </head>
+  <body>
+    <main class="lab-shell" aria-live="polite">
+      <header class="lab-header"><strong>StrangerTalks</strong><span>Prototype 1</span></header>
+
+      <section id="control-screen" class="lab-screen" hidden>
+        <p class="eyebrow">Talk</p>
+        <h1>Talk to a stranger.</h1>
+        <p class="status">No profile. No prompt.</p>
+        <button id="control-connect" type="button">Connect</button>
+        <p id="control-status" class="status"></p>
+      </section>
+
+      <section id="hearth-screen" class="lab-screen" hidden>
+        <p class="eyebrow">The Hearth</p>
+        <h1>What did you buy thinking, “I’m definitely using this,” and then barely touched?</h1>
+        <form id="hearth-form">
+          <label for="hearth-input">Name the thing</label>
+          <div class="input-row">
+            <input id="hearth-input" maxlength="100" autocomplete="off" required>
+            <button type="submit">Place it here</button>
+          </div>
+          <p><span id="char-count">0</span>/100</p>
+        </form>
+        <div id="recent-wrap" hidden>
+          <p class="eyebrow">A few things left here recently</p>
+          <ul id="recent-list" class="residue-list"></ul>
+        </div>
+        <p id="hearth-status" class="status">Opening the Hearth…</p>
+      </section>
+
+      <section id="bridge-screen" class="lab-screen" hidden>
+        <p class="eyebrow">Someone else is here</p>
+        <h1>You’re both standing near the same question.</h1>
+        <div class="anchor-pair"><p><span>Them</span><strong id="partner-anchor"></strong></p><p><span>You</span><strong id="own-anchor"></strong></p></div>
+        <div class="actions"><button id="step-in" type="button">Step in</button><button id="pass" type="button" class="secondary">Pass</button></div>
+        <p id="bridge-status" class="status"></p>
+      </section>
+
+      <section id="room-screen" class="lab-screen" hidden>
+        <div class="room-head"><div id="room-anchor" class="room-anchor"><span id="room-own-anchor"></span><span aria-hidden="true">—</span><span id="room-partner-anchor"></span></div><button id="leave-room" type="button" class="secondary">Leave</button></div>
+        <ol id="messages" class="messages" aria-live="polite"></ol>
+        <form id="message-form" class="message-form"><label class="sr-only" for="message-input">Message</label><input id="message-input" autocomplete="off" placeholder="Say something…" required><button type="submit">Send</button></form>
+      </section>
+
+      <section id="feedback-screen" class="lab-screen" hidden>
+        <p class="eyebrow">Conversation ended</p>
+        <h1>Quick context on why you left?</h1>
+        <p>Optional.</p>
+        <div id="feedback-actions" class="feedback-grid">
+          <button data-reason="ran_out">Ran out of things to say</button>
+          <button data-reason="one_sided">Felt one-sided</button>
+          <button data-reason="good_chat">Got what I needed / Good chat</button>
+          <button data-reason="uncomfortable">Uncomfortable / Weird</button>
+          <button data-reason="passing_through">Just passing through</button>
+        </div>
+        <button id="close-feedback" class="secondary">Close</button>
+      </section>
+    </main>
+    <script type="module" src="/assets/hearth_lab.mjs?v=20260911_p1"></script>
+  </body>
+</html>
