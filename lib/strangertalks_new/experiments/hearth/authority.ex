@@ -3,6 +3,7 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
 
   @default_bridge_ttl_ms 20_000
   @default_submission_ttl_ms 120_000
+  @default_max_active_participants 2_000
   @max_recent 3
   @max_contribution 100
 
@@ -32,6 +33,12 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
   def room(server \\ __MODULE__, participant_id),
     do: GenServer.call(server, {:room, participant_id})
 
+  def route_message(server \\ __MODULE__, participant_id, room_id),
+    do: GenServer.call(server, {:route_message, participant_id, room_id})
+
+  def leave_room(server \\ __MODULE__, participant_id, room_id),
+    do: GenServer.call(server, {:leave_room, participant_id, room_id})
+
   def snapshot(server \\ __MODULE__), do: GenServer.call(server, :snapshot)
 
   @impl true
@@ -46,7 +53,10 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
        participant_room: %{},
        recent: [],
        bridge_ttl_ms: Keyword.get(opts, :bridge_ttl_ms, @default_bridge_ttl_ms),
-       submission_ttl_ms: Keyword.get(opts, :submission_ttl_ms, @default_submission_ttl_ms)
+       submission_ttl_ms: Keyword.get(opts, :submission_ttl_ms, @default_submission_ttl_ms),
+       max_active_participants:
+         Keyword.get(opts, :max_active_participants, @default_max_active_participants),
+       notifier: Keyword.get(opts, :notifier)
      }}
   end
 
@@ -55,49 +65,61 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
     state = prune(state)
 
     with true <- valid_participant?(participant_id),
-         {:ok, contribution} <- normalize_contribution(contribution) do
-      state = remove_participant(state, participant_id)
+         {:ok, contribution} <- normalize_contribution(contribution),
+         false <- active_participant?(state, participant_id),
+         true <- active_participant_count(state) < state.max_active_participants do
       now = now_ms()
       state = %{state | recent: Enum.take([contribution | state.recent], @max_recent)}
 
-      case next_waiting(state, participant_id) do
+      case next_waiting(state) do
         nil ->
-          waiting = Map.put(state.waiting, participant_id, %{contribution: contribution, at: now})
-          order = state.order |> Enum.reject(&(&1 == participant_id)) |> Kernel.++([participant_id])
-          {:reply, {:ok, %{status: :waiting}}, %{state | waiting: waiting, order: order}}
+          token = make_ref()
+          Process.send_after(self(), {:expire_waiting, participant_id, token}, state.submission_ttl_ms)
+
+          waiting =
+            Map.put(state.waiting, participant_id, %{
+              contribution: contribution,
+              at: now,
+              token: token
+            })
+
+          {:reply, {:ok, %{status: :waiting}},
+           %{state | waiting: waiting, order: state.order ++ [participant_id]}}
 
         partner_id ->
           partner = Map.fetch!(state.waiting, partner_id)
           bridge_id = Ecto.UUID.generate()
+          expires_at = now + state.bridge_ttl_ms
+          Process.send_after(self(), {:expire_bridge, bridge_id}, state.bridge_ttl_ms)
 
           bridge = %{
             id: bridge_id,
             participants: [partner_id, participant_id],
             contributions: %{partner_id => partner.contribution, participant_id => contribution},
             stepped_in: MapSet.new(),
-            expires_at: now + state.bridge_ttl_ms
+            expires_at: expires_at
           }
 
-          state = %{
+          state =
             state
-            | waiting: Map.delete(state.waiting, partner_id),
-              order: Enum.reject(state.order, &(&1 == partner_id)),
-              bridges: Map.put(state.bridges, bridge_id, bridge),
-              participant_bridge:
-                state.participant_bridge
-                |> Map.put(partner_id, bridge_id)
-                |> Map.put(participant_id, bridge_id)
-          }
+            |> remove_waiting_only(partner_id)
+            |> put_in([:bridges, bridge_id], bridge)
+            |> put_in([:participant_bridge, partner_id], bridge_id)
+            |> put_in([:participant_bridge, participant_id], bridge_id)
 
           {:reply,
            {:ok,
             %{
               status: :bridge_offered,
               bridge_id: bridge_id,
-              partner_id: partner_id
+              partner_id: partner_id,
+              expires_at: expires_at
             }}, state}
       end
     else
+      {:error, :invalid_contribution} -> {:reply, {:error, :invalid_contribution}, state}
+      false -> {:reply, {:error, :capacity}, state}
+      true -> {:reply, {:error, :already_active}, state}
       _ -> {:reply, {:error, :invalid_contribution}, state}
     end
   end
@@ -116,8 +138,7 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
         {:reply, {:error, :no_offer}, state}
 
       bridge ->
-        [a, b] = bridge.participants
-        partner_id = if a == participant_id, do: b, else: a
+        partner_id = partner_id(bridge.participants, participant_id)
 
         {:reply,
          {:ok,
@@ -131,13 +152,9 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
   end
 
   def handle_call({:step_in, participant_id, bridge_id}, _from, state) do
-    now = now_ms()
+    state = prune(state)
 
     case Map.get(state.bridges, bridge_id) do
-      %{expires_at: expires_at} when expires_at <= now ->
-        state = dissolve_bridge(state, bridge_id)
-        {:reply, {:error, :expired}, state}
-
       %{participants: participants} = bridge ->
         if participant_id in participants do
           stepped_in = MapSet.put(bridge.stepped_in, participant_id)
@@ -151,7 +168,8 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
               id: room_id,
               participants: bridge.participants,
               contributions: bridge.contributions,
-              started_at: now
+              started_at: now_ms(),
+              turn_count: 0
             }
 
             state =
@@ -173,30 +191,49 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
              put_in(state, [:bridges, bridge_id], bridge)}
           end
         else
-          {:reply, {:error, :no_offer}, prune(state)}
+          {:reply, {:error, :no_offer}, state}
         end
 
       _ ->
-        {:reply, {:error, :no_offer}, prune(state)}
+        {:reply, {:error, :no_offer}, state}
     end
   end
 
   def handle_call({:pass, participant_id, bridge_id}, _from, state) do
     case Map.get(state.bridges, bridge_id) do
-      %{participants: participants} ->
+      %{participants: participants} when is_list(participants) ->
         if participant_id in participants do
-          {:reply, :ok, dissolve_bridge(state, bridge_id)}
+          partner = partner_id(participants, participant_id)
+          {:reply, {:ok, %{status: :bridge_dissolved, partner_id: partner}},
+           dissolve_bridge(state, bridge_id)}
         else
-          {:reply, :ok, state}
+          {:reply, {:ok, %{status: :none}}, state}
         end
 
       _ ->
-        {:reply, :ok, state}
+        {:reply, {:ok, %{status: :none}}, state}
     end
   end
 
   def handle_call({:disconnect, participant_id}, _from, state) do
-    {:reply, :ok, remove_participant(state, participant_id)}
+    cond do
+      room_id = Map.get(state.participant_room, participant_id) ->
+        {effect, state} = dissolve_room_with_effect(state, room_id, participant_id)
+        {:reply, {:ok, effect}, state}
+
+      bridge_id = Map.get(state.participant_bridge, participant_id) ->
+        bridge = Map.fetch!(state.bridges, bridge_id)
+        partner = partner_id(bridge.participants, participant_id)
+
+        {:reply, {:ok, %{status: :bridge_dissolved, partner_id: partner}},
+         dissolve_bridge(state, bridge_id)}
+
+      Map.has_key?(state.waiting, participant_id) ->
+        {:reply, {:ok, %{status: :waiting_removed}}, remove_waiting_only(state, participant_id)}
+
+      true ->
+        {:reply, {:ok, %{status: :none}}, state}
+    end
   end
 
   def handle_call({:room, participant_id}, _from, state) do
@@ -206,16 +243,49 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
 
       room_id ->
         room = Map.fetch!(state.rooms, room_id)
-        [a, b] = room.participants
-        partner_id = if a == participant_id, do: b, else: a
+        partner = partner_id(room.participants, participant_id)
 
         {:reply,
          {:ok,
           %{
             room_id: room_id,
             own_anchor: room.contributions[participant_id],
-            partner_anchor: room.contributions[partner_id]
+            partner_anchor: room.contributions[partner],
+            turn_count: room.turn_count
           }}, state}
+    end
+  end
+
+  def handle_call({:route_message, participant_id, room_id}, _from, state) do
+    case Map.get(state.rooms, room_id) do
+      %{participants: participants} = room ->
+        if participant_id in participants and Map.get(state.participant_room, participant_id) == room_id do
+          partner = partner_id(participants, participant_id)
+          turn_number = room.turn_count + 1
+          state = put_in(state, [:rooms, room_id, :turn_count], turn_number)
+
+          {:reply, {:ok, %{partner_id: partner, turn_number: turn_number}}, state}
+        else
+          {:reply, {:error, :no_room}, state}
+        end
+
+      _ ->
+        {:reply, {:error, :no_room}, state}
+    end
+  end
+
+  def handle_call({:leave_room, participant_id, room_id}, _from, state) do
+    case Map.get(state.rooms, room_id) do
+      %{participants: participants} when is_list(participants) ->
+        if participant_id in participants and Map.get(state.participant_room, participant_id) == room_id do
+          {effect, state} = dissolve_room_with_effect(state, room_id, participant_id)
+          {:reply, {:ok, effect}, state}
+        else
+          {:reply, {:error, :no_room}, state}
+        end
+
+      _ ->
+        {:reply, {:error, :no_room}, state}
     end
   end
 
@@ -226,10 +296,35 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
       waiting_count: map_size(state.waiting),
       bridge_count: map_size(state.bridges),
       room_count: map_size(state.rooms),
-      recent_count: length(state.recent)
+      recent_count: length(state.recent),
+      active_participant_count: active_participant_count(state),
+      turn_count: Enum.reduce(state.rooms, 0, fn {_id, room}, acc -> acc + room.turn_count end)
     }
 
     {:reply, snapshot, state}
+  end
+
+  @impl true
+  def handle_info({:expire_waiting, participant_id, token}, state) do
+    case Map.get(state.waiting, participant_id) do
+      %{token: ^token} ->
+        notify(state.notifier, {:hearth_waiting_expired, participant_id})
+        {:noreply, remove_waiting_only(state, participant_id)}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_info({:expire_bridge, bridge_id}, state) do
+    case Map.get(state.bridges, bridge_id) do
+      %{participants: participants} ->
+        notify(state.notifier, {:hearth_bridge_expired, bridge_id, participants})
+        {:noreply, dissolve_bridge(state, bridge_id)}
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   defp normalize_contribution(value) when is_binary(value) do
@@ -243,8 +338,8 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
   defp normalize_contribution(_), do: {:error, :invalid_contribution}
   defp valid_participant?(value), do: is_binary(value) and value != ""
 
-  defp next_waiting(state, participant_id) do
-    Enum.find(state.order, fn id -> id != participant_id and Map.has_key?(state.waiting, id) end)
+  defp next_waiting(state) do
+    Enum.find(state.order, &Map.has_key?(state.waiting, &1))
   end
 
   defp bridge_for(state, participant_id) do
@@ -256,24 +351,18 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
     end
   end
 
-  defp remove_participant(state, participant_id) do
-    state = %{
-      state
-      | waiting: Map.delete(state.waiting, participant_id),
-        order: Enum.reject(state.order, &(&1 == participant_id))
-    }
-
-    state =
-      case Map.get(state.participant_bridge, participant_id) do
-        nil -> state
-        bridge_id -> dissolve_bridge(state, bridge_id)
-      end
-
-    case Map.get(state.participant_room, participant_id) do
-      nil -> state
-      room_id -> dissolve_room(state, room_id)
-    end
+  defp active_participant?(state, participant_id) do
+    Map.has_key?(state.waiting, participant_id) or
+      Map.has_key?(state.participant_bridge, participant_id) or
+      Map.has_key?(state.participant_room, participant_id)
   end
+
+  defp active_participant_count(state) do
+    map_size(state.waiting) + map_size(state.participant_bridge) + map_size(state.participant_room)
+  end
+
+  defp partner_id([a, b], participant_id) when participant_id == a, do: b
+  defp partner_id([a, b], participant_id) when participant_id == b, do: a
 
   defp dissolve_bridge(state, bridge_id) do
     case Map.pop(state.bridges, bridge_id) do
@@ -284,6 +373,22 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
         participant_bridge = Enum.reduce(participants, state.participant_bridge, &Map.delete(&2, &1))
         %{state | bridges: bridges, participant_bridge: participant_bridge}
     end
+  end
+
+  defp dissolve_room_with_effect(state, room_id, participant_id) do
+    room = Map.fetch!(state.rooms, room_id)
+    partner = partner_id(room.participants, participant_id)
+    duration_ms = max(now_ms() - room.started_at, 0)
+
+    effect = %{
+      status: :room_dissolved,
+      room_id: room_id,
+      partner_id: partner,
+      turn_count: room.turn_count,
+      duration_ms: duration_ms
+    }
+
+    {effect, dissolve_room(state, room_id)}
   end
 
   defp dissolve_room(state, room_id) do
@@ -321,6 +426,13 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
       | waiting: Map.delete(state.waiting, participant_id),
         order: Enum.reject(state.order, &(&1 == participant_id))
     }
+  end
+
+  defp notify(nil, _event), do: :ok
+  defp notify(pid, event) when is_pid(pid), do: send(pid, event)
+
+  defp notify(module, event) when is_atom(module) do
+    if function_exported?(module, :notify, 1), do: module.notify(event), else: :ok
   end
 
   defp now_ms, do: System.monotonic_time(:millisecond)
