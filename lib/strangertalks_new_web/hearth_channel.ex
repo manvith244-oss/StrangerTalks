@@ -252,11 +252,17 @@ defmodule StrangertalksNewWeb.HearthChannel do
   end
 
   defp notify_room_ended(participant_id, room_id) do
-    Phoenix.PubSub.broadcast(@pubsub, topic(participant_id), {:room_partner_disconnected, room_id})
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      topic(participant_id),
+      {:room_partner_disconnected, room_id}
+    )
   end
 
   defp safe_disconnect(participant_id) do
-    if Process.whereis(Authority), do: Authority.disconnect(Authority, participant_id), else: {:ok, %{status: :none}}
+    if Process.whereis(Authority),
+      do: Authority.disconnect(Authority, participant_id),
+      else: {:ok, %{status: :none}}
   catch
     :exit, _ -> {:ok, %{status: :none}}
   end
