@@ -65,7 +65,8 @@ defmodule StrangertalksNewWeb.HearthChannel do
       when map_size(params) == 1 do
     if variant(socket) == :treatment do
       with :ok <- require_enabled(),
-           {:ok, result} <- Authority.submit(Authority, socket.assigns.participant_id, contribution) do
+           {:ok, result} <-
+             Authority.submit(Authority, socket.assigns.participant_id, contribution) do
         emit(:hearth_submitted, %{variant: :treatment})
 
         case result do
@@ -292,8 +293,13 @@ defmodule StrangertalksNewWeb.HearthChannel do
     if :erlang.phash2(participant_id, 2) == 0, do: :control, else: :treatment
   end
 
-  defp resolve_variant(%{}, _participant_id), do: {:ok, :treatment}
-  defp resolve_variant(%{"variant" => "auto"}, participant_id), do: {:ok, assigned_variant(participant_id)}
+  defp resolve_variant(params, _participant_id) when map_size(params) == 0,
+    do: {:ok, :treatment}
+
+  defp resolve_variant(%{"variant" => "auto"} = params, participant_id)
+       when map_size(params) == 1,
+       do: {:ok, assigned_variant(participant_id)}
+
   defp resolve_variant(_params, _participant_id), do: {:error, :invalid_variant}
 
   defp join_reply(:treatment) do
@@ -380,7 +386,8 @@ defmodule StrangertalksNewWeb.HearthChannel do
     end
   end
 
-  defp maybe_emit_first_message(%{assigns: %{hearth_first_message_sent: true}} = socket), do: socket
+  defp maybe_emit_first_message(%{assigns: %{hearth_first_message_sent: true}} = socket),
+    do: socket
 
   defp maybe_emit_first_message(socket) do
     started_at = socket.assigns[:hearth_room_started_at]
