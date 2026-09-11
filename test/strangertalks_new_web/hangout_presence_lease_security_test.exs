@@ -90,17 +90,13 @@ defmodule StrangertalksNewWeb.HangoutPresenceLeaseSecurityTest do
 
     final_socket =
       Enum.reduce(1..8, first_socket, fn _iteration, older_socket ->
-        leave_task =
-          Task.async(fn ->
-            leave_ref = leave(older_socket)
-            assert_reply leave_ref, :ok
-            :ok
-          end)
+        older_monitor = Process.monitor(older_socket.channel_pid)
+        Process.exit(older_socket.channel_pid, :kill)
 
         assert {:ok, _snapshot, replacement_socket} =
                  join_hangout(participant, room.room_id)
 
-        assert :ok = Task.await(leave_task)
+        assert_receive {:DOWN, ^older_monitor, :process, _pid, :killed}
 
         eventually(fn ->
           membership!(room.room_id, participant.participant_id).status == :ACTIVE and
