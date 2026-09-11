@@ -46,7 +46,7 @@ defmodule StrangertalksNewWeb.HearthH01aSingleShotBoundaryTest do
   test "lab client terminalizes consumed attempts instead of inviting another encounter" do
     source = File.read!("priv/static/assets/hearth_lab.mjs")
 
-    assert source =~ "finishParticipation"
+    assert source =~ "finishAttempt"
     assert source =~ ~s(error?.reason === "already_participated")
     refute source =~ "You can try again."
     refute source =~ "The next encounter starts clean."
