@@ -20,7 +20,7 @@ defmodule StrangertalksNew.Experiments.Hearth.TelemetryRecorderTest do
     start_supervised!({TelemetryRecorder, name: TelemetryRecorder})
 
     log =
-      capture_log(fn ->
+      capture_log([level: :info], fn ->
         :telemetry.execute(
           [:strangertalks_new, :experiment, :hearth, :experiment_room_ended],
           %{count: 1, duration_ms: 12_345, turn_count: 14, monotonic_time: 9_999},
@@ -56,7 +56,7 @@ defmodule StrangertalksNew.Experiments.Hearth.TelemetryRecorderTest do
     start_supervised!({TelemetryRecorder, name: TelemetryRecorder})
 
     log =
-      capture_log(fn ->
+      capture_log([level: :info], fn ->
         :telemetry.execute(
           [:strangertalks_new, :experiment, :hearth, :bridge_step_in],
           %{count: 1, monotonic_time: 100},
@@ -79,7 +79,7 @@ defmodule StrangertalksNew.Experiments.Hearth.TelemetryRecorderTest do
     start_supervised!({TelemetryRecorder, name: TelemetryRecorder})
 
     log =
-      capture_log(fn ->
+      capture_log([level: :info], fn ->
         :telemetry.execute(
           [:strangertalks_new, :experiment, :hearth, :future_payload_event],
           %{count: 1},
@@ -96,7 +96,7 @@ defmodule StrangertalksNew.Experiments.Hearth.TelemetryRecorderTest do
     GenServer.stop(pid)
 
     log =
-      capture_log(fn ->
+      capture_log([level: :info], fn ->
         :telemetry.execute(
           [:strangertalks_new, :experiment, :hearth, :experiment_room_ended],
           %{count: 1, duration_ms: 10, turn_count: 2},
