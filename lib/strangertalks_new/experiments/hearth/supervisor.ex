@@ -11,9 +11,7 @@ defmodule StrangertalksNew.Experiments.Hearth.Supervisor do
   def init(_opts) do
     Supervisor.init(
       [
-        {Authority,
-         name: Authority,
-         notifier: Notifier}
+        {Authority, name: Authority, notifier: Notifier}
       ],
       strategy: :one_for_one
     )
