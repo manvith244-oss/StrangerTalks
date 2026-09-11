@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "audit_date": "2026-09-11",
+  "repository": "manvith244-oss/StrangerTalks",
+  "canonical_main": "d69fd48889ba9c79a66a5653acd44ad329c97969",
+  "canonical_tree": "7577273953ed7d505b3c65b3c3900cff588390de",
+  "observed_live_branch_ref_count": 364,
+  "purpose": "Classify the post-convergence remote branch namespace without bulk-deleting historical provenance. Explicit entries override namespace rules. Namespace rules are provenance classifications, not proof that every branch is safe to delete.",
+  "allowed_statuses": [
+    "KEEP_ACTIVE",
+    "KEEP_AUDIT",
+    "PRESERVE_PRODUCT_DECISION",
+    "PRESERVE_RND",
+    "PRESERVE_DOCS",
+    "ADMITTED_PROVENANCE",
+    "SUPERSEDED_PROVENANCE",
+    "EVIDENCE_ARCHIVE",
+    "HISTORICAL_ARCHIVE",
+    "DISCONNECTED_ROOT_ARCHIVE"
+  ],
+  "explicit": {
+    "main": {
+      "status": "KEEP_ACTIVE",
+      "confidence": "verified",
+      "note": "Canonical branch at audit baseline."
+    },
+    "audit/outside-main-2026-09-11": {
+      "status": "KEEP_AUDIT",
+      "confidence": "verified",
+      "note": "Frozen earlier outside-main audit at main@65b6bf065193269c52cc73c5231dc64546b92d38."
+    },
+    "audit/post-convergence-2026-09-11": {
+      "status": "KEEP_AUDIT",
+      "confidence": "verified",
+      "note": "Post-convergence delta/ledger branch based exactly on canonical main d69fd48889ba9c79a66a5653acd44ad329c97969."
+    },
+    "fix/d5-hangouts-durable-interactions-2026-09-11": {
+      "status": "PRESERVE_PRODUCT_DECISION",
+      "confidence": "verified_semantic_exception",
+      "head": "76afe490f26b67a94d81de3f1760f796d6ff6880",
+      "relation_to_audit_main": "diverged: 11 ahead, 15 behind; merge base 1e23977246f42e2e4c918a89170156fc58dd5da5",
+      "issue": 266,
+      "note": "Unique runtime packet adding durable Hangout content/reaction/skip-vote state. Changes anonymous-at-rest persistence semantics; DO NOT MERGE AS-IS. Reconstruct only after product/privacy retention decision."
+    },
+    "experiment/living-thread-pilot-2026-09-11": {
+      "status": "PRESERVE_PRODUCT_DECISION",
+      "confidence": "verified",
+      "issue": 260,
+      "note": "Closed experiment branch. Preserve hypothesis; rebuild from fresh main only if scheduled."
+    },
+    "t08/future-001-circle-formation-kernel": {
+      "status": "PRESERVE_RND",
+      "confidence": "verified_from_frozen_audit",
+      "note": "Unique Circle formation R&D absent from canonical main. Too stale to merge directly."
+    },
+    "t08/future-002-circle-capacity-liquidity": {
+      "status": "PRESERVE_RND",
+      "confidence": "verified_from_frozen_audit",
+      "note": "Unique later Circle capacity/liquidity R&D. Preserve as input packet; reconstruct if product approves Circles."
+    },
+    "language/p01-measurement-spec-2026-09-11": {
+      "status": "PRESERVE_DOCS",
+      "confidence": "verified_semantic_exception",
+      "relation_to_audit_main": "diverged: 9 ahead, 16 behind; merge base 65b6bf065193269c52cc73c5231dc64546b92d38",
+      "note": "Nine commits of language-team measurement/privacy/study/instrumentation documentation. No runtime code. Preserve as research provenance; do not wholesale-merge stale plan docs into main."
+    },
+    "architecture/construction-system-2026-09-02": {
+      "status": "PRESERVE_DOCS",
+      "confidence": "verified_semantic_exception",
+      "relation_to_audit_main": "diverged: 26 ahead, 386 behind; merge base 2724d655a1ab7502c0caa39c91644cd6559a5f96",
+      "note": "Unique historical construction/governance/team operating documentation. Preserve for archaeology; current repository authority has evolved substantially, so do not merge wholesale."
+    },
+    "security/ring-authority-reconstruction-2026-09-11": {
+      "status": "ADMITTED_PROVENANCE",
+      "confidence": "verified",
+      "pr": 265,
+      "canonical_commit": "d69fd48889ba9c79a66a5653acd44ad329c97969",
+      "note": "Exact security reconstruction admitted through #265."
+    },
+    "security/ring-presence-b1-b3-closure-2026-09-11": {
+      "status": "SUPERSEDED_PROVENANCE",
+      "confidence": "verified",
+      "pr": 248,
+      "note": "Closed unmerged after #265; historical B1/B3 packet only. Never merge."
+    },
+    "language/p02-entrance-instrumentation-2026-09-11": {
+      "status": "SUPERSEDED_PROVENANCE",
+      "confidence": "verified",
+      "note": "Historical WIP #249; valid event contract reconstructed/admitted through #264."
+    },
+    "language/p02-interface-placement-2026-09-10": {
+      "status": "ADMITTED_PROVENANCE",
+      "confidence": "verified",
+      "note": "Interface placement admitted through #242."
+    },
+    "fix/p02-language-selector-queue-lock-2026-09-10": {
+      "status": "SUPERSEDED_PROVENANCE",
+      "confidence": "verified",
+      "note": "Later queue-lock intent reconstructed/admitted through fresh-main #255."
+    },
+    "feature/hangouts-v1": {
+      "status": "ADMITTED_PROVENANCE",
+      "confidence": "verified",
+      "pr": 241,
+      "note": "Hangouts V1 admitted; historical branch is not missing product code."
+    },
+    "release/staging-supabase-ca-trust-v2-2026-09-10": {
+      "status": "SUPERSEDED_PROVENANCE",
+      "confidence": "verified",
+      "note": "Historical #246 candidate; valid CA/TLS packet reconstructed/admitted through #253."
+    },
+    "convergence/ca-bundle-fresh-main-2026-09-11": {
+      "status": "ADMITTED_PROVENANCE",
+      "confidence": "verified",
+      "pr": 253,
+      "note": "Fresh-main CA bundle admission branch."
+    },
+    "convergence/p02-language-queue-lock-v2-2026-09-11": {
+      "status": "ADMITTED_PROVENANCE",
+      "confidence": "verified",
+      "pr": 255,
+      "note": "Fresh-main language lifecycle admission branch."
+    },
+    "convergence/product-events-v3-main-2026-09-11": {
+      "status": "ADMITTED_PROVENANCE",
+      "confidence": "verified",
+      "pr": 264,
+      "note": "Fresh-main privacy-bounded product-event admission branch."
+    },
+    "convergence/rpr-production-migration-v4-2026-09-11": {
+      "status": "ADMITTED_PROVENANCE",
+      "confidence": "verified",
+      "pr": 263,
+      "note": "Current canonical migration-authority hardening source branch. Repository code only; no production migration implied."
+    },
+    "convergence/relationship-pairing-reservation-race-2026-09-11": {
+      "status": "ADMITTED_PROVENANCE",
+      "confidence": "verified",
+      "pr": 258,
+      "note": "Relationship reconnect / pairing atomicity admitted."
+    },
+    "construction/issue-184-durable-terminal-restart": {
+      "status": "HISTORICAL_ARCHIVE",
+      "confidence": "verified_ancestry",
+      "relation_to_audit_main": "behind: 0 ahead, 232 behind",
+      "note": "Fully contained in final main ancestry."
+    },
+    "full-source-recovery": {
+      "status": "HISTORICAL_ARCHIVE",
+      "confidence": "verified_ancestry",
+      "relation_to_audit_main": "behind: 0 ahead, 1276 behind",
+      "note": "Fully contained in final main ancestry."
+    },
+    "staging/candidate-2026-09-10": {
+      "status": "HISTORICAL_ARCHIVE",
+      "confidence": "verified_ancestry",
+      "relation_to_audit_main": "behind: 0 ahead, 19 behind",
+      "note": "Fully contained in final main ancestry."
+    },
+    "reconcile/complete-strangertalks-2026-09-01": {
+      "status": "HISTORICAL_ARCHIVE",
+      "confidence": "verified_ancestry",
+      "relation_to_audit_main": "behind: 0 ahead, 264 behind",
+      "note": "Fully contained in final main ancestry."
+    },
+    "adopt/unified-strangertalks-into-main-2026-09-02": {
+      "status": "HISTORICAL_ARCHIVE",
+      "confidence": "verified_ancestry",
+      "relation_to_audit_main": "behind: 0 ahead, 244 behind",
+      "note": "Fully contained in final main ancestry."
+    },
+    "master": {
+      "status": "DISCONNECTED_ROOT_ARCHIVE",
+      "confidence": "verified_ancestry",
+      "relation_to_audit_main": "no common ancestor",
+      "note": "Disconnected historical root; never use as an integration source for current main."
+    }
+  },
+  "namespace_rules": [
+    {
+      "prefixes": ["evidence/", "proof/", "validation/", "diag/", "diagnostics/", "probe/", "bisect/", "checkpoint/", "backup/", "baseline/", "verify/"],
+      "status": "EVIDENCE_ARCHIVE",
+      "confidence": "namespace_provenance",
+      "action": "Preserve while provenance is useful. Never merge solely because the branch is ahead. Before deletion, confirm no unique test/result referenced by an open decision issue."
+    },
+    {
+      "prefixes": ["noop", "temp", "tmp/", "ignore"],
+      "status": "EVIDENCE_ARCHIVE",
+      "confidence": "namespace_provenance",
+      "action": "Temporary/no-op provenance. Candidate for later cleanup only after ref/PR references are checked."
+    },
+    {
+      "prefixes": ["convergence/"],
+      "status": "SUPERSEDED_PROVENANCE",
+      "confidence": "namespace_provenance_with_explicit_admission_overrides",
+      "action": "Historical convergence candidates, RED carriers and superseded fresh-main packets. Explicit admitted branches above override this rule. Do not merge old convergence branches after canonical admission."
+    },
+    {
+      "prefixes": ["release/", "staging/", "phase3/", "ops/", "st-work-k/", "k/"],
+      "status": "HISTORICAL_ARCHIVE",
+      "confidence": "namespace_provenance_with_explicit_overrides",
+      "action": "Historical release/integration/ops carriers. Re-run deployment verification from current main; never merge an old release base to solve an external proof gap."
+    },
+    {
+      "prefixes": ["team1/", "team2/", "team3/", "team4/", "team5/", "team6/", "team7/", "team8/", "team9/", "team10/", "team11/", "team12/", "team13/", "team-a01/", "team-a04/", "newteam/", "agent-central/", "central/", "codex/"],
+      "status": "HISTORICAL_ARCHIVE",
+      "confidence": "namespace_provenance",
+      "action": "Historical team execution/proof branches. Semantic work was heavily reconstructed during convergence. Treat as source archaeology; fresh current-main regression is required before reviving anything."
+    },
+    {
+      "prefixes": ["f01/", "f02/", "f03/", "f04/", "f06/", "f07/", "f09/", "f10/", "f11/", "f-x07/", "fx04/", "fx05/", "fx07/"],
+      "status": "HISTORICAL_ARCHIVE",
+      "confidence": "namespace_provenance",
+      "action": "Old frontend/secondary-flow packets. Frozen audit spot checks found representative lines already ancestral/admitted. Do not merge directly."
+    },
+    {
+      "prefixes": ["feature/", "feat/", "fix/", "ci/", "brand/", "doors-visual-structure-", "settings-risk-gradient-", "t01/"],
+      "status": "HISTORICAL_ARCHIVE",
+      "confidence": "namespace_provenance_with_explicit_overrides",
+      "action": "Legacy feature/fix/source branches. Explicit D5/P02/Hangouts exceptions above override this rule. Before deletion, use ancestry or semantic-current-main proof; do not treat branch name as an integration command."
+    },
+    {
+      "prefixes": ["language/"],
+      "status": "HISTORICAL_ARCHIVE",
+      "confidence": "namespace_provenance_with_explicit_overrides",
+      "action": "Language-team historical/research branches. Explicit P01/P02 dispositions above override this rule."
+    },
+    {
+      "prefixes": ["security/"],
+      "status": "SUPERSEDED_PROVENANCE",
+      "confidence": "namespace_provenance_with_explicit_overrides",
+      "action": "Security candidate history. Explicit #265/#248 dispositions above override this rule."
+    },
+    {
+      "prefixes": ["architecture/", "construction/", "reconcile/", "adopt/"],
+      "status": "HISTORICAL_ARCHIVE",
+      "confidence": "namespace_provenance_with_explicit_overrides",
+      "action": "Historical architecture/construction/reconciliation packets. Explicit construction-doc and ancestry dispositions above override this rule."
+    }
+  ],
+  "classification_notes": {
+    "unknown_policy": "This ledger intentionally has no automatic UNKNOWN catch-all. A branch not matched by an explicit entry or one of the recorded namespace rules must be treated as UNKNOWN and audited before any mutation.",
+    "deletion_policy": "No branch is marked SAFE_DELETE in this ledger. Classification is complete enough to prevent blind merges; destructive branch cleanup remains a separate operation requiring ancestry/reference checks.",
+    "product_decisions": [259, 260, 266],
+    "unique_runtime_packets_preserved_outside_main": [
+      "fix/d5-hangouts-durable-interactions-2026-09-11",
+      "t08/future-001-circle-formation-kernel",
+      "t08/future-002-circle-capacity-liquidity"
+    ],
+    "unique_non_runtime_packets_preserved_outside_main": [
+      "language/p01-measurement-spec-2026-09-11",
+      "architecture/construction-system-2026-09-02"
+    ]
+  }
+}
