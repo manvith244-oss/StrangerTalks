@@ -416,13 +416,20 @@ defmodule StrangertalksNew.Experiments.Hearth.Authority do
 
   defp validate_entry(state, participant_id) do
     cond do
-      not valid_participant?(participant_id) -> {:error, :invalid_participant}
-      active_participant?(state, participant_id) -> {:error, :already_active}
+      not valid_participant?(participant_id) ->
+        {:error, :invalid_participant}
+
+      active_participant?(state, participant_id) ->
+        {:error, :already_active}
+
       MapSet.member?(state.consumed_participants, participant_id) ->
         {:error, :already_participated}
 
-      active_participant_count(state) >= state.max_active_participants -> {:error, :capacity}
-      true -> :ok
+      active_participant_count(state) >= state.max_active_participants ->
+        {:error, :capacity}
+
+      true ->
+        :ok
     end
   end
 
