@@ -29,7 +29,8 @@ defmodule StrangertalksNewWeb.HearthParticipantController do
   defp fingerprint(source) do
     case Endpoint.config(:secret_key_base) do
       secret when is_binary(secret) and byte_size(secret) >= 32 ->
-        {:ok, :crypto.mac(:hmac, :sha256, secret, :erlang.term_to_binary({:hearth_source_v1, source}))}
+        {:ok,
+         :crypto.mac(:hmac, :sha256, secret, :erlang.term_to_binary({:hearth_source_v1, source}))}
 
       _ ->
         {:error, :unavailable}
