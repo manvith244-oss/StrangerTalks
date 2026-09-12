@@ -21,3 +21,5 @@ jobs:
           git status --short --branch
       - name: Enforce bounded migration scope
         run: bash test/security_closure_01_backport_contract.sh
+      - name: Prove deployed runtime has no Supabase Data API client path
+        run: bash test/security_closure_01_deployed_data_api_code_audit.sh
