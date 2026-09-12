@@ -32,6 +32,7 @@ defmodule StrangertalksNewWeb.Router do
     pipe_through :api
 
     post "/participants", ParticipantController, :create
+    post "/hearth/participants", HearthParticipantController, :create
     get "/gifs/status", GifController, :status
     get "/gifs/search", GifController, :index
     get "/account/session", AccountController, :session

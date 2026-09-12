@@ -1,11 +1,13 @@
 import {Socket} from "/vendor/phoenix.mjs"
 
 const $ = (id) => document.getElementById(id)
-const screens = ["control-screen", "hearth-screen", "bridge-screen", "room-screen", "feedback-screen"]
+const screens = ["control-screen", "hearth-screen", "bridge-screen", "room-screen", "feedback-screen", "done-screen"]
+const identityKey = "strangertalks-hearth-h01a-v1"
 
 const state = {
   socket: null,
   channel: null,
+  identity: null,
   variant: null,
   bridgeId: null,
   roomId: null,
@@ -29,6 +31,39 @@ function renderRecent(items = []) {
     return li
   }))
   $("recent-wrap").hidden = safe.length === 0
+}
+
+function readIdentityRecord() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(identityKey) || "null")
+    if (typeof parsed?.participant_id === "string" && typeof parsed?.token === "string") return parsed
+  } catch {}
+  return null
+}
+
+function writeIdentityRecord(record) {
+  try { localStorage.setItem(identityKey, JSON.stringify(record)) } catch {}
+}
+
+function markAttempted() {
+  if (!state.identity) return
+  writeIdentityRecord({...state.identity, attempted: true})
+}
+
+async function identityForPilot() {
+  const existing = readIdentityRecord()
+  if (existing) return existing
+
+  const response = await fetch("/api/hearth/participants", {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: "{}"
+  })
+
+  if (!response.ok) throw new Error("participant_issuance_failed")
+  const identity = await response.json()
+  writeIdentityRecord({...identity, attempted: false})
+  return identity
 }
 
 function push(event, payload) {
@@ -71,19 +106,16 @@ function enterRoom(payload) {
   $("message-input").focus()
 }
 
-function returnToEntry(message = "") {
+function finishAttempt(message = "Thanks for taking part. This pilot allows one encounter attempt per person.") {
+  markAttempted()
   state.bridgeId = null
   state.roomId = null
   state.ownAnchor = ""
   state.partnerAnchor = ""
-
-  if (state.variant === "control") {
-    setStatus("control-status", message)
-    show("control-screen")
-  } else {
-    setStatus("hearth-status", message)
-    show("hearth-screen")
-  }
+  $("done-message").textContent = message
+  show("done-screen")
+  try { state.channel?.leave() } catch {}
+  try { state.socket?.disconnect() } catch {}
 }
 
 function showFeedback() {
@@ -92,16 +124,15 @@ function showFeedback() {
 }
 
 async function bootstrap() {
-  const response = await fetch("/api/participants", {
-    method: "POST",
-    headers: {"content-type": "application/json"},
-    body: "{}"
-  })
+  const identity = await identityForPilot()
+  state.identity = identity
 
-  if (!response.ok) throw new Error("participant_issuance_failed")
-  const identity = await response.json()
+  if (identity.attempted === true) {
+    finishAttempt()
+    return
+  }
 
-  const socket = new Socket("/socket", {
+  const socket = new Socket("/hearth_socket", {
     authToken: () => identity.token,
     timeout: 5000,
     reconnectAfterMs: () => 500,
@@ -115,8 +146,8 @@ async function bootstrap() {
   state.channel = channel
 
   channel.on("bridge:offered", enterBridge)
-  channel.on("bridge:dissolved", () => returnToEntry("The moment passed. You can try again."))
-  channel.on("experiment:reset", () => returnToEntry("That moment dissolved. You can try again."))
+  channel.on("bridge:dissolved", () => finishAttempt("That moment ended. Thanks for taking part."))
+  channel.on("experiment:reset", () => finishAttempt("That attempt ended. Thanks for taking part."))
   channel.on("room:ready", enterRoom)
   channel.on("room:message", ({room_id: roomId, content}) => {
     if (roomId === state.roomId && typeof content === "string") appendMessage("them", content)
@@ -150,8 +181,10 @@ $("control-connect").addEventListener("click", async () => {
   setStatus("control-status", "Connecting…")
   try {
     const reply = await push("control:connect", {})
+    markAttempted()
     if (reply.status === "waiting") setStatus("control-status", "Waiting for someone else…")
   } catch (error) {
+    if (error?.reason === "already_participated") return finishAttempt()
     setStatus("control-status", error?.reason === "capacity" ? "No room right now." : "Could not connect.")
   }
 })
@@ -169,9 +202,11 @@ $("hearth-form").addEventListener("submit", async (event) => {
 
   try {
     const reply = await push("hearth:submit", {contribution})
+    markAttempted()
     state.ownAnchor = contribution
     if (reply.status === "waiting") setStatus("hearth-status", "Your thought is here. Someone may cross your path.")
   } catch (error) {
+    if (error?.reason === "already_participated") return finishAttempt()
     setStatus("hearth-status", error?.reason === "capacity" ? "The Hearth is full right now." : "That could not be placed here.")
   }
 })
@@ -182,14 +217,15 @@ $("step-in").addEventListener("click", async () => {
   try {
     await push("bridge:step_in", {bridge_id: state.bridgeId})
   } catch {
-    returnToEntry("That moment passed.")
+    finishAttempt("That moment ended. Thanks for taking part.")
   }
 })
 
 $("pass").addEventListener("click", async () => {
-  if (!state.bridgeId) returnToEntry()
-  try { await push("bridge:pass", {bridge_id: state.bridgeId}) } catch {}
-  returnToEntry()
+  if (state.bridgeId) {
+    try { await push("bridge:pass", {bridge_id: state.bridgeId}) } catch {}
+  }
+  finishAttempt()
 })
 
 $("message-form").addEventListener("submit", async (event) => {
@@ -218,10 +254,10 @@ $("feedback-actions").addEventListener("click", async (event) => {
   const reason = event.target?.dataset?.reason
   if (!reason) return
   try { await push("experiment:feedback", {reason}) } catch {}
-  returnToEntry("Thanks. The next encounter starts clean.")
+  finishAttempt()
 })
 
-$("close-feedback").addEventListener("click", () => returnToEntry())
+$("close-feedback").addEventListener("click", () => finishAttempt())
 
 bootstrap().catch(() => {
   document.body.textContent = "This lab could not start."
