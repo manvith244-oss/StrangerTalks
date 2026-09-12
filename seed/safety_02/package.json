@@ -1,0 +1,15 @@
+{
+  "name": "strangertalks-seed-safety-02",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "cborg": "6.1.2"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.5"
+  }
+}
