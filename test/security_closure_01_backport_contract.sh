@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Red phase: this contract must fail until the three approved migrations are present.
 approved=(
   priv/repo/migrations/20260909183500_secure_supabase_public_schema_c1.exs
   priv/repo/migrations/20260910110008_harden_public_rpc_defaults_rpr.exs
