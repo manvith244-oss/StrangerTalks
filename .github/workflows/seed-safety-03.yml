@@ -1,0 +1,108 @@
+name: SEED-SAFETY-03 Witness Operational Boundary
+
+on:
+  push:
+    branches:
+      - seed/safety-03-witness-operational-boundary-2026-09-12
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  operational-model:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout seed branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install seed dependencies
+        working-directory: seed/safety_03
+        run: npm install --ignore-scripts --no-audit --no-fund --no-package-lock
+
+      - name: Run operational failure tests
+        working-directory: seed/safety_03
+        run: npm run test:unit
+
+      - name: Remove ephemeral dependencies
+        if: always()
+        run: rm -rf seed/safety_03/node_modules seed/safety_03/package-lock.json seed/safety_03/test-results seed/safety_03/playwright-report
+
+      - name: Prove operational job left tree clean
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+
+  browser-matrix:
+    name: browser-${{ matrix.project }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: chromium-cft
+            browser: chromium
+          - project: firefox
+            browser: firefox
+          - project: webkit-linux
+            browser: webkit
+          - project: webkit-mobile-emulation
+            browser: webkit
+    steps:
+      - name: Checkout seed branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install seed dependencies
+        working-directory: seed/safety_03
+        run: npm install --ignore-scripts --no-audit --no-fund --no-package-lock
+
+      - name: Install Playwright browser and OS dependencies
+        working-directory: seed/safety_03
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+
+      - name: Print Playwright and browser project identity
+        working-directory: seed/safety_03
+        run: |
+          node --version
+          npx playwright --version
+          printf 'PROJECT=%s\nBROWSER=%s\n' '${{ matrix.project }}' '${{ matrix.browser }}'
+
+      - name: Run browser persistence tests
+        working-directory: seed/safety_03
+        run: npx playwright test --config=playwright.config.mjs --project='${{ matrix.project }}'
+
+      - name: Upload browser failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: safety-03-${{ matrix.project }}-artifacts
+          path: |
+            seed/safety_03/test-results
+            seed/safety_03/playwright-report
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove ephemeral browser artifacts
+        if: always()
+        run: rm -rf seed/safety_03/node_modules seed/safety_03/package-lock.json seed/safety_03/test-results seed/safety_03/playwright-report
+
+      - name: Prove browser job left tree clean
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
