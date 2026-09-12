@@ -1,0 +1,14 @@
+{
+  "name": "strangertalks-seed-safety-03",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:unit": "node --test test/operational_failures.test.mjs",
+    "test:browser": "playwright test --config=playwright.config.mjs",
+    "test": "npm run test:unit && npm run test:browser"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}
