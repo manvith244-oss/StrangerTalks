@@ -1,0 +1,37 @@
+name: SEED-SAFETY-02 Witness Envelope
+
+on:
+  push:
+    branches:
+      - seed/safety-02-adversarial-witness-envelope-2026-09-12
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  witness-seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout seed branch
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install isolated seed dependencies
+        working-directory: seed/safety_02
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Run hostile witness tests
+        working-directory: seed/safety_02
+        run: npm test
+
+      - name: Prove seed did not mutate repository during tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
