@@ -1,0 +1,84 @@
+name: SECURITY-CLOSURE-01 Reconciliation
+
+on:
+  push:
+    branches:
+      - security/security-closure-01
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: strangertalks_security_closure
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d strangertalks_security_closure"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout security backport branch
+        uses: actions/checkout@v4
+        with:
+          path: backport
+      - name: Checkout canonical main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: canonical
+      - name: Record exact identities
+        run: |
+          echo "BACKPORT_HEAD=$(git -C backport rev-parse HEAD)"
+          echo "CANONICAL_MAIN_HEAD=$(git -C canonical rev-parse HEAD)"
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+      - name: Configure disposable release environment
+        run: |
+          echo 'MIX_ENV=prod' >> "$GITHUB_ENV"
+          echo 'DATABASE_URL=ecto://postgres@127.0.0.1:5432/strangertalks_security_closure' >> "$GITHUB_ENV"
+          echo 'PHX_HOST=localhost' >> "$GITHUB_ENV"
+          echo 'POOL_SIZE=5' >> "$GITHUB_ENV"
+          echo "SECRET_KEY_BASE=$(openssl rand -hex 64)" >> "$GITHUB_ENV"
+      - name: Install dependencies
+        run: |
+          (cd backport && MIX_ENV=prod mix deps.get --only prod)
+          (cd canonical && MIX_ENV=prod mix deps.get --only prod)
+      - name: Run State A to B to C proof
+        run: bash backport/test/security_closure_01_future_main_reconciliation.sh backport canonical
+      - name: Upload evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-closure-01-reconciliation-${{ github.sha }}
+          if-no-files-found: warn
+          path: |
+            state-a-migrate.log
+            state-b-release.log
+            state-c-release.log
+            expected-state-a.txt
+            actual-state-a.txt
+            expected-state-b.txt
+            actual-state-b.txt
+            expected-state-c.txt
+            before-state-c.txt
+            pending-state-c.txt
+            actual-state-c.txt
+            security-inserted-before.txt
+            security-inserted-after.txt
