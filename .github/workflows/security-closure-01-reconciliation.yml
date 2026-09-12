@@ -52,7 +52,7 @@ jobs:
       - name: Configure disposable release environment
         run: |
           echo 'MIX_ENV=prod' >> "$GITHUB_ENV"
-          echo 'DATABASE_URL=ecto://postgres@127.0.0.1:5432/strangertalks_security_closure' >> "$GITHUB_ENV"
+          echo 'DATABASE_URL=postgresql://postgres@127.0.0.1:5432/strangertalks_security_closure' >> "$GITHUB_ENV"
           echo 'PHX_HOST=localhost' >> "$GITHUB_ENV"
           echo 'POOL_SIZE=5' >> "$GITHUB_ENV"
           echo "SECRET_KEY_BASE=$(openssl rand -hex 64)" >> "$GITHUB_ENV"
