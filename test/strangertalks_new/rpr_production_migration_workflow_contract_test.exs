@@ -5,7 +5,7 @@ defmodule StrangertalksNew.RprProductionMigrationWorkflowContractTest do
   @live_path ".github/workflows/rpr-production-migration-live.yml"
   @backup_path ".github/workflows/postgres-r2-backup.yml"
   @bundled_ca "priv/certs/supabase-prod-ca-2021.crt"
-  @migration_tree "d0d1c1a5a781c6dfe504839c2411ef48c7c14a7d"
+  @migration_tree "2e2c41722f9ed1f1ffa11bce086519f57f7a8ab3"
   @owner_actor "manvith244-oss"
 
   test "PR rehearsal is incapable of receiving production secrets or mutating production" do
