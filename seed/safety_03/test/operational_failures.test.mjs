@@ -158,6 +158,21 @@ test('Mode B final-only persistence cannot recover authoritative completeness af
   assert.equal(modeBFinalState(restarted, 'witness-mode-b-final-only').status, 'FINALIZATION_INCOMPLETE')
 })
 
+test('Mode B finalized commitment survives a restart once the durable final state exists', () => {
+  const authority = new WitnessOperationalAuthority({serverKeyId: 'server-v1', modeBPersistence: 'final-only'})
+  authority.startSession({sessionId: 'witness-mode-b-finalized', mode: 'B'})
+  authority.acceptMessage('witness-mode-b-finalized', 'digest-1')
+  authority.acceptMessage('witness-mode-b-finalized', 'digest-2')
+  const committed = authority.finalizeModeB('witness-mode-b-finalized')
+
+  const restarted = restartAuthority(authority)
+  const recovered = modeBFinalState(restarted, 'witness-mode-b-finalized')
+  assert.equal(recovered.status, 'FINALIZED')
+  assert.equal(recovered.root, committed.root)
+  assert.equal(recovered.finalAcceptedSequence, 2)
+  assert.equal(recovered.messageCount, 2)
+})
+
 test('Mode B crash-resilient evolving accumulator can recover a final commitment but necessarily persists evolving session metadata', () => {
   const authority = new WitnessOperationalAuthority({serverKeyId: 'server-v1', modeBPersistence: 'evolving-accumulator'})
   authority.startSession({sessionId: 'witness-mode-b-evolving', mode: 'B'})
