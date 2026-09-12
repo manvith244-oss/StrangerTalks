@@ -1,0 +1,147 @@
+name: SECURITY-CLOSURE-01 RLS Convergence
+
+on:
+  push:
+    branches:
+      - security/rls-convergence-01
+    paths:
+      - .github/workflows/security-closure-01-rls-convergence.yml
+      - priv/repo/migrations/**
+      - test/strangertalks_new/team4_db_security_closure_test.exs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: strangertalks_security_closure
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d strangertalks_security_closure"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout frozen emergency security backport
+        uses: actions/checkout@v4
+        with:
+          ref: 51d9b7474219681ac6a6d62b1a352d84818ed841
+          path: backport
+      - name: Checkout exact RLS convergence candidate
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: canonical
+      - name: Record exact identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          backport_head="$(git -C backport rev-parse HEAD)"
+          candidate_head="$(git -C canonical rev-parse HEAD)"
+          echo "BACKPORT_HEAD=$backport_head"
+          echo "RLS_CONVERGENCE_HEAD=$candidate_head"
+          test "$backport_head" = "51d9b7474219681ac6a6d62b1a352d84818ed841"
+          test "$candidate_head" = "${{ github.sha }}"
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4'
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+      - name: Enable verified TLS on disposable Postgres
+        shell: bash
+        run: |
+          set -euo pipefail
+          cert_dir="$RUNNER_TEMP/security-closure-ca"
+          mkdir -p "$cert_dir"
+
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "$cert_dir/ca.key" \
+            -out "$cert_dir/ca.crt" \
+            -days 1 \
+            -subj '/CN=SECURITY-CLOSURE-01 Disposable CA'
+
+          openssl req -newkey rsa:2048 -nodes \
+            -keyout "$cert_dir/server.key" \
+            -out "$cert_dir/server.csr" \
+            -subj '/CN=localhost' \
+            -addext 'subjectAltName=DNS:localhost,IP:127.0.0.1'
+
+          printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > "$cert_dir/server.ext"
+          openssl x509 -req \
+            -in "$cert_dir/server.csr" \
+            -CA "$cert_dir/ca.crt" \
+            -CAkey "$cert_dir/ca.key" \
+            -CAcreateserial \
+            -out "$cert_dir/server.crt" \
+            -days 1 \
+            -extfile "$cert_dir/server.ext"
+
+          postgres_container="$(docker ps -q --filter ancestor=postgres:17 | head -n1)"
+          test -n "$postgres_container"
+          docker cp "$cert_dir/server.crt" "$postgres_container:/var/lib/postgresql/server.crt"
+          docker cp "$cert_dir/server.key" "$postgres_container:/var/lib/postgresql/server.key"
+          docker exec -u 0 "$postgres_container" chown postgres:postgres /var/lib/postgresql/server.crt /var/lib/postgresql/server.key
+          docker exec -u 0 "$postgres_container" chmod 600 /var/lib/postgresql/server.key
+          docker exec -u postgres "$postgres_container" psql -d strangertalks_security_closure -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET ssl = 'on'"
+          docker exec -u postgres "$postgres_container" psql -d strangertalks_security_closure -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET ssl_cert_file = '/var/lib/postgresql/server.crt'"
+          docker exec -u postgres "$postgres_container" psql -d strangertalks_security_closure -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET ssl_key_file = '/var/lib/postgresql/server.key'"
+          docker restart "$postgres_container"
+
+          for _ in $(seq 1 30); do
+            if pg_isready -h 127.0.0.1 -U postgres -d strangertalks_security_closure >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+
+          PGSSLMODE=verify-full PGSSLROOTCERT="$cert_dir/ca.crt" \
+            psql 'postgresql://postgres@localhost:5432/strangertalks_security_closure' -v ON_ERROR_STOP=1 -Atc \
+            "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()" | grep -qx t
+          echo "DB_CA_CERT_FILE=$cert_dir/ca.crt" >> "$GITHUB_ENV"
+          echo 'DISPOSABLE_POSTGRES_TLS=PASS'
+      - name: Configure disposable release environment
+        run: |
+          echo 'MIX_ENV=prod' >> "$GITHUB_ENV"
+          echo 'DATABASE_URL=postgresql://postgres@localhost:5432/strangertalks_security_closure' >> "$GITHUB_ENV"
+          echo 'PHX_HOST=localhost' >> "$GITHUB_ENV"
+          echo 'POOL_SIZE=5' >> "$GITHUB_ENV"
+          echo "SECRET_KEY_BASE=$(openssl rand -hex 64)" >> "$GITHUB_ENV"
+      - name: Install dependencies
+        run: |
+          (cd backport && MIX_ENV=prod mix deps.get --only prod)
+          (cd canonical && MIX_ENV=prod mix deps.get --only prod)
+      - name: Run State A to B to C proof
+        run: bash backport/test/security_closure_01_future_main_reconciliation.sh backport canonical
+      - name: Upload reconciliation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-closure-01-rls-convergence-${{ github.sha }}
+          if-no-files-found: warn
+          path: |
+            state-a-migrate.log
+            state-b-release.log
+            state-c-release.log
+            expected-state-a.txt
+            actual-state-a.txt
+            expected-state-b.txt
+            actual-state-b.txt
+            expected-state-c.txt
+            before-state-c.txt
+            pending-state-c.txt
+            actual-state-c.txt
+            security-inserted-before.txt
+            security-inserted-after.txt
