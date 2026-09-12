@@ -1,0 +1,23 @@
+name: SECURITY-CLOSURE-01 Proof
+
+on:
+  push:
+    branches:
+      - security/security-closure-01
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backport-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@v4
+      - name: Record exact commit
+        run: |
+          echo "SECURITY_CLOSURE_COMMIT=$(git rev-parse HEAD)"
+          git status --short --branch
+      - name: Enforce bounded migration scope
+        run: bash test/security_closure_01_backport_contract.sh
