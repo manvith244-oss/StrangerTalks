@@ -101,7 +101,14 @@ const html = `<!doctype html>
     const persisted = navigator.storage?.persisted ? await navigator.storage.persisted() : null
     let persistRequest = null
     if (navigator.storage?.persist) {
-      try { persistRequest = await navigator.storage.persist() } catch (_) { persistRequest = 'error' }
+      try {
+        persistRequest = await Promise.race([
+          navigator.storage.persist(),
+          new Promise((resolve) => setTimeout(() => resolve('timeout'), 1500))
+        ])
+      } catch (_) {
+        persistRequest = 'error'
+      }
     }
     return {estimate, persisted, persistRequest}
   }
