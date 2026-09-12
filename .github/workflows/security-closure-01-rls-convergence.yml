@@ -8,6 +8,13 @@ on:
       - .github/workflows/security-closure-01-rls-convergence.yml
       - priv/repo/migrations/**
       - test/strangertalks_new/team4_db_security_closure_test.exs
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/security-closure-01-rls-convergence.yml
+      - priv/repo/migrations/**
+      - test/strangertalks_new/team4_db_security_closure_test.exs
   workflow_dispatch:
 
 permissions:
