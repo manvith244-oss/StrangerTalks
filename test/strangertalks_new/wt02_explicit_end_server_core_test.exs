@@ -57,8 +57,7 @@ defmodule StrangertalksNew.WT02ExplicitEndServerCoreTest do
       assert Enum.find(state.recent_messages, &(&1.message_id == message_id)).delivery_status ==
                :sent
 
-      refute_receive {:conversation_message_status,
-                      %{message_id: ^message_id, status: "failed"}},
+      refute_receive {:conversation_message_status, %{message_id: ^message_id, status: "failed"}},
                      100
 
       refute_receive {:conversation_completed, _payload}, 100
