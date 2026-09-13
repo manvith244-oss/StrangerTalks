@@ -1,0 +1,361 @@
+==> decimal
+Compiling 4 files (.ex)
+Generated decimal app
+==> mime
+Compiling 1 file (.ex)
+Generated mime app
+==> strangertalks_new
+===> Analyzing applications...
+===> Compiling idna
+==> nimble_options
+Compiling 3 files (.ex)
+Generated nimble_options app
+==> phoenix_template
+Compiling 4 files (.ex)
+Generated phoenix_template app
+==> strangertalks_new
+===> Analyzing applications...
+===> Compiling telemetry
+==> telemetry_metrics
+Compiling 7 files (.ex)
+Generated telemetry_metrics app
+==> strangertalks_new
+===> Analyzing applications...
+===> Compiling telemetry_poller
+==> thousand_island
+Compiling 18 files (.ex)
+Generated thousand_island app
+==> jason
+Compiling 10 files (.ex)
+Generated jason app
+==> db_connection
+Compiling 18 files (.ex)
+Generated db_connection app
+==> expo
+Compiling 2 files (.erl)
+Compiling 22 files (.ex)
+Generated expo app
+==> phoenix_pubsub
+Compiling 12 files (.ex)
+Generated phoenix_pubsub app
+==> plug_crypto
+Compiling 5 files (.ex)
+Generated plug_crypto app
+==> hpax
+Compiling 4 files (.ex)
+Generated hpax app
+==> mint
+Compiling 1 file (.erl)
+Compiling 20 files (.ex)
+Generated mint app
+==> dns_cluster
+Compiling 1 file (.ex)
+Generated dns_cluster app
+==> gettext
+Compiling 18 files (.ex)
+Generated gettext app
+==> jose
+Compiling 113 files (.erl)
+Compiling 8 files (.ex)
+Generated jose app
+==> ecto
+Compiling 56 files (.ex)
+Generated ecto app
+==> plug
+Compiling 1 file (.erl)
+Compiling 42 files (.ex)
+Generated plug app
+==> postgrex
+Compiling 70 files (.ex)
+Generated postgrex app
+==> ecto_sql
+Compiling 25 files (.ex)
+Generated ecto_sql app
+==> nimble_pool
+Compiling 2 files (.ex)
+Generated nimble_pool app
+==> finch
+Compiling 23 files (.ex)
+Generated finch app
+==> req
+Compiling 24 files (.ex)
+Generated req app
+==> websock
+Compiling 1 file (.ex)
+Generated websock app
+==> bandit
+Compiling 54 files (.ex)
+Generated bandit app
+==> swoosh
+Compiling 61 files (.ex)
+Generated swoosh app
+==> websock_adapter
+Compiling 4 files (.ex)
+Generated websock_adapter app
+==> phoenix
+Compiling 74 files (.ex)
+Generated phoenix app
+==> phoenix_ecto
+Compiling 7 files (.ex)
+Generated phoenix_ecto app
+==> strangertalks_new
+Compiling 167 files (.ex)
+Generated strangertalks_new app
+Running ExUnit with seed: 152481, max_cases: 1
+
+     warning: variable "b" is unused (if the variable is not meant to be used, prefix it with an underscore)
+     │
+ 494 │     %{conversation: conversation, a: a, b: b} = queue_match()
+     │                                            ~
+     │
+     └─ test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs:494:44: StrangertalksNew.WT02TerminalAtomicityProofTest."test PENDING variant: same pre-commit gap exists, then converges to FAILED/PARTICIPANT_LEFT"/1
+
+
+StrangertalksNew.WT02TerminalAtomicityProofTest [test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs]
+  * test PENDING variant: same pre-commit gap exists, then converges to FAILED/PARTICIPANT_LEFT [L#493]00:15:42.570 reason_code=INTERNAL_ERROR target_status=FAILED [error] Conversation terminal persistence failed
+00:15:57.589 [error] Postgrex.Protocol (#PID<0.7847.0> ({Postgrex.Protocol, "strangertalks_new_test"})) disconnected: ** (DBConnection.ConnectionError) client #PID<0.7919.0> (ExUnit.OnExitHandler) timed out because it queued and checked out the connection for longer than 15000ms
+
+Client #PID<0.7919.0> (ExUnit.OnExitHandler) is still using a connection from owner at location:
+
+    :prim_inet.recv0/3
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:3296: Postgrex.Protocol.msg_recv/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1643: Postgrex.Protocol.recv_parse/3
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1609: Postgrex.Protocol.recv_parse_describe/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1409: Postgrex.Protocol.parse_describe_flush/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:379: Postgrex.Protocol.handle_prepare/3
+    (db_connection 2.10.2) lib/db_connection/holder.ex:379: DBConnection.Holder.holder_apply/4
+    (db_connection 2.10.2) lib/db_connection.ex:1543: DBConnection.prepare/4
+    (db_connection 2.10.2) lib/db_connection.ex:1536: DBConnection.run_prepare/4
+    (db_connection 2.10.2) lib/db_connection.ex:1548: DBConnection.run_prepare_execute/5
+    (db_connection 2.10.2) lib/db_connection.ex:1606: DBConnection.run_with_retries/5
+    (db_connection 2.10.2) lib/db_connection.ex:810: DBConnection.parsed_prepare_execute/5
+    (db_connection 2.10.2) lib/db_connection.ex:802: DBConnection.prepare_execute/4
+    (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
+    (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+The connection itself was checked out by #PID<0.7919.0> (ExUnit.OnExitHandler) at location:
+
+    (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
+    (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+
+  * test PENDING variant: same pre-commit gap exists, then converges to FAILED/PARTICIPANT_LEFT (88.1ms) [L#493]
+
+  1) test PENDING variant: same pre-commit gap exists, then converges to FAILED/PARTICIPANT_LEFT (StrangertalksNew.WT02TerminalAtomicityProofTest)
+     test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs:493
+     ** (Postgrex.Error) ERROR 57014 (query_canceled) canceling statement due to user request
+
+         query: DELETE FROM conversations WHERE NOT (conversation_id::text = ANY($1::text[]))
+     stacktrace:
+       (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:1121: Ecto.Adapters.SQL.raise_sql_call_error/1
+       (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+       (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+       (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+       (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+  * test F/G: duplicate and simultaneous participant terminal requests converge on one durable terminal row [L#434]00:16:12.937 [error] Postgrex.Protocol (#PID<0.7853.0> ({Postgrex.Protocol, "strangertalks_new_test"})) disconnected: ** (DBConnection.ConnectionError) client #PID<0.7930.0> (ExUnit.OnExitHandler) timed out because it queued and checked out the connection for longer than 15000ms
+
+Client #PID<0.7930.0> (ExUnit.OnExitHandler) is still using a connection from owner at location:
+
+    :prim_inet.recv0/3
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:3296: Postgrex.Protocol.msg_recv/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1643: Postgrex.Protocol.recv_parse/3
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1609: Postgrex.Protocol.recv_parse_describe/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1409: Postgrex.Protocol.parse_describe_flush/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:379: Postgrex.Protocol.handle_prepare/3
+    (db_connection 2.10.2) lib/db_connection/holder.ex:379: DBConnection.Holder.holder_apply/4
+    (db_connection 2.10.2) lib/db_connection.ex:1543: DBConnection.prepare/4
+    (db_connection 2.10.2) lib/db_connection.ex:1536: DBConnection.run_prepare/4
+    (db_connection 2.10.2) lib/db_connection.ex:1548: DBConnection.run_prepare_execute/5
+    (db_connection 2.10.2) lib/db_connection.ex:1606: DBConnection.run_with_retries/5
+    (db_connection 2.10.2) lib/db_connection.ex:810: DBConnection.parsed_prepare_execute/5
+    (db_connection 2.10.2) lib/db_connection.ex:802: DBConnection.prepare_execute/4
+    (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
+    (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+The connection itself was checked out by #PID<0.7930.0> (ExUnit.OnExitHandler) at location:
+
+    (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
+    (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+
+  * test F/G: duplicate and simultaneous participant terminal requests converge on one durable terminal row (342.5ms) [L#434]
+
+  2) test F/G: duplicate and simultaneous participant terminal requests converge on one durable terminal row (StrangertalksNew.WT02TerminalAtomicityProofTest)
+     test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs:434
+     ** (Postgrex.Error) ERROR 57014 (query_canceled) canceling statement due to user request
+
+         query: DELETE FROM conversations WHERE NOT (conversation_id::text = ANY($1::text[]))
+     stacktrace:
+       (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:1121: Ecto.Adapters.SQL.raise_sql_call_error/1
+       (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+       (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+       (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+       (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+  * test A: normal explicit terminalization commits durable truth before terminal authority [L#19]00:16:28.283 [error] Postgrex.Protocol (#PID<0.7849.0> ({Postgrex.Protocol, "strangertalks_new_test"})) disconnected: ** (DBConnection.ConnectionError) client #PID<0.7939.0> (ExUnit.OnExitHandler) timed out because it queued and checked out the connection for longer than 15000ms
+
+Client #PID<0.7939.0> (ExUnit.OnExitHandler) is still using a connection from owner at location:
+
+    :prim_inet.recv0/3
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:3296: Postgrex.Protocol.msg_recv/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1643: Postgrex.Protocol.recv_parse/3
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1609: Postgrex.Protocol.recv_parse_describe/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1409: Postgrex.Protocol.parse_describe_flush/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:379: Postgrex.Protocol.handle_prepare/3
+    (db_connection 2.10.2) lib/db_connection/holder.ex:379: DBConnection.Holder.holder_apply/4
+    (db_connection 2.10.2) lib/db_connection.ex:1543: DBConnection.prepare/4
+    (db_connection 2.10.2) lib/db_connection.ex:1536: DBConnection.run_prepare/4
+    (db_connection 2.10.2) lib/db_connection.ex:1548: DBConnection.run_prepare_execute/5
+    (db_connection 2.10.2) lib/db_connection.ex:1606: DBConnection.run_with_retries/5
+    (db_connection 2.10.2) lib/db_connection.ex:810: DBConnection.parsed_prepare_execute/5
+    (db_connection 2.10.2) lib/db_connection.ex:802: DBConnection.prepare_execute/4
+    (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
+    (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+The connection itself was checked out by #PID<0.7939.0> (ExUnit.OnExitHandler) at location:
+
+    (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
+    (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+
+  * test A: normal explicit terminalization commits durable truth before terminal authority (341.3ms) [L#19]
+
+  3) test A: normal explicit terminalization commits durable truth before terminal authority (StrangertalksNew.WT02TerminalAtomicityProofTest)
+     test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs:19
+     ** (Postgrex.Error) ERROR 57014 (query_canceled) canceling statement due to user request
+
+         query: DELETE FROM conversations WHERE NOT (conversation_id::text = ANY($1::text[]))
+     stacktrace:
+       (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:1121: Ecto.Adapters.SQL.raise_sql_call_error/1
+       (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+       (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+       (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+       (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+  * test B/C: pending teardown precedes failed DB commit, gates actions, retries, then converges once [L#106]00:16:28.317 reason_code=INTERNAL_ERROR target_status=ENDED [error] Conversation terminal persistence failed
+00:16:28.625 reason_code=INTERNAL_ERROR target_status=ENDED [error] Conversation terminal persistence failed
+00:16:44.241 [error] Postgrex.Protocol (#PID<0.7850.0> ({Postgrex.Protocol, "strangertalks_new_test"})) disconnected: ** (DBConnection.ConnectionError) client #PID<0.7949.0> (ExUnit.OnExitHandler) timed out because it queued and checked out the connection for longer than 15000ms
+
+Client #PID<0.7949.0> (ExUnit.OnExitHandler) is still using a connection from owner at location:
+
+    :prim_inet.recv0/3
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:3296: Postgrex.Protocol.msg_recv/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1643: Postgrex.Protocol.recv_parse/3
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1609: Postgrex.Protocol.recv_parse_describe/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1409: Postgrex.Protocol.parse_describe_flush/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:379: Postgrex.Protocol.handle_prepare/3
+    (db_connection 2.10.2) lib/db_connection/holder.ex:379: DBConnection.Holder.holder_apply/4
+    (db_connection 2.10.2) lib/db_connection.ex:1543: DBConnection.prepare/4
+    (db_connection 2.10.2) lib/db_connection.ex:1536: DBConnection.run_prepare/4
+    (db_connection 2.10.2) lib/db_connection.ex:1548: DBConnection.run_prepare_execute/5
+    (db_connection 2.10.2) lib/db_connection.ex:1606: DBConnection.run_with_retries/5
+    (db_connection 2.10.2) lib/db_connection.ex:810: DBConnection.parsed_prepare_execute/5
+    (db_connection 2.10.2) lib/db_connection.ex:802: DBConnection.prepare_execute/4
+    (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
+    (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+The connection itself was checked out by #PID<0.7949.0> (ExUnit.OnExitHandler) at location:
+
+    (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
+    (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+
+  * test B/C: pending teardown precedes failed DB commit, gates actions, retries, then converges once (953.1ms) [L#106]
+
+  4) test B/C: pending teardown precedes failed DB commit, gates actions, retries, then converges once (StrangertalksNew.WT02TerminalAtomicityProofTest)
+     test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs:106
+     ** (Postgrex.Error) ERROR 57014 (query_canceled) canceling statement due to user request
+
+         query: DELETE FROM conversations WHERE NOT (conversation_id::text = ANY($1::text[]))
+     stacktrace:
+       (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:1121: Ecto.Adapters.SQL.raise_sql_call_error/1
+       (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+       (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+       (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+       (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+  * test D: process death in pre-commit TERMINATING window loses terminal intent and resurrects ACTIVE runtime [L#306]00:16:44.275 reason_code=INTERNAL_ERROR target_status=ENDED [error] Conversation terminal persistence failed
+00:16:59.502 [error] Postgrex.Protocol (#PID<0.7849.0> ({Postgrex.Protocol, "strangertalks_new_test"})) disconnected: ** (DBConnection.ConnectionError) client #PID<0.7962.0> (ExUnit.OnExitHandler) timed out because it queued and checked out the connection for longer than 15000ms
+
+Client #PID<0.7962.0> (ExUnit.OnExitHandler) is still using a connection from owner at location:
+
+    :prim_inet.recv0/3
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:3296: Postgrex.Protocol.msg_recv/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1643: Postgrex.Protocol.recv_parse/3
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1609: Postgrex.Protocol.recv_parse_describe/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:1409: Postgrex.Protocol.parse_describe_flush/4
+    (postgrex 0.22.4) lib/postgrex/protocol.ex:379: Postgrex.Protocol.handle_prepare/3
+    (db_connection 2.10.2) lib/db_connection/holder.ex:379: DBConnection.Holder.holder_apply/4
+    (db_connection 2.10.2) lib/db_connection.ex:1543: DBConnection.prepare/4
+    (db_connection 2.10.2) lib/db_connection.ex:1536: DBConnection.run_prepare/4
+    (db_connection 2.10.2) lib/db_connection.ex:1548: DBConnection.run_prepare_execute/5
+    (db_connection 2.10.2) lib/db_connection.ex:1606: DBConnection.run_with_retries/5
+    (db_connection 2.10.2) lib/db_connection.ex:810: DBConnection.parsed_prepare_execute/5
+    (db_connection 2.10.2) lib/db_connection.ex:802: DBConnection.prepare_execute/4
+    (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
+    (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+The connection itself was checked out by #PID<0.7962.0> (ExUnit.OnExitHandler) at location:
+
+    (postgrex 0.22.4) lib/postgrex.ex:353: Postgrex.query_prepare_execute/4
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:628: Ecto.Adapters.SQL.query!/4
+    (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+    (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+    (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+
+  * test D: process death in pre-commit TERMINATING window loses terminal intent and resurrects ACTIVE runtime (255.9ms) [L#306]
+
+  5) test D: process death in pre-commit TERMINATING window loses terminal intent and resurrects ACTIVE runtime (StrangertalksNew.WT02TerminalAtomicityProofTest)
+     test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs:306
+     ** (Postgrex.Error) ERROR 57014 (query_canceled) canceling statement due to user request
+
+         query: DELETE FROM conversations WHERE NOT (conversation_id::text = ANY($1::text[]))
+     stacktrace:
+       (ecto_sql 3.14.0) lib/ecto/adapters/sql.ex:1121: Ecto.Adapters.SQL.raise_sql_call_error/1
+       (strangertalks_new 0.1.0) test/support/pairing_test_isolation.ex:31: StrangertalksNew.PairingTestIsolation.cleanup!/1
+       (ecto_sql 3.14.0) lib/ecto/adapters/sql/sandbox.ex:630: Ecto.Adapters.SQL.Sandbox.unboxed_run/2
+       (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:136: ExUnit.OnExitHandler.exec_callback/1
+       (ex_unit 1.18.4) lib/ex_unit/on_exit_handler.ex:122: ExUnit.OnExitHandler.on_exit_runner_loop/0
+
+
+Finished in 78.3 seconds (0.00s async, 78.3s sync)
+5 tests, 5 failures
