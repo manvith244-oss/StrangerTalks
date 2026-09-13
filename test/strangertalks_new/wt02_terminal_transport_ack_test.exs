@@ -1,7 +1,6 @@
 defmodule StrangertalksNew.WT02TerminalTransportAckTest do
   use StrangertalksNew.DataCase, async: false
 
-  alias StrangertalksNew.Conversation
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNew.Repo
 
@@ -228,7 +227,7 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
     drain_mailbox()
     force_lifecycle(pid, :TERMINATING)
 
-    assert {:error, :conversation_terminating} =
+    assert {:error, :conversation_inactive} =
              ConversationServer.register_channel(conversation_id, context.participant_b, self())
 
     refute_receive {:conversation_message, %{message_id: ^message_id}}, 100
