@@ -2208,7 +2208,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
 
       transition_pending?(state) ->
         state =
-          prepare_terminal_transition(
+          prepare_explicit_end_transition(
             state,
             :FAILED,
             "left_during_transition",
@@ -2226,12 +2226,12 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
             {:stop, :normal, {:ok, %{status: "ended"}}, state}
 
           {:error, state} ->
-            {:reply, {:ok, %{status: "ending"}}, state}
+            {:reply, {:error, :end_not_committed}, state}
         end
 
       completable_conversation?(state) ->
         state =
-          prepare_terminal_transition(
+          prepare_explicit_end_transition(
             state,
             :ENDED,
             "participant_completed",
@@ -2246,7 +2246,7 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
 
         case persist_terminal_intent(state) do
           {:ok, state} -> {:stop, :normal, {:ok, %{status: "ended"}}, state}
-          {:error, state} -> {:reply, {:ok, %{status: "ending"}}, state}
+          {:error, state} -> {:reply, {:error, :end_not_committed}, state}
         end
 
       true ->
@@ -4732,6 +4732,32 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
     end
   end
 
+  defp prepare_explicit_end_transition(
+         state,
+         target_status,
+         failure_reason,
+         event_reason,
+         persistence_attrs,
+         client_payload
+       ) do
+    %{
+      state
+      | lifecycle_status: :TERMINATING,
+        terminal_intent: %{
+          cause: :explicit_end,
+          previous_lifecycle_status: state.lifecycle_status,
+          target_status: target_status,
+          failure_reason: failure_reason,
+          ended_at: DateTime.utc_now(),
+          termination_reason: event_reason,
+          persistence_attrs: persistence_attrs,
+          client_payload: client_payload,
+          retry_ref: nil,
+          retry_token: nil
+        }
+    }
+  end
+
   defp prepare_terminal_transition(
          state,
          target_status,
@@ -4784,6 +4810,14 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
             source_resolver
           )
 
+        state =
+          if explicit_end_intent?(intent) do
+            :ok = maybe_requeue_transition_survivor(conversation, intent)
+            fail_all_pending(state, intent.failure_reason)
+          else
+            state
+          end
+
         notify_terminal_clients(state, intent.client_payload)
 
         dispatch_bus_payload("conversation.ended", %{
@@ -4791,7 +4825,9 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
           "reason" => intent.termination_reason
         })
 
-        maybe_requeue_transition_survivor(conversation, intent)
+        if not explicit_end_intent?(intent) do
+          maybe_requeue_transition_survivor(conversation, intent)
+        end
 
         {:ok,
          %{
@@ -4807,8 +4843,22 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
           reason_code: StrangertalksNew.DomainError.from_error(reason).code
         )
 
-        {:error, schedule_terminal_persistence_retry(state)}
+        if explicit_end_intent?(intent) do
+          {:error, rollback_explicit_end_attempt(state)}
+        else
+          {:error, schedule_terminal_persistence_retry(state)}
+        end
     end
+  end
+
+  defp explicit_end_intent?(%{cause: :explicit_end}), do: true
+  defp explicit_end_intent?(_intent), do: false
+
+  defp rollback_explicit_end_attempt(state) do
+    previous_lifecycle_status =
+      Map.get(state.terminal_intent, :previous_lifecycle_status, :ACTIVE)
+
+    %{state | lifecycle_status: previous_lifecycle_status, terminal_intent: nil}
   end
 
   defp schedule_terminal_persistence_retry(state) do
