@@ -1,0 +1,107 @@
+name: WT-02 Terminal Precommit Atomicity Proof
+
+on:
+  push:
+    branches:
+      - wind-tunnel/wt02-terminal-precommit-proof
+  workflow_dispatch:
+
+concurrency:
+  group: wt02-terminal-precommit-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  wt02-terminal-atomicity:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact proof commit
+        uses: actions/checkout@v4
+
+      - name: Prove isolated baseline ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_base="30717f4ee84a493697bb4965f4e8128b2e6af6b9"
+          tested="$(git rev-parse HEAD)"
+          base="$(git merge-base "$expected_base" "$tested")"
+          echo "WT02_EXPECTED_BASE=$expected_base"
+          echo "WT02_TESTED_COMMIT=$tested"
+          echo "WT02_MERGE_BASE=$base"
+          test "$base" = "$expected_base"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Verify proof formatting and diff hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix format --check-formatted \
+            test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs \
+            test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs
+          git diff --check
+
+      - name: WT-02 A B C D F G and PENDING proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs --trace
+
+      - name: WT-02 E post-commit pre-notify process-death proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs --trace
+
+      - name: Existing terminal regression proofs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test \
+            test/strangertalks_new/terminal_persistence_failure_test.exs \
+            test/strangertalks_new/recovery_restart_test.exs \
+            test/strangertalks_new/st_work_d_terminal_truth_test.exs \
+            test/strangertalks_new_web/channels/conversation_terminal_channel_test.exs
+
+      - name: Final clean-tree proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
+          echo "WT02_TESTED_COMMIT=$(git rev-parse HEAD)"
