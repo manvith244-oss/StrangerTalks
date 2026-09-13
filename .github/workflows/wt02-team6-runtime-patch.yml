@@ -22,64 +22,65 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("lib/strangertalks_new/conversation_lifecycle/conversation_server.ex")
           text = path.read_text()
 
-          ack_start = text.index("  def handle_call({:acknowledge_message, participant_id, message_id}, _from, state) do")
-          ack_end = text.index("\n  def handle_call(", ack_start + 1)
-          ack_block = text[ack_start:ack_end]
-          ack_gate = """      terminating?(state) ->
-                {:reply, {:error, :conversation_terminating}, state}
+          def replace_in_handler(text, start_marker, next_marker, pattern, replacement, label):
+              start = text.index(start_marker)
+              end = text.index(next_marker, start + len(start_marker))
+              block = text[start:end]
+              updated, count = re.subn(pattern, replacement, block, count=1, flags=re.MULTILINE)
+              assert count == 1, f"{label}: expected one exact cut, found {count}"
+              return text[:start] + updated + text[end:]
 
-          """
-          assert ack_block.count(ack_gate) == 1, "text ACK terminating gate drifted"
-          ack_block = ack_block.replace(ack_gate, "", 1)
-          text = text[:ack_start] + ack_block + text[ack_end:]
+          text = replace_in_handler(
+              text,
+              "  def handle_call({:acknowledge_message, participant_id, message_id}, _from, state) do",
+              "\n  def handle_call(",
+              r"\n\s*terminating\?\(state\) ->\n\s*\{:reply, \{:error, :conversation_terminating\}, state\}\n",
+              "\n",
+              "text ACK terminating gate",
+          )
 
-          text_retry_old = """        if connected?(state, message.recipient_id) do
-                  deliver_to_participant(state, message.recipient_id, message)
-                  {:noreply, schedule_retry(state, message_id)}
-                else
-                  {:noreply, state}
-                end
-          """
-          text_retry_new = """        cond do
-                  terminating?(state) ->
-                    {:noreply, state}
+          text = replace_in_handler(
+              text,
+              "  def handle_info({:retry_message, message_id, retry_token}, state) do",
+              "\n  def handle_info(",
+              r"(?ms)        if connected\?\(state, message\.recipient_id\) do\n\s*deliver_to_participant\(state, message\.recipient_id, message\)\n\s*\{:noreply, schedule_retry\(state, message_id\)\}\n\s*else\n\s*\{:noreply, state\}\n\s*end",
+              """        cond do
+          terminating?(state) ->
+            {:noreply, state}
 
-                  connected?(state, message.recipient_id) ->
-                    deliver_to_participant(state, message.recipient_id, message)
-                    {:noreply, schedule_retry(state, message_id)}
+          connected?(state, message.recipient_id) ->
+            deliver_to_participant(state, message.recipient_id, message)
+            {:noreply, schedule_retry(state, message_id)}
 
-                  true ->
-                    {:noreply, state}
-                end
-          """
-          assert text.count(text_retry_old) == 1, "text/expressive retry authority drifted"
-          text = text.replace(text_retry_old, text_retry_new, 1)
+          true ->
+            {:noreply, state}
+        end""",
+              "text/expressive retry authority",
+          )
 
-          voice_retry_old = """        if connected?(state, note.recipient_id) do
-                  deliver_voice_note_to_participant(state, note.recipient_id, note)
-                  {:noreply, schedule_voice_retry(state, voice_note_id)}
-                else
-                  {:noreply, state}
-                end
-          """
-          voice_retry_new = """        cond do
-                  terminating?(state) ->
-                    {:noreply, state}
+          text = replace_in_handler(
+              text,
+              "  def handle_info({:retry_voice_note, voice_note_id, retry_token}, state) do",
+              "\n  def handle_info(",
+              r"(?ms)        if connected\?\(state, note\.recipient_id\) do\n\s*deliver_voice_note_to_participant\(state, note\.recipient_id, note\)\n\s*\{:noreply, schedule_voice_retry\(state, voice_note_id\)\}\n\s*else\n\s*\{:noreply, state\}\n\s*end",
+              """        cond do
+          terminating?(state) ->
+            {:noreply, state}
 
-                  connected?(state, note.recipient_id) ->
-                    deliver_voice_note_to_participant(state, note.recipient_id, note)
-                    {:noreply, schedule_voice_retry(state, voice_note_id)}
+          connected?(state, note.recipient_id) ->
+            deliver_voice_note_to_participant(state, note.recipient_id, note)
+            {:noreply, schedule_voice_retry(state, voice_note_id)}
 
-                  true ->
-                    {:noreply, state}
-                end
-          """
-          assert text.count(voice_retry_old) == 1, "voice retry authority drifted"
-          text = text.replace(voice_retry_old, voice_retry_new, 1)
+          true ->
+            {:noreply, state}
+        end""",
+              "voice retry authority",
+          )
 
           path.write_text(text)
           PY
