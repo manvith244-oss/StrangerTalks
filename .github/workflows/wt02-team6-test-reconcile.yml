@@ -22,19 +22,14 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("test/strangertalks_new/conversation_delivery_test.exs")
           text = path.read_text()
-          marker = """    assert {:error, :conversation_terminating} =
-             ConversationServer.acknowledge_message(
-               conversation_id,
-               context.participant_b,
-               message_id
-             )
-          """
-          replacement = marker.replace(":conversation_terminating", ":unknown_message", 1)
-          assert text.count(marker) == 1, f"expected one stale terminal ACK assertion, found {text.count(marker)}"
-          path.write_text(text.replace(marker, replacement, 1))
+          pattern = r"(assert \{:error, ):conversation_terminating(\} =\n\s+ConversationServer\.acknowledge_message\()"
+          text, count = re.subn(pattern, r"\1:unknown_message\2", text, count=1)
+          assert count == 1, f"expected one stale terminal ACK assertion, found {count}"
+          path.write_text(text)
           PY
           git diff --check
           git diff -- test/strangertalks_new/conversation_delivery_test.exs
