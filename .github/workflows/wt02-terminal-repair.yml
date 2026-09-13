@@ -75,7 +75,9 @@ jobs:
           mix format --check-formatted \
             lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
             lib/strangertalks_new/domain_error.ex \
-            test/strangertalks_new/wt02_explicit_end_server_core_test.exs
+            test/strangertalks_new/wt02_explicit_end_server_core_test.exs \
+            test/strangertalks_new/terminal_persistence_failure_test.exs \
+            test/strangertalks_new/terminal_observability_test.exs
           git diff --check
 
       - name: Team 5 focused explicit End contract
@@ -90,9 +92,22 @@ jobs:
           set -euo pipefail
           mix test \
             test/strangertalks_new/terminal_persistence_failure_test.exs \
+            test/strangertalks_new/terminal_observability_test.exs \
             test/strangertalks_new/recovery_restart_test.exs \
             test/strangertalks_new/st_work_d_terminal_truth_test.exs \
             test/strangertalks_new_web/channels/conversation_terminal_channel_test.exs
+
+      - name: Existing postcommit pre-notify durable-truth proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_test="test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs"
+          trap 'rm -f "$proof_test"' EXIT
+          git show 54a4aadb2d3ec2498bc9f92b8f5ae8a11d0a7187:"$proof_test" > "$proof_test"
+          mix test "$proof_test" --trace
+          rm -f "$proof_test"
+          trap - EXIT
+          test -z "$(git status --porcelain)"
 
       - name: Full precommit
         shell: bash
