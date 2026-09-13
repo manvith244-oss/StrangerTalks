@@ -10,7 +10,6 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
   @terminal_constraint "wt02_reject_terminal_ended_at"
 
   setup do
-    StrangertalksNew.PairingTestIsolation.install!()
     Agent.update(QueueState, fn _ -> %{} end)
     drop_terminal_constraint()
     :ok

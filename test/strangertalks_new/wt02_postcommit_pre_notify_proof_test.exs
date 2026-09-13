@@ -8,7 +8,6 @@ defmodule StrangertalksNew.WT02PostCommitPreNotifyProofTest do
   alias StrangertalksNew.{Repo, SessionReconciliation}
 
   setup do
-    StrangertalksNew.PairingTestIsolation.install!()
     Agent.update(QueueState, fn _ -> %{} end)
     :ok
   end
