@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   apply-team5:
-    if: github.event.head_commit.message == 'chore(wt02): authorize Team 5 production apply'
+    if: "${{ github.event.head_commit.message == 'chore(wt02): authorize Team 5 production apply' }}"
     runs-on: ubuntu-latest
     services:
       postgres:
