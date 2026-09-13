@@ -75,21 +75,18 @@ jobs:
           sed -i '/StrangertalksNew.PairingTestIsolation.install!()/d' \
             test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs \
             test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs
-          rm -f wt02-main-proof-failure.log wt02-postcommit-proof-failure.log
           mix format \
             test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs \
             test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs
           git diff --check
           if ! git diff --quiet -- \
             test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs \
-            test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs \
-            wt02-main-proof-failure.log wt02-postcommit-proof-failure.log; then
+            test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs; then
             git config user.name "WT-02 Proof Bot"
             git config user.email "wt02-proof@users.noreply.github.com"
-            git add -A -- \
+            git add \
               test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs \
-              test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs \
-              wt02-main-proof-failure.log wt02-postcommit-proof-failure.log
+              test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs
             git commit -m "test(wt02): isolate proof teardown from unboxed cleanup"
             git push origin HEAD:wind-tunnel/wt02-terminal-precommit-proof
           fi
