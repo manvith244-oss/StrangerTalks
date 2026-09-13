@@ -124,19 +124,15 @@ defmodule StrangertalksNew.WT02PostCommitPreNotifyProofTest do
 
     source = File.read!(source_path)
 
-    needle = """
-      {:ok, conversation} ->
-        source_resolver = fn client_msg_id ->
-    """
+    needle =
+      "      {:ok, conversation} ->\n        source_resolver = fn client_msg_id ->\n"
 
-    replacement = """
-      {:ok, conversation} ->
-        if hook = Application.get_env(:strangertalks_new, :wt02_postcommit_probe) do
-          hook.(self(), conversation)
-        end
-
-        source_resolver = fn client_msg_id ->
-    """
+    replacement =
+      "      {:ok, conversation} ->\n" <>
+        "        if hook = Application.get_env(:strangertalks_new, :wt02_postcommit_probe) do\n" <>
+        "          hook.(self(), conversation)\n" <>
+        "        end\n\n" <>
+        "        source_resolver = fn client_msg_id ->\n"
 
     assert String.contains?(source, needle)
     patched = String.replace(source, needle, replacement, global: false)
