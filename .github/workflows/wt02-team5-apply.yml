@@ -1,0 +1,388 @@
+name: WT-02 Team 5 One-Time Apply
+
+on:
+  push:
+    branches:
+      - wind-tunnel/wt02-terminal-repair
+
+permissions:
+  contents: write
+
+jobs:
+  apply-team5:
+    if: github.event.head_commit.message == 'chore(wt02): authorize Team 5 production apply'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact repair branch
+        uses: actions/checkout@v4
+        with:
+          ref: wind-tunnel/wt02-terminal-repair
+          fetch-depth: 0
+
+      - name: Prove frozen base
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_base="30717f4ee84a493697bb4965f4e8128b2e6af6b9"
+          test "$(git merge-base "$expected_base" HEAD)" = "$expected_base"
+
+      - name: Apply bounded Team 5 repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          server_path = Path("lib/strangertalks_new/conversation_lifecycle/conversation_server.ex")
+          server = server_path.read_text()
+
+          pending_marker = """      transition_pending?(state) ->
+                  state =
+                    prepare_terminal_transition(
+          """
+          assert server.count(pending_marker) == 1
+          server = server.replace(
+              pending_marker,
+              """      transition_pending?(state) ->
+                  state =
+                    prepare_explicit_end_transition(
+          """,
+              1,
+          )
+
+          active_marker = """      completable_conversation?(state) ->
+                  state =
+                    prepare_terminal_transition(
+          """
+          assert server.count(active_marker) == 1
+          server = server.replace(
+              active_marker,
+              """      completable_conversation?(state) ->
+                  state =
+                    prepare_explicit_end_transition(
+          """,
+              1,
+          )
+
+          pending_failure = """          {:error, state} ->
+                    {:reply, {:ok, %{status: \"ending\"}}, state}
+          """
+          assert server.count(pending_failure) == 1
+          server = server.replace(
+              pending_failure,
+              """          {:error, state} ->
+                    {:reply, {:error, :end_not_committed}, state}
+          """,
+              1,
+          )
+
+          active_failure = """          {:error, state} -> {:reply, {:ok, %{status: \"ending\"}}, state}
+          """
+          assert server.count(active_failure) == 1
+          server = server.replace(
+              active_failure,
+              """          {:error, state} -> {:reply, {:error, :end_not_committed}, state}
+          """,
+              1,
+          )
+
+          helper_marker = "  defp prepare_terminal_transition(\n"
+          assert server.count(helper_marker) == 1
+          explicit_helper = """  defp prepare_explicit_end_transition(
+                 state,
+                 target_status,
+                 failure_reason,
+                 event_reason,
+                 persistence_attrs,
+                 client_payload
+               ) do
+            %{
+              state
+              | lifecycle_status: :TERMINATING,
+                terminal_intent: %{
+                  cause: :explicit_end,
+                  previous_lifecycle_status: state.lifecycle_status,
+                  target_status: target_status,
+                  failure_reason: failure_reason,
+                  ended_at: DateTime.utc_now(),
+                  termination_reason: event_reason,
+                  persistence_attrs: persistence_attrs,
+                  client_payload: client_payload,
+                  retry_ref: nil,
+                  retry_token: nil
+                }
+            }
+          end
+
+          """
+          server = server.replace(helper_marker, explicit_helper + helper_marker, 1)
+
+          persist_start = server.index("  defp persist_terminal_intent(state) do\n")
+          persist_end = server.index("  defp schedule_terminal_persistence_retry(state) do\n", persist_start)
+          persist_replacement = """  defp persist_terminal_intent(state) do
+            intent = state.terminal_intent
+
+            case persist_conversation_status(
+                   state.conversation,
+                   intent.target_status,
+                   intent.ended_at,
+                   intent.persistence_attrs
+                 ) do
+              {:ok, conversation} ->
+                source_resolver = fn client_msg_id ->
+                  find_recent_message(state.recent_messages, client_msg_id)
+                end
+
+                _ =
+                  StrangertalksNew.Reflections.finalize_conversation_terminal(
+                    conversation.conversation_id,
+                    intent.ended_at,
+                    source_resolver
+                  )
+
+                state =
+                  if explicit_end_intent?(intent) do
+                    :ok = maybe_requeue_transition_survivor(conversation, intent)
+                    fail_all_pending(state, intent.failure_reason)
+                  else
+                    state
+                  end
+
+                notify_terminal_clients(state, intent.client_payload)
+
+                dispatch_bus_payload("conversation.ended", %{
+                  "conversation_id" => conversation.conversation_id,
+                  "reason" => intent.termination_reason
+                })
+
+                if not explicit_end_intent?(intent) do
+                  maybe_requeue_transition_survivor(conversation, intent)
+                end
+
+                {:ok,
+                 %{
+                   state
+                   | conversation: conversation,
+                     lifecycle_status: intent.target_status,
+                     terminal_intent: nil
+                 }}
+
+              {:error, reason} ->
+                Logger.error("Conversation terminal persistence failed",
+                  target_status: intent.target_status,
+                  reason_code: StrangertalksNew.DomainError.from_error(reason).code
+                )
+
+                if explicit_end_intent?(intent) do
+                  {:error, rollback_explicit_end_attempt(state)}
+                else
+                  {:error, schedule_terminal_persistence_retry(state)}
+                end
+            end
+          end
+
+          defp explicit_end_intent?(%{cause: :explicit_end}), do: true
+          defp explicit_end_intent?(_intent), do: false
+
+          defp rollback_explicit_end_attempt(state) do
+            previous_lifecycle_status =
+              Map.get(state.terminal_intent, :previous_lifecycle_status, :ACTIVE)
+
+            %{state | lifecycle_status: previous_lifecycle_status, terminal_intent: nil}
+          end
+
+          """
+          server = server[:persist_start] + persist_replacement + server[persist_end:]
+          server_path.write_text(server)
+
+          domain_path = Path("lib/strangertalks_new/domain_error.ex")
+          domain = domain_path.read_text()
+          domain_marker = """    media_unavailable: %{
+          """
+          assert domain.count(domain_marker) == 1
+          domain_entry = """    end_not_committed: %{
+              code: "END_NOT_COMMITTED",
+              category: :transport,
+              retryable: true,
+              action: :none,
+              http_status: 503
+            },
+          """
+          domain = domain.replace(domain_marker, domain_entry + domain_marker, 1)
+          domain_path.write_text(domain)
+
+          persistence_test_path = Path("test/strangertalks_new/terminal_persistence_failure_test.exs")
+          persistence_test = persistence_test_path.read_text()
+          old_test_title = '  test "End persistence failure reports ending, emits no terminal authority, then converges only after durable retry" do\n'
+          start = persistence_test.index(old_test_title)
+          end = persistence_test.index("  defp queue_match do\n", start)
+          replacement_test = """  test "End persistence failure returns retryable error and restores active runtime without retry authority" do
+            %{conversation: conversation, a: a, b: b} = queue_match()
+            conversation_id = conversation.conversation_id
+            pid = start_supervised!({ConversationServer, %{conversation_id: conversation_id}})
+
+            assert {:ok, _} =
+                     ConversationServer.sync_and_register_channel(
+                       conversation_id,
+                       a.participant_id,
+                       self(),
+                       nil,
+                       0
+                     )
+
+            assert {:ok, _} =
+                     ConversationServer.sync_and_register_channel(
+                       conversation_id,
+                       b.participant_id,
+                       self(),
+                       nil,
+                       0
+                     )
+
+            durable_active = Repo.get!(Conversation, conversation_id)
+            assert durable_active.conversation_status == :ACTIVE
+
+            :sys.replace_state(pid, fn state ->
+              %{state | conversation: %{state.conversation | participant_b_id: nil}}
+            end)
+
+            assert {:error, :end_not_committed} =
+                     ConversationServer.complete_conversation(conversation_id, a.participant_id)
+
+            after_failure = Repo.get!(Conversation, conversation_id)
+            assert after_failure.conversation_status == :ACTIVE
+            assert after_failure.ended_at == nil
+            refute_receive {:conversation_completed, _payload}, 100
+            assert Process.alive?(pid)
+
+            assert {:ok, state} = ConversationServer.inspect_state(conversation_id)
+            assert state.lifecycle_status == :ACTIVE
+            assert state.terminal_intent == nil
+
+            assert_eventually(fn -> ConversationServer.lookup(conversation_id) == {:ok, pid} end)
+
+            :sys.replace_state(pid, fn state -> %{state | conversation: durable_active} end)
+
+            assert {:ok, %{status: "sent"}} =
+                     ConversationServer.append_message(
+                       conversation_id,
+                       a.participant_id,
+                       Ecto.UUID.generate(),
+                       "failed End returns authority to the active conversation"
+                     )
+          end
+
+          """
+          persistence_test = persistence_test[:start] + replacement_test + persistence_test[end:]
+          persistence_test_path.write_text(persistence_test)
+
+          observability_path = Path("test/strangertalks_new/terminal_observability_test.exs")
+          observability = observability_path.read_text()
+          old_observability = '    assert {:ok, %{status: "ending"}} =\n             ConversationServer.complete_conversation(\n'
+          assert observability.count(old_observability) == 1
+          observability = observability.replace(
+              old_observability,
+              '    assert {:error, :end_not_committed} =\n             ConversationServer.complete_conversation(\n',
+              1,
+          )
+          observability_path.write_text(observability)
+          PY
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Format and prove diff hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix format \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/domain_error.ex \
+            test/strangertalks_new/wt02_explicit_end_server_core_test.exs \
+            test/strangertalks_new/terminal_persistence_failure_test.exs \
+            test/strangertalks_new/terminal_observability_test.exs
+          git diff --check
+
+      - name: GREEN focused explicit End contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/wt02_explicit_end_server_core_test.exs --trace
+
+      - name: GREEN terminal and Block regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test \
+            test/strangertalks_new/terminal_persistence_failure_test.exs \
+            test/strangertalks_new/terminal_observability_test.exs \
+            test/strangertalks_new/recovery_restart_test.exs \
+            test/strangertalks_new/st_work_d_terminal_truth_test.exs \
+            test/strangertalks_new_web/channels/conversation_terminal_channel_test.exs
+
+      - name: GREEN postcommit pre-notify durable-truth proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_test="test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs"
+          trap 'rm -f "$proof_test"' EXIT
+          git show 54a4aadb2d3ec2498bc9f92b8f5ae8a11d0a7187:"$proof_test" > "$proof_test"
+          mix test "$proof_test" --trace
+          rm -f "$proof_test"
+          trap - EXIT
+
+      - name: GREEN full precommit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix precommit
+          git diff --check
+
+      - name: Commit verified bounded repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/wt02-team5-apply.yml
+          git status --short
+          git config user.name "Manvith"
+          git config user.email "manvithh24@gmail.com"
+          git add \
+            lib/strangertalks_new/conversation_lifecycle/conversation_server.ex \
+            lib/strangertalks_new/domain_error.ex \
+            test/strangertalks_new/terminal_persistence_failure_test.exs \
+            test/strangertalks_new/terminal_observability_test.exs
+          git diff --cached --check
+          git commit -m "fix: make explicit conversation end commit-authoritative"
+          git push origin HEAD:wind-tunnel/wt02-terminal-repair
+          echo "WT02_TEAM5_HEAD=$(git rev-parse HEAD)"
