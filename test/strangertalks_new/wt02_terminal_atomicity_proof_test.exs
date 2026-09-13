@@ -19,6 +19,7 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
   test "A: normal explicit terminalization commits durable truth before terminal authority" do
     %{conversation: conversation, a: a, b: b} = queue_match()
     conversation_id = conversation.conversation_id
+
     %{pid: pid, a_client: a_client, b_client: b_client} =
       activate_runtime(conversation_id, a.participant_id, b.participant_id)
 
@@ -39,8 +40,7 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
              )
 
     assert_receive {:wt02_client_a,
-                    {:conversation_message_status,
-                     %{message_id: ^message_id, status: "sent"}}},
+                    {:conversation_message_status, %{message_id: ^message_id, status: "sent"}}},
                    500
 
     assert_receive {:wt02_client_b,
@@ -63,13 +63,11 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
                    500
 
     assert_receive {:wt02_client_a,
-                    {:conversation_completed,
-                     %{status: "ended", reason: "participant_completed"}}},
+                    {:conversation_completed, %{status: "ended", reason: "participant_completed"}}},
                    500
 
     assert_receive {:wt02_client_b,
-                    {:conversation_completed,
-                     %{status: "ended", reason: "participant_completed"}}},
+                    {:conversation_completed, %{status: "ended", reason: "participant_completed"}}},
                    500
 
     assert_receive {:conversation_event, :"conversation.ended",
@@ -108,6 +106,7 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
   test "B/C: pending teardown precedes failed DB commit, gates actions, retries, then converges once" do
     %{conversation: conversation, a: a, b: b} = queue_match()
     conversation_id = conversation.conversation_id
+
     %{pid: pid, a_client: _a_client, b_client: _b_client} =
       activate_runtime(conversation_id, a.participant_id, b.participant_id)
 
@@ -129,12 +128,10 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
              )
 
     assert_receive {:wt02_client_a,
-                    {:conversation_message_status,
-                     %{message_id: ^message_id, status: "sent"}}},
+                    {:conversation_message_status, %{message_id: ^message_id, status: "sent"}}},
                    500
 
-    assert_receive {:wt02_client_b,
-                    {:conversation_message, %{message_id: ^message_id}}},
+    assert_receive {:wt02_client_b, {:conversation_message, %{message_id: ^message_id}}},
                    500
 
     assert {:ok, before_cut} = ConversationServer.inspect_state(conversation_id)
@@ -170,8 +167,10 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
       assert terminating.pending_count == 0
       assert terminating.pending == %{}
       assert terminating.completed[message_id].final_state == :failed
+
       assert Enum.find(terminating.recent_messages, &(&1.message_id == message_id)).delivery_status ==
                :failed
+
       assert %{retry_token: retry_token_1, retry_ref: retry_ref_1} = terminating.terminal_intent
       assert is_reference(retry_token_1)
       assert is_reference(retry_ref_1)
@@ -251,10 +250,11 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
 
       assert Repo.get!(Conversation, conversation_id).conversation_status == :ACTIVE
       assert active_reservations(conversation.match_id) == 2
+
       refute_receive {:wt02_client_a,
-                      {:conversation_message_status,
-                       %{message_id: ^message_id, status: "failed"}}},
+                      {:conversation_message_status, %{message_id: ^message_id, status: "failed"}}},
                      100
+
       refute_receive {:wt02_client_a, {:conversation_completed, _}}, 100
       refute_receive {:wt02_client_b, {:conversation_completed, _}}, 100
 
@@ -319,9 +319,9 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
              )
 
     assert_receive {:wt02_client_a,
-                    {:conversation_message_status,
-                     %{message_id: ^message_id, status: "sent"}}},
+                    {:conversation_message_status, %{message_id: ^message_id, status: "sent"}}},
                    500
+
     assert_receive {:wt02_client_b, {:conversation_message, %{message_id: ^message_id}}}, 500
 
     assert {:ok, before_cut} = ConversationServer.inspect_state(conversation_id)
@@ -344,6 +344,7 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
 
       assert Repo.get!(Conversation, conversation_id).conversation_status == :ACTIVE
       assert active_reservations(conversation.match_id) == 2
+
       assert {:ok, %{lifecycle_status: :TERMINATING}} =
                ConversationServer.inspect_state(conversation_id)
 
@@ -418,9 +419,13 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
       # Cleanup only after the proof: remove the injected DB failure and terminalize
       # the resurrected isolated conversation so the test leaves no live runtime.
       drop_terminal_constraint()
+
       assert {:ok, %{status: "ended"}} =
                ConversationServer.complete_conversation(conversation_id, a.participant_id)
-      assert_eventually(fn -> ConversationServer.lookup(conversation_id) == {:error, :not_started} end)
+
+      assert_eventually(fn ->
+        ConversationServer.lookup(conversation_id) == {:error, :not_started}
+      end)
     after
       drop_terminal_constraint()
     end
@@ -455,7 +460,11 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
     send(task_b.pid, :go)
 
     results = [Task.await(task_a, 2_000), Task.await(task_b, 2_000)]
-    assert Enum.all?(results, &match?({:ok, %{status: status}} when status in ["ended", "ending"], &1))
+
+    assert Enum.all?(
+             results,
+             &match?({:ok, %{status: status}} when status in ["ended", "ending"], &1)
+           )
 
     assert_receive {:wt02_client_a, {:conversation_completed, %{status: "ended"}}}, 1_000
     assert_receive {:wt02_client_b, {:conversation_completed, %{status: "ended"}}}, 1_000
@@ -476,6 +485,7 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
 
     assert {:ok, %{status: "ended"}} =
              ConversationServer.complete_conversation(conversation_id, a.participant_id)
+
     assert {:ok, %{status: "ended"}} =
              ConversationServer.complete_conversation(conversation_id, b.participant_id)
   end
@@ -512,8 +522,7 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
              )
 
     assert_receive {:wt02_client_a,
-                    {:conversation_message_status,
-                     %{message_id: ^message_id, status: "sent"}}},
+                    {:conversation_message_status, %{message_id: ^message_id, status: "sent"}}},
                    500
 
     assert {:ok, %{pending_count: 1}} = ConversationServer.inspect_state(conversation_id)
@@ -552,6 +561,7 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
                       {:conversation_completed,
                        %{status: "ended", reason: "left_during_transition"}}},
                      1_000
+
       assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 1_000
 
       terminal = Repo.get!(Conversation, conversation_id)
@@ -588,7 +598,10 @@ defmodule StrangertalksNew.WT02TerminalAtomicityProofTest do
                0
              )
 
-    assert_eventually(fn -> Repo.get!(Conversation, conversation_id).conversation_status == :ACTIVE end)
+    assert_eventually(fn ->
+      Repo.get!(Conversation, conversation_id).conversation_status == :ACTIVE
+    end)
+
     drain_mailbox()
 
     %{pid: pid, a_client: a_client, b_client: b_client}

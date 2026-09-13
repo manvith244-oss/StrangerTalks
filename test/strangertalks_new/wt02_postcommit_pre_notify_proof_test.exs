@@ -46,7 +46,10 @@ defmodule StrangertalksNew.WT02PostCommitPreNotifyProofTest do
                0
              )
 
-    assert_eventually(fn -> Repo.get!(Conversation, conversation_id).conversation_status == :ACTIVE end)
+    assert_eventually(fn ->
+      Repo.get!(Conversation, conversation_id).conversation_status == :ACTIVE
+    end)
+
     drain_mailbox()
 
     :ok =
@@ -97,7 +100,10 @@ defmodule StrangertalksNew.WT02PostCommitPreNotifyProofTest do
 
     # Durable terminal truth prevents the transient child from resurrecting. A missed
     # client notification is recoverable by canonical reconciliation / join refusal.
-    assert_eventually(fn -> ConversationServer.lookup(conversation_id) == {:error, :not_started} end)
+    assert_eventually(fn ->
+      ConversationServer.lookup(conversation_id) == {:error, :not_started}
+    end)
+
     assert {:error, :terminal_conversation} = ConversationServer.ensure_started(conversation_id)
 
     assert {:ok, %{canonical_state: :AVAILABLE, conversation: nil}} =
