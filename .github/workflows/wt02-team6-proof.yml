@@ -49,7 +49,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ github.sha }}"
 
       - name: Correct RED harness expectation
-        if: github.event.head_commit.message == 'ci: correct WT-02 RED harness'
+        if: "${{ github.event.head_commit.message == 'ci: correct WT-02 RED harness' }}"
         shell: bash
         run: |
           set -euo pipefail
@@ -82,7 +82,7 @@ jobs:
           git push origin HEAD:wind-tunnel/wt02-terminal-transport-repair
 
       - name: Apply bounded runtime repair
-        if: github.event.head_commit.message == 'ci: apply WT-02 runtime repair'
+        if: "${{ github.event.head_commit.message == 'ci: apply WT-02 runtime repair' }}"
         shell: bash
         run: |
           set -euo pipefail
