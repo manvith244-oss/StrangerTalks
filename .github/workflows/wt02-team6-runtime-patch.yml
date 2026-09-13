@@ -27,72 +27,40 @@ jobs:
           path = Path("lib/strangertalks_new/conversation_lifecycle/conversation_server.ex")
           text = path.read_text()
 
-          def replace_in_handler(text, start_marker, next_marker, pattern, replacement, label):
-              start = text.index(start_marker)
-              end = text.index(next_marker, start + len(start_marker))
-              block = text[start:end]
-              updated, count = re.subn(pattern, replacement, block, count=1, flags=re.MULTILINE)
-              assert count == 1, f"{label}: expected one exact cut, found {count}"
-              return text[:start] + updated + text[end:]
+          ack_start_marker = "  def handle_call({:acknowledge_message, participant_id, message_id}, _from, state) do"
+          ack_start = text.index(ack_start_marker)
+          ack_end = text.index("\n  def handle_call(", ack_start + len(ack_start_marker))
+          ack_block = text[ack_start:ack_end]
+          ack_pattern = r"\n\s*terminating\?\(state\) ->\n\s*\{:reply, \{:error, :conversation_terminating\}, state\}\n"
+          ack_block, ack_count = re.subn(ack_pattern, "\n", ack_block, count=1)
+          assert ack_count == 1, f"text ACK terminating gate: expected one exact cut, found {ack_count}"
+          text = text[:ack_start] + ack_block + text[ack_end:]
 
-          text = replace_in_handler(
-              text,
-              "  def handle_call({:acknowledge_message, participant_id, message_id}, _from, state) do",
-              "\n  def handle_call(",
-              r"\n\s*terminating\?\(state\) ->\n\s*\{:reply, \{:error, :conversation_terminating\}, state\}\n",
-              "\n",
-              "text ACK terminating gate",
-          )
+          retry_start_marker = "  def handle_info({:retry_message, message_id, retry_token}, state) do"
+          retry_start = text.index(retry_start_marker)
+          retry_end = text.index("\n  def handle_info(", retry_start + len(retry_start_marker))
+          retry_block = text[retry_start:retry_end]
+          retry_pattern = r"(?ms)        if connected\?\(state, message\.recipient_id\) do\n\s*deliver_to_participant\(state, message\.recipient_id, message\)\n\s*\{:noreply, schedule_retry\(state, message_id\)\}\n\s*else\n\s*\{:noreply, state\}\n\s*end"
+          retry_replacement = "\n".join(["        cond do", "          terminating?(state) ->", "            {:noreply, state}", "", "          connected?(state, message.recipient_id) ->", "            deliver_to_participant(state, message.recipient_id, message)", "            {:noreply, schedule_retry(state, message_id)}", "", "          true ->", "            {:noreply, state}", "        end"])
+          retry_block, retry_count = re.subn(retry_pattern, retry_replacement, retry_block, count=1)
+          assert retry_count == 1, f"text/expressive retry authority: expected one exact cut, found {retry_count}"
+          text = text[:retry_start] + retry_block + text[retry_end:]
 
-          text = replace_in_handler(
-              text,
-              "  def handle_info({:retry_message, message_id, retry_token}, state) do",
-              "\n  def handle_info(",
-              r"(?ms)        if connected\?\(state, message\.recipient_id\) do\n\s*deliver_to_participant\(state, message\.recipient_id, message\)\n\s*\{:noreply, schedule_retry\(state, message_id\)\}\n\s*else\n\s*\{:noreply, state\}\n\s*end",
-              """        cond do
-          terminating?(state) ->
-            {:noreply, state}
-
-          connected?(state, message.recipient_id) ->
-            deliver_to_participant(state, message.recipient_id, message)
-            {:noreply, schedule_retry(state, message_id)}
-
-          true ->
-            {:noreply, state}
-        end""",
-              "text/expressive retry authority",
-          )
-
-          text = replace_in_handler(
-              text,
-              "  def handle_info({:retry_voice_note, voice_note_id, retry_token}, state) do",
-              "\n  def handle_info(",
-              r"(?ms)        if connected\?\(state, note\.recipient_id\) do\n\s*deliver_voice_note_to_participant\(state, note\.recipient_id, note\)\n\s*\{:noreply, schedule_voice_retry\(state, voice_note_id\)\}\n\s*else\n\s*\{:noreply, state\}\n\s*end",
-              """        cond do
-          terminating?(state) ->
-            {:noreply, state}
-
-          connected?(state, note.recipient_id) ->
-            deliver_voice_note_to_participant(state, note.recipient_id, note)
-            {:noreply, schedule_voice_retry(state, voice_note_id)}
-
-          true ->
-            {:noreply, state}
-        end""",
-              "voice retry authority",
-          )
+          voice_start_marker = "  def handle_info({:retry_voice_note, voice_note_id, retry_token}, state) do"
+          voice_start = text.index(voice_start_marker)
+          voice_end = text.index("\n  def handle_info(", voice_start + len(voice_start_marker))
+          voice_block = text[voice_start:voice_end]
+          voice_pattern = r"(?ms)        if connected\?\(state, note\.recipient_id\) do\n\s*deliver_voice_note_to_participant\(state, note\.recipient_id, note\)\n\s*\{:noreply, schedule_voice_retry\(state, voice_note_id\)\}\n\s*else\n\s*\{:noreply, state\}\n\s*end"
+          voice_replacement = "\n".join(["        cond do", "          terminating?(state) ->", "            {:noreply, state}", "", "          connected?(state, note.recipient_id) ->", "            deliver_voice_note_to_participant(state, note.recipient_id, note)", "            {:noreply, schedule_voice_retry(state, voice_note_id)}", "", "          true ->", "            {:noreply, state}", "        end"])
+          voice_block, voice_count = re.subn(voice_pattern, voice_replacement, voice_block, count=1)
+          assert voice_count == 1, f"voice retry authority: expected one exact cut, found {voice_count}"
+          text = text[:voice_start] + voice_block + text[voice_end:]
 
           path.write_text(text)
           PY
 
           git diff --check
           git diff -- lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
-
-          if git diff --quiet -- lib/strangertalks_new/conversation_lifecycle/conversation_server.ex; then
-            echo "Runtime already repaired."
-            exit 0
-          fi
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add lib/strangertalks_new/conversation_lifecycle/conversation_server.ex
