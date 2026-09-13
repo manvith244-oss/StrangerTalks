@@ -1718,9 +1718,6 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
       not member?(state, participant_id) ->
         {:reply, {:error, :not_conversation_member}, state}
 
-      terminating?(state) ->
-        {:reply, {:error, :conversation_terminating}, state}
-
       true ->
         acknowledge_pending_message(state, participant_id, message_id)
     end
@@ -3123,11 +3120,16 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
         message = %{message | retry_ref: nil, retry_token: nil}
         state = put_in(state.pending[message_id], message)
 
-        if connected?(state, message.recipient_id) do
-          deliver_to_participant(state, message.recipient_id, message)
-          {:noreply, schedule_retry(state, message_id)}
-        else
-          {:noreply, state}
+        cond do
+          terminating?(state) ->
+            {:noreply, state}
+
+          connected?(state, message.recipient_id) ->
+            deliver_to_participant(state, message.recipient_id, message)
+            {:noreply, schedule_retry(state, message_id)}
+
+          true ->
+            {:noreply, state}
         end
 
       _missing_or_stale ->
@@ -3148,11 +3150,16 @@ defmodule StrangertalksNew.ConversationLifecycle.ConversationServer do
         note = %{note | retry_ref: nil, retry_token: nil}
         state = put_in(state.pending_voice_notes[voice_note_id], note)
 
-        if connected?(state, note.recipient_id) do
-          deliver_voice_note_to_participant(state, note.recipient_id, note)
-          {:noreply, schedule_voice_retry(state, voice_note_id)}
-        else
-          {:noreply, state}
+        cond do
+          terminating?(state) ->
+            {:noreply, state}
+
+          connected?(state, note.recipient_id) ->
+            deliver_voice_note_to_participant(state, note.recipient_id, note)
+            {:noreply, schedule_voice_retry(state, voice_note_id)}
+
+          true ->
+            {:noreply, state}
         end
 
       _ ->
