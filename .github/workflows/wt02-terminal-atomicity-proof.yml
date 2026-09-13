@@ -68,37 +68,50 @@ jobs:
           mix local.rebar --force
           mix deps.get
 
-      - name: Normalize proof formatting and commit proof-only result
+      - name: Verify proof formatting and diff hygiene
         shell: bash
         run: |
           set -euo pipefail
-          mix format \
+          mix format --check-formatted \
             test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs \
             test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs
           git diff --check
-          if ! git diff --quiet -- \
-            test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs \
-            test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs; then
-            git config user.name "WT-02 Proof Bot"
-            git config user.email "wt02-proof@users.noreply.github.com"
-            git add \
-              test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs \
-              test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs
-            git commit -m "test(wt02): format isolated proof harness"
-            git push origin HEAD:wind-tunnel/wt02-terminal-precommit-proof
-          fi
 
       - name: WT-02 A B C D F G and PENDING proof
         shell: bash
         run: |
-          set -euo pipefail
-          mix test test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs --trace
+          set -uo pipefail
+          set +e
+          mix test test/strangertalks_new/wt02_terminal_atomicity_proof_test.exs --trace 2>&1 | tee /tmp/wt02-main-proof.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            cp /tmp/wt02-main-proof.log wt02-main-proof-failure.log
+            git config user.name "WT-02 Proof Bot"
+            git config user.email "wt02-proof@users.noreply.github.com"
+            git add wt02-main-proof-failure.log
+            git commit -m "test(wt02): capture main proof failure evidence"
+            git push origin HEAD:wind-tunnel/wt02-terminal-precommit-proof
+            exit "$status"
+          fi
 
       - name: WT-02 E post-commit pre-notify process-death proof
         shell: bash
         run: |
-          set -euo pipefail
-          mix test test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs --trace
+          set -uo pipefail
+          set +e
+          mix test test/strangertalks_new/wt02_postcommit_pre_notify_proof_test.exs --trace 2>&1 | tee /tmp/wt02-postcommit-proof.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            cp /tmp/wt02-postcommit-proof.log wt02-postcommit-proof-failure.log
+            git config user.name "WT-02 Proof Bot"
+            git config user.email "wt02-proof@users.noreply.github.com"
+            git add wt02-postcommit-proof-failure.log
+            git commit -m "test(wt02): capture postcommit proof failure evidence"
+            git push origin HEAD:wind-tunnel/wt02-terminal-precommit-proof
+            exit "$status"
+          fi
 
       - name: Existing terminal regression proofs
         shell: bash
