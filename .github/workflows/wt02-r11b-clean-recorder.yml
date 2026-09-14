@@ -1,13 +1,19 @@
 name: WT02 R11B Clean Recorder
 
 on:
-  workflow_dispatch:
+  push:
+    branches:
+      - wind-tunnel/wt02-r11b-clean-only-exec
 
 permissions:
   contents: read
 
 jobs:
   clean-recorder:
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/wind-tunnel/wt02-r11b-clean-only-exec' &&
+      github.event.before == '3511539b5cf4129bfb9213ef4a7174f2ee27b0d3'
     runs-on: ubuntu-latest
     services:
       postgres:
