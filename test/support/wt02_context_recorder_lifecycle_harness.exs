@@ -26,6 +26,19 @@ target = %{
   time: 17
 }
 
+predecessor_test = %{
+  module: StrangertalksNew.WT02SyntheticPredecessor,
+  name: :synthetic_predecessor,
+  tags: %{async: false},
+  state: nil,
+  time: 3
+}
+
+predecessor_module = %{
+  name: StrangertalksNew.WT02SyntheticPredecessor,
+  tests: [predecessor_test]
+}
+
 wait_until = fn predicate, description ->
   deadline = System.monotonic_time(:millisecond) + 2_000
 
@@ -97,14 +110,26 @@ File.rm(artifact)
 generation_1 = Map.put(valid_context, :synthetic_generation, 1)
 {formatter_1, recorder_1} = start_formatter.()
 :ok = WT02ContextRecorder.record_context(generation_1)
+GenServer.cast(formatter_1, {:test_finished, predecessor_test})
+GenServer.cast(formatter_1, {:module_finished, predecessor_module})
+
+wait_until.(
+  fn ->
+    state = :sys.get_state(recorder_1)
+    length(state.tests) == 1 and length(state.modules) == 1
+  end,
+  "generation 1 predecessor history"
+)
+
 state_1 = :sys.get_state(recorder_1)
 
 {:ok, formatter_2} = GenServer.start_link(WT02ContextRecorder, [max_cases: 1])
 recorder_2 = Process.whereis(WT02ContextRecorder)
 state_2 = :sys.get_state(recorder_2)
 
-unless recorder_2 == recorder_1 and state_2.context[:synthetic_generation] == 1 do
-  raise "stale-recorder attachment defect was not reproduced"
+unless recorder_2 == recorder_1 and state_2.context[:synthetic_generation] == 1 and
+         length(state_2.tests) == 1 and length(state_2.modules) == 1 do
+  raise "stale-recorder attachment defect was not reproduced with predecessor history"
 end
 
 IO.puts("STALE_RECORDER_RED=REPRODUCED recorder_reused=true generation=#{state_2.context[:synthetic_generation]}")
