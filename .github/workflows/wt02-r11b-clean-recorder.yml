@@ -1,0 +1,104 @@
+name: WT02 R11B Clean Recorder
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clean-recorder:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      WT02_CONTEXT_RECORDER: "1"
+      WT02_TEAM6_SHA: ac867b346426c782b90031b3d770a0d294761065
+      WT02_SEED: "972822"
+      WT02_POSTGRES_VERSION: "16"
+      EXPECTED_REPAIRED_SHA: a42623aa580377a8dd2c34a77749f4cd6055e342
+    steps:
+      - name: Checkout exact repaired recorder revision
+        uses: actions/checkout@v4
+        with:
+          ref: a42623aa580377a8dd2c34a77749f4cd6055e342
+          fetch-depth: 1
+
+      - name: Assert exact repaired recorder revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          echo "HEAD=$actual"
+          test "$actual" = "$EXPECTED_REPAIRED_SHA"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Prepare disposable test database
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Apply reviewed R11 diagnostic-only target overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def rep(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              if s.count(old) != 1:
+                  raise SystemExit(f"overlay anchor mismatch: {path}")
+              p.write_text(s.replace(old, new))
+
+          p = "test/test_helper.exs"
+          rep(p, "ExUnit.start()\n", '''ExUnit.start()\n\nif System.get_env("WT02_CONTEXT_RECORDER") == "1" do\n  ExUnit.configure(formatters: [ExUnit.CLIFormatter, StrangertalksNew.WT02ContextRecorder])\nend\n''')
+
+          p = "test/strangertalks_new/relationship_reconnections_test.exs"
+          rep(p, "  setup do\n    Agent.update(QueueState, fn _ -> %{} end)\n    fixture = relationship_fixture()\n    %{fixture: fixture}\n  end\n", '''  setup context do\n    target? = System.get_env("WT02_CONTEXT_RECORDER") == "1" and String.contains?(to_string(context.test), "concurrent second-intent attempts still create one Match and one Conversation")\n    if target?, do: StrangertalksNew.WT02ContextRecorder.pre_reset()\n    Agent.update(QueueState, fn _ -> %{} end)\n    fixture = relationship_fixture()\n    if target?, do: StrangertalksNew.WT02ContextRecorder.after_setup()\n    %{fixture: fixture}\n  end\n''')
+          rep(p, "      |> Enum.map(fn {:ok, result} -> result end)\n\n    assert Enum.all?(results, &match?({:ok, %{status: \"matched\"}}, &1))\n", '''      |> Enum.map(fn {:ok, result} -> result end)\n\n    if System.get_env("WT02_CONTEXT_RECORDER") == "1", do: StrangertalksNew.WT02ContextRecorder.post_race(f, results)\n\n    assert Enum.all?(results, &match?({:ok, %{status: "matched"}}, &1))\n''')
+          PY
+          git diff --check
+
+      - name: Compile diagnostic code
+        run: mix compile
+
+      - name: Run clean recorder target exactly once
+        env:
+          WT02_ARTIFACT: tmp/wt02-r11-clean.json
+        run: mix test test/strangertalks_new/relationship_reconnections_test.exs:170 --seed 972822
+
+      - name: Upload clean recorder artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt02-r11b-clean-recorder
+          path: tmp/wt02-r11-clean.json
+          if-no-files-found: warn
