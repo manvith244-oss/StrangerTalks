@@ -1,0 +1,119 @@
+name: WT-02 Window-1 Deterministic Diagnostic
+
+on:
+  push:
+    branches:
+      - wind-tunnel/wt02-window1-deterministic-diagnostic
+    paths:
+      - .github/workflows/wt02-window1-deterministic-diagnostic.yml
+      - test/diagnostics/wt02_window1_overlay.py
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+  STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+jobs:
+  window1:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout diagnostic controller
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: Build three identical diagnostic copies
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/wt02-window1"
+          mkdir -p "$root/evidence"
+          : > "$root/evidence/identities.txt"
+          : > "$root/evidence/patched-source-sha256.txt"
+          while read -r name sha; do
+            git worktree add --detach "$root/$name" "$sha"
+            actual="$(git -C "$root/$name" rev-parse HEAD)"
+            test "$actual" = "$sha"
+            echo "$name $actual" >> "$root/evidence/identities.txt"
+            (cd "$root/$name" && python3 "$GITHUB_WORKSPACE/test/diagnostics/wt02_window1_overlay.py")
+            sha256sum "$root/$name/lib/strangertalks_new/relationship_reconnections.ex" | awk -v n="$name" '{print n" "$1}' >> "$root/evidence/patched-source-sha256.txt"
+          done <<'SHAS'
+          canonical 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          team5 c4b2ab30c5bea5131d87e239eb37205165330673
+          team6 ac867b346426c782b90031b3d770a0d294761065
+          SHAS
+          test "$(awk '{print $2}' "$root/evidence/patched-source-sha256.txt" | sort -u | wc -l)" -eq 1
+          cat "$root/evidence/identities.txt"
+          cat "$root/evidence/patched-source-sha256.txt"
+
+      - name: Run nine deterministic confirmations
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/wt02-window1"
+          summary="$root/evidence/summary.txt"
+          : > "$summary"
+          for name in canonical team5 team6; do
+            cd "$root/$name"
+            mix deps.get
+            for run in 1 2 3; do
+              mix ecto.drop --force >/dev/null 2>&1 || true
+              mix ecto.create >/dev/null
+              mix ecto.migrate >/dev/null
+              log="$root/evidence/${name}-run${run}.log"
+              set +e
+              mix test test/strangertalks_new/relationship_reconnections_test.exs --only wt02_window1 --seed 0 --trace >"$log" 2>&1
+              rc=$?
+              set -e
+              if grep -q "WT02_HARNESS_INVALID" "$log"; then
+                result=INVALID
+              elif test "$rc" -eq 0 && grep -q "WT02_RESULT=PASS" "$log"; then
+                result=PASS
+              else
+                result=FAIL
+              fi
+              echo "$name Run $run: $result" | tee -a "$summary"
+              grep -E "WT02_(WINNER_SNAPSHOT|SEQUENCE|RESULT)" "$log" || true
+            done
+          done
+          echo "--- MATRIX ---"
+          cat "$summary"
+
+      - name: Upload diagnostic evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt02-window1-deterministic-${{ github.sha }}
+          path: ${{ runner.temp }}/wt02-window1/evidence
+          if-no-files-found: error
