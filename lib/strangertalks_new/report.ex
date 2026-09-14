@@ -24,6 +24,10 @@ defmodule StrangertalksNew.Report do
     field :deduplication_key, :string
     field :media_origin, Ecto.Enum, values: [:NO_MEDIA, :MEDIA_ORIGIN]
 
+    field :source_kind, Ecto.Enum,
+      values: [:CONVERSATION, :HANGOUT],
+      default: :CONVERSATION
+
     belongs_to :reporting_participant, StrangertalksNew.Participant,
       foreign_key: :reporting_participant_id,
       references: :participant_id
@@ -76,6 +80,8 @@ defmodule StrangertalksNew.Report do
     |> foreign_key_constraint(:reported_message_id)
     |> unique_constraint(:deduplication_key)
     |> check_constraint(:media_origin, name: :reports_media_origin_check)
+    |> check_constraint(:source_kind, name: :reports_source_kind_check)
+    |> check_constraint(:source_kind, name: :reports_source_authority_check)
   end
 
   defp validate_self_reporting(changeset) do
