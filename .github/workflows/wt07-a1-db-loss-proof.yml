@@ -195,20 +195,46 @@ jobs:
           fi
           echo "migration_result=success" >> "$PROOF_DIR/proof-transcript.txt"
 
-      - name: Start canonical production release and capture PID
+      - name: Start canonical production release and record launch PID
         shell: bash
         run: |
           set -euo pipefail
           runtime_log="$PROOF_DIR/application-runtime.log"
           _build/prod/rel/strangertalks_new/bin/strangertalks_new start >"$runtime_log" 2>&1 &
-          app_pid=$!
-          echo "$app_pid" > "$PROOF_DIR/app-pid.txt"
-          echo "APP_PID=$app_pid" >> "$GITHUB_ENV"
-          echo "application_pid_initial=$app_pid" >> "$PROOF_DIR/proof-transcript.txt"
-          sleep 1
-          kill -0 "$app_pid"
+          launch_pid=$!
+          echo "$launch_pid" > "$PROOF_DIR/launch-pid.txt"
+          launch_starttime="$(python3 - "$launch_pid" <<'PY_STARTTIME'
+          import pathlib
+          import sys
 
-      - name: Establish healthy baseline and capture live plus ready
+          data = pathlib.Path(f"/proc/{sys.argv[1]}/stat").read_text()
+          close = data.rfind(")")
+          if close < 0:
+              raise SystemExit(1)
+          fields_after_comm = data[close + 2:].split()
+          if len(fields_after_comm) <= 19:
+              raise SystemExit(1)
+          print(fields_after_comm[19])
+          PY_STARTTIME
+          )"
+          test -n "$launch_starttime"
+          {
+            echo "LAUNCH_PID=$launch_pid"
+            echo "LAUNCH_PROC_STARTTIME=$launch_starttime"
+          } >> "$GITHUB_ENV"
+          launch_alive_after_1s=false
+          sleep 1
+          if kill -0 "$launch_pid" 2>/dev/null; then
+            launch_alive_after_1s=true
+          fi
+          {
+            echo "LAUNCH_PID=$launch_pid"
+            echo "LAUNCH_PROC_STARTTIME=$launch_starttime"
+            echo "launch_pid_role=provenance_only"
+            echo "launch_pid_alive_after_1s=$launch_alive_after_1s"
+          } >> "$PROOF_DIR/proof-transcript.txt"
+
+      - name: Establish healthy baseline and fingerprint HTTP listener process
         shell: bash
         run: |
           set -euo pipefail
@@ -245,6 +271,59 @@ jobs:
             } >> "$transcript"
           }
 
+          discover_listener_pid() {
+            evidence_file="$1"
+            command -v ss >/dev/null
+            ss -H -ltnp 'sport = :4000' > "$evidence_file"
+            python3 - "$evidence_file" <<'PY_DISCOVER'
+          import pathlib
+          import re
+          import sys
+
+          text = pathlib.Path(sys.argv[1]).read_text()
+          pids = sorted({int(value) for value in re.findall(r'pid=(\d+)', text)})
+          if len(pids) != 1:
+              print(f"expected exactly one TCP LISTEN owner for port 4000, found {pids}", file=sys.stderr)
+              raise SystemExit(1)
+          print(pids[0])
+          PY_DISCOVER
+          }
+
+          proc_starttime() {
+            python3 - "$1" <<'PY_STARTTIME'
+          import pathlib
+          import sys
+
+          data = pathlib.Path(f"/proc/{sys.argv[1]}/stat").read_text()
+          close = data.rfind(")")
+          if close < 0:
+              raise SystemExit(1)
+          fields_after_comm = data[close + 2:].split()
+          if len(fields_after_comm) <= 19:
+              raise SystemExit(1)
+          print(fields_after_comm[19])
+          PY_STARTTIME
+          }
+
+          belongs_to_launch_tree() {
+            target_pid="$1"
+            launch_pid="$2"
+            cursor="$target_pid"
+            for _depth in $(seq 0 64); do
+              if [ "$cursor" = "$launch_pid" ]; then
+                return 0
+              fi
+              if [ "$cursor" -le 1 ] || [ ! -r "/proc/$cursor/status" ]; then
+                return 1
+              fi
+              cursor="$(awk '$1 == "PPid:" {print $2}' "/proc/$cursor/status")"
+              case "$cursor" in
+                ''|*[!0-9]*) return 1 ;;
+              esac
+            done
+            return 1
+          }
+
           healthy=false
           for attempt in $(seq 1 30); do
             if curl --silent --show-error --fail --connect-timeout 2 --max-time 3 \
@@ -252,7 +331,6 @@ jobs:
               healthy=true
               break
             fi
-            kill -0 "$APP_PID"
             sleep 2
           done
           test "$healthy" = true
@@ -263,9 +341,76 @@ jobs:
           test "$(cat "$PROOF_DIR/healthy_ready.status")" = "200"
           python3 -c 'import json,pathlib,sys; payload=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert payload == {"status": sys.argv[2]}, payload' "$PROOF_DIR/healthy_live.body" live
           python3 -c 'import json,pathlib,sys; payload=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert payload == {"status": sys.argv[2]}, payload' "$PROOF_DIR/healthy_ready.body" ready
-          kill -0 "$APP_PID"
-          echo "APP_PID_BEFORE_DB_LOSS=$APP_PID" >> "$GITHUB_ENV"
-          echo "APP_PID_BEFORE_DB_LOSS=$APP_PID" >> "$transcript"
+
+          listener_before="$PROOF_DIR/listener-before.txt"
+          if ! http_pid_before="$(discover_listener_pid "$listener_before")"; then
+            echo "pre_loss_listener_discovery=FAIL_CLOSED" | tee -a "$transcript"
+            exit 1
+          fi
+          test -r "/proc/$http_pid_before/stat"
+          test -r "/proc/$http_pid_before/cmdline"
+          test -e "/proc/$http_pid_before/exe"
+          http_starttime_before="$(proc_starttime "$http_pid_before")"
+          http_exe_before="$(readlink -f "/proc/$http_pid_before/exe")"
+          http_cmdline_hash_before="$(sha256sum "/proc/$http_pid_before/cmdline" | awk '{print $1}')"
+          test -n "$http_starttime_before"
+          test -n "$http_exe_before"
+          test -n "$http_cmdline_hash_before"
+          test "$(basename "$http_exe_before")" = "beam.smp"
+
+          release_tree_relation=false
+          release_executable_match=false
+          launch_relation=none
+          launch_identity_current=false
+          if [ -r "/proc/$LAUNCH_PID/stat" ] && \
+             [ "$(proc_starttime "$LAUNCH_PID")" = "$LAUNCH_PROC_STARTTIME" ]; then
+            launch_identity_current=true
+          fi
+          if [ "$launch_identity_current" = true ] && [ "$http_pid_before" = "$LAUNCH_PID" ]; then
+            release_tree_relation=true
+            launch_relation=launch_pid_equals_http_pid_same_incarnation
+          elif [ "$launch_identity_current" = true ] && belongs_to_launch_tree "$http_pid_before" "$LAUNCH_PID"; then
+            release_tree_relation=true
+            launch_relation=http_pid_descends_from_launch_pid_same_incarnation
+          fi
+          release_root="$(readlink -f _build/prod/rel/strangertalks_new)"
+          for candidate in "$release_root"/erts-*/bin/beam.smp; do
+            [ -e "$candidate" ] || continue
+            if [ "$(readlink -f "$candidate")" = "$http_exe_before" ]; then
+              release_executable_match=true
+              break
+            fi
+          done
+          http_belongs_to_release=false
+          if [ "$release_tree_relation" = true ] && [ "$release_executable_match" = true ]; then
+            http_belongs_to_release=true
+          fi
+
+          {
+            echo "LAUNCH_PID=$LAUNCH_PID"
+            echo "HTTP_PID_BEFORE_DB_LOSS=$http_pid_before"
+            echo "HTTP_PROC_STARTTIME_BEFORE=$http_starttime_before"
+            echo "HTTP_EXE_BEFORE=$http_exe_before"
+            echo "HTTP_CMDLINE_HASH_BEFORE=$http_cmdline_hash_before"
+            echo "HTTP_PROCESS_EXECUTABLE=$http_exe_before"
+            echo "HTTP_PROCESS_BELONGS_TO_RELEASE=$http_belongs_to_release"
+            echo "LAUNCH_HTTP_RELATION=$launch_relation"
+            echo "launch_pid_same_incarnation=$launch_identity_current"
+            echo "release_executable_match=$release_executable_match"
+          } | tee "$PROOF_DIR/process-before.txt" >> "$transcript"
+
+          if [ "$http_belongs_to_release" != true ]; then
+            echo "pre_loss_release_relationship=FAIL_CLOSED" | tee -a "$transcript"
+            exit 1
+          fi
+
+          {
+            echo "HTTP_PID_BEFORE_DB_LOSS=$http_pid_before"
+            echo "HTTP_PROC_STARTTIME_BEFORE=$http_starttime_before"
+            echo "HTTP_EXE_BEFORE=$http_exe_before"
+            echo "HTTP_CMDLINE_HASH_BEFORE=$http_cmdline_hash_before"
+            echo "HTTP_PROCESS_BELONGS_TO_RELEASE_BEFORE=$http_belongs_to_release"
+          } >> "$GITHUB_ENV"
 
       - name: Identify disposable PostgreSQL service exactly
         shell: bash
@@ -317,25 +462,168 @@ jobs:
             echo "postgres_running_after_stop=$running_after"
           } | tee "$stop_record" >> "$transcript"
 
-      - name: Record same-process survival immediately after database loss
+      - name: Rediscover and fingerprint HTTP listener after database loss
         shell: bash
         run: |
           set -euo pipefail
           transcript="$PROOF_DIR/proof-transcript.txt"
-          alive=false
-          if kill -0 "$APP_PID" 2>/dev/null; then
-            alive=true
+          listener_after="$PROOF_DIR/listener-after.txt"
+          process_after="$PROOF_DIR/process-after.txt"
+
+          discover_listener_pid() {
+            evidence_file="$1"
+            command -v ss >/dev/null
+            ss -H -ltnp 'sport = :4000' > "$evidence_file"
+            python3 - "$evidence_file" <<'PY_DISCOVER'
+          import pathlib
+          import re
+          import sys
+
+          text = pathlib.Path(sys.argv[1]).read_text()
+          pids = sorted({int(value) for value in re.findall(r'pid=(\d+)', text)})
+          if len(pids) != 1:
+              print(f"expected exactly one TCP LISTEN owner for port 4000, found {pids}", file=sys.stderr)
+              raise SystemExit(1)
+          print(pids[0])
+          PY_DISCOVER
+          }
+
+          proc_starttime() {
+            python3 - "$1" <<'PY_STARTTIME'
+          import pathlib
+          import sys
+
+          data = pathlib.Path(f"/proc/{sys.argv[1]}/stat").read_text()
+          close = data.rfind(")")
+          if close < 0:
+              raise SystemExit(1)
+          fields_after_comm = data[close + 2:].split()
+          if len(fields_after_comm) <= 19:
+              raise SystemExit(1)
+          print(fields_after_comm[19])
+          PY_STARTTIME
+          }
+
+          belongs_to_launch_tree() {
+            target_pid="$1"
+            launch_pid="$2"
+            cursor="$target_pid"
+            for _depth in $(seq 0 64); do
+              if [ "$cursor" = "$launch_pid" ]; then
+                return 0
+              fi
+              if [ "$cursor" -le 1 ] || [ ! -r "/proc/$cursor/status" ]; then
+                return 1
+              fi
+              cursor="$(awk '$1 == "PPid:" {print $2}' "/proc/$cursor/status")"
+              case "$cursor" in
+                ''|*[!0-9]*) return 1 ;;
+              esac
+            done
+            return 1
+          }
+
+          discovery_status=exactly_one_listener
+          set +e
+          http_pid_after="$(discover_listener_pid "$listener_after")"
+          discovery_rc=$?
+          set -e
+          if [ "$discovery_rc" -ne 0 ]; then
+            discovery_status=no_or_ambiguous_listener
+            {
+              echo "LAUNCH_PID=$LAUNCH_PID"
+              echo "HTTP_PID_BEFORE_DB_LOSS=$HTTP_PID_BEFORE_DB_LOSS"
+              echo "HTTP_PID_AFTER_DB_LOSS="
+              echo "HTTP_PROC_STARTTIME_AFTER="
+              echo "HTTP_EXE_AFTER="
+              echo "HTTP_CMDLINE_HASH_AFTER="
+              echo "HTTP_PROCESS_EXECUTABLE="
+              echo "HTTP_PROCESS_BELONGS_TO_RELEASE=false"
+              echo "SAME_PROCESS_INCARNATION=false"
+              echo "post_loss_listener_discovery=$discovery_status"
+            } | tee "$process_after" >> "$transcript"
+            {
+              echo "HTTP_PID_AFTER_DB_LOSS="
+              echo "HTTP_PROC_STARTTIME_AFTER="
+              echo "HTTP_EXE_AFTER="
+              echo "HTTP_CMDLINE_HASH_AFTER="
+              echo "HTTP_PROCESS_BELONGS_TO_RELEASE_AFTER=false"
+              echo "SAME_PROCESS_INCARNATION=false"
+            } >> "$GITHUB_ENV"
+            exit 0
           fi
-          app_pid_after="$APP_PID"
-          same_pid=false
-          if [ "$APP_PID_BEFORE_DB_LOSS" = "$app_pid_after" ]; then
-            same_pid=true
+
+          test -r "/proc/$http_pid_after/stat"
+          test -r "/proc/$http_pid_after/cmdline"
+          test -e "/proc/$http_pid_after/exe"
+          http_starttime_after="$(proc_starttime "$http_pid_after")"
+          http_exe_after="$(readlink -f "/proc/$http_pid_after/exe")"
+          http_cmdline_hash_after="$(sha256sum "/proc/$http_pid_after/cmdline" | awk '{print $1}')"
+          test -n "$http_starttime_after"
+          test -n "$http_exe_after"
+          test -n "$http_cmdline_hash_after"
+
+          release_tree_relation_after=false
+          release_executable_match_after=false
+          launch_identity_current_after=false
+          if [ -r "/proc/$LAUNCH_PID/stat" ] && \
+             [ "$(proc_starttime "$LAUNCH_PID")" = "$LAUNCH_PROC_STARTTIME" ]; then
+            launch_identity_current_after=true
+          fi
+          if [ "$launch_identity_current_after" = true ] && \
+             { [ "$http_pid_after" = "$LAUNCH_PID" ] || belongs_to_launch_tree "$http_pid_after" "$LAUNCH_PID"; }; then
+            release_tree_relation_after=true
+          fi
+          release_root="$(readlink -f _build/prod/rel/strangertalks_new)"
+          for candidate in "$release_root"/erts-*/bin/beam.smp; do
+            [ -e "$candidate" ] || continue
+            if [ "$(readlink -f "$candidate")" = "$http_exe_after" ]; then
+              release_executable_match_after=true
+              break
+            fi
+          done
+          http_belongs_to_release_after=false
+          if [ "$release_tree_relation_after" = true ] && \
+             [ "$release_executable_match_after" = true ] && \
+             [ "$(basename "$http_exe_after")" = "beam.smp" ]; then
+            http_belongs_to_release_after=true
+          fi
+
+          same_process_incarnation=false
+          if [ "$http_pid_after" = "$HTTP_PID_BEFORE_DB_LOSS" ] && \
+             [ "$http_starttime_after" = "$HTTP_PROC_STARTTIME_BEFORE" ] && \
+             [ "$http_exe_after" = "$HTTP_EXE_BEFORE" ] && \
+             [ "$http_cmdline_hash_after" = "$HTTP_CMDLINE_HASH_BEFORE" ] && \
+             [ "$http_belongs_to_release_after" = true ]; then
+            same_process_incarnation=true
+          fi
+
+          alive_after=false
+          if kill -0 "$http_pid_after" 2>/dev/null; then
+            alive_after=true
           fi
           {
-            echo "APP_PID_AFTER_DB_LOSS=$app_pid_after"
-            echo "SAME_PID=$same_pid"
-            echo "PROCESS_ALIVE_AFTER_DB_LOSS=$alive"
-          } | tee "$PROOF_DIR/pid-after-db-loss.txt" >> "$transcript"
+            echo "LAUNCH_PID=$LAUNCH_PID"
+            echo "HTTP_PID_BEFORE_DB_LOSS=$HTTP_PID_BEFORE_DB_LOSS"
+            echo "HTTP_PID_AFTER_DB_LOSS=$http_pid_after"
+            echo "HTTP_PROC_STARTTIME_AFTER=$http_starttime_after"
+            echo "HTTP_EXE_AFTER=$http_exe_after"
+            echo "HTTP_CMDLINE_HASH_AFTER=$http_cmdline_hash_after"
+            echo "HTTP_PROCESS_EXECUTABLE=$http_exe_after"
+            echo "HTTP_PROCESS_BELONGS_TO_RELEASE=$http_belongs_to_release_after"
+            echo "launch_pid_same_incarnation_after=$launch_identity_current_after"
+            echo "PROCESS_ALIVE_AFTER_DB_LOSS=$alive_after"
+            echo "SAME_PROCESS_INCARNATION=$same_process_incarnation"
+            echo "post_loss_listener_discovery=$discovery_status"
+          } | tee "$process_after" >> "$transcript"
+          {
+            echo "HTTP_PID_AFTER_DB_LOSS=$http_pid_after"
+            echo "HTTP_PROC_STARTTIME_AFTER=$http_starttime_after"
+            echo "HTTP_EXE_AFTER=$http_exe_after"
+            echo "HTTP_CMDLINE_HASH_AFTER=$http_cmdline_hash_after"
+            echo "HTTP_PROCESS_BELONGS_TO_RELEASE_AFTER=$http_belongs_to_release_after"
+            echo "SAME_PROCESS_INCARNATION=$same_process_incarnation"
+          } >> "$GITHUB_ENV"
 
       - name: Capture post-loss live and ready behavior before verdicting
         shell: bash
@@ -366,7 +654,7 @@ jobs:
             printf '%s' "$timed_out" > "$PROOF_DIR/${label}.timed_out"
             body_one_line="$(tr '\n' ' ' < "$body" 2>/dev/null || true)"
             alive_after=false
-            if kill -0 "$APP_PID" 2>/dev/null; then
+            if [ -n "${HTTP_PID_AFTER_DB_LOSS:-}" ] && kill -0 "$HTTP_PID_AFTER_DB_LOSS" 2>/dev/null; then
               alive_after=true
             fi
             {
@@ -383,7 +671,7 @@ jobs:
           probe db_loss_ready http://127.0.0.1:4000/health/ready
 
           alive_final=false
-          if kill -0 "$APP_PID" 2>/dev/null; then
+          if [ -n "${HTTP_PID_AFTER_DB_LOSS:-}" ] && kill -0 "$HTTP_PID_AFTER_DB_LOSS" 2>/dev/null; then
             alive_final=true
           fi
           echo "PROCESS_ALIVE_AFTER_DB_LOSS_PROBES=$alive_final" >> "$transcript"
@@ -402,6 +690,12 @@ jobs:
           if [ "$alive_final" != "true" ]; then
             unexpected=1
           fi
+          if [ "${HTTP_PROCESS_BELONGS_TO_RELEASE_AFTER:-false}" != "true" ]; then
+            unexpected=1
+          fi
+          if [ "${SAME_PROCESS_INCARNATION:-false}" != "true" ]; then
+            unexpected=1
+          fi
           if [ "$unexpected" -ne 0 ]; then
             echo "post_loss_contract_observation=UNEXPECTED_EVIDENCE_CAPTURED" >> "$transcript"
             exit 1
@@ -415,25 +709,77 @@ jobs:
           set -euo pipefail
           test -d "$PROOF_DIR"
           test -s "$PROOF_DIR/proof-transcript.txt"
-          if [ -s "$PROOF_DIR/app-pid.txt" ]; then
+          if [ -s "$PROOF_DIR/launch-pid.txt" ]; then
             test -s "$PROOF_DIR/application-runtime.log"
           fi
+          if [ -e "$PROOF_DIR/listener-before.txt" ]; then
+            test -s "$PROOF_DIR/process-before.txt"
+          fi
+          if [ -e "$PROOF_DIR/listener-after.txt" ]; then
+            test -s "$PROOF_DIR/process-after.txt"
+          fi
 
-      - name: Clean up only the disposable application process
+      - name: Clean up only the proven disposable HTTP-serving process
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
-            kill "$APP_PID"
-            for attempt in $(seq 1 20); do
-              if ! kill -0 "$APP_PID" 2>/dev/null; then
-                break
+          transcript="$PROOF_DIR/proof-transcript.txt"
+          cleanup_status=no_proven_listener_to_stop
+
+          proc_starttime() {
+            python3 - "$1" <<'PY_STARTTIME'
+          import pathlib
+          import sys
+
+          data = pathlib.Path(f"/proc/{sys.argv[1]}/stat").read_text()
+          close = data.rfind(")")
+          if close < 0:
+              raise SystemExit(1)
+          fields_after_comm = data[close + 2:].split()
+          if len(fields_after_comm) <= 19:
+              raise SystemExit(1)
+          print(fields_after_comm[19])
+          PY_STARTTIME
+          }
+
+          if [ -n "${HTTP_PID_BEFORE_DB_LOSS:-}" ] && \
+             [ "${HTTP_PROCESS_BELONGS_TO_RELEASE_BEFORE:-false}" = "true" ]; then
+            current_listener="$(ss -H -ltnp 'sport = :4000' 2>/dev/null || true)"
+            cleanup_pid="$(printf '%s\n' "$current_listener" | python3 -c 'import re,sys; p=sorted({int(x) for x in re.findall(r"pid=(\d+)", sys.stdin.read())}); print(p[0] if len(p)==1 else "")')"
+            if [ -z "$cleanup_pid" ]; then
+              cleanup_status=no_unique_listener_process
+            elif [ "$cleanup_pid" != "$HTTP_PID_BEFORE_DB_LOSS" ]; then
+              cleanup_status=skipped_listener_pid_mismatch
+            elif [ ! -r "/proc/$cleanup_pid/stat" ] || \
+                 [ ! -r "/proc/$cleanup_pid/cmdline" ] || \
+                 [ ! -e "/proc/$cleanup_pid/exe" ]; then
+              cleanup_status=listener_already_exited
+            else
+              cleanup_starttime="$(proc_starttime "$cleanup_pid")"
+              cleanup_exe="$(readlink -f "/proc/$cleanup_pid/exe")"
+              cleanup_cmdline_hash="$(sha256sum "/proc/$cleanup_pid/cmdline" | awk '{print $1}')"
+              if [ "$cleanup_starttime" != "$HTTP_PROC_STARTTIME_BEFORE" ] || \
+                 [ "$cleanup_exe" != "$HTTP_EXE_BEFORE" ] || \
+                 [ "$cleanup_cmdline_hash" != "$HTTP_CMDLINE_HASH_BEFORE" ]; then
+                cleanup_status=skipped_process_incarnation_mismatch
+              else
+                kill "$cleanup_pid"
+                cleanup_status=term_sent_to_proven_http_process
+                for attempt in $(seq 1 20); do
+                  if ! kill -0 "$cleanup_pid" 2>/dev/null; then
+                    cleanup_status=proven_http_process_exited
+                    break
+                  fi
+                  sleep 1
+                done
               fi
-              sleep 1
-            done
+            fi
           fi
-          echo "application_cleanup_attempted=true" >> "$PROOF_DIR/proof-transcript.txt"
+          {
+            echo "application_cleanup_attempted=true"
+            echo "application_cleanup_status=$cleanup_status"
+          } >> "$transcript"
 
       - name: Upload WT-07 A1 proof artifact
         if: always()
