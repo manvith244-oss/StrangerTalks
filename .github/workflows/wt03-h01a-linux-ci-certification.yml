@@ -1,0 +1,310 @@
+name: WT-03 H-01A Linux CI Certification
+
+on:
+  push:
+    branches:
+      - diagnostic/wt03-h01a-linux-ci-certification
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wt03-h01a-linux-ci-certification-${{ github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  linux-ci-certification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      PGPASSWORD: strangertalks_test
+      TARGET_CANDIDATE_SHA: "275f37f9f796da1fd2074a4c3f2965bdbb4104f9"
+      TARGET_CANDIDATE_TREE: "5a40a514e492df1c5493b129e25a78390a0f6cac"
+      FROZEN_CANONICAL_BASE: "30717f4ee84a493697bb4965f4e8128b2e6af6b9"
+      EXPECTED_MIGRATIONS_TREE: "662fa9e49daaa8832fb4175c1366fbedbd1ad1a6"
+      EXPECTED_REPOSITORY_HEAD: "20260914175320"
+      EXPECTED_PRODUCTION_HEAD: "20260821191324"
+
+    steps:
+      - name: Assert single attempt
+        shell: bash
+        run: |
+          test "${{ github.run_attempt }}" = "1"
+
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: "275f37f9f796da1fd2074a4c3f2965bdbb4104f9"
+          fetch-depth: 0
+
+      - name: Gate 1 — Exact Checkout Identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse 'HEAD^{tree}')"
+          actual_migrations_tree="$(git rev-parse 'HEAD:priv/repo/migrations')"
+          actual_merge_base="$(git merge-base "$FROZEN_CANONICAL_BASE" HEAD)"
+          repo_latest=$(find priv/repo/migrations -maxdepth 1 -type f -name '*.exs' -printf '%f\n' | sed -n 's/^\([0-9]\{14\}\)_.*/\1/p' | sort | tail -1)
+
+          echo "=== GATE 1 IDENTITY ==="
+          echo "HEAD=$actual_sha"
+          echo "TREE=$actual_tree"
+          echo "MIGRATIONS_TREE=$actual_migrations_tree"
+          echo "MERGE_BASE=$actual_merge_base"
+          echo "REPO_HEAD=$repo_latest"
+
+          test "$actual_sha" = "$TARGET_CANDIDATE_SHA"
+          test "$actual_tree" = "$TARGET_CANDIDATE_TREE"
+          test "$actual_migrations_tree" = "$EXPECTED_MIGRATIONS_TREE"
+          test "$actual_merge_base" = "$FROZEN_CANONICAL_BASE"
+          test "$repo_latest" = "$EXPECTED_REPOSITORY_HEAD"
+          echo "GATE 1 PASS"
+
+      - name: Gate 2 — Diff Scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== GATE 2 DIFF SCOPE ==="
+          git diff --name-status "$FROZEN_CANONICAL_BASE...HEAD" | tee /tmp/diff-scope.txt
+
+          diff_count=$(wc -l < /tmp/diff-scope.txt)
+          test "$diff_count" -eq 6
+
+          grep -qx 'M	.github/workflows/rpr-production-migration-closure.yml' /tmp/diff-scope.txt
+          grep -qx 'M	.github/workflows/rpr-production-migration-live.yml' /tmp/diff-scope.txt
+          grep -qx 'M	lib/strangertalks_new/report.ex' /tmp/diff-scope.txt
+          grep -qx 'A	priv/repo/migrations/20260914175320_add_report_source_kind.exs' /tmp/diff-scope.txt
+          grep -qx 'A	test/strangertalks_new/h01a_source_safe_reports_test.exs' /tmp/diff-scope.txt
+          grep -qx 'M	test/strangertalks_new/rpr_production_migration_workflow_contract_test.exs' /tmp/diff-scope.txt
+
+          git diff --check "$FROZEN_CANONICAL_BASE...HEAD"
+          echo "GATE 2 DIFF SCOPE PASS"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Gate 2b — Format Hygiene
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix format --check-formatted
+          echo "GATE 2 FORMAT PASS"
+
+      - name: Create PostgreSQL Roles & Prepare Database
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon NOLOGIN; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role NOLOGIN; END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_admin') THEN CREATE ROLE supabase_admin NOLOGIN; END IF;
+          END
+          $$;
+          GRANT CREATE, USAGE ON SCHEMA public TO supabase_admin;
+          SQL
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+          echo "DATABASE PREPARED"
+
+      - name: Gate 3 — Migration Workflow Contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/rpr_production_migration_workflow_contract_test.exs
+          echo "GATE 3 PASS"
+
+      - name: Gate 4 — H-01A Focused Contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/h01a_source_safe_reports_test.exs
+          echo "GATE 4 PASS"
+
+      - name: Gate 5 — Conversation Report Regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/report_test.exs test/strangertalks_new/report_media_origin_truth_test.exs test/strangertalks_new/conversation_unsend_report_safety_test.exs test/strangertalks_new/view_once_safety_report_test.exs
+          echo "GATE 5 PASS"
+
+      - name: Gate 6 — Safety Review Regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/relationship_consent_safety_review_test.exs test/strangertalks_new/team4_safety_boundary_test.exs test/strangertalks_new/safety_events_test.exs test/strangertalks_new/retention_safety_media_closure_test.exs
+          echo "GATE 6 PASS"
+
+      - name: Gate 7 — Hangout Safety
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/hangouts/safety_test.exs
+          echo "GATE 7 PASS"
+
+      - name: Gate 8 — DB Security Closure
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix test test/strangertalks_new/team4_db_security_closure_test.exs
+          echo "GATE 8 PASS"
+
+      - name: Gate 9 — Fresh Database Rehearsal
+        shell: bash
+        run: |
+          set -euo pipefail
+          MIX_TEST_PARTITION="_fresh" mix ecto.create --quiet
+          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test_fresh -c "GRANT CREATE, USAGE ON SCHEMA public TO supabase_admin;"
+          MIX_TEST_PARTITION="_fresh" mix ecto.migrate
+          final_head=$(psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test_fresh -Atc 'SELECT max(version) FROM schema_migrations')
+          test "$final_head" = "$EXPECTED_REPOSITORY_HEAD"
+          ledger_count=$(psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test_fresh -Atc "SELECT count(*) FROM schema_migrations WHERE version = $EXPECTED_REPOSITORY_HEAD")
+          test "$ledger_count" = "1"
+          dup_versions=$(psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test_fresh -Atc "SELECT version, count(*) FROM schema_migrations GROUP BY version HAVING count(*) > 1")
+          test -z "$dup_versions"
+          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test_fresh -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE app_count integer; bad_rls integer; api_grants integer; role_name text; chk_cnt integer;
+          BEGIN
+            SELECT count(*) INTO app_count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations';
+            IF app_count <> 30 THEN RAISE EXCEPTION 'expected 30 application tables, got %', app_count; END IF;
+            SELECT count(*) INTO bad_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations' AND NOT c.relrowsecurity;
+            IF bad_rls <> 0 THEN RAISE EXCEPTION 'application tables without RLS: %', bad_rls; END IF;
+            FOREACH role_name IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+              IF has_schema_privilege(role_name, 'public', 'USAGE') OR has_schema_privilege(role_name, 'public', 'CREATE') THEN RAISE EXCEPTION '% retains public schema authority', role_name; END IF;
+            END LOOP;
+            SELECT count(*) INTO api_grants FROM information_schema.table_privileges WHERE table_schema = 'public' AND grantee IN ('anon','authenticated','service_role');
+            IF api_grants <> 0 THEN RAISE EXCEPTION 'Data API table grants remain: %', api_grants; END IF;
+            SELECT count(*) INTO chk_cnt FROM pg_constraint WHERE conname IN ('reports_source_kind_check', 'reports_source_authority_check');
+            IF chk_cnt <> 2 THEN RAISE EXCEPTION 'expected 2 H-01A constraints, found %', chk_cnt; END IF;
+          END
+          $$;
+          SQL
+          echo "GATE 9 PASS"
+
+      - name: Gate 10 — Production-Head Disposable Rehearsal
+        shell: bash
+        run: |
+          set -euo pipefail
+          MIX_TEST_PARTITION="_prod_rehearsal" mix ecto.create --quiet
+          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test_prod_rehearsal -c "GRANT CREATE, USAGE ON SCHEMA public TO supabase_admin;"
+          MIX_TEST_PARTITION="_prod_rehearsal" mix ecto.migrate --to "$EXPECTED_PRODUCTION_HEAD"
+          prod_head=$(psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test_prod_rehearsal -Atc 'SELECT max(version) FROM schema_migrations')
+          test "$prod_head" = "$EXPECTED_PRODUCTION_HEAD"
+
+          # Inject Supabase-like ACL state
+          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test_prod_rehearsal -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
+          GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
+          GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC, anon, authenticated, service_role;
+          ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC, anon, authenticated, service_role;
+          SQL
+
+          # Migrate to repository head
+          MIX_TEST_PARTITION="_prod_rehearsal" mix ecto.migrate
+          final_head=$(psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test_prod_rehearsal -Atc 'SELECT max(version) FROM schema_migrations')
+          test "$final_head" = "$EXPECTED_REPOSITORY_HEAD"
+
+          # Verify security & constraints
+          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test_prod_rehearsal -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE app_count integer; bad_rls integer; api_grants integer; role_name text; chk_cnt integer;
+          BEGIN
+            SELECT count(*) INTO app_count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations';
+            IF app_count <> 30 THEN RAISE EXCEPTION 'expected 30 application tables, got %', app_count; END IF;
+            SELECT count(*) INTO bad_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations' AND NOT c.relrowsecurity;
+            IF bad_rls <> 0 THEN RAISE EXCEPTION 'application tables without RLS: %', bad_rls; END IF;
+            FOREACH role_name IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+              IF has_schema_privilege(role_name, 'public', 'USAGE') OR has_schema_privilege(role_name, 'public', 'CREATE') THEN RAISE EXCEPTION '% retains public schema authority', role_name; END IF;
+            END LOOP;
+            SELECT count(*) INTO api_grants FROM information_schema.table_privileges WHERE table_schema = 'public' AND grantee IN ('anon','authenticated','service_role');
+            IF api_grants <> 0 THEN RAISE EXCEPTION 'Data API table grants remain: %', api_grants; END IF;
+            SELECT count(*) INTO chk_cnt FROM pg_constraint WHERE conname IN ('reports_source_kind_check', 'reports_source_authority_check');
+            IF chk_cnt <> 2 THEN RAISE EXCEPTION 'expected 2 H-01A constraints, found %', chk_cnt; END IF;
+          END
+          $$;
+          SQL
+          echo "GATE 10 PASS"
+
+      - name: Gate 11 — Standard Linux Precommit
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== RUNNING STANDARD UNMODIFIED MIX PRECOMMIT ==="
+          mix precommit
+          echo "GATE 11 PRECOMMIT PASS"
+
+      - name: Prepare Certification Artifact
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="certification_artifact"
+          mkdir -p "$proof_dir"
+
+          cat <<EOF > "$proof_dir/certification_record.json"
+          {
+            "candidate_sha": "$TARGET_CANDIDATE_SHA",
+            "candidate_tree": "$TARGET_CANDIDATE_TREE",
+            "frozen_canonical_base": "$FROZEN_CANONICAL_BASE",
+            "migration_tree": "$EXPECTED_MIGRATIONS_TREE",
+            "repository_migration_head": "$EXPECTED_REPOSITORY_HEAD",
+            "production_migration_head": "$EXPECTED_PRODUCTION_HEAD",
+            "runner_os": "$RUNNER_OS",
+            "runner_arch": "$RUNNER_ARCH",
+            "elixir_version": "1.18.4",
+            "otp_version": "27.3.4",
+            "postgres_image": "postgres:17",
+            "diff_scope_files": 6,
+            "gates_evaluated": 11,
+            "status": "CERTIFIED"
+          }
+          EOF
+
+      - name: Upload Certification Artifact
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt03-h01a-linux-ci-certification
+          path: certification_artifact/
+          if-no-files-found: error
