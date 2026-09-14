@@ -1,0 +1,910 @@
+name: WT-05 Delete-All Continuity-Key Boundary Diagnostic R1
+
+on:
+  push:
+    tags:
+      - 'diagnostic/wt05-delete-key-r1-*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wt05-delete-all-key-boundary-r1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  delete-key-boundary-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
+      WT05_FROZEN_SHA: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+      WT05_FROZEN_TREE: 72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a
+
+    steps:
+      - name: Guard diagnostic execution context
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'GITHUB_EVENT_NAME=%s\n' "$GITHUB_EVENT_NAME"
+          printf 'GITHUB_REF=%s\n' "$GITHUB_REF"
+          printf 'GITHUB_REF_NAME=%s\n' "$GITHUB_REF_NAME"
+          printf 'GITHUB_SHA=%s\n' "$GITHUB_SHA"
+          test "$GITHUB_EVENT_NAME" = "push"
+          case "$GITHUB_REF" in
+            refs/tags/diagnostic/wt05-delete-key-r1-*) ;;
+            *)
+              echo "WT05_DELETE_KEY_INVALID_EXECUTION_REF=$GITHUB_REF"
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout frozen canonical application source
+        uses: actions/checkout@v4
+        with:
+          ref: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          fetch-depth: 1
+
+      - name: Prove frozen canonical identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse HEAD^{tree})"
+          printf 'WT05_DELETE_KEY_CHECKOUT_COMMIT=%s\n' "$actual_sha"
+          printf 'WT05_DELETE_KEY_CHECKOUT_TREE=%s\n' "$actual_tree"
+          test "$actual_sha" = "$WT05_FROZEN_SHA"
+          test "$actual_tree" = "$WT05_FROZEN_TREE"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install canonical dependencies and Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          test "$(node -p "require('./node_modules/playwright/package.json').version")" = "1.62.1"
+          npx playwright install --with-deps chromium
+
+      - name: Prepare disposable PostgreSQL database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Create diagnostic evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wt05-delete-key-evidence"
+          printf 'WT05_EVIDENCE_DIR=%s\n' "$RUNNER_TEMP/wt05-delete-key-evidence" >> "$GITHUB_ENV"
+          printf 'WT05_PROFILE_DIR=%s\n' "$RUNNER_TEMP/wt05-delete-key-profile-r1" >> "$GITHUB_ENV"
+
+      - name: Start frozen Phoenix runtime and wait for readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNewWeb.Endpoint,
+              Keyword.put(endpoint, :server, true)
+            )
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > "$WT05_EVIDENCE_DIR/phoenix.log" 2>&1 &
+          echo $! > "$WT05_EVIDENCE_DIR/phoenix.pid"
+
+          ready=0
+          for attempt in $(seq 1 60); do
+            if ! kill -0 "$(cat "$WT05_EVIDENCE_DIR/phoenix.pid")" 2>/dev/null; then
+              cat "$WT05_EVIDENCE_DIR/phoenix.log"
+              exit 1
+            fi
+            if curl --silent --fail "$STRANGERTALKS_BROWSER_BASE_URL/health/ready" \
+              > "$WT05_EVIDENCE_DIR/health-ready.json"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            cat "$WT05_EVIDENCE_DIR/phoenix.log"
+            exit 1
+          fi
+
+          echo "WT05_DELETE_KEY_RUNTIME_BEGIN"
+          {
+            printf '{"kind":"runtime","commit":"%s","tree":"%s","postgres":"16","node":"%s","npm":"%s","playwright":"%s","elixir":"%s","otp":"%s","endpoint":"%s","health_ready":true}\n' \
+              "$WT05_FROZEN_SHA" \
+              "$WT05_FROZEN_TREE" \
+              "$(node --version)" \
+              "$(npm --version)" \
+              "$(npx playwright --version | awk '{print $2}')" \
+              "$(elixir -e 'IO.write(System.version())')" \
+              "$(elixir -e 'IO.write(System.otp_release())')" \
+              "$STRANGERTALKS_BROWSER_BASE_URL"
+          } | tee "$WT05_EVIDENCE_DIR/runtime.jsonl"
+          cat "$WT05_EVIDENCE_DIR/health-ready.json"
+          echo "WT05_DELETE_KEY_RUNTIME_END"
+
+      - name: Generate job-local delete-key boundary diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/wt05-delete-key-boundary-r1.mjs" <<'WT05_NODE'
+          import fs from "node:fs"
+          import path from "node:path"
+          import {execFileSync} from "node:child_process"
+          import {createRequire} from "node:module"
+
+          const require = createRequire(path.join(process.cwd(), "package.json"))
+          const {chromium} = require("playwright")
+
+          const BASE = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const EVIDENCE_DIR = process.env.WT05_EVIDENCE_DIR
+          const PROFILE_DIR = process.env.WT05_PROFILE_DIR
+          const JSONL = path.join(EVIDENCE_DIR, "delete-key-boundary.jsonl")
+          const WAIT = 15_000
+
+          const PRIMARY_DB = "strangertalks-local-v1"
+          const PRIMARY_STORE = "records"
+          const KEY_DB = "strangertalks-sync-key-v1"
+          const KEY_STORE = "keys"
+          const LANGUAGE_KEY = "strangertalks.conversation-language.v1"
+
+          const OLD_CONTINUITY_ID = "wt05-delete-boundary-r1-old"
+          const NEW_CONTINUITY_ID = "wt05-delete-boundary-r1-new"
+          const MEMORY_ID = "memory:wt05-pre-delete-key-boundary"
+          const MARKER = "WT05 pre-delete encrypted continuity marker"
+          const EXPECTED_ANNOUNCEMENT = "All prior local data was deleted. A new anonymous identity was created."
+
+          fs.mkdirSync(EVIDENCE_DIR, {recursive: true})
+          fs.rmSync(PROFILE_DIR, {recursive: true, force: true})
+
+          const invalidFailures = []
+          let context = null
+          let page = null
+          let preDeleteEnvelope = null
+          let oldParticipantId = null
+          let newParticipantId = null
+          let immediateCrypto = null
+          let immediateProductBinding = null
+          let restartCrypto = null
+          let restartProductBinding = null
+          let postDeleteStorage = null
+          let restartStorage = null
+          let browserBoundary = null
+
+          function emit(record) {
+            const safe = JSON.parse(JSON.stringify(record, (_key, value) =>
+              typeof value === "bigint" ? value.toString() : value
+            ))
+            const line = JSON.stringify({...safe, observed_at: new Date().toISOString()})
+            console.log(line)
+            fs.appendFileSync(JSONL, `${line}\n`)
+          }
+
+          function errorRecord(error) {
+            return {
+              name: error?.name || "Error",
+              message: String(error?.message || error),
+              stack: String(error?.stack || "").split("\n").slice(0, 10)
+            }
+          }
+
+          async function screenshot(name) {
+            if (!page || page.isClosed()) return
+            try {
+              await page.screenshot({
+                path: path.join(EVIDENCE_DIR, `${name.toLowerCase().replaceAll("_", "-")}.png`),
+                fullPage: true
+              })
+            } catch {}
+          }
+
+          async function phase(name, fn) {
+            console.log(`${name}_BEGIN`)
+            try {
+              const result = await fn()
+              emit({phase: name, status: "complete", result})
+              return result
+            } catch (error) {
+              const failure = {phase: name, status: "invalid", error: errorRecord(error)}
+              invalidFailures.push(failure)
+              emit(failure)
+              await screenshot(name)
+              return null
+            } finally {
+              console.log(`${name}_END`)
+            }
+          }
+
+          function sanitizeKey(value) {
+            return {
+              crypto_key: typeof CryptoKey !== "undefined" && value instanceof CryptoKey,
+              algorithm: value?.algorithm?.name || null,
+              extractable: typeof value?.extractable === "boolean" ? value.extractable : null,
+              usages: Array.isArray(value?.usages) ? [...value.usages] : []
+            }
+          }
+
+          async function inspectKeyDb(targetPage) {
+            return targetPage.evaluate(async ({dbName, storeName}) => {
+              try {
+                const factory = globalThis.__wt05NativeIndexedDB || globalThis.indexedDB
+                if (typeof factory?.databases === "function") {
+                  const dbs = await factory.databases()
+                  if (!dbs.some(db => db.name === dbName)) {
+                    return {available: true, database_exists: false, store_exists: false, slots: []}
+                  }
+                }
+
+                const db = await new Promise((resolve, reject) => {
+                  const request = factory.open(dbName)
+                  request.onerror = () => reject(request.error || new Error("indexeddb_open_failed"))
+                  request.onsuccess = () => resolve(request.result)
+                })
+
+                if (!db.objectStoreNames.contains(storeName)) {
+                  db.close()
+                  return {available: true, database_exists: true, store_exists: false, slots: []}
+                }
+
+                const [keys, values] = await Promise.all([
+                  new Promise((resolve, reject) => {
+                    const tx = db.transaction(storeName, "readonly")
+                    const request = tx.objectStore(storeName).getAllKeys()
+                    request.onerror = () => reject(request.error || new Error("indexeddb_getallkeys_failed"))
+                    request.onsuccess = () => resolve(request.result)
+                  }),
+                  new Promise((resolve, reject) => {
+                    const tx = db.transaction(storeName, "readonly")
+                    const request = tx.objectStore(storeName).getAll()
+                    request.onerror = () => reject(request.error || new Error("indexeddb_getall_failed"))
+                    request.onsuccess = () => resolve(request.result)
+                  })
+                ])
+                db.close()
+
+                return {
+                  available: true,
+                  database_exists: true,
+                  store_exists: true,
+                  slots: keys.map((key, index) => {
+                    const value = values[index]
+                    return {
+                      slot: String(key),
+                      crypto_key: typeof CryptoKey !== "undefined" && value instanceof CryptoKey,
+                      algorithm: value?.algorithm?.name || null,
+                      extractable: typeof value?.extractable === "boolean" ? value.extractable : null,
+                      usages: Array.isArray(value?.usages) ? [...value.usages] : []
+                    }
+                  })
+                }
+              } catch (error) {
+                return {
+                  available: false,
+                  error: {name: error?.name || "Error", message: String(error?.message || error)}
+                }
+              }
+            }, {dbName: KEY_DB, storeName: KEY_STORE})
+          }
+
+          async function inspectPrimary(targetPage) {
+            return targetPage.evaluate(async () => {
+              const local = await import("/assets/local_data.mjs")
+              const records = await local.listRecords()
+              return records.map(record => {
+                if (record?.type === "identity") {
+                  return {
+                    id: record.id,
+                    type: record.type,
+                    schema_version: record.schema_version ?? null,
+                    participant_id: record.value?.participant_id || null,
+                    token_present: Boolean(record.value?.token),
+                    updated_at: record.updated_at || null
+                  }
+                }
+                return {
+                  id: record?.id || null,
+                  type: record?.type || null,
+                  schema_version: record?.schema_version ?? null,
+                  updated_at: record?.updated_at || null
+                }
+              })
+            })
+          }
+
+          async function captureStorage(targetPage, label) {
+            const [primary, keys, browser] = await Promise.all([
+              inspectPrimary(targetPage),
+              inspectKeyDb(targetPage),
+              targetPage.evaluate(({languageKey}) => ({
+                language: localStorage.getItem(languageKey),
+                status_text: document.querySelector("#status")?.textContent?.trim() || null,
+                active_screen: document.querySelector("section.screen.active")?.dataset?.screen || null,
+                readiness: window.StrangerTalksF11?.getReadiness?.() || null
+              }), {languageKey: LANGUAGE_KEY})
+            ])
+            return {label, primary, continuity_keys: keys, local_storage: {language: browser.language}, status_text: browser.status_text, active_screen: browser.active_screen, readiness: browser.readiness}
+          }
+
+          function participantId(storage) {
+            return storage?.primary?.find(record => record.type === "identity")?.participant_id || null
+          }
+
+          async function waitForApp(targetPage) {
+            const response = await targetPage.goto(BASE, {waitUntil: "domcontentloaded", timeout: WAIT})
+            if (!response?.ok()) throw new Error(`root_page_http_${response?.status()}`)
+            await targetPage.waitForFunction(() => Boolean(window.StrangerTalksF11), null, {timeout: WAIT})
+            await targetPage.waitForFunction(() => {
+              const state = window.StrangerTalksF11?.getReadiness?.()
+              return state?.status === "READY"
+            }, null, {timeout: WAIT})
+          }
+
+          async function waitForIdentity(targetPage) {
+            await targetPage.waitForFunction(async () => {
+              try {
+                const local = await import("/assets/local_data.mjs")
+                return (await local.listRecords()).some(record =>
+                  record.type === "identity" &&
+                  Boolean(record.value?.participant_id) &&
+                  Boolean(record.value?.token)
+                )
+              } catch {
+                return false
+              }
+            }, null, {timeout: WAIT})
+          }
+
+          async function waitForRotatedIdentity(targetPage, previousId) {
+            await targetPage.waitForFunction(async previous => {
+              try {
+                const local = await import("/assets/local_data.mjs")
+                const identity = (await local.listRecords()).find(record => record.type === "identity")
+                return Boolean(
+                  identity?.value?.participant_id &&
+                  identity?.value?.token &&
+                  identity.value.participant_id !== previous
+                )
+              } catch {
+                return false
+              }
+            }, previousId, {timeout: WAIT})
+          }
+
+          async function accountSnapshot(targetPage) {
+            return targetPage.evaluate(async () => {
+              const response = await fetch("/api/account/session", {credentials: "same-origin"})
+              const body = await response.json().catch(() => ({}))
+              const status = document.querySelector("#account-status")?.textContent?.trim() || null
+              return {
+                http_status: response.status,
+                available: body?.available ?? null,
+                connected: body?.connected ?? null,
+                participant_id: body?.participant_id || null,
+                continuity_id: body?.continuity_id || null,
+                participant_token_present: Boolean(body?.participant_token),
+                csrf_token_present: Boolean(body?.csrf_token),
+                capabilities: body?.capabilities || null,
+                account_status_text: status,
+                app_account_sync_key_metadata: "NOT_DIRECTLY_EXPOSED_BY_CANONICAL_BROWSER_API"
+              }
+            })
+          }
+
+          async function keyAccessLog(targetPage) {
+            return targetPage.evaluate(() =>
+              Array.isArray(globalThis.__wt05KeyAccessLog)
+                ? globalThis.__wt05KeyAccessLog.map(item => ({...item}))
+                : []
+            )
+          }
+
+          async function launchPersistent(label) {
+            fs.mkdirSync(PROFILE_DIR, {recursive: true})
+            const launched = await chromium.launchPersistentContext(PROFILE_DIR, {
+              headless: true,
+              viewport: {width: 1280, height: 800}
+            })
+
+            await launched.addInitScript(({keyStore}) => {
+              if (!globalThis.__wt05NativeIndexedDB) globalThis.__wt05NativeIndexedDB = globalThis.indexedDB
+              globalThis.__wt05KeyAccessLog = []
+
+              const originalGet = IDBObjectStore.prototype.get
+              if (!IDBObjectStore.prototype.__wt05GetWrapped) {
+                Object.defineProperty(IDBObjectStore.prototype, "__wt05GetWrapped", {
+                  configurable: true,
+                  value: true
+                })
+                IDBObjectStore.prototype.get = function(key) {
+                  try {
+                    if (this?.name === keyStore) {
+                      globalThis.__wt05KeyAccessLog.push({
+                        operation: "get",
+                        key: typeof key === "string" ? key : String(key),
+                        at: new Date().toISOString()
+                      })
+                    }
+                  } catch {}
+                  return Reflect.apply(originalGet, this, arguments)
+                }
+              }
+            }, {keyStore: KEY_STORE})
+
+            const targetPage = launched.pages()[0] || await launched.newPage()
+            targetPage.on("pageerror", error => emit({kind: "pageerror", label, error: errorRecord(error)}))
+            targetPage.on("console", message => {
+              if (message.type() === "error") emit({kind: "console_error", label, text: message.text()})
+            })
+            return {context: launched, page: targetPage}
+          }
+
+          function profileChromiumProcesses() {
+            let output
+            try {
+              output = execFileSync("ps", ["-eo", "pid=,args="], {encoding: "utf8"})
+            } catch (error) {
+              throw new Error(`ps_failed:${error?.message || error}`)
+            }
+            return output
+              .split("\n")
+              .map(line => line.trim())
+              .filter(Boolean)
+              .filter(line => line.includes(PROFILE_DIR))
+              .filter(line => /\b(chrome|chromium)\b/i.test(line))
+              .map(line => {
+                const match = line.match(/^(\d+)\s+(.*)$/)
+                return match ? {pid: Number(match[1]), command: match[2]} : {pid: null, command: line}
+              })
+          }
+
+          async function waitForNoProfileChromium(timeoutMs = 8_000) {
+            const deadline = Date.now() + timeoutMs
+            let last = profileChromiumProcesses()
+            while (Date.now() < deadline) {
+              if (last.length === 0) return []
+              await new Promise(resolve => setTimeout(resolve, 200))
+              last = profileChromiumProcesses()
+            }
+            return last
+          }
+
+          async function directCryptoProbe(targetPage, envelope, label) {
+            return targetPage.evaluate(async ({oldId, newId, envelope, memoryId, marker, label}) => {
+              const sync = await import("/assets/encrypted_sync.mjs")
+              const oldKey = await sync.loadSyncKey(oldId)
+              let decrypted = []
+              let decryptSucceeded = false
+              let decryptError = null
+              if (oldKey) {
+                try {
+                  decrypted = await sync.decryptSyncWithKey(envelope, oldKey)
+                  decryptSucceeded = true
+                } catch (error) {
+                  decryptError = {name: error?.name || "Error", message: String(error?.message || error)}
+                }
+              }
+              const newKey = await sync.loadSyncKey(newId)
+              return {
+                label,
+                old_key_loadable: Boolean(oldKey),
+                old_key_metadata: oldKey ? {
+                  crypto_key: typeof CryptoKey !== "undefined" && oldKey instanceof CryptoKey,
+                  algorithm: oldKey?.algorithm?.name || null,
+                  extractable: typeof oldKey?.extractable === "boolean" ? oldKey.extractable : null,
+                  usages: Array.isArray(oldKey?.usages) ? [...oldKey.usages] : []
+                } : null,
+                decrypt_succeeded: decryptSucceeded,
+                decrypt_error: decryptError,
+                decrypted_record_ids: decrypted.map(record => record.id),
+                exact_marker_recovered: decrypted.some(record =>
+                  record.id === memoryId &&
+                  record.type === "memory" &&
+                  record.value?.text === marker
+                ),
+                new_continuity_control_loadable: Boolean(newKey),
+                new_continuity_control_metadata: newKey ? {
+                  crypto_key: typeof CryptoKey !== "undefined" && newKey instanceof CryptoKey,
+                  algorithm: newKey?.algorithm?.name || null,
+                  extractable: typeof newKey?.extractable === "boolean" ? newKey.extractable : null,
+                  usages: Array.isArray(newKey?.usages) ? [...newKey.usages] : []
+                } : null
+              }
+            }, {oldId: OLD_CONTINUITY_ID, newId: NEW_CONTINUITY_ID, envelope, memoryId: MEMORY_ID, marker: MARKER, label})
+          }
+
+          function bindingClassification(account, accesses) {
+            if (account?.connected === true && account?.continuity_id === OLD_CONTINUITY_ID) {
+              return "OLD_KEY_AUTOMATICALLY_REBOUND"
+            }
+            if (accesses.some(item => item.key === `account:${OLD_CONTINUITY_ID}`)) {
+              return "OLD_KEY_AUTOMATICALLY_REBOUND"
+            }
+            if (account?.available === false && account?.connected === false) {
+              return "NO_ACCOUNT_CONTEXT_AVAILABLE"
+            }
+            if (account?.connected === false || !account?.continuity_id) {
+              return "OLD_KEY_NOT_AUTOMATICALLY_REBOUND"
+            }
+            return "INDETERMINATE"
+          }
+
+          function yesNo(value) {
+            if (value === true) return "YES"
+            if (value === false) return "NO"
+            return "INDETERMINATE"
+          }
+
+          await phase("WT05_DELETE_KEY_PREDELETE_FIXTURE", async () => {
+            const launched = await launchPersistent("initial")
+            context = launched.context
+            page = launched.page
+
+            await waitForApp(page)
+            await waitForIdentity(page)
+
+            await page.locator("#conversation-language").selectOption("te")
+
+            const beforeIdentity = await captureStorage(page, "pre_delete_before_fixture")
+            oldParticipantId = participantId(beforeIdentity)
+            if (!oldParticipantId) throw new Error("pre_delete_identity_missing")
+
+            const fixture = await page.evaluate(async ({oldId, memoryId, marker}) => {
+              const local = await import("/assets/local_data.mjs")
+              const sync = await import("/assets/encrypted_sync.mjs")
+              const now = new Date().toISOString()
+
+              await local.putRecord({
+                id: memoryId,
+                type: "memory",
+                schema_version: 1,
+                value: {text: marker},
+                updated_at: now
+              })
+
+              const sourceRecord = {
+                id: memoryId,
+                type: "memory",
+                value: {text: marker},
+                updated_at: now
+              }
+              const records = sync.syncableRecords([sourceRecord])
+              if (!sync.validateSyncRecords(records)) throw new Error("diagnostic_sync_record_invalid")
+
+              const passphrase = `wt05-r1-${crypto.randomUUID()}-${crypto.randomUUID()}`
+              const bundle = await sync.encryptSyncBundle(records, passphrase, 1)
+              await sync.storeSyncKey(bundle.syncKey, oldId)
+
+              const reloaded = await sync.loadSyncKey(oldId)
+              const decrypted = await sync.decryptSyncWithKey(bundle.envelope, reloaded)
+              const positive = decrypted.some(record =>
+                record.id === memoryId &&
+                record.type === "memory" &&
+                record.value?.text === marker
+              )
+              if (!positive) throw new Error("pre_delete_positive_control_failed")
+
+              return {
+                envelope: bundle.envelope,
+                sanitized: {
+                  diagnostic_continuity_id: oldId,
+                  syncable_record: records[0],
+                  key_metadata: {
+                    crypto_key: typeof CryptoKey !== "undefined" && reloaded instanceof CryptoKey,
+                    algorithm: reloaded?.algorithm?.name || null,
+                    extractable: typeof reloaded?.extractable === "boolean" ? reloaded.extractable : null,
+                    usages: Array.isArray(reloaded?.usages) ? [...reloaded.usages] : []
+                  },
+                  envelope_metadata: {
+                    kind: bundle.envelope?.kind || null,
+                    version: bundle.envelope?.version ?? null,
+                    revision: bundle.envelope?.revision ?? null,
+                    ciphertext_present: Boolean(bundle.envelope?.content?.ciphertext)
+                  },
+                  positive_control: {
+                    decrypted_record_ids: decrypted.map(record => record.id),
+                    exact_marker_recovered: positive
+                  }
+                }
+              }
+            }, {oldId: OLD_CONTINUITY_ID, memoryId: MEMORY_ID, marker: MARKER})
+
+            preDeleteEnvelope = fixture.envelope
+            const storage = await captureStorage(page, "pre_delete_fixture_complete")
+            const oldSlot = storage.continuity_keys?.slots?.find(slot => slot.slot === `account:${OLD_CONTINUITY_ID}`) || null
+
+            if (!oldSlot?.crypto_key) throw new Error("pre_delete_persistent_old_key_slot_missing")
+            if (!fixture.sanitized.positive_control.exact_marker_recovered) throw new Error("pre_delete_positive_control_not_exact")
+
+            return {
+              old_participant_id: oldParticipantId,
+              token_presence_only: storage.primary.find(record => record.type === "identity")?.token_present === true,
+              old_continuity_id: OLD_CONTINUITY_ID,
+              primary_store_record_ids_types: storage.primary.map(record => ({id: record.id, type: record.type})),
+              continuity_key_slots: storage.continuity_keys?.slots || [],
+              fixture: fixture.sanitized,
+              local_storage: storage.local_storage
+            }
+          })
+
+          if (!preDeleteEnvelope || invalidFailures.length) {
+            emit({phase: "WT05_DELETE_KEY_ABORT", reason: "pre_delete_fixture_invalid"})
+          } else {
+            await phase("WT05_DELETE_KEY_UI_DELETE", async () => {
+              await page.locator('#bottom-nav [data-go="settings"]').click()
+              await page.locator('section[data-screen="settings"].active').waitFor({state: "visible", timeout: WAIT})
+
+              let dialogText = null
+              page.once("dialog", async dialog => {
+                dialogText = dialog.message()
+                await dialog.accept()
+              })
+
+              await page.locator("#delete-all").click()
+              await waitForRotatedIdentity(page, oldParticipantId)
+              await page.waitForFunction(expected => document.querySelector("#status")?.textContent?.trim() === expected, EXPECTED_ANNOUNCEMENT, {timeout: WAIT})
+
+              const storage = await captureStorage(page, "immediate_after_delete_ui")
+              newParticipantId = participantId(storage)
+              if (!newParticipantId) throw new Error("post_delete_identity_missing")
+              if (newParticipantId === oldParticipantId) throw new Error("post_delete_identity_not_rotated")
+
+              return {
+                actual_product_ui: "#delete-all",
+                confirmation_dialog: dialogText,
+                announcement: storage.status_text,
+                old_participant_id: oldParticipantId,
+                new_participant_id: newParticipantId,
+                identity_changed: newParticipantId !== oldParticipantId
+              }
+            })
+
+            await phase("WT05_DELETE_KEY_POSTDELETE_STORAGE", async () => {
+              postDeleteStorage = await captureStorage(page, "immediate_post_delete_storage")
+              const oldSlot = postDeleteStorage.continuity_keys?.slots?.find(slot => slot.slot === `account:${OLD_CONTINUITY_ID}`) || null
+              const preDeletePrimary = postDeleteStorage.primary.filter(record => record.id === MEMORY_ID)
+              return {
+                primary_indexeddb: {
+                  record_ids_types: postDeleteStorage.primary.map(record => ({id: record.id, type: record.type})),
+                  pre_delete_diagnostic_records_remaining: preDeletePrimary.map(record => ({id: record.id, type: record.type}))
+                },
+                continuity_key_indexeddb: {
+                  slots: postDeleteStorage.continuity_keys?.slots || [],
+                  old_slot_exists: Boolean(oldSlot)
+                },
+                local_storage: postDeleteStorage.local_storage
+              }
+            })
+
+            await phase("WT05_DELETE_KEY_DIRECT_CRYPTO", async () => {
+              immediateCrypto = await directCryptoProbe(page, preDeleteEnvelope, "immediate_after_delete")
+              return immediateCrypto
+            })
+
+            await phase("WT05_DELETE_KEY_PRODUCT_BINDING", async () => {
+              await page.reload({waitUntil: "domcontentloaded", timeout: WAIT})
+              await page.waitForFunction(() => Boolean(window.StrangerTalksF11), null, {timeout: WAIT})
+              await page.waitForFunction(() => window.StrangerTalksF11?.getReadiness?.()?.status === "READY", null, {timeout: WAIT})
+              await waitForIdentity(page)
+
+              const accesses = await keyAccessLog(page)
+              const account = await accountSnapshot(page)
+              const storage = await captureStorage(page, "post_delete_normal_product_boot")
+              const identityRecord = storage.primary.find(record => record.type === "identity") || null
+              const oldKeyReadByProductBoot = accesses.some(item => item.key === `account:${OLD_CONTINUITY_ID}`)
+              const exposedOldContinuity = account?.continuity_id === OLD_CONTINUITY_ID
+
+              immediateProductBinding = {
+                classification: bindingClassification(account, accesses),
+                new_participant_id: participantId(storage),
+                new_identity_record_fields: identityRecord ? Object.keys(identityRecord).sort() : [],
+                account,
+                key_reads_during_normal_product_boot: accesses,
+                old_key_read_during_normal_product_boot: oldKeyReadByProductBoot,
+                fresh_identity_exposes_old_continuity_id: exposedOldContinuity,
+                normal_product_discovery_observed: oldKeyReadByProductBoot || exposedOldContinuity
+              }
+              return immediateProductBinding
+            })
+
+            await phase("WT05_DELETE_KEY_BROWSER_RESTART", async () => {
+              const before = profileChromiumProcesses()
+              await context.close()
+              const afterClose = await waitForNoProfileChromium()
+
+              if (before.length === 0) throw new Error("browser_process_boundary_no_pre_shutdown_process")
+              if (afterClose.length !== 0) throw new Error(`browser_process_did_not_exit:${JSON.stringify(afterClose)}`)
+
+              const relaunched = await launchPersistent("restart")
+              context = relaunched.context
+              page = relaunched.page
+
+              const afterLaunch = profileChromiumProcesses()
+              if (afterLaunch.length === 0) throw new Error("browser_process_relaunch_not_observed")
+
+              await waitForApp(page)
+              await waitForIdentity(page)
+
+              const bootAccesses = await keyAccessLog(page)
+              const account = await accountSnapshot(page)
+              restartStorage = await captureStorage(page, "after_verified_browser_restart")
+              const restartedParticipantId = participantId(restartStorage)
+              const oldSlot = restartStorage.continuity_keys?.slots?.find(slot => slot.slot === `account:${OLD_CONTINUITY_ID}`) || null
+
+              restartProductBinding = {
+                classification: bindingClassification(account, bootAccesses),
+                new_participant_id: restartedParticipantId,
+                participant_identity_stable_across_restart: restartedParticipantId === newParticipantId,
+                account,
+                key_reads_during_normal_product_boot: bootAccesses,
+                old_key_read_during_normal_product_boot: bootAccesses.some(item => item.key === `account:${OLD_CONTINUITY_ID}`),
+                fresh_identity_exposes_old_continuity_id: account?.continuity_id === OLD_CONTINUITY_ID,
+                normal_product_discovery_observed:
+                  bootAccesses.some(item => item.key === `account:${OLD_CONTINUITY_ID}`) ||
+                  account?.continuity_id === OLD_CONTINUITY_ID
+              }
+
+              restartCrypto = await directCryptoProbe(page, preDeleteEnvelope, "after_browser_restart")
+              browserBoundary = {
+                mechanism: "ps -eo pid=,args= filtered by exact WT05_PROFILE_DIR and chrome/chromium command",
+                before_restart_profile_processes: before,
+                after_close_profile_processes: afterClose,
+                after_relaunch_profile_processes: afterLaunch
+              }
+
+              return {
+                process_boundary: browserBoundary,
+                storage: {
+                  old_slot_exists: Boolean(oldSlot),
+                  slots: restartStorage.continuity_keys?.slots || []
+                },
+                product_binding_before_any_diagnostic_old_key_load: restartProductBinding,
+                direct_crypto_after_product_binding_observation: restartCrypto
+              }
+            })
+          }
+
+          console.log("WT05_DELETE_KEY_SUMMARY_BEGIN")
+          const oldSlotImmediate = postDeleteStorage?.continuity_keys?.slots?.some(slot => slot.slot === `account:${OLD_CONTINUITY_ID}`)
+          const oldSlotRestart = restartStorage?.continuity_keys?.slots?.some(slot => slot.slot === `account:${OLD_CONTINUITY_ID}`)
+
+          const outcomeMatrix = {
+            "Old key physically survives Delete-All": yesNo(oldSlotImmediate),
+            "Old key survives browser restart": yesNo(oldSlotRestart),
+            "Old key loads by old continuity ID": yesNo(immediateCrypto?.old_key_loadable),
+            "Old key decrypts pre-delete envelope immediately after Delete-All": yesNo(immediateCrypto?.decrypt_succeeded && immediateCrypto?.exact_marker_recovered),
+            "Old key decrypts pre-delete envelope after browser restart": yesNo(restartCrypto?.decrypt_succeeded && restartCrypto?.exact_marker_recovered),
+            "Fresh anonymous identity automatically references old continuity ID": yesNo(
+              immediateProductBinding
+                ? immediateProductBinding.fresh_identity_exposes_old_continuity_id
+                : null
+            ),
+            "Normal product boot automatically reloads old key": yesNo(
+              immediateProductBinding
+                ? immediateProductBinding.old_key_read_during_normal_product_boot
+                : null
+            ),
+            "Normal post-delete product flow can discover old continuity": yesNo(
+              immediateProductBinding && restartProductBinding
+                ? (
+                    immediateProductBinding.normal_product_discovery_observed ||
+                    restartProductBinding.normal_product_discovery_observed
+                  )
+                : null
+            )
+          }
+
+          const summary = {
+            experiment_valid: invalidFailures.length === 0,
+            invalid_failures: invalidFailures,
+            outcome_matrix: outcomeMatrix,
+            impact_verdict: "DEFERRED_TO_FUTURE_EVIDENCE_REVIEW_TEAM",
+            product_outcomes_are_observations_not_pass_assertions: true,
+            optional_account_context_probe: {
+              status: "NOT EXECUTED",
+              reason: "No external-production-free canonical connected-account browser harness is used by this diagnostic."
+            },
+            secrets: {
+              repository_secrets_required: "NONE",
+              participant_token_emitted: false,
+              raw_crypto_key_emitted: false,
+              passphrase_emitted: false,
+              production_cookie_injected: false
+            }
+          }
+          emit({phase: "WT05_DELETE_KEY_SUMMARY", status: invalidFailures.length === 0 ? "complete" : "invalid", result: summary})
+          console.log("WT05_DELETE_KEY_SUMMARY_END")
+
+          await context?.close().catch(() => {})
+
+          if (invalidFailures.length) process.exitCode = 1
+          WT05_NODE
+
+      - name: Execute delete-key boundary proof
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          node "$RUNNER_TEMP/wt05-delete-key-boundary-r1.mjs" \
+            2>&1 | tee "$WT05_EVIDENCE_DIR/browser.log" || status=$?
+          exit "$status"
+
+      - name: Stop Phoenix
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$WT05_EVIDENCE_DIR/phoenix.pid" ]; then
+            kill "$(cat "$WT05_EVIDENCE_DIR/phoenix.pid")" 2>/dev/null || true
+          fi
+
+      - name: Preserve Phoenix log in job output on failure
+        if: failure()
+        shell: bash
+        run: |
+          cat "$WT05_EVIDENCE_DIR/phoenix.log" || true
+
+      - name: Upload WT-05 delete-key evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt05-delete-key-boundary-r1-${{ github.run_id }}
+          path: ${{ runner.temp }}/wt05-delete-key-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Prove frozen checkout stayed pristine
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$WT05_FROZEN_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$WT05_FROZEN_TREE"
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
