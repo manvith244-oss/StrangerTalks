@@ -1,0 +1,444 @@
+name: WT-07 A1 PostgreSQL Loss Health Proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  db-loss-proof:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: strangertalks_wt07
+          POSTGRES_PASSWORD: disposable-wt07-only
+          POSTGRES_DB: strangertalks_wt07
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_wt07 -d strangertalks_wt07"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      MIX_ENV: prod
+      DATABASE_URL: postgresql://strangertalks_wt07:disposable-wt07-only@localhost:5432/strangertalks_wt07
+      SECRET_KEY_BASE: wt07-disposable-secret-key-base-only-0000000000000000000000000000000000000000000000000000000000000000
+      PHX_HOST: localhost
+      PHX_SERVER: "true"
+      PORT: "4000"
+      POOL_SIZE: "5"
+      FROZEN_APP_SHA: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+      FROZEN_APP_TREE: 72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a
+      PROOF_DIR: ${{ runner.temp }}/wt07-a1-db-loss-proof
+
+    steps:
+      - name: Initialize proof transcript and reject production credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROOF_DIR"
+          transcript="$PROOF_DIR/proof-transcript.txt"
+          : > "$transcript"
+          echo "workflow=WT-07 A1 PostgreSQL Loss Health Proof" >> "$transcript"
+          echo "run_id=$GITHUB_RUN_ID" >> "$transcript"
+          echo "runner_os=$RUNNER_OS" >> "$transcript"
+          echo "runner_arch=$RUNNER_ARCH" >> "$transcript"
+          expected='postgresql://strangertalks_wt07:disposable-wt07-only@localhost:5432/strangertalks_wt07'
+          if [ "$DATABASE_URL" != "$expected" ]; then
+            echo "production_credential_guard=FAIL_DATABASE_URL_NOT_DISPOSABLE" | tee -a "$transcript"
+            exit 2
+          fi
+          for name in SUPABASE_DATABASE_URL RENDER_DATABASE_URL STAGING_DATABASE_URL; do
+            if [ -n "${!name:-}" ]; then
+              echo "production_credential_guard=FAIL_${name}_PRESENT" | tee -a "$transcript"
+              exit 2
+            fi
+          done
+          case "$DATABASE_URL" in
+            *supabase*|*render*|*amazonaws*|*neon.tech*)
+              echo "production_credential_guard=FAIL_REMOTE_DATABASE_HOST" | tee -a "$transcript"
+              exit 2
+              ;;
+          esac
+          echo "production_credentials_referenced=false" >> "$transcript"
+
+      - name: Checkout frozen canonical application generation
+        uses: actions/checkout@v4
+        with:
+          ref: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          fetch-depth: 1
+
+      - name: Prove frozen application identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          head_sha="$(git rev-parse HEAD)"
+          tree_sha="$(git rev-parse HEAD^{tree})"
+          printf 'tested_application_sha=%s\ntested_application_tree=%s\n' "$head_sha" "$tree_sha" | tee -a "$PROOF_DIR/proof-transcript.txt"
+          test "$(git rev-parse HEAD)" = "30717f4ee84a493697bb4965f4e8128b2e6af6b9"
+          test "$(git rev-parse HEAD^{tree})" = "72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Record toolchain environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "elixir_version_begin"
+            elixir --version
+            echo "elixir_version_end"
+            echo "node_version=$(node --version)"
+            echo "npm_version=$(npm --version)"
+            echo "ubuntu_description=$(grep '^PRETTY_NAME=' /etc/os-release | cut -d= -f2- | tr -d '"')"
+          } | tee "$PROOF_DIR/environment-identity.txt" >> "$PROOF_DIR/proof-transcript.txt"
+
+      - name: Make disposable PostgreSQL TLS-capable for production runtime
+        shell: bash
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          transcript="$PROOF_DIR/proof-transcript.txt"
+          test -n "$POSTGRES_CONTAINER_ID"
+          actual_id="$(docker inspect --format '{{.Id}}' "$POSTGRES_CONTAINER_ID")"
+          test "$actual_id" = "$POSTGRES_CONTAINER_ID"
+          image="$(docker inspect --format '{{.Config.Image}}' "$POSTGRES_CONTAINER_ID")"
+          test "$image" = "postgres:17"
+          tls_dir="$RUNNER_TEMP/wt07-pg-tls"
+          mkdir -p "$tls_dir"
+          openssl req -x509 -newkey rsa:2048 -nodes \
+            -keyout "$tls_dir/ca.key" \
+            -out "$tls_dir/ca.crt" \
+            -sha256 -days 1 -subj '/CN=WT07 Disposable CA' >/dev/null 2>&1
+          openssl req -newkey rsa:2048 -nodes \
+            -keyout "$tls_dir/server.key" \
+            -out "$tls_dir/server.csr" \
+            -subj '/CN=localhost' >/dev/null 2>&1
+          printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\n' > "$tls_dir/server.ext"
+          openssl x509 -req -in "$tls_dir/server.csr" \
+            -CA "$tls_dir/ca.crt" -CAkey "$tls_dir/ca.key" -CAcreateserial \
+            -out "$tls_dir/server.crt" -days 1 -sha256 \
+            -extfile "$tls_dir/server.ext" >/dev/null 2>&1
+          docker cp "$tls_dir/server.crt" "$POSTGRES_CONTAINER_ID:/var/lib/postgresql/server.crt"
+          docker cp "$tls_dir/server.key" "$POSTGRES_CONTAINER_ID:/var/lib/postgresql/server.key"
+          docker exec "$POSTGRES_CONTAINER_ID" sh -lc \
+            'chown postgres:postgres /var/lib/postgresql/server.crt /var/lib/postgresql/server.key && chmod 644 /var/lib/postgresql/server.crt && chmod 600 /var/lib/postgresql/server.key'
+          pgdata="$(docker exec "$POSTGRES_CONTAINER_ID" sh -lc 'printf %s "$PGDATA"')"
+          test -n "$pgdata"
+          docker exec "$POSTGRES_CONTAINER_ID" sh -lc \
+            "printf '\nssl=on\nssl_cert_file='\"'\"'/var/lib/postgresql/server.crt'\"'\"'\nssl_key_file='\"'\"'/var/lib/postgresql/server.key'\"'\"'\n' >> '$pgdata/postgresql.conf'"
+          docker kill --signal=HUP "$POSTGRES_CONTAINER_ID" >/dev/null
+          for attempt in $(seq 1 30); do
+            health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$POSTGRES_CONTAINER_ID")"
+            ssl_state="$(docker exec "$POSTGRES_CONTAINER_ID" psql -U strangertalks_wt07 -d strangertalks_wt07 -Atc 'show ssl' 2>/dev/null || true)"
+            if [ "$health" = "healthy" ] && [ "$ssl_state" = "on" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "postgres_tls_setup=FAIL_TLS_NOT_ACTIVE" | tee -a "$transcript"
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "DB_CA_CERT_FILE=$tls_dir/ca.crt" >> "$GITHUB_ENV"
+          echo "postgres_tls_setup=disposable_self_signed_ca_reload_only" >> "$transcript"
+
+      - name: Build canonical production release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get --only prod
+          mix deps.compile
+          mix compile --warnings-as-errors
+          mix assets.deploy
+          mix release --overwrite
+          test -x _build/prod/rel/strangertalks_new/bin/migrate
+          test -x _build/prod/rel/strangertalks_new/bin/strangertalks_new
+          {
+            echo "release_build=complete"
+            echo "migration_executable=_build/prod/rel/strangertalks_new/bin/migrate"
+            echo "application_executable=_build/prod/rel/strangertalks_new/bin/strangertalks_new"
+          } >> "$PROOF_DIR/proof-transcript.txt"
+
+      - name: Run canonical release migrations on disposable PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          migration_log="$RUNNER_TEMP/wt07-a1-migration.log"
+          set +e
+          _build/prod/rel/strangertalks_new/bin/migrate >"$migration_log" 2>&1
+          rc=$?
+          set -e
+          cat "$migration_log"
+          echo "migration_exit_code=$rc" >> "$PROOF_DIR/proof-transcript.txt"
+          if [ "$rc" -ne 0 ]; then
+            echo "migration_failure_log_tail_begin" >> "$PROOF_DIR/proof-transcript.txt"
+            tail -n 200 "$migration_log" >> "$PROOF_DIR/proof-transcript.txt"
+            echo "migration_failure_log_tail_end" >> "$PROOF_DIR/proof-transcript.txt"
+            exit "$rc"
+          fi
+          echo "migration_result=success" >> "$PROOF_DIR/proof-transcript.txt"
+
+      - name: Start canonical production release and capture PID
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_log="$PROOF_DIR/application-runtime.log"
+          _build/prod/rel/strangertalks_new/bin/strangertalks_new start >"$runtime_log" 2>&1 &
+          app_pid=$!
+          echo "$app_pid" > "$PROOF_DIR/app-pid.txt"
+          echo "APP_PID=$app_pid" >> "$GITHUB_ENV"
+          echo "application_pid_initial=$app_pid" >> "$PROOF_DIR/proof-transcript.txt"
+          sleep 1
+          kill -0 "$app_pid"
+
+      - name: Establish healthy baseline and capture live plus ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          transcript="$PROOF_DIR/proof-transcript.txt"
+          probe() {
+            label="$1"
+            url="$2"
+            body="$PROOF_DIR/${label}.body"
+            stderr_file="$PROOF_DIR/${label}.curl.stderr"
+            set +e
+            metrics="$(curl --silent --show-error --connect-timeout 2 --max-time 10 \
+              --output "$body" --write-out '%{http_code}\t%{time_total}' "$url" 2>"$stderr_file")"
+            rc=$?
+            set -e
+            status="$(printf '%s' "$metrics" | cut -f1)"
+            elapsed="$(printf '%s' "$metrics" | cut -f2)"
+            timed_out=false
+            if [ "$rc" -eq 28 ]; then
+              status=timeout
+              timed_out=true
+            elif [ "$rc" -ne 0 ]; then
+              status="curl_error_${rc}"
+            fi
+            printf '%s' "$status" > "$PROOF_DIR/${label}.status"
+            printf '%s' "$elapsed" > "$PROOF_DIR/${label}.elapsed"
+            printf '%s' "$timed_out" > "$PROOF_DIR/${label}.timed_out"
+            body_one_line="$(tr '\n' ' ' < "$body" 2>/dev/null || true)"
+            {
+              echo "${label}_http_status=$status"
+              echo "${label}_body=$body_one_line"
+              echo "${label}_elapsed=$elapsed"
+              echo "${label}_TIMED_OUT=$timed_out"
+              echo "${label}_curl_rc=$rc"
+            } >> "$transcript"
+          }
+
+          healthy=false
+          for attempt in $(seq 1 30); do
+            if curl --silent --show-error --fail --connect-timeout 2 --max-time 3 \
+              http://127.0.0.1:4000/health/ready >/dev/null 2>&1; then
+              healthy=true
+              break
+            fi
+            kill -0 "$APP_PID"
+            sleep 2
+          done
+          test "$healthy" = true
+
+          probe healthy_live http://127.0.0.1:4000/health/live
+          probe healthy_ready http://127.0.0.1:4000/health/ready
+          test "$(cat "$PROOF_DIR/healthy_live.status")" = "200"
+          test "$(cat "$PROOF_DIR/healthy_ready.status")" = "200"
+          python3 -c 'import json,pathlib,sys; payload=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert payload == {"status": sys.argv[2]}, payload' "$PROOF_DIR/healthy_live.body" live
+          python3 -c 'import json,pathlib,sys; payload=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert payload == {"status": sys.argv[2]}, payload' "$PROOF_DIR/healthy_ready.body" ready
+          kill -0 "$APP_PID"
+          echo "APP_PID_BEFORE_DB_LOSS=$APP_PID" >> "$GITHUB_ENV"
+          echo "APP_PID_BEFORE_DB_LOSS=$APP_PID" >> "$transcript"
+
+      - name: Identify disposable PostgreSQL service exactly
+        shell: bash
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          transcript="$PROOF_DIR/proof-transcript.txt"
+          identity="$PROOF_DIR/postgres-identity.txt"
+          test -n "$POSTGRES_CONTAINER_ID"
+          actual_id="$(docker inspect --format '{{.Id}}' "$POSTGRES_CONTAINER_ID")"
+          image="$(docker inspect --format '{{.Config.Image}}' "$POSTGRES_CONTAINER_ID")"
+          running="$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER_ID")"
+          test "$actual_id" = "$POSTGRES_CONTAINER_ID"
+          test "$image" = "postgres:17"
+          test "$running" = "true"
+          current_user="$(docker exec "$POSTGRES_CONTAINER_ID" psql -U strangertalks_wt07 -d strangertalks_wt07 -Atc 'select current_user')"
+          current_db="$(docker exec "$POSTGRES_CONTAINER_ID" psql -U strangertalks_wt07 -d strangertalks_wt07 -Atc 'select current_database()')"
+          pg_version="$(docker exec "$POSTGRES_CONTAINER_ID" psql -U strangertalks_wt07 -d strangertalks_wt07 -Atc 'show server_version')"
+          test "$current_user" = "strangertalks_wt07"
+          test "$current_db" = "strangertalks_wt07"
+          case "$pg_version" in 17.*) ;; *) exit 1 ;; esac
+          {
+            echo "container_id=$actual_id"
+            echo "image=$image"
+            echo "running=$running"
+            echo "database_user=$current_user"
+            echo "database_name=$current_db"
+            echo "postgresql_version=$pg_version"
+          } | tee "$identity" >> "$transcript"
+          echo "POSTGRES_CONTAINER_ID=$actual_id" >> "$GITHUB_ENV"
+
+      - name: Stop only the disposable PostgreSQL service container
+        shell: bash
+        run: |
+          set -euo pipefail
+          transcript="$PROOF_DIR/proof-transcript.txt"
+          stop_record="$PROOF_DIR/postgres-stop.txt"
+          test -n "$POSTGRES_CONTAINER_ID"
+          before_id="$(docker inspect --format '{{.Id}}' "$POSTGRES_CONTAINER_ID")"
+          test "$before_id" = "$POSTGRES_CONTAINER_ID"
+          stop_timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          docker stop "$POSTGRES_CONTAINER_ID" > "$PROOF_DIR/postgres-stop-command.out"
+          running_after="$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER_ID")"
+          test "$running_after" = "false"
+          {
+            echo "postgres_stop_timestamp=$stop_timestamp"
+            echo "postgres_container_id=$POSTGRES_CONTAINER_ID"
+            echo "postgres_running_after_stop=$running_after"
+          } | tee "$stop_record" >> "$transcript"
+
+      - name: Record same-process survival immediately after database loss
+        shell: bash
+        run: |
+          set -euo pipefail
+          transcript="$PROOF_DIR/proof-transcript.txt"
+          alive=false
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            alive=true
+          fi
+          app_pid_after="$APP_PID"
+          same_pid=false
+          if [ "$APP_PID_BEFORE_DB_LOSS" = "$app_pid_after" ]; then
+            same_pid=true
+          fi
+          {
+            echo "APP_PID_AFTER_DB_LOSS=$app_pid_after"
+            echo "SAME_PID=$same_pid"
+            echo "PROCESS_ALIVE_AFTER_DB_LOSS=$alive"
+          } | tee "$PROOF_DIR/pid-after-db-loss.txt" >> "$transcript"
+
+      - name: Capture post-loss live and ready behavior before verdicting
+        shell: bash
+        run: |
+          set -euo pipefail
+          transcript="$PROOF_DIR/proof-transcript.txt"
+          probe() {
+            label="$1"
+            url="$2"
+            body="$PROOF_DIR/${label}.body"
+            stderr_file="$PROOF_DIR/${label}.curl.stderr"
+            set +e
+            metrics="$(curl --silent --show-error --connect-timeout 2 --max-time 10 \
+              --output "$body" --write-out '%{http_code}\t%{time_total}' "$url" 2>"$stderr_file")"
+            rc=$?
+            set -e
+            status="$(printf '%s' "$metrics" | cut -f1)"
+            elapsed="$(printf '%s' "$metrics" | cut -f2)"
+            timed_out=false
+            if [ "$rc" -eq 28 ]; then
+              status=timeout
+              timed_out=true
+            elif [ "$rc" -ne 0 ]; then
+              status="curl_error_${rc}"
+            fi
+            printf '%s' "$status" > "$PROOF_DIR/${label}.status"
+            printf '%s' "$elapsed" > "$PROOF_DIR/${label}.elapsed"
+            printf '%s' "$timed_out" > "$PROOF_DIR/${label}.timed_out"
+            body_one_line="$(tr '\n' ' ' < "$body" 2>/dev/null || true)"
+            alive_after=false
+            if kill -0 "$APP_PID" 2>/dev/null; then
+              alive_after=true
+            fi
+            {
+              echo "${label}_http_status=$status"
+              echo "${label}_body=$body_one_line"
+              echo "${label}_elapsed=$elapsed"
+              echo "${label}_TIMED_OUT=$timed_out"
+              echo "${label}_curl_rc=$rc"
+              echo "${label}_process_alive_after=$alive_after"
+            } >> "$transcript"
+          }
+
+          probe db_loss_live http://127.0.0.1:4000/health/live
+          probe db_loss_ready http://127.0.0.1:4000/health/ready
+
+          alive_final=false
+          if kill -0 "$APP_PID" 2>/dev/null; then
+            alive_final=true
+          fi
+          echo "PROCESS_ALIVE_AFTER_DB_LOSS_PROBES=$alive_final" >> "$transcript"
+
+          unexpected=0
+          if [ "$(cat "$PROOF_DIR/db_loss_live.status")" != "200" ]; then
+            unexpected=1
+          else
+            python3 -c 'import json,pathlib,sys; payload=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert payload == {"status": sys.argv[2]}, payload' "$PROOF_DIR/db_loss_live.body" live || unexpected=1
+          fi
+          if [ "$(cat "$PROOF_DIR/db_loss_ready.status")" != "503" ]; then
+            unexpected=1
+          else
+            python3 -c 'import json,pathlib,sys; payload=json.loads(pathlib.Path(sys.argv[1]).read_text()); assert payload == {"status": sys.argv[2]}, payload' "$PROOF_DIR/db_loss_ready.body" not_ready || unexpected=1
+          fi
+          if [ "$alive_final" != "true" ]; then
+            unexpected=1
+          fi
+          if [ "$unexpected" -ne 0 ]; then
+            echo "post_loss_contract_observation=UNEXPECTED_EVIDENCE_CAPTURED" >> "$transcript"
+            exit 1
+          fi
+          echo "post_loss_contract_observation=EXPECTED_EVIDENCE_CAPTURED" >> "$transcript"
+
+      - name: Validate proof evidence files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -d "$PROOF_DIR"
+          test -s "$PROOF_DIR/proof-transcript.txt"
+          if [ -s "$PROOF_DIR/app-pid.txt" ]; then
+            test -s "$PROOF_DIR/application-runtime.log"
+          fi
+
+      - name: Clean up only the disposable application process
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+            kill "$APP_PID"
+            for attempt in $(seq 1 20); do
+              if ! kill -0 "$APP_PID" 2>/dev/null; then
+                break
+              fi
+              sleep 1
+            done
+          fi
+          echo "application_cleanup_attempted=true" >> "$PROOF_DIR/proof-transcript.txt"
+
+      - name: Upload WT-07 A1 proof artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt07-a1-db-loss-proof-${{ github.run_id }}
+          path: ${{ runner.temp }}/wt07-a1-db-loss-proof
+          if-no-files-found: error
