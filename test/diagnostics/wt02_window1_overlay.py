@@ -58,7 +58,7 @@ diagnostic = r'''  @tag :wt02_window1
     ref = make_ref()
 
     t1 = Task.async(fn ->
-      Ecto.Adapters.SQL.checkout(Repo, fn ->
+      Repo.checkout(fn ->
         [[backend]] = Repo.query!("select pg_backend_pid()").rows
         send(controller, {:wt02_t1_connection, ref, backend})
         Process.put(:wt02_window1_barrier, {controller, ref})
@@ -82,7 +82,7 @@ diagnostic = r'''  @tag :wt02_window1
     IO.puts("WT02_PHASE=checkpoint_verified")
 
     t2 = Task.async(fn ->
-      Ecto.Adapters.SQL.checkout(Repo, fn ->
+      Repo.checkout(fn ->
         [[backend]] = Repo.query!("select pg_backend_pid()").rows
         {backend, reconnect(f, f.b, door)}
       end)
