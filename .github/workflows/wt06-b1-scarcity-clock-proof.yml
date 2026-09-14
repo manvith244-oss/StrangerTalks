@@ -1,0 +1,717 @@
+name: WT-06 B1 Scarcity Clock Boundary Proof
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scarcity-clock-boundary-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      MIX_ENV: test
+      TZ: UTC
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      WT06_TESTED_SHA: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+      WT06_TESTED_TREE: 72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a
+
+    steps:
+      - name: Checkout frozen canonical application
+        uses: actions/checkout@v4
+        with:
+          ref: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Assert frozen application identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/wt06-b1-scarcity-clock-proof"
+          mkdir -p "$proof_dir"
+
+          actual_sha="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse 'HEAD^{tree}')"
+          test "$actual_sha" = "$WT06_TESTED_SHA"
+          test "$actual_tree" = "$WT06_TESTED_TREE"
+
+          {
+            echo "TESTED_SHA=$actual_sha"
+            echo "TESTED_TREE=$actual_tree"
+          } | tee "$proof_dir/application-identity.txt" > "$proof_dir/transcript.txt"
+
+          git status --porcelain=v1 > "$proof_dir/checkout-status.txt"
+          test ! -s "$proof_dir/checkout-status.txt"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex, Rebar, dependencies, and compile test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          mix compile --warnings-as-errors
+
+      - name: Prepare disposable PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/wt06-b1-scarcity-clock-proof"
+          cid="$(docker ps --filter ancestor=postgres:17 --format '{{.ID}}' | head -n1)"
+          test -n "$cid"
+          postgres_version="$(docker exec "$cid" psql -U strangertalks_local -d strangertalks_new_test -X -At -c 'SHOW server_version;')"
+          test -n "$postgres_version"
+
+          {
+            echo "POSTGRES_VERSION=$postgres_version"
+            docker ps --filter id="$cid" --format 'container={{.ID}} image={{.Image}} status={{.Status}} ports={{.Ports}}'
+          } | tee "$proof_dir/database-identity.txt"
+          echo "POSTGRES_VERSION=$postgres_version" >> "$proof_dir/transcript.txt"
+
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Install process-local deterministic clock library
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libfaketime
+
+          proof_dir="$RUNNER_TEMP/wt06-b1-scarcity-clock-proof"
+          libfake="$(dpkg -L libfaketime | awk '/libfaketimeMT\.so\.1$/ {print; exit}')"
+          test -n "$libfake"
+          test -r "$libfake"
+
+          printf '%s\n' '2030-01-01 00:00:30' > "$proof_dir/faketime.rc"
+          package_version="$(dpkg-query -W -f='${Version}' libfaketime)"
+          library_sha256="$(sha256sum "$libfake" | awk '{print $1}')"
+          host_wall_before="$(date -u +'%Y-%m-%dT%H:%M:%S.%3NZ')"
+
+          {
+            echo "CLOCK_CONTROL_METHOD=libfaketime LD_PRELOAD + FAKETIME_TIMESTAMP_FILE + FAKETIME_NO_CACHE=1"
+            echo "CLOCK_LIBRARY=$libfake"
+            echo "CLOCK_PACKAGE_VERSION=$package_version"
+            echo "CLOCK_LIBRARY_SHA256=$library_sha256"
+            echo "CLOCK_SCOPE=single mix-test process tree only; no system clock mutation"
+            echo "CLOCK_MONOTONIC_POLICY=FAKETIME_DONT_FAKE_MONOTONIC=1"
+            echo "HOST_WALL_BEFORE=$host_wall_before"
+          } | tee "$proof_dir/clock-identity.txt"
+
+          echo "CLOCK_CONTROL_METHOD=libfaketime process-local LD_PRELOAD timestamp-file/no-cache; monotonic excluded" >> "$proof_dir/transcript.txt"
+
+      - name: Generate ephemeral canonical scarcity harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/wt06-b1-scarcity-clock-proof"
+          harness="$proof_dir/wt06_b1_scarcity_clock_proof_test.exs"
+
+          cat > "$harness" <<'ELIXIR'
+          defmodule WT06B1ScarcityClockProofTest do
+            use StrangertalksNew.DataCase, async: false
+            import Phoenix.ChannelTest
+
+            @endpoint StrangertalksNewWeb.Endpoint
+            @matcher StrangertalksNew.Matchmaking.MatchmakingEngine
+            @queue_state StrangertalksNew.QueueEngine.QueueState
+            @proof_dir System.fetch_env!("WT06_PROOF_DIR")
+            @clock_file System.fetch_env!("WT06_CLOCK_FILE")
+            @trace_file Path.join(@proof_dir, "runtime-trace.log")
+            @transcript Path.join(@proof_dir, "transcript.txt")
+            @clock_a "2030-01-01 00:00:30"
+            @clock_forward "2030-01-01 00:00:31"
+            @clock_backward "2030-01-01 00:00:29"
+            @wake_clock "2030-01-01 00:00:46"
+            @automatic_observation_window_ms 20_000
+
+            test "captures exact canonical scarcity boundary and wake-up evidence" do
+              Agent.update(@queue_state, fn _ -> %{} end)
+              File.write!(@trace_file, "")
+
+              clock_fidelity = validate_clock_control!()
+              put_kv("CLOCK_CONTROL_FIDELITY", clock_fidelity)
+
+              {:module, @matcher} = Code.ensure_loaded(@matcher)
+              beam_path = :code.which(@matcher) |> to_string()
+              source_path = @matcher.module_info(:compile) |> Keyword.fetch!(:source) |> to_string()
+              put_kv("CANONICAL_MATCHER_MODULE", inspect(@matcher))
+              put_kv("PRE_PERSISTENCE_ELIGIBILITY_ORACLE", "private find_viable_partner/3 call+return trace")
+              put_kv("A1_R2_INDEPENDENCE", "primary verdict ignores durable Match/Conversation outcome")
+              append_trace("matcher_module=#{inspect(@matcher)} beam=#{beam_path} source=#{source_path}")
+
+              results = %{
+                edge_01: selection_case!("EDGE-01", :JUST_TALK, :EXPLORE, "en", "en", 14_999, 14_999),
+                edge_02: selection_case!("EDGE-02", :JUST_TALK, :EXPLORE, "en", "en", 15_000, 15_000),
+                edge_03: selection_case!("EDGE-03", :JUST_TALK, :EXPLORE, "en", "en", 15_001, 15_001),
+                edge_04: selection_case!("EDGE-04", :JUST_TALK, :EXPLORE, "en", "en", 15_000, 14_999),
+                edge_05: selection_case!("EDGE-05", :JUST_TALK, :EXPLORE, "en", "en", 14_999, 15_000),
+                same_door: selection_case!("CONTROL-01", :EXPLORE, :EXPLORE, "en", "en", 1_000, 1_000),
+                forbidden_before: selection_case!("CONTROL-02-BEFORE", :JUST_TALK, :SOMETHING_REAL, "en", "en", 14_999, 14_999),
+                forbidden_exact: selection_case!("CONTROL-02-EXACT", :JUST_TALK, :SOMETHING_REAL, "en", "en", 15_000, 15_000),
+                forbidden_after: selection_case!("CONTROL-02-AFTER", :JUST_TALK, :SOMETHING_REAL, "en", "en", 15_001, 15_001),
+                language: selection_case!("CONTROL-03", :JUST_TALK, :EXPLORE, "en", "te", 15_001, 15_001)
+              }
+
+              put_kv("EDGE_01_14999", results.edge_01)
+              put_kv("EDGE_02_15000", results.edge_02)
+              put_kv("EDGE_03_15001", results.edge_03)
+              put_kv("EDGE_04_15000_14999", results.edge_04)
+              put_kv("EDGE_05_14999_15000", results.edge_05)
+              put_kv("SAME_DOOR_CONTROL", results.same_door)
+              put_kv("FORBIDDEN_DOOR_BEFORE", results.forbidden_before)
+              put_kv("FORBIDDEN_DOOR_EXACT", results.forbidden_exact)
+              put_kv("FORBIDDEN_DOOR_AFTER", results.forbidden_after)
+              put_kv("LANGUAGE_CONTROL", results.language)
+
+              transition = two_evaluator_transition!()
+              put_kv("EVALUATOR_1_NOW", transition.evaluator_1_now)
+              put_kv("EVALUATOR_1_SELECTION", transition.evaluator_1_selection)
+              put_kv("EVALUATOR_2_NOW", transition.evaluator_2_now)
+              put_kv("EVALUATOR_2_SELECTION", transition.evaluator_2_selection)
+
+              wake = automatic_reevaluation_observation!()
+              put_kv("INITIAL_EVALUATION_OBSERVED", wake.initial_evaluation_observed)
+              put_kv("THRESHOLD_CROSSED", wake.threshold_crossed)
+              put_kv("NEW_EXTERNAL_TRIGGER_SENT", false)
+              put_kv("AUTOMATIC_POST_THRESHOLD_EVALUATION_OBSERVED", wake.automatic_observed)
+              put_kv("AUTOMATIC_OBSERVATION_WINDOW_MS", @automatic_observation_window_ms)
+
+              if wake.automatic_now do
+                put_kv("AUTOMATIC_POST_THRESHOLD_EVALUATION_NOW", wake.automatic_now)
+                put_kv("AUTOMATIC_POST_THRESHOLD_MAX_QUEUE_AGE_MS", wake.max_queue_age_ms)
+                put_kv("AUTOMATIC_POST_THRESHOLD_MONOTONIC_DELAY_MS", wake.monotonic_delay_ms)
+              end
+
+              expected = %{
+                edge_01: "NO_MATCH",
+                edge_02: "MATCH",
+                edge_03: "MATCH",
+                edge_04: "NO_MATCH",
+                edge_05: "NO_MATCH",
+                same_door: "MATCH",
+                forbidden_before: "NO_MATCH",
+                forbidden_exact: "NO_MATCH",
+                forbidden_after: "NO_MATCH",
+                language: "NO_MATCH"
+              }
+
+              mismatches =
+                for {key, expected_value} <- expected,
+                    Map.fetch!(results, key) != expected_value,
+                    do: {key, expected_value, Map.fetch!(results, key)}
+
+              transition_mismatch =
+                transition.evaluator_1_selection != "NO_MATCH" or
+                  transition.evaluator_2_selection != "MATCH"
+
+              put_kv("PRODUCT_EXPECTATION_MISMATCH_COUNT", length(mismatches))
+              put_kv("TWO_EVALUATOR_EXPECTATION_MISMATCH", transition_mismatch)
+
+              if mismatches != [] do
+                append_trace("product_expectation_mismatches=#{inspect(mismatches)}")
+              end
+
+              assert mismatches == []
+              refute transition_mismatch
+            end
+
+            defp validate_clock_control! do
+              set_clock!(@clock_a)
+              wall_1 = DateTime.utc_now(:millisecond)
+              mono_1 = System.monotonic_time(:millisecond)
+              Process.sleep(25)
+              wall_2 = DateTime.utc_now(:millisecond)
+              mono_2 = System.monotonic_time(:millisecond)
+
+              assert iso_ms(wall_1) == "2030-01-01T00:00:30.000Z"
+              assert wall_1 == wall_2
+              assert mono_2 > mono_1
+
+              set_clock!(@clock_forward)
+              forward = DateTime.utc_now(:millisecond)
+              assert iso_ms(forward) == "2030-01-01T00:00:31.000Z"
+
+              set_clock!(@clock_backward)
+              backward = DateTime.utc_now(:millisecond)
+              assert iso_ms(backward) == "2030-01-01T00:00:29.000Z"
+
+              set_clock!(@clock_a)
+              restored = DateTime.utc_now(:millisecond)
+              assert iso_ms(restored) == "2030-01-01T00:00:30.000Z"
+
+              append_trace(
+                "clock_preflight frozen_1=#{iso_ms(wall_1)} frozen_2=#{iso_ms(wall_2)} " <>
+                  "forward=#{iso_ms(forward)} backward=#{iso_ms(backward)} restored=#{iso_ms(restored)} " <>
+                  "monotonic_delta_ms=#{mono_2 - mono_1}"
+              )
+
+              "PASS: repeated DateTime.utc_now frozen; runtime forward/backward changes observed; monotonic advanced"
+            end
+
+            defp selection_case!(label, door_a, door_b, lang_a, lang_b, age_a_ms, age_b_ms) do
+              set_clock!(@clock_a)
+              now = DateTime.utc_now(:millisecond)
+              a = queue_entry(door_a, lang_a, age_a_ms, now)
+              b = queue_entry(door_b, lang_b, age_b_ms, now)
+              Agent.update(@queue_state, fn _ -> %{a.participant_id => a, b.participant_id => b} end)
+
+              traced = trace_private_selection!(label)
+              traced_now = traced.now
+
+              assert traced_now == now
+              assert traced.module == @matcher
+              assert traced.function == :find_viable_partner
+              assert MapSet.new([traced.p1_id | traced.candidate_ids]) == MapSet.new([a.participant_id, b.participant_id])
+              assert traced.candidate_ids != []
+              traced.selection
+            end
+
+            defp two_evaluator_transition! do
+              set_clock!(@clock_a)
+              now = DateTime.utc_now(:millisecond)
+              a = queue_entry(:JUST_TALK, "en", 14_999, now)
+              b = queue_entry(:EXPLORE, "en", 14_999, now)
+              initial_attempts = MapSet.new([a.queue_attempt_id, b.queue_attempt_id])
+              Agent.update(@queue_state, fn _ -> %{a.participant_id => a, b.participant_id => b} end)
+
+              first = trace_private_selection!("TWO-EVALUATOR-1")
+              after_first = Agent.get(@queue_state, & &1)
+              after_first_attempts = after_first |> Map.values() |> Enum.map(& &1.queue_attempt_id) |> MapSet.new()
+              assert after_first_attempts == initial_attempts
+
+              set_clock!(@clock_forward)
+              second = trace_private_selection!("TWO-EVALUATOR-2")
+
+              append_trace(
+                "two_evaluator unchanged_attempts=true first_now=#{iso_ms(first.now)} first=#{first.selection} " <>
+                  "second_now=#{iso_ms(second.now)} second=#{second.selection}"
+              )
+
+              %{
+                evaluator_1_now: iso_ms(first.now),
+                evaluator_1_selection: first.selection,
+                evaluator_2_now: iso_ms(second.now),
+                evaluator_2_selection: second.selection
+              }
+            end
+
+            defp automatic_reevaluation_observation! do
+              Agent.update(@queue_state, fn _ -> %{} end)
+              set_clock!(@clock_a)
+
+              participant_a = participant_fixture!()
+              participant_b = participant_fixture!()
+              socket_a = joined_participant_socket!(participant_a)
+              socket_b = joined_participant_socket!(participant_b)
+
+              enable_eval_trace!()
+
+              try do
+                ref_a = push(socket_a, "queue:join", %{"door_type" => "JUST_TALK", "conversation_language" => "en"})
+                assert_reply ref_a, :ok, %{status: "queued"}
+                initial_a = await_eval_entry!(socket_a.channel_pid, "join_a")
+
+                ref_b = push(socket_b, "queue:join", %{"door_type" => "EXPLORE", "conversation_language" => "en"})
+                assert_reply ref_b, :ok, %{status: "queued"}
+                initial_b = await_eval_entry!(socket_b.channel_pid, "join_b")
+
+                drain_eval_return(socket_a.channel_pid)
+                drain_eval_return(socket_b.channel_pid)
+
+                initial_state = Agent.get(@queue_state, & &1)
+                assert map_size(initial_state) == 2
+                assert Enum.all?(initial_state, fn {_id, entry} ->
+                         DateTime.diff(DateTime.utc_now(:millisecond), entry.queue_entry_time, :millisecond) < 15_000
+                       end)
+
+                set_clock!(@wake_clock)
+                threshold_now = DateTime.utc_now(:millisecond)
+                threshold_mono = System.monotonic_time(:millisecond)
+
+                threshold_crossed =
+                  Enum.all?(initial_state, fn {_id, entry} ->
+                    DateTime.diff(threshold_now, entry.queue_entry_time, :millisecond) >= 15_000
+                  end)
+
+                assert threshold_crossed
+                append_trace(
+                  "wake_phase initial_a=#{initial_a} initial_b=#{initial_b} threshold_now=#{iso_ms(threshold_now)} " <>
+                    "new_external_trigger_sent=false observation_window_ms=#{@automatic_observation_window_ms}"
+                )
+
+                automatic = await_any_eval_entry(@automatic_observation_window_ms)
+
+                case automatic do
+                  nil ->
+                    append_trace("automatic_post_threshold_evaluation=false")
+                    %{
+                      initial_evaluation_observed: true,
+                      threshold_crossed: true,
+                      automatic_observed: false,
+                      automatic_now: nil,
+                      max_queue_age_ms: nil,
+                      monotonic_delay_ms: nil
+                    }
+
+                  %{pid: pid, observed_now: observed_now, observed_mono: observed_mono} ->
+                    state = Agent.get(@queue_state, & &1)
+
+                    max_age =
+                      state
+                      |> Map.values()
+                      |> Enum.map(&DateTime.diff(observed_now, &1.queue_entry_time, :millisecond))
+                      |> Enum.max(fn -> 0 end)
+
+                    monotonic_delay = observed_mono - threshold_mono
+
+                    append_trace(
+                      "automatic_post_threshold_evaluation=true pid=#{inspect(pid)} observed_now=#{iso_ms(observed_now)} " <>
+                        "max_queue_age_ms=#{max_age} monotonic_delay_ms=#{monotonic_delay}"
+                    )
+
+                    %{
+                      initial_evaluation_observed: true,
+                      threshold_crossed: true,
+                      automatic_observed: true,
+                      automatic_now: iso_ms(observed_now),
+                      max_queue_age_ms: max_age,
+                      monotonic_delay_ms: monotonic_delay
+                    }
+                end
+              after
+                disable_eval_trace!()
+              end
+            end
+
+            defp trace_private_selection!(label) do
+              flush_private_trace_messages()
+              match_spec = [{:_, [], [{:return_trace}]}]
+              matched_functions = :erlang.trace_pattern({@matcher, :find_viable_partner, 3}, match_spec, [:local])
+              assert matched_functions == 1
+              :erlang.trace(self(), true, [:call, {:tracer, self()}])
+
+              _public_result = @matcher.evaluate_pending_matches()
+              :erlang.trace(self(), false, [:call])
+              :erlang.trace_pattern({@matcher, :find_viable_partner, 3}, false, [:local])
+
+              tracee = self()
+
+              call =
+                receive do
+                  {:trace, ^tracee, :call, {@matcher, :find_viable_partner, [p1, candidates, now]}}
+                  when candidates != [] ->
+                    %{p1: p1, candidates: candidates, now: now}
+                after
+                  2_000 -> flunk("#{label}: canonical find_viable_partner/3 decision call trace missing")
+                end
+
+              returned =
+                receive do
+                  {:trace, ^tracee, :return_from, {@matcher, :find_viable_partner, 3}, value} -> value
+                after
+                  2_000 -> flunk("#{label}: canonical find_viable_partner/3 return trace missing")
+                end
+
+              selection =
+                case returned do
+                  :no_match -> "NO_MATCH"
+                  {:match, _partner, _score} -> "MATCH"
+                  other -> flunk("#{label}: unexpected canonical matcher return #{inspect(other)}")
+                end
+
+              candidate_ids = Enum.map(call.candidates, & &1.participant_id)
+
+              append_trace(
+                "#{label} module=#{inspect(@matcher)} function=find_viable_partner/3 now=#{iso_ms(call.now)} " <>
+                  "p1=#{call.p1.participant_id} candidates=#{inspect(candidate_ids)} return=#{inspect(returned)} selection=#{selection}"
+              )
+
+              %{
+                module: @matcher,
+                function: :find_viable_partner,
+                now: call.now,
+                p1_id: call.p1.participant_id,
+                candidate_ids: candidate_ids,
+                selection: selection
+              }
+            end
+
+            defp queue_entry(door, language, age_ms, now) do
+              %{
+                participant_id: Ecto.UUID.generate(),
+                door_selection: door,
+                conversation_language: language,
+                media_bitmask: nil,
+                keystroke_cadence: nil,
+                queue_entry_time: DateTime.add(now, -age_ms, :millisecond),
+                queue_entry_monotonic: System.monotonic_time(),
+                queue_attempt_id: Ecto.UUID.generate(),
+                attempt_count: 1
+              }
+            end
+
+            defp participant_fixture! do
+              {:ok, participant} = StrangertalksNew.Participants.create_participant(%{})
+              participant
+            end
+
+            defp joined_participant_socket!(participant) do
+              token = StrangertalksNewWeb.ParticipantToken.sign(participant.participant_id)
+              {:ok, socket} = connect(StrangertalksNewWeb.UserSocket, %{}, connect_info: %{auth_token: token})
+              {:ok, _, socket} =
+                subscribe_and_join(socket, StrangertalksNewWeb.ParticipantChannel, "participant:#{participant.participant_id}")
+              socket
+            end
+
+            defp enable_eval_trace! do
+              flush_eval_trace_messages()
+              match_spec = [{:_, [], [{:return_trace}]}]
+              matched_functions =
+                :erlang.trace_pattern({@matcher, :evaluate_pending_matches, 0}, match_spec, [:local])
+
+              assert matched_functions == 1
+              :erlang.trace(:all, true, [:call, {:tracer, self()}])
+              :erlang.trace(:new, true, [:call, {:tracer, self()}])
+            end
+
+            defp disable_eval_trace! do
+              :erlang.trace(:new, false, [:call])
+              :erlang.trace(:all, false, [:call])
+              :erlang.trace_pattern({@matcher, :evaluate_pending_matches, 0}, false, [:local])
+            end
+
+            defp await_eval_entry!(pid, phase) do
+              receive do
+                {:trace, ^pid, :call, {@matcher, :evaluate_pending_matches, []}} ->
+                  observed = iso_ms(DateTime.utc_now(:millisecond))
+                  append_trace("evaluate_entry phase=#{phase} pid=#{inspect(pid)} observed_now=#{observed}")
+                  observed
+              after
+                2_000 -> flunk("#{phase}: canonical evaluate_pending_matches/0 entry trace missing")
+              end
+            end
+
+            defp drain_eval_return(pid) do
+              receive do
+                {:trace, ^pid, :return_from, {@matcher, :evaluate_pending_matches, 0}, value} ->
+                  append_trace("evaluate_return pid=#{inspect(pid)} value=#{inspect(value)}")
+              after
+                2_000 -> flunk("canonical evaluate_pending_matches/0 return trace missing for #{inspect(pid)}")
+              end
+            end
+
+            defp await_any_eval_entry(timeout_ms) do
+              receive do
+                {:trace, pid, :call, {@matcher, :evaluate_pending_matches, []}} ->
+                  %{
+                    pid: pid,
+                    observed_now: DateTime.utc_now(:millisecond),
+                    observed_mono: System.monotonic_time(:millisecond)
+                  }
+              after
+                timeout_ms -> nil
+              end
+            end
+
+            defp flush_private_trace_messages do
+              receive do
+                {:trace, _pid, kind, payload} when kind in [:call, :return_from] ->
+                  append_trace("flushed_private_trace kind=#{kind} payload=#{inspect(payload)}")
+                  flush_private_trace_messages()
+              after
+                0 -> :ok
+              end
+            end
+
+            defp flush_eval_trace_messages do
+              receive do
+                {:trace, _pid, kind, {@matcher, :evaluate_pending_matches, _} = payload}
+                when kind in [:call, :return_from] ->
+                  append_trace("flushed_eval_trace kind=#{kind} payload=#{inspect(payload)}")
+                  flush_eval_trace_messages()
+              after
+                0 -> :ok
+              end
+            end
+
+            defp set_clock!(value) do
+              File.write!(@clock_file, value <> "\n")
+              observed = DateTime.utc_now(:millisecond)
+              append_trace("clock_set requested=#{value} observed=#{iso_ms(observed)}")
+              observed
+            end
+
+            defp iso_ms(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+
+            defp put_kv(key, value) do
+              File.write!(@transcript, "#{key}=#{value}\n", [:append])
+            end
+
+            defp append_trace(line) do
+              File.write!(@trace_file, line <> "\n", [:append])
+            end
+          end
+          ELIXIR
+
+          test -s "$harness"
+          cp "$harness" "$proof_dir/ephemeral-harness-source.exs"
+
+      - name: Run deterministic scarcity proof instrument
+        shell: bash
+        env:
+          WT06_PROOF_DIR: ${{ runner.temp }}/wt06-b1-scarcity-clock-proof
+          WT06_CLOCK_FILE: ${{ runner.temp }}/wt06-b1-scarcity-clock-proof/faketime.rc
+        run: |
+          set -euo pipefail
+          proof_dir="$WT06_PROOF_DIR"
+          harness="$proof_dir/wt06_b1_scarcity_clock_proof_test.exs"
+          libfake="$(dpkg -L libfaketime | awk '/libfaketimeMT\.so\.1$/ {print; exit}')"
+          test -r "$libfake"
+          test -s "$harness"
+
+          set +e
+          env \
+            LD_PRELOAD="$libfake" \
+            FAKETIME_TIMESTAMP_FILE="$WT06_CLOCK_FILE" \
+            FAKETIME_NO_CACHE=1 \
+            FAKETIME_DONT_FAKE_MONOTONIC=1 \
+            FAKETIME_DISABLE_SHM=1 \
+            NO_FAKE_STAT=1 \
+            WT06_PROOF_DIR="$WT06_PROOF_DIR" \
+            WT06_CLOCK_FILE="$WT06_CLOCK_FILE" \
+            mix test "$harness" --seed 0 --trace 2>&1 | tee "$proof_dir/mix-test.log"
+          harness_status="${PIPESTATUS[0]}"
+          set -e
+
+          echo "$harness_status" > "$proof_dir/harness.exit"
+          if [ "$harness_status" -eq 0 ]; then
+            echo "FINAL_INSTRUMENT_RESULT=EVIDENCE_CAPTURED" >> "$proof_dir/transcript.txt"
+          else
+            echo "FINAL_INSTRUMENT_RESULT=HARNESS_FAILED" >> "$proof_dir/transcript.txt"
+          fi
+
+          host_wall_after="$(date -u +'%Y-%m-%dT%H:%M:%S.%3NZ')"
+          echo "HOST_WALL_AFTER=$host_wall_after" >> "$proof_dir/clock-identity.txt"
+          echo "HOST_CLOCK_MUTATION=NONE" >> "$proof_dir/clock-identity.txt"
+
+      - name: Validate bounded proof evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/wt06-b1-scarcity-clock-proof"
+          transcript="$proof_dir/transcript.txt"
+
+          required_files=(
+            "$transcript"
+            "$proof_dir/application-identity.txt"
+            "$proof_dir/database-identity.txt"
+            "$proof_dir/clock-identity.txt"
+            "$proof_dir/runtime-trace.log"
+            "$proof_dir/ephemeral-harness-source.exs"
+            "$proof_dir/mix-test.log"
+            "$proof_dir/harness.exit"
+          )
+          for file in "${required_files[@]}"; do
+            test -s "$file"
+          done
+
+          required_keys=(
+            TESTED_SHA
+            TESTED_TREE
+            POSTGRES_VERSION
+            CLOCK_CONTROL_METHOD
+            CANONICAL_MATCHER_MODULE
+            PRE_PERSISTENCE_ELIGIBILITY_ORACLE
+            A1_R2_INDEPENDENCE
+            CLOCK_CONTROL_FIDELITY
+            EDGE_01_14999
+            EDGE_02_15000
+            EDGE_03_15001
+            EDGE_04_15000_14999
+            EDGE_05_14999_15000
+            SAME_DOOR_CONTROL
+            FORBIDDEN_DOOR_BEFORE
+            FORBIDDEN_DOOR_EXACT
+            FORBIDDEN_DOOR_AFTER
+            LANGUAGE_CONTROL
+            EVALUATOR_1_NOW
+            EVALUATOR_1_SELECTION
+            EVALUATOR_2_NOW
+            EVALUATOR_2_SELECTION
+            INITIAL_EVALUATION_OBSERVED
+            THRESHOLD_CROSSED
+            NEW_EXTERNAL_TRIGGER_SENT
+            AUTOMATIC_POST_THRESHOLD_EVALUATION_OBSERVED
+            FINAL_INSTRUMENT_RESULT
+          )
+          for key in "${required_keys[@]}"; do
+            grep -q "^${key}=" "$transcript"
+          done
+
+          grep -q '^TESTED_SHA=30717f4ee84a493697bb4965f4e8128b2e6af6b9$' "$transcript"
+          grep -q '^TESTED_TREE=72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a$' "$transcript"
+          grep -q '^NEW_EXTERNAL_TRIGGER_SENT=false$' "$transcript"
+          grep -q '^CANONICAL_MATCHER_MODULE=StrangertalksNew.Matchmaking.MatchmakingEngine$' "$transcript"
+
+          cat "$transcript"
+
+      - name: Upload bounded scarcity proof artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt06-b1-scarcity-clock-proof-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/wt06-b1-scarcity-clock-proof/transcript.txt
+            ${{ runner.temp }}/wt06-b1-scarcity-clock-proof/application-identity.txt
+            ${{ runner.temp }}/wt06-b1-scarcity-clock-proof/database-identity.txt
+            ${{ runner.temp }}/wt06-b1-scarcity-clock-proof/clock-identity.txt
+            ${{ runner.temp }}/wt06-b1-scarcity-clock-proof/runtime-trace.log
+            ${{ runner.temp }}/wt06-b1-scarcity-clock-proof/ephemeral-harness-source.exs
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Fail closed on instrument failure
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir="$RUNNER_TEMP/wt06-b1-scarcity-clock-proof"
+          test -s "$proof_dir/harness.exit"
+          status="$(cat "$proof_dir/harness.exit")"
+          test "$status" = "0"
+          grep -q '^FINAL_INSTRUMENT_RESULT=EVIDENCE_CAPTURED$' "$proof_dir/transcript.txt"
+
+      - name: Cleanup disposable clock state
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f "$RUNNER_TEMP/wt06-b1-scarcity-clock-proof/faketime.rc"
+          rm -f /dev/shm/faketime_shm_* /dev/shm/sem.faketime_sem_* 2>/dev/null || true
