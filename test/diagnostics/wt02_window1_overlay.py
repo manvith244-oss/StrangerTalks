@@ -29,6 +29,19 @@ helper = """  defp wt02_window1_checkpoint do
 assert text.count(anchor) == 1, "checkpoint helper anchor drift"
 source.write_text(text.replace(anchor, helper + anchor, 1))
 
+# The normal test helper always puts Repo into SQL Sandbox manual mode. This
+# diagnostic intentionally runs Repo with DBConnection.ConnectionPool so T1/T2
+# can commit independently; make only the disposable diagnostic copy skip that
+# Sandbox-only call when the already-existing persistent-test flag is enabled.
+test_helper = Path("test/test_helper.exs")
+text = test_helper.read_text()
+sandbox_line = "Ecto.Adapters.SQL.Sandbox.mode(StrangertalksNew.Repo, :manual)"
+sandbox_guard = """if System.get_env("STRANGERTALKS_PERSISTENT_TEST_SERVER") != "1" do
+  Ecto.Adapters.SQL.Sandbox.mode(StrangertalksNew.Repo, :manual)
+end"""
+assert text.count(sandbox_line) == 1, "test helper Sandbox line drift"
+test_helper.write_text(text.replace(sandbox_line, sandbox_guard, 1))
+
 test = Path("test/strangertalks_new/relationship_reconnections_test.exs")
 text = test.read_text()
 case_line = "  use StrangertalksNew.DataCase, async: false\n"
@@ -66,6 +79,7 @@ diagnostic = r'''  @tag :wt02_window1
     assert Repo.aggregate(from(i in RelationshipReconnectionIntent,
              where: i.relationship_id == ^f.relationship.relationship_id and i.status == :ACTIVE), :count) == 2,
            "WT02_HARNESS_INVALID prepare transaction not durably visible"
+    IO.puts("WT02_PHASE=checkpoint_verified")
 
     t2 = Task.async(fn ->
       Ecto.Adapters.SQL.checkout(Repo, fn ->
@@ -74,7 +88,9 @@ diagnostic = r'''  @tag :wt02_window1
       end)
     end)
 
-    {t2_backend, {:ok, %{status: "matched", conversation_id: cid}}} = Task.await(t2, 15_000)
+    t2_result = Task.await(t2, 15_000)
+    IO.inspect(t2_result, label: "WT02_T2_RESULT")
+    {t2_backend, {:ok, %{status: "matched", conversation_id: cid}}} = t2_result
     refute t1_backend == t2_backend, "WT02_HARNESS_INVALID DB connections not independent"
     assert Task.yield(t1, 0) == nil, "WT02_HARNESS_INVALID T1 resumed before release"
 
@@ -105,7 +121,9 @@ diagnostic = r'''  @tag :wt02_window1
       participants: participant_states, reservations: reservations}, label: "WT02_WINNER_SNAPSHOT")
 
     send(t1.pid, {:wt02_window1_release, ref})
-    {^t1_backend, {:ok, %{status: "matched", conversation_id: ^cid}}} = Task.await(t1, 15_000)
+    t1_result = Task.await(t1, 15_000)
+    IO.inspect(t1_result, label: "WT02_T1_RESULT")
+    {^t1_backend, {:ok, %{status: "matched", conversation_id: ^cid}}} = t1_result
     assert Repo.aggregate(Matching, :count, :match_id) == base_m + 1
     assert Repo.aggregate(Conversation, :count, :conversation_id) == base_c + 1
     assert Repo.get!(Relationship, rel.relationship_id).latest_conversation_id == cid
