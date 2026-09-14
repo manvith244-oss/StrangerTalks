@@ -1,0 +1,83 @@
+name: WT02 R11 Seed 972822 Context Proof
+on:
+  push:
+    branches: [wind-tunnel/wt02-seed972822-context-proof]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: wt02-r11-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_USER: strangertalks_local, POSTGRES_PASSWORD: strangertalks_test, POSTGRES_DB: strangertalks_new_test}
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      WT02_CONTEXT_RECORDER: "1"
+      WT02_TEAM6_SHA: ac867b346426c782b90031b3d770a0d294761065
+      WT02_SEED: "972822"
+      WT02_POSTGRES_VERSION: "16"
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: "${{ github.sha }}"}
+      - name: Verify diagnostic ancestry and scope
+        run: |
+          git merge-base --is-ancestor "$WT02_TEAM6_SHA" HEAD
+          test "$(git diff --name-only "$WT02_TEAM6_SHA"...HEAD | wc -l)" -le 3
+          git diff --name-only "$WT02_TEAM6_SHA"...HEAD
+      - uses: erlef/setup-beam@v1
+        with: {elixir-version: "1.18.4", otp-version: "27.3.4"}
+      - run: mix local.hex --force && mix local.rebar --force && mix deps.get
+      - name: Apply diagnostic-only target overlay
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          def rep(path, old, new):
+              p=Path(path); s=p.read_text()
+              if s.count(old) != 1: raise SystemExit(f"overlay anchor mismatch: {path}")
+              p.write_text(s.replace(old,new))
+          p="test/test_helper.exs"
+          rep(p, "ExUnit.start()\n", '''ExUnit.start()\n\nif System.get_env("WT02_CONTEXT_RECORDER") == "1" do\n  ExUnit.configure(formatters: [ExUnit.CLIFormatter, StrangertalksNew.WT02ContextRecorder])\nend\n''')
+          p="test/strangertalks_new/relationship_reconnections_test.exs"
+          rep(p, "  setup do\n    Agent.update(QueueState, fn _ -> %{} end)\n    fixture = relationship_fixture()\n    %{fixture: fixture}\n  end\n", '''  setup context do\n    target? = System.get_env("WT02_CONTEXT_RECORDER") == "1" and String.contains?(to_string(context.test), "concurrent second-intent attempts still create one Match and one Conversation")\n    if target?, do: StrangertalksNew.WT02ContextRecorder.pre_reset()\n    Agent.update(QueueState, fn _ -> %{} end)\n    fixture = relationship_fixture()\n    if target?, do: StrangertalksNew.WT02ContextRecorder.after_setup()\n    %{fixture: fixture}\n  end\n''')
+          rep(p, "      |> Enum.map(fn {:ok, result} -> result end)\n\n    assert Enum.all?(results, &match?({:ok, %{status: \"matched\"}}, &1))\n", '''      |> Enum.map(fn {:ok, result} -> result end)\n\n    if System.get_env("WT02_CONTEXT_RECORDER") == "1", do: StrangertalksNew.WT02ContextRecorder.post_race(f, results)\n\n    assert Enum.all?(results, &match?({:ok, %{status: "matched"}}, &1))\n''')
+          PY
+          git diff --check
+      - name: Clean target-only control
+        id: clean
+        continue-on-error: true
+        env: {WT02_ARTIFACT: "tmp/wt02-r11-clean.json"}
+        run: mix test test/strangertalks_new/relationship_reconnections_test.exs:170 --seed 972822
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: wt02-r11-clean, path: tmp/wt02-r11-clean.json, if-no-files-found: warn}
+      - name: Require valid clean control, then reset DB
+        run: |
+          test "${{ steps.clean.outcome }}" = "success"
+          mix ecto.drop --force && mix ecto.create && mix ecto.migrate
+      - name: Historical focused prelude
+        run: |
+          mix test test/strangertalks_new/wt02_terminal_transport_ack_test.exs --trace
+          mix test test/strangertalks_new/wt02_explicit_end_server_core_test.exs --trace
+          mix test test/strangertalks_new/conversation_delivery_test.exs --trace
+          mix test test/strangertalks_new/terminal_persistence_failure_test.exs test/strangertalks_new/recovery_restart_test.exs --trace
+          mix test test/strangertalks_new/team4_safety_boundary_test.exs --trace
+      - name: One historical-fidelity seed-972822 full-suite observation
+        id: historical
+        continue-on-error: true
+        env: {WT02_ARTIFACT: "tmp/wt02-r11-historical.json"}
+        run: mix precommit --seed 972822
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: wt02-r11-historical, path: tmp/wt02-r11-historical.json, if-no-files-found: warn}
