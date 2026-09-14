@@ -1,0 +1,93 @@
+name: WT-03 Hangout Retention Proof
+
+on:
+  push:
+    branches:
+      - wind-tunnel/wt03-hangout-retention-proof
+
+concurrency:
+  group: wt03-hangout-retention-proof
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  retention-proof:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      WT03_EXPECTED_CANONICAL_COMMIT: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+      WT03_EXPECTED_CANONICAL_TREE: 72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a
+
+    steps:
+      - name: Checkout diagnostic branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Reverify canonical identity and branch ancestry
+        run: |
+          git fetch origin main
+          actual_main="$(git rev-parse origin/main)"
+          actual_tree="$(git rev-parse "${WT03_EXPECTED_CANONICAL_COMMIT}^{tree}")"
+          merge_base="$(git merge-base HEAD origin/main)"
+          echo "WT03_DIAGNOSTIC_HEAD=$(git rev-parse HEAD)"
+          echo "WT03_CANONICAL_MAIN=$actual_main"
+          echo "WT03_CANONICAL_TREE=$actual_tree"
+          echo "WT03_MERGE_BASE=$merge_base"
+          test "$actual_main" = "$WT03_EXPECTED_CANONICAL_COMMIT"
+          test "$actual_tree" = "$WT03_EXPECTED_CANONICAL_TREE"
+          test "$merge_base" = "$WT03_EXPECTED_CANONICAL_COMMIT"
+
+      - name: Enforce diagnostic-only mutation boundary
+        run: |
+          changed="$(git diff --name-only "$WT03_EXPECTED_CANONICAL_COMMIT"..HEAD)"
+          printf '%s\n' "$changed"
+          unexpected="$(printf '%s\n' "$changed" | grep -Ev '^(test/strangertalks_new/hangouts/wt03_hangout_retention_proof_test\.exs|\.github/workflows/wt03-hangout-retention-proof\.yml)$' || true)"
+          test -z "$unexpected"
+          test -z "$(printf '%s\n' "$changed" | grep '^priv/repo/migrations/' || true)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Elixir dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Prepare disposable PostgreSQL
+        run: |
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Compile with warnings as errors
+        run: mix compile --warnings-as-errors
+
+      - name: Check diagnostic test formatting
+        run: mix format --check-formatted test/strangertalks_new/hangouts/wt03_hangout_retention_proof_test.exs
+
+      - name: Execute bounded WT-03 retention experiment
+        run: mix test test/strangertalks_new/hangouts/wt03_hangout_retention_proof_test.exs --trace
