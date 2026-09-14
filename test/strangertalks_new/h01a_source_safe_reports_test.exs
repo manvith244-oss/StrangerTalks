@@ -184,26 +184,28 @@ defmodule StrangertalksNew.H01aSourceSafeReportsTest do
       participant_b: participant_b,
       conversation: conversation
     } do
-      assert_raise Postgrex.Error, ~r/null value in column "source_kind"|violates not-null constraint/, fn ->
-        Repo.query!(
-          """
-          INSERT INTO public.reports (
-            report_id, created_at, updated_at, reporting_participant_id,
-            reported_participant_id, conversation_id, report_category, report_status, source_kind
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)
-          """,
-          [
-            Ecto.UUID.dump!(Ecto.UUID.generate()),
-            DateTime.utc_now(),
-            DateTime.utc_now(),
-            Ecto.UUID.dump!(participant_a.participant_id),
-            Ecto.UUID.dump!(participant_b.participant_id),
-            Ecto.UUID.dump!(conversation.conversation_id),
-            "HARASSMENT",
-            "SUBMITTED"
-          ]
-        )
-      end
+      assert_raise Postgrex.Error,
+                   ~r/null value in column "source_kind"|violates not-null constraint/,
+                   fn ->
+                     Repo.query!(
+                       """
+                       INSERT INTO public.reports (
+                         report_id, created_at, updated_at, reporting_participant_id,
+                         reported_participant_id, conversation_id, report_category, report_status, source_kind
+                       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)
+                       """,
+                       [
+                         Ecto.UUID.dump!(Ecto.UUID.generate()),
+                         DateTime.utc_now(),
+                         DateTime.utc_now(),
+                         Ecto.UUID.dump!(participant_a.participant_id),
+                         Ecto.UUID.dump!(participant_b.participant_id),
+                         Ecto.UUID.dump!(conversation.conversation_id),
+                         "HARASSMENT",
+                         "SUBMITTED"
+                       ]
+                     )
+                   end
     end
   end
 
@@ -324,6 +326,7 @@ defmodule StrangertalksNew.H01aSourceSafeReportsTest do
 
         # submit_conversation_report context rejection
         cat_str = Atom.to_string(cat)
+
         assert {:error, :invalid_report_category} =
                  Reports.submit_conversation_report(
                    conversation.conversation_id,
