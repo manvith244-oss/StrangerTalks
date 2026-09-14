@@ -22,6 +22,21 @@ defmodule StrangertalksNew.WT02ContextRecorder do
   end
 
   def post_race(f, results) do
+    base = %{pre_reset: Process.get(:wt02_pre), after_setup: Process.get(:wt02_after), results: results,
+      post_race: nil, observation_error: nil}
+
+    context =
+      try do
+        %{base | post_race: post_race_snapshot(f, results)}
+      rescue
+        error in [DBConnection.EncodeError, Ecto.NoResultsError, Ecto.Query.CastError, Postgrex.Error] ->
+          %{base | observation_error: inspect(error.__struct__)}
+      end
+
+    GenServer.call(__MODULE__, {:context, context})
+  end
+
+  defp post_race_snapshot(f, results) do
     rel = Repo.one!(from r in Relationship, where: r.relationship_id == ^f.relationship.relationship_id,
       select: %{relationship_id: r.relationship_id, relationship_status: r.relationship_status, latest_conversation_id: r.latest_conversation_id,
         conversation_count: r.conversation_count, reconnection_count: r.reconnection_count})
@@ -30,18 +45,16 @@ defmodule StrangertalksNew.WT02ContextRecorder do
     matches = Repo.all(from m in pair(Matching, f), select: %{match_id: m.match_id, status: m.match_status, strategy: m.match_strategy})
     conversations = Repo.all(from c in pair(Conversation, f),
       select: %{conversation_id: c.conversation_id, match_id: c.match_id, relationship_id: c.relationship_id, status: c.conversation_status})
-    reservations = Repo.query!("SELECT match_id::text, participant_id::text, released_at::text FROM participant_pairing_reservations WHERE participant_id IN ($1::uuid,$2::uuid)", [f.a, f.b]).rows
+    reservations = Repo.query!("SELECT match_id::text, participant_id::text, released_at::text FROM participant_pairing_reservations WHERE participant_id IN ($1::uuid,$2::uuid)", [Ecto.UUID.dump!(f.a), Ecto.UUID.dump!(f.b)]).rows
     win = Enum.find_value(results, fn {:ok, %{status: "matched", conversation_id: id}} -> id; _ -> nil end)
     q = Agent.get(QueueState, &Map.take(&1, [f.a, f.b]))
     match_ids = MapSet.new(matches, & &1.match_id)
-    context = %{pre_reset: Process.get(:wt02_pre), after_setup: Process.get(:wt02_after), results: results,
-      post_race: %{queue_state: %{fixture_participant_entries: q}, conversation_supervisor: supervisor(), conversation_registry: registry_one(win),
-        recovery_sweeper: process_info(RecoverySweeper), durable: %{relationship: rel, reconnect_intents: intents, matches: matches,
-          conversations: conversations, reservations: reservations,
-          duplicates: %{reconnect_matches: Enum.count(matches, &(&1.strategy == :relationship_reconnect_v1)),
-            relationship_conversations: Enum.count(conversations, &(&1.relationship_id == rel.relationship_id))},
-          bounded_orphans: Enum.reject(conversations, &MapSet.member?(match_ids, &1.match_id))}}}
-    GenServer.call(__MODULE__, {:context, context})
+    %{queue_state: %{fixture_participant_entries: q}, conversation_supervisor: supervisor(), conversation_registry: registry_one(win),
+      recovery_sweeper: process_info(RecoverySweeper), durable: %{relationship: rel, reconnect_intents: intents, matches: matches,
+        conversations: conversations, reservations: reservations,
+        duplicates: %{reconnect_matches: Enum.count(matches, &(&1.strategy == :relationship_reconnect_v1)),
+          relationship_conversations: Enum.count(conversations, &(&1.relationship_id == rel.relationship_id))},
+        bounded_orphans: Enum.reject(conversations, &MapSet.member?(match_ids, &1.match_id))}}
   end
 
   def handle_call({:context, c}, _from, s), do: {:reply, :ok, %{s | context: c}}
@@ -60,16 +73,24 @@ defmodule StrangertalksNew.WT02ContextRecorder do
   def handle_cast(_, s), do: {:noreply, s}
 
   defp write_artifact(s, t) do
-    c = s.context || %{}; results = Map.get(c, :results, []); ok = Enum.all?(results, &match?({:ok, %{status: "matched"}}, &1))
-    class = if Enum.any?(results, &match?({:error, :reconnection_unavailable}, &1)), do: "UNAVAILABLE_ROUTE_NOT_YET_LOCALIZED",
-      else: if(ok, do: "NONE", else: "DB_EXCEPTION_RESCUE_OBSERVED")
+    c = s.context || %{}; results = Map.get(c, :results, [])
+    complete = match?([_, _], results) and Enum.all?(results, &valid_result?/1)
+    valid = complete and not is_nil(Map.get(c, :post_race)) and is_nil(Map.get(c, :observation_error))
+    ok = valid and Enum.all?(results, &match?({:ok, %{status: "matched"}}, &1))
+    class = cond do
+      not valid -> "INVALID_OBSERVATION"
+      Enum.any?(results, &match?({:error, :reconnection_unavailable}, &1)) -> "UNAVAILABLE_ROUTE_NOT_YET_LOCALIZED"
+      ok -> "NONE"
+      true -> "DB_EXCEPTION_RESCUE_OBSERVED"
+    end
     artifact = %{schema_version: 1, identity: identity(s.opts),
       target: %{module: t.module, test: t.name, async: t.tags[:async], formatter_test_started_received_monotonic: s.started,
         pre_reset_monotonic: get_in(c, [:pre_reset, :monotonic]), test_outcome: outcome(t.state), duration: t.time,
         t1_result: Enum.at(results, 0), t2_result: Enum.at(results, 1)},
       predecessors: %{recent_tests: s.tests, recent_modules: s.modules, immediately_preceding_module: List.last(s.modules)},
       pre_reset: Map.get(c, :pre_reset), after_setup: Map.get(c, :after_setup), post_race: Map.get(c, :post_race),
-      classification: %{existing_error_class: class, target_contract_satisfied: ok, artifact_written_at: DateTime.utc_now()}}
+      classification: %{existing_error_class: class, observation_valid: valid, observation_error: Map.get(c, :observation_error),
+        target_contract_satisfied: ok, artifact_written_at: DateTime.utc_now()}}
     path = System.fetch_env!("WT02_ARTIFACT"); File.mkdir_p!(Path.dirname(path)); File.write!(path, Jason.encode!(clean(artifact), pretty: true))
   end
 
@@ -77,7 +98,15 @@ defmodule StrangertalksNew.WT02ContextRecorder do
     schedulers_online: System.schedulers_online(), MIX_TEST_PARTITION: System.get_env("MIX_TEST_PARTITION"), elixir_version: System.version(),
     otp_version: System.otp_release(), postgres_version: System.get_env("WT02_POSTGRES_VERSION"),
     runner_identity: "#{System.get_env("GITHUB_RUN_ID")}:#{System.get_env("GITHUB_JOB")}:#{System.get_env("GITHUB_SHA")}"}
-  defp pair(schema, f), do: from x in schema, where: (x.participant_a_id == ^f.a and x.participant_b_id == ^f.b) or (x.participant_a_id == ^f.b and x.participant_b_id == ^f.a)
+  defp pair(schema, f) do
+    from x in schema,
+      where:
+        (x.participant_a_id == ^f.a and x.participant_b_id == ^f.b) or
+          (x.participant_a_id == ^f.b and x.participant_b_id == ^f.a)
+  end
+  defp valid_result?({:ok, result}), do: is_map(result)
+  defp valid_result?({:error, _reason}), do: true
+  defp valid_result?(_), do: false
   defp target?(t), do: t.module == StrangertalksNew.RelationshipReconnectionsTest and String.contains?(to_string(t.name), @target)
   defp ring(xs, x, n), do: Enum.take(xs ++ [x], -n)
   defp outcome(nil), do: "passed"
