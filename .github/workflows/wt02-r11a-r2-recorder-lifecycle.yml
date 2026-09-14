@@ -1,0 +1,56 @@
+name: WT02 R11A-R2 Recorder Lifecycle
+
+on:
+  push:
+    branches:
+      - wind-tunnel/wt02-r11a-r2-recorder-lifecycle
+    paths:
+      - test/support/wt02_context_recorder.ex
+      - test/support/wt02_context_recorder_lifecycle_harness.exs
+      - .github/workflows/wt02-r11a-r2-recorder-lifecycle.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-lifecycle:
+    runs-on: ubuntu-latest
+    env:
+      MIX_ENV: test
+    steps:
+      - name: Checkout exact diagnostic branch generation
+        uses: actions/checkout@v4
+
+      - name: Record identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HEAD=$(git rev-parse HEAD)"
+          echo "TREE=$(git rev-parse HEAD^{tree})"
+          git status --short
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Compile diagnostic generation
+        run: mix compile
+
+      - name: Run synthetic recorder lifecycle harness only
+        run: mix run --no-start test/support/wt02_context_recorder_lifecycle_harness.exs
+
+      - name: Diff hygiene
+        if: always()
+        shell: bash
+        run: |
+          git diff --check
+          git status --short
