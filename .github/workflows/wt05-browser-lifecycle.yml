@@ -1,0 +1,788 @@
+name: WT-05 Real Browser Lifecycle Diagnostic
+
+on:
+  push:
+    tags:
+      - 'diagnostic/wt05-lifecycle-r1-*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wt05-browser-lifecycle-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lifecycle-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
+      WT05_FROZEN_SHA: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+      WT05_FROZEN_TREE: 72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a
+
+    steps:
+      - name: Checkout frozen canonical application source
+        uses: actions/checkout@v4
+        with:
+          ref: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          fetch-depth: 1
+
+      - name: Prove frozen canonical identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse HEAD^{tree})"
+          printf 'WT05_CHECKOUT_COMMIT=%s\n' "$actual_sha"
+          printf 'WT05_CHECKOUT_TREE=%s\n' "$actual_tree"
+          test "$actual_sha" = "$WT05_FROZEN_SHA"
+          test "$actual_tree" = "$WT05_FROZEN_TREE"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install canonical dependencies and Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare disposable PostgreSQL database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Create diagnostic evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wt05-evidence"
+          printf 'WT05_EVIDENCE_DIR=%s\n' "$RUNNER_TEMP/wt05-evidence" >> "$GITHUB_ENV"
+          printf 'WT05_PROFILE_DIR=%s\n' "$RUNNER_TEMP/wt05-browser-profile" >> "$GITHUB_ENV"
+
+      - name: Start frozen Phoenix runtime and wait for readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNewWeb.Endpoint,
+              Keyword.put(endpoint, :server, true)
+            )
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > "$WT05_EVIDENCE_DIR/phoenix.log" 2>&1 &
+          echo $! > "$WT05_EVIDENCE_DIR/phoenix.pid"
+
+          ready=0
+          for attempt in $(seq 1 60); do
+            if ! kill -0 "$(cat "$WT05_EVIDENCE_DIR/phoenix.pid")" 2>/dev/null; then
+              cat "$WT05_EVIDENCE_DIR/phoenix.log"
+              exit 1
+            fi
+            if curl --silent --fail "$STRANGERTALKS_BROWSER_BASE_URL/health/ready" \
+              > "$WT05_EVIDENCE_DIR/health-ready.json"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            cat "$WT05_EVIDENCE_DIR/phoenix.log"
+            exit 1
+          fi
+
+          echo "WT05_RUNTIME_BEGIN"
+          node --version
+          npm --version
+          npx playwright --version
+          elixir --version
+          cat "$WT05_EVIDENCE_DIR/health-ready.json"
+          printf '{"commit":"%s","tree":"%s","postgres":"16","endpoint":"%s","health_ready":true}\n' \
+            "$WT05_FROZEN_SHA" "$WT05_FROZEN_TREE" "$STRANGERTALKS_BROWSER_BASE_URL" \
+            | tee "$WT05_EVIDENCE_DIR/runtime.jsonl"
+          echo "WT05_RUNTIME_END"
+
+      - name: Generate job-local lifecycle diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/wt05-browser-lifecycle.mjs" <<'WT05_NODE'
+          import fs from "node:fs"
+          import path from "node:path"
+          import {createRequire} from "node:module"
+
+          const require = createRequire(path.join(process.cwd(), "package.json"))
+          const {chromium} = require("playwright")
+
+          const BASE = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const EVIDENCE_DIR = process.env.WT05_EVIDENCE_DIR
+          const PROFILE_DIR = process.env.WT05_PROFILE_DIR
+          const JSONL = path.join(EVIDENCE_DIR, "lifecycle.jsonl")
+          const WAIT = 15_000
+          const CONVERSATION_ID = "51515151-5151-4515-8515-515151515151"
+          const MESSAGE_ID = "61616161-6161-4616-8616-616161616161"
+          const LANGUAGE_KEY = "strangertalks.conversation-language.v1"
+          const PRIMARY_DB = "strangertalks-local-v1"
+          const PRIMARY_STORE = "records"
+          const KEY_DB = "strangertalks-sync-key-v1"
+          const KEY_STORE = "keys"
+
+          fs.mkdirSync(EVIDENCE_DIR, {recursive: true})
+          const failures = []
+          let primaryContext = null
+          let primaryPage = null
+          let primaryTraceActive = false
+
+          function emit(record) {
+            const safe = JSON.parse(JSON.stringify(record, (_key, value) =>
+              typeof value === "bigint" ? value.toString() : value
+            ))
+            const line = JSON.stringify({...safe, observed_at: new Date().toISOString()})
+            console.log(line)
+            fs.appendFileSync(JSONL, `${line}\n`)
+          }
+
+          function errorRecord(error) {
+            return {
+              name: error?.name || "Error",
+              message: String(error?.message || error),
+              stack: String(error?.stack || "").split("\n").slice(0, 8)
+            }
+          }
+
+          async function screenshot(name) {
+            if (!primaryPage || primaryPage.isClosed()) return
+            try {
+              await primaryPage.screenshot({
+                path: path.join(EVIDENCE_DIR, `${name.toLowerCase().replaceAll("_", "-")}.png`),
+                fullPage: true
+              })
+            } catch {}
+          }
+
+          async function phase(name, fn) {
+            console.log(`${name}_BEGIN`)
+            try {
+              const result = await fn()
+              emit({phase: name, status: "ok", result})
+              return result
+            } catch (error) {
+              const failure = {phase: name, status: "error", error: errorRecord(error)}
+              failures.push(failure)
+              emit(failure)
+              await screenshot(name)
+              return null
+            } finally {
+              console.log(`${name}_END`)
+            }
+          }
+
+          async function waitForAppModule(page) {
+            await page.waitForFunction(() => Boolean(window.StrangerTalksF11), null, {timeout: WAIT})
+          }
+
+          async function settleReadiness(page, timeout = 5_000) {
+            try {
+              await page.waitForFunction(() => {
+                const state = window.StrangerTalksF11?.getReadiness?.()
+                return state?.status === "READY"
+              }, null, {timeout})
+              return true
+            } catch {
+              return false
+            }
+          }
+
+          async function waitForBoot(page) {
+            const response = await page.goto(BASE, {waitUntil: "domcontentloaded", timeout: WAIT})
+            if (!response?.ok()) throw new Error(`root_page_http_${response?.status()}`)
+            await waitForAppModule(page)
+            return settleReadiness(page)
+          }
+
+          function attachRuntimeObservers(page, label) {
+            const observations = {
+              label,
+              pageErrors: [],
+              consoleErrors: [],
+              failedRequests: [],
+              websockets: []
+            }
+            page.on("pageerror", error => observations.pageErrors.push(error.message))
+            page.on("console", message => {
+              if (message.type() === "error") observations.consoleErrors.push(message.text())
+            })
+            page.on("requestfailed", request => {
+              observations.failedRequests.push({
+                url: request.url(),
+                reason: request.failure()?.errorText || "unknown"
+              })
+            })
+            page.on("websocket", socket => {
+              const item = {url: socket.url(), opened_at: new Date().toISOString(), closed_at: null}
+              observations.websockets.push(item)
+              socket.on("close", () => { item.closed_at = new Date().toISOString() })
+            })
+            return observations
+          }
+
+          async function inspectKnownDb(page, dbName, storeName, keyMetadata = false) {
+            return page.evaluate(async ({dbName, storeName, keyMetadata}) => {
+              try {
+                const factory = globalThis.__wt05NativeIndexedDB || globalThis.indexedDB
+                if (typeof factory?.databases === "function") {
+                  const databases = await factory.databases()
+                  if (!databases.some(database => database.name === dbName)) {
+                    return {available: true, database_exists: false, store_exists: false, entries: []}
+                  }
+                }
+                const db = await new Promise((resolve, reject) => {
+                  let request
+                  try { request = factory.open(dbName) } catch (error) { reject(error); return }
+                  request.onerror = () => reject(request.error || new Error("indexeddb_open_failed"))
+                  request.onsuccess = () => resolve(request.result)
+                })
+                if (!db.objectStoreNames.contains(storeName)) {
+                  db.close()
+                  return {available: true, database_exists: true, store_exists: false, entries: []}
+                }
+                const entries = await new Promise((resolve, reject) => {
+                  const tx = db.transaction(storeName, "readonly")
+                  const store = tx.objectStore(storeName)
+                  const request = store.getAll()
+                  request.onerror = () => reject(request.error || new Error("indexeddb_getall_failed"))
+                  request.onsuccess = () => resolve(request.result)
+                })
+                db.close()
+                if (!keyMetadata) return {available: true, database_exists: true, store_exists: true, entries}
+                return {
+                  available: true,
+                  database_exists: true,
+                  store_exists: true,
+                  entries: entries.map(value => ({
+                    crypto_key: typeof CryptoKey !== "undefined" && value instanceof CryptoKey,
+                    algorithm: value?.algorithm?.name || null,
+                    extractable: typeof value?.extractable === "boolean" ? value.extractable : null,
+                    usages: Array.isArray(value?.usages) ? [...value.usages] : []
+                  }))
+                }
+              } catch (error) {
+                return {
+                  available: false,
+                  error: {name: error?.name || "Error", message: String(error?.message || error)}
+                }
+              }
+            }, {dbName, storeName, keyMetadata})
+          }
+
+          function sanitizePrimaryRecords(result) {
+            if (!result?.entries || !Array.isArray(result.entries)) return result
+            return {
+              ...result,
+              entries: result.entries.map(record => {
+                if (record?.type === "identity") {
+                  return {
+                    id: record.id,
+                    type: record.type,
+                    schema_version: record.schema_version ?? null,
+                    value: {
+                      participant_id: record.value?.participant_id || null,
+                      has_token: Boolean(record.value?.token)
+                    },
+                    updated_at: record.updated_at || null
+                  }
+                }
+                return record
+              })
+            }
+          }
+
+          async function captureState(page, context, label, observations = null) {
+            const [primaryRaw, keyDb, cookies] = await Promise.all([
+              inspectKnownDb(page, PRIMARY_DB, PRIMARY_STORE, false),
+              inspectKnownDb(page, KEY_DB, KEY_STORE, true),
+              context.cookies(BASE)
+            ])
+            const browserState = await page.evaluate(({languageKey}) => {
+              let language = null
+              let languageError = null
+              try { language = localStorage.getItem(languageKey) }
+              catch (error) { languageError = {name: error?.name || "Error", message: String(error?.message || error)} }
+
+              let storageStatus = null
+              try {
+                storageStatus = typeof indexedDB?.storageStatus === "function"
+                  ? indexedDB.storageStatus()
+                  : null
+              } catch (error) {
+                storageStatus = {error: {name: error?.name || "Error", message: String(error?.message || error)}}
+              }
+
+              return {
+                language,
+                language_error: languageError,
+                active_screen: document.querySelector("section.screen.active")?.dataset?.screen || null,
+                readiness: window.StrangerTalksF11?.getReadiness?.() || null,
+                storage_status: storageStatus,
+                visible_status_text: [...document.querySelectorAll('[role="status"], [aria-live]')]
+                  .filter(node => {
+                    const style = getComputedStyle(node)
+                    return style.display !== "none" && style.visibility !== "hidden"
+                  })
+                  .map(node => (node.textContent || "").trim())
+                  .filter(Boolean)
+                  .slice(0, 20)
+              }
+            }, {languageKey: LANGUAGE_KEY})
+
+            return {
+              label,
+              primary: sanitizePrimaryRecords(primaryRaw),
+              continuity_keys: keyDb,
+              local_storage: {
+                language: browserState.language,
+                error: browserState.language_error
+              },
+              cookies: cookies.map(cookie => ({
+                name: cookie.name,
+                domain: cookie.domain,
+                path: cookie.path,
+                expires: cookie.expires,
+                httpOnly: cookie.httpOnly,
+                secure: cookie.secure,
+                sameSite: cookie.sameSite
+              })),
+              active_screen: browserState.active_screen,
+              readiness: browserState.readiness,
+              storage_status: browserState.storage_status,
+              visible_status_text: browserState.visible_status_text,
+              runtime_observations: observations
+                ? {
+                    page_errors: observations.pageErrors,
+                    console_errors: observations.consoleErrors,
+                    failed_requests: observations.failedRequests,
+                    websockets: observations.websockets
+                  }
+                : null
+            }
+          }
+
+          async function seedRepresentativeState(page, context, label) {
+            await page.waitForFunction(async () => {
+              try {
+                const local = await import("/assets/local_data.mjs")
+                return (await local.listRecords()).some(record =>
+                  record.type === "identity" && record.value?.participant_id && record.value?.token
+                )
+              } catch { return false }
+            }, null, {timeout: WAIT})
+
+            await page.locator("#conversation-language").selectOption("te")
+            await page.evaluate(async ({conversationId, messageId, label}) => {
+              const local = await import("/assets/local_data.mjs")
+              const drafts = await import("/assets/conversation_draft_runtime.mjs")
+              const sync = await import("/assets/encrypted_sync.mjs")
+              const now = new Date().toISOString()
+
+              await local.putRecord({
+                id: `conversation:${conversationId}`,
+                type: "local_conversation",
+                schema_version: 1,
+                value: {
+                  conversation_id: conversationId,
+                  door_type: "EXPLORE",
+                  display_door: "Advice",
+                  abstract_signature_seed: "wt05-diagnostic",
+                  status: "kept",
+                  connection_state: "ended",
+                  started_at: now,
+                  ended_at: now,
+                  summary_id: null
+                },
+                updated_at: now
+              })
+
+              await local.putRecord({
+                id: `message:${conversationId}:${messageId}`,
+                type: "local_message",
+                schema_version: 1,
+                value: {
+                  conversation_id: conversationId,
+                  client_message_id: messageId,
+                  message_id: null,
+                  type: "text",
+                  content: `WT05 disposable local message ${label}`,
+                  mine: true,
+                  delivery_status: "sent",
+                  sent_at: now
+                },
+                updated_at: now
+              })
+
+              await local.putRecord(
+                drafts.conversationDraftRecord(
+                  conversationId,
+                  `WT05 disposable draft ${label}`,
+                  now
+                )
+              )
+
+              const key = await crypto.subtle.generateKey(
+                {name: "AES-GCM", length: 256},
+                false,
+                ["encrypt", "decrypt"]
+              )
+              await sync.storeSyncKey(key, "wt05-disposable")
+            }, {conversationId: CONVERSATION_ID, messageId: MESSAGE_ID, label})
+
+            await context.addCookies([{
+              name: "wt05_disposable",
+              value: "1",
+              url: BASE,
+              httpOnly: false,
+              secure: false,
+              sameSite: "Lax"
+            }])
+          }
+
+          async function launchPersistent(profileDir, label) {
+            fs.mkdirSync(profileDir, {recursive: true})
+            const context = await chromium.launchPersistentContext(profileDir, {
+              headless: true,
+              viewport: {width: 1280, height: 800}
+            })
+            await context.addInitScript(() => {
+              if (!globalThis.__wt05NativeIndexedDB) globalThis.__wt05NativeIndexedDB = globalThis.indexedDB
+            })
+            const page = context.pages()[0] || await context.newPage()
+            const observations = attachRuntimeObservers(page, label)
+            return {context, page, observations}
+          }
+
+          async function freshHostileProfile(name, initScript) {
+            const dir = path.join(path.dirname(PROFILE_DIR), name)
+            fs.rmSync(dir, {recursive: true, force: true})
+            const context = await chromium.launchPersistentContext(dir, {
+              headless: true,
+              viewport: {width: 1100, height: 760}
+            })
+            await context.addInitScript(initScript)
+            const page = context.pages()[0] || await context.newPage()
+            const observations = attachRuntimeObservers(page, name)
+            return {context, page, observations, dir}
+          }
+
+          fs.rmSync(PROFILE_DIR, {recursive: true, force: true})
+
+          await phase("WT05_SEED_STATE", async () => {
+            const launched = await launchPersistent(PROFILE_DIR, "primary")
+            primaryContext = launched.context
+            primaryPage = launched.page
+            await primaryContext.tracing.start({screenshots: true, snapshots: true})
+            primaryTraceActive = true
+            await waitForBoot(primaryPage)
+            await seedRepresentativeState(primaryPage, primaryContext, "primary")
+            return captureState(primaryPage, primaryContext, "seeded", launched.observations)
+          })
+
+          await phase("WT05_REFRESH", async () => {
+            const observations = attachRuntimeObservers(primaryPage, "refresh")
+            await primaryPage.reload({waitUntil: "domcontentloaded", timeout: WAIT})
+            await waitForAppModule(primaryPage)
+            const readinessSettled = await settleReadiness(primaryPage)
+            return {
+              readiness_settled: readinessSettled,
+              state: await captureState(primaryPage, primaryContext, "after_refresh", observations)
+            }
+          })
+
+          await phase("WT05_RECONNECT", async () => {
+            const observations = attachRuntimeObservers(primaryPage, "reconnect")
+            await primaryContext.setOffline(true)
+            await primaryPage.waitForTimeout(750)
+            const offline = await primaryPage.evaluate(() => navigator.onLine)
+            await primaryContext.setOffline(false)
+            await primaryPage.waitForTimeout(2500)
+            const online = await primaryPage.evaluate(() => navigator.onLine)
+            const readinessSettled = await settleReadiness(primaryPage)
+            return {
+              readiness_settled: readinessSettled,
+              offline_navigator_online: offline,
+              restored_navigator_online: online,
+              state: await captureState(primaryPage, primaryContext, "after_real_network_reconnect", observations)
+            }
+          })
+
+          await phase("WT05_NEW_TAB", async () => {
+            const page = await primaryContext.newPage()
+            const observations = attachRuntimeObservers(page, "new-tab")
+            await waitForBoot(page)
+            const state = await captureState(page, primaryContext, "new_tab", observations)
+            return {state, open_pages: primaryContext.pages().length}
+          })
+
+          await phase("WT05_DUPLICATE_TAB", async () => {
+            const page = await primaryContext.newPage()
+            const observations = attachRuntimeObservers(page, "duplicate-tab")
+            await waitForBoot(page)
+            const states = []
+            for (const [index, openPage] of primaryContext.pages().entries()) {
+              if (!openPage.isClosed()) {
+                states.push(await captureState(openPage, primaryContext, `concurrent_tab_${index}`, index === primaryContext.pages().length - 1 ? observations : null))
+              }
+            }
+            return {open_pages: primaryContext.pages().length, states}
+          })
+
+          await phase("WT05_REOPEN", async () => {
+            for (const page of primaryContext.pages()) await page.close().catch(() => {})
+            primaryPage = await primaryContext.newPage()
+            const observations = attachRuntimeObservers(primaryPage, "reopen")
+            await waitForBoot(primaryPage)
+            return captureState(primaryPage, primaryContext, "after_close_all_and_reopen", observations)
+          })
+
+          await phase("WT05_BROWSER_RESTART", async () => {
+            if (primaryTraceActive) {
+              await primaryContext.tracing.stop({path: path.join(EVIDENCE_DIR, "primary-before-restart-trace.zip")}).catch(() => {})
+              primaryTraceActive = false
+            }
+            await primaryContext.close()
+            const relaunched = await launchPersistent(PROFILE_DIR, "browser-restart")
+            primaryContext = relaunched.context
+            primaryPage = relaunched.page
+            await primaryContext.tracing.start({screenshots: true, snapshots: true})
+            primaryTraceActive = true
+            await waitForBoot(primaryPage)
+            return captureState(primaryPage, primaryContext, "after_full_chromium_restart", relaunched.observations)
+          })
+
+          await phase("WT05_INDEXEDDB_FAILURE", async () => {
+            const hostile = await freshHostileProfile("wt05-indexeddb-unavailable", () => {
+              Object.defineProperty(window, "indexedDB", {
+                configurable: true,
+                value: {open() { throw new Error("WT05 IndexedDB blocked") }}
+              })
+            })
+            try {
+              await waitForBoot(hostile.page)
+              const before = await hostile.page.evaluate(async () => {
+                const local = await import("/assets/local_data.mjs")
+                await local.putRecord({
+                  id: "memory:wt05-ephemeral",
+                  type: "memory",
+                  schema_version: 1,
+                  value: {text: "WT05 ephemeral probe"},
+                  updated_at: new Date().toISOString()
+                })
+                let syncKeyResult
+                try {
+                  const sync = await import("/assets/encrypted_sync.mjs")
+                  const key = await crypto.subtle.generateKey({name: "AES-GCM", length: 256}, false, ["encrypt", "decrypt"])
+                  await sync.storeSyncKey(key, "wt05-indexeddb-failure")
+                  syncKeyResult = {stored: true}
+                } catch (error) {
+                  syncKeyResult = {stored: false, error: {name: error?.name || "Error", message: String(error?.message || error)}}
+                }
+                return {
+                  storage_status: typeof indexedDB.storageStatus === "function" ? indexedDB.storageStatus() : null,
+                  record_present: (await local.listRecords()).some(record => record.id === "memory:wt05-ephemeral"),
+                  sync_key: syncKeyResult,
+                  readiness: window.StrangerTalksF11?.getReadiness?.() || null
+                }
+              })
+              await hostile.page.reload({waitUntil: "domcontentloaded", timeout: WAIT})
+              await waitForAppModule(hostile.page)
+              const readinessSettled = await settleReadiness(hostile.page)
+              const after = await hostile.page.evaluate(async () => {
+                const local = await import("/assets/local_data.mjs")
+                return {
+                  storage_status: typeof indexedDB.storageStatus === "function" ? indexedDB.storageStatus() : null,
+                  record_present: (await local.listRecords()).some(record => record.id === "memory:wt05-ephemeral"),
+                  readiness: window.StrangerTalksF11?.getReadiness?.() || null,
+                  user_visible_status: [...document.querySelectorAll('[role="status"], [aria-live]')]
+                    .map(node => (node.textContent || "").trim())
+                    .filter(Boolean)
+                    .slice(0, 20)
+                }
+              })
+              return {
+                boot: true,
+                before_refresh: before,
+                after_refresh: after,
+                readiness_settled_after_refresh: readinessSettled,
+                page_errors: hostile.observations.pageErrors,
+                console_errors: hostile.observations.consoleErrors
+              }
+            } finally {
+              await hostile.context.close().catch(() => {})
+            }
+          })
+
+          await phase("WT05_LOCALSTORAGE_FAILURE", async () => {
+            const hostile = await freshHostileProfile("wt05-localstorage-unavailable", () => {
+              Storage.prototype.getItem = () => { throw new Error("WT05 localStorage blocked") }
+              Storage.prototype.setItem = () => { throw new Error("WT05 localStorage blocked") }
+              Storage.prototype.removeItem = () => { throw new Error("WT05 localStorage blocked") }
+            })
+            try {
+              await waitForBoot(hostile.page)
+              await hostile.page.locator("#conversation-language").selectOption("hi")
+              const before = await hostile.page.evaluate(() => ({
+                runtime_language: window.StrangerTalksF11?.getFutureConversationLanguage?.() || null,
+                readiness: window.StrangerTalksF11?.getReadiness?.() || null
+              }))
+              await hostile.page.reload({waitUntil: "domcontentloaded", timeout: WAIT})
+              await waitForAppModule(hostile.page)
+              const readinessSettled = await settleReadiness(hostile.page)
+              const after = await hostile.page.evaluate(() => ({
+                runtime_language: window.StrangerTalksF11?.getFutureConversationLanguage?.() || null,
+                selected_language: document.querySelector("#conversation-language")?.value || null,
+                readiness: window.StrangerTalksF11?.getReadiness?.() || null
+              }))
+              return {
+                boot: true,
+                before_refresh: before,
+                after_refresh: after,
+                readiness_settled_after_refresh: readinessSettled,
+                page_errors: hostile.observations.pageErrors,
+                console_errors: hostile.observations.consoleErrors
+              }
+            } finally {
+              await hostile.context.close().catch(() => {})
+            }
+          })
+
+          await phase("WT05_DELETE_ALL", async () => {
+            await seedRepresentativeState(primaryPage, primaryContext, "delete-all")
+            const before = await captureState(primaryPage, primaryContext, "delete_all_before")
+            await primaryPage.locator('#bottom-nav [data-go="settings"]').click()
+            await primaryPage.locator('section[data-screen="settings"].active').waitFor({state: "visible", timeout: WAIT})
+
+            let dialogText = null
+            primaryPage.once("dialog", async dialog => {
+              dialogText = dialog.message()
+              await dialog.accept()
+            })
+            await primaryPage.locator("#delete-all").click()
+            await primaryPage.waitForTimeout(1500)
+
+            const after = await captureState(primaryPage, primaryContext, "delete_all_after")
+            const beforeIdentity = before.primary?.entries?.find(record => record.type === "identity")?.value?.participant_id || null
+            const afterIdentity = after.primary?.entries?.find(record => record.type === "identity")?.value?.participant_id || null
+            return {
+              dialog_text: dialogText,
+              used_product_ui_action: true,
+              before,
+              after,
+              recreated_identity: {
+                before_participant_id: beforeIdentity,
+                after_participant_id: afterIdentity,
+                changed: Boolean(beforeIdentity && afterIdentity && beforeIdentity !== afterIdentity)
+              }
+            }
+          })
+
+          if (primaryTraceActive && primaryContext) {
+            await primaryContext.tracing.stop({path: path.join(EVIDENCE_DIR, "primary-after-restart-trace.zip")}).catch(() => {})
+            primaryTraceActive = false
+          }
+          await primaryContext?.close().catch(() => {})
+
+          emit({
+            phase: "WT05_SUMMARY",
+            status: failures.length === 0 ? "complete" : "incomplete",
+            failures
+          })
+
+          if (failures.length) process.exitCode = 1
+          WT05_NODE
+
+      - name: Execute lifecycle proof
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          node "$RUNNER_TEMP/wt05-browser-lifecycle.mjs" \
+            2>&1 | tee "$WT05_EVIDENCE_DIR/lifecycle.log" || status=$?
+          exit "$status"
+
+      - name: Stop Phoenix
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$WT05_EVIDENCE_DIR/phoenix.pid" ]; then
+            kill "$(cat "$WT05_EVIDENCE_DIR/phoenix.pid")" 2>/dev/null || true
+          fi
+
+      - name: Preserve Phoenix log in job output on failure
+        if: failure()
+        shell: bash
+        run: |
+          cat "$WT05_EVIDENCE_DIR/phoenix.log" || true
+
+      - name: Upload WT-05 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt05-browser-lifecycle-${{ github.run_id }}
+          path: ${{ runner.temp }}/wt05-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Prove frozen checkout stayed pristine
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$WT05_FROZEN_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$WT05_FROZEN_TREE"
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
