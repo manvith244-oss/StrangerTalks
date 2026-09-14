@@ -1,0 +1,1118 @@
+name: WT-05 Real Browser Lifecycle Diagnostic R2
+
+on:
+  push:
+    tags:
+      - 'diagnostic/wt05-lifecycle-r2-*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wt05-browser-lifecycle-r2-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lifecycle-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
+      WT05_FROZEN_SHA: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+      WT05_FROZEN_TREE: 72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a
+
+    steps:
+      - name: Guard diagnostic execution context
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'GITHUB_EVENT_NAME=%s\n' "$GITHUB_EVENT_NAME"
+          printf 'GITHUB_REF=%s\n' "$GITHUB_REF"
+          printf 'GITHUB_REF_NAME=%s\n' "$GITHUB_REF_NAME"
+          printf 'GITHUB_SHA=%s\n' "$GITHUB_SHA"
+          test "$GITHUB_EVENT_NAME" = "push"
+          case "$GITHUB_REF" in
+            refs/tags/diagnostic/wt05-lifecycle-r2-*) ;;
+            *)
+              echo "WT05_R2_INVALID_EXECUTION_REF=$GITHUB_REF"
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout frozen canonical application source
+        uses: actions/checkout@v4
+        with:
+          ref: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          fetch-depth: 1
+
+      - name: Prove frozen canonical identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse HEAD^{tree})"
+          printf 'WT05_CHECKOUT_COMMIT=%s\n' "$actual_sha"
+          printf 'WT05_CHECKOUT_TREE=%s\n' "$actual_tree"
+          test "$actual_sha" = "$WT05_FROZEN_SHA"
+          test "$actual_tree" = "$WT05_FROZEN_TREE"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install canonical dependencies and Chromium
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Prepare disposable PostgreSQL database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Create diagnostic evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wt05-evidence"
+          printf 'WT05_EVIDENCE_DIR=%s\n' "$RUNNER_TEMP/wt05-evidence" >> "$GITHUB_ENV"
+          printf 'WT05_PROFILE_DIR=%s\n' "$RUNNER_TEMP/wt05-browser-profile-r2" >> "$GITHUB_ENV"
+
+      - name: Start frozen Phoenix runtime and wait for readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 24)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(
+              :strangertalks_new,
+              StrangertalksNewWeb.Endpoint,
+              Keyword.put(endpoint, :server, true)
+            )
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > "$WT05_EVIDENCE_DIR/phoenix.log" 2>&1 &
+          echo $! > "$WT05_EVIDENCE_DIR/phoenix.pid"
+
+          ready=0
+          for attempt in $(seq 1 60); do
+            if ! kill -0 "$(cat "$WT05_EVIDENCE_DIR/phoenix.pid")" 2>/dev/null; then
+              cat "$WT05_EVIDENCE_DIR/phoenix.log"
+              exit 1
+            fi
+            if curl --silent --fail "$STRANGERTALKS_BROWSER_BASE_URL/health/ready" \
+              > "$WT05_EVIDENCE_DIR/health-ready.json"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            cat "$WT05_EVIDENCE_DIR/phoenix.log"
+            exit 1
+          fi
+
+          echo "WT05_RUNTIME_BEGIN"
+          node --version
+          npm --version
+          npx playwright --version
+          elixir --version
+          cat "$WT05_EVIDENCE_DIR/health-ready.json"
+          printf '{"commit":"%s","tree":"%s","postgres":"16","endpoint":"%s","health_ready":true}\n' \
+            "$WT05_FROZEN_SHA" "$WT05_FROZEN_TREE" "$STRANGERTALKS_BROWSER_BASE_URL" \
+            | tee "$WT05_EVIDENCE_DIR/runtime.jsonl"
+          echo "WT05_RUNTIME_END"
+
+      - name: Generate job-local lifecycle diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/wt05-browser-lifecycle-r2.mjs" <<'WT05_NODE'
+          import fs from "node:fs"
+          import path from "node:path"
+          import {execFileSync} from "node:child_process"
+          import {createRequire} from "node:module"
+
+          const require = createRequire(path.join(process.cwd(), "package.json"))
+          const {chromium} = require("playwright")
+
+          const BASE = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
+          const EVIDENCE_DIR = process.env.WT05_EVIDENCE_DIR
+          const PROFILE_DIR = process.env.WT05_PROFILE_DIR
+          const JSONL = path.join(EVIDENCE_DIR, "lifecycle.jsonl")
+          const WAIT = 15_000
+          const TEMP_CONVERSATION_ID = "52525252-5252-4525-8525-525252525252"
+          const TEMP_MESSAGE_ID = "62626262-6262-4626-8626-626262626262"
+          const DURABLE_MEMORY_ID = "memory:wt05-durable-r2"
+          const CROSS_TAB_MEMORY_ID = "memory:wt05-cross-tab-r2"
+          const LANGUAGE_KEY = "strangertalks.conversation-language.v1"
+          const PRIMARY_DB = "strangertalks-local-v1"
+          const PRIMARY_STORE = "records"
+          const KEY_DB = "strangertalks-sync-key-v1"
+          const KEY_STORE = "keys"
+
+          fs.mkdirSync(EVIDENCE_DIR, {recursive: true})
+          const failures = []
+          let primaryContext = null
+          let primaryPage = null
+          let primaryTraceActive = false
+
+          function emit(record) {
+            const safe = JSON.parse(JSON.stringify(record, (_key, value) =>
+              typeof value === "bigint" ? value.toString() : value
+            ))
+            const line = JSON.stringify({...safe, observed_at: new Date().toISOString()})
+            console.log(line)
+            fs.appendFileSync(JSONL, `${line}\n`)
+          }
+
+          function errorRecord(error) {
+            return {
+              name: error?.name || "Error",
+              message: String(error?.message || error),
+              stack: String(error?.stack || "").split("\n").slice(0, 8)
+            }
+          }
+
+          async function screenshot(name) {
+            if (!primaryPage || primaryPage.isClosed()) return
+            try {
+              await primaryPage.screenshot({
+                path: path.join(EVIDENCE_DIR, `${name.toLowerCase().replaceAll("_", "-")}.png`),
+                fullPage: true
+              })
+            } catch {}
+          }
+
+          async function phase(name, fn) {
+            console.log(`${name}_BEGIN`)
+            try {
+              const result = await fn()
+              emit({phase: name, status: "ok", result})
+              return result
+            } catch (error) {
+              const failure = {phase: name, status: "error", error: errorRecord(error)}
+              failures.push(failure)
+              emit(failure)
+              await screenshot(name)
+              return null
+            } finally {
+              console.log(`${name}_END`)
+            }
+          }
+
+          async function waitForAppModule(page) {
+            await page.waitForFunction(() => Boolean(window.StrangerTalksF11), null, {timeout: WAIT})
+          }
+
+          async function settleReadiness(page, timeout = 5_000) {
+            try {
+              await page.waitForFunction(() => {
+                const state = window.StrangerTalksF11?.getReadiness?.()
+                return state?.status === "READY"
+              }, null, {timeout})
+              return true
+            } catch {
+              return false
+            }
+          }
+
+          async function waitForBoot(page) {
+            const response = await page.goto(BASE, {waitUntil: "domcontentloaded", timeout: WAIT})
+            if (!response?.ok()) throw new Error(`root_page_http_${response?.status()}`)
+            await waitForAppModule(page)
+            return settleReadiness(page)
+          }
+
+          function attachRuntimeObservers(page, label) {
+            const observations = {
+              label,
+              pageErrors: [],
+              consoleErrors: [],
+              failedRequests: [],
+              websockets: []
+            }
+            page.on("pageerror", error => observations.pageErrors.push(error.message))
+            page.on("console", message => {
+              if (message.type() === "error") observations.consoleErrors.push(message.text())
+            })
+            page.on("requestfailed", request => {
+              observations.failedRequests.push({
+                url: request.url(),
+                reason: request.failure()?.errorText || "unknown"
+              })
+            })
+            page.on("websocket", socket => {
+              const item = {url: socket.url(), opened_at: new Date().toISOString(), closed_at: null}
+              observations.websockets.push(item)
+              socket.on("close", () => { item.closed_at = new Date().toISOString() })
+            })
+            return observations
+          }
+
+          async function inspectKnownDb(page, dbName, storeName, keyMetadata = false) {
+            return page.evaluate(async ({dbName, storeName, keyMetadata}) => {
+              try {
+                const factory = globalThis.__wt05NativeIndexedDB || globalThis.indexedDB
+                if (typeof factory?.databases === "function") {
+                  const databases = await factory.databases()
+                  if (!databases.some(database => database.name === dbName)) {
+                    return {available: true, database_exists: false, store_exists: false, entries: []}
+                  }
+                }
+                const db = await new Promise((resolve, reject) => {
+                  let request
+                  try { request = factory.open(dbName) } catch (error) { reject(error); return }
+                  request.onerror = () => reject(request.error || new Error("indexeddb_open_failed"))
+                  request.onsuccess = () => resolve(request.result)
+                })
+                if (!db.objectStoreNames.contains(storeName)) {
+                  db.close()
+                  return {available: true, database_exists: true, store_exists: false, entries: []}
+                }
+                const entries = await new Promise((resolve, reject) => {
+                  const tx = db.transaction(storeName, "readonly")
+                  const store = tx.objectStore(storeName)
+                  const request = store.getAll()
+                  request.onerror = () => reject(request.error || new Error("indexeddb_getall_failed"))
+                  request.onsuccess = () => resolve(request.result)
+                })
+                db.close()
+                if (!keyMetadata) return {available: true, database_exists: true, store_exists: true, entries}
+                return {
+                  available: true,
+                  database_exists: true,
+                  store_exists: true,
+                  entries: entries.map(value => ({
+                    crypto_key: typeof CryptoKey !== "undefined" && value instanceof CryptoKey,
+                    algorithm: value?.algorithm?.name || null,
+                    extractable: typeof value?.extractable === "boolean" ? value.extractable : null,
+                    usages: Array.isArray(value?.usages) ? [...value.usages] : []
+                  }))
+                }
+              } catch (error) {
+                return {
+                  available: false,
+                  error: {name: error?.name || "Error", message: String(error?.message || error)}
+                }
+              }
+            }, {dbName, storeName, keyMetadata})
+          }
+
+          function sanitizePrimaryRecords(result) {
+            if (!result?.entries || !Array.isArray(result.entries)) return result
+            return {
+              ...result,
+              entries: result.entries.map(record => {
+                if (record?.type === "identity") {
+                  return {
+                    id: record.id,
+                    type: record.type,
+                    schema_version: record.schema_version ?? null,
+                    value: {
+                      participant_id: record.value?.participant_id || null,
+                      has_token: Boolean(record.value?.token)
+                    },
+                    updated_at: record.updated_at || null
+                  }
+                }
+                return record
+              })
+            }
+          }
+
+          async function captureState(page, context, label, observations = null) {
+            const [primaryRaw, keyDb, cookies] = await Promise.all([
+              inspectKnownDb(page, PRIMARY_DB, PRIMARY_STORE, false),
+              inspectKnownDb(page, KEY_DB, KEY_STORE, true),
+              context.cookies(BASE)
+            ])
+            const browserState = await page.evaluate(({languageKey}) => {
+              let language = null
+              let languageError = null
+              try { language = localStorage.getItem(languageKey) }
+              catch (error) { languageError = {name: error?.name || "Error", message: String(error?.message || error)} }
+
+              let storageStatus = null
+              try {
+                storageStatus = typeof indexedDB?.storageStatus === "function"
+                  ? indexedDB.storageStatus()
+                  : null
+              } catch (error) {
+                storageStatus = {error: {name: error?.name || "Error", message: String(error?.message || error)}}
+              }
+
+              return {
+                language,
+                language_error: languageError,
+                active_screen: document.querySelector("section.screen.active")?.dataset?.screen || null,
+                readiness: window.StrangerTalksF11?.getReadiness?.() || null,
+                storage_status: storageStatus,
+                visible_status_text: [...document.querySelectorAll('[role="status"], [aria-live]')]
+                  .filter(node => {
+                    const style = getComputedStyle(node)
+                    return style.display !== "none" && style.visibility !== "hidden"
+                  })
+                  .map(node => (node.textContent || "").trim())
+                  .filter(Boolean)
+                  .slice(0, 20)
+              }
+            }, {languageKey: LANGUAGE_KEY})
+
+            return {
+              label,
+              primary: sanitizePrimaryRecords(primaryRaw),
+              continuity_keys: keyDb,
+              local_storage: {
+                language: browserState.language,
+                error: browserState.language_error
+              },
+              cookies: cookies.map(cookie => ({
+                name: cookie.name,
+                domain: cookie.domain,
+                path: cookie.path,
+                expires: cookie.expires,
+                httpOnly: cookie.httpOnly,
+                secure: cookie.secure,
+                sameSite: cookie.sameSite
+              })),
+              product_cookie: {
+                strangertalks_account_present: cookies.some(cookie => cookie.name === "strangertalks_account"),
+                phoenix_session_cookie_names: cookies.filter(cookie => /session/i.test(cookie.name)).map(cookie => cookie.name),
+                limitation: "No production credential is forged; absence means the disposable flow did not naturally establish one."
+              },
+              active_screen: browserState.active_screen,
+              readiness: browserState.readiness,
+              storage_status: browserState.storage_status,
+              visible_status_text: browserState.visible_status_text,
+              runtime_observations: observations
+                ? {
+                    page_errors: observations.pageErrors,
+                    console_errors: observations.consoleErrors,
+                    failed_requests: observations.failedRequests,
+                    websockets: observations.websockets
+                  }
+                : null
+            }
+          }
+
+          async function captureRecoveryTuple(page, label) {
+            return page.evaluate(async ({conversationId, messageId, label}) => {
+              const local = await import("/assets/local_data.mjs")
+              const records = await local.listRecords()
+              const ids = [
+                `conversation:${conversationId}`,
+                `message:${conversationId}:${messageId}`,
+                `conversation_draft:${conversationId}`,
+                `sync_cursor:${conversationId}`
+              ]
+              return {
+                label,
+                records: ids.map(id => records.find(record => record.id === id) || null),
+                present_ids: ids.filter(id => records.some(record => record.id === id))
+              }
+            }, {conversationId: TEMP_CONVERSATION_ID, messageId: TEMP_MESSAGE_ID, label})
+          }
+
+          async function ensureTemporaryRecoveryCanary(page, label) {
+            return page.evaluate(async ({conversationId, messageId, label}) => {
+              const local = await import("/assets/local_data.mjs")
+              const drafts = await import("/assets/conversation_draft_runtime.mjs")
+              const now = new Date().toISOString()
+              const existing = await local.getRecord(`conversation:${conversationId}`)
+              if (existing?.value?.status === "temporary") {
+                return {created: false, existing}
+              }
+
+              const conversation = local.temporaryConversation({
+                conversation_id: conversationId,
+                door_type: "EXPLORE",
+                display_door: "Advice",
+                started_at: now
+              })
+              const message = local.localMessage({
+                conversation_id: conversationId,
+                client_message_id: messageId,
+                message_id: null,
+                type: "text",
+                content: `WT05 R2 temporary recovery message ${label}`,
+                mine: true,
+                delivery_status: "sent",
+                sent_at: now,
+                sequence: 1
+              })
+              const draft = drafts.conversationDraftRecord(
+                conversationId,
+                `WT05 R2 temporary recovery draft ${label}`,
+                now
+              )
+              const cursor = local.conversationSyncCursor({
+                conversation_id: conversationId,
+                epoch_id: "wt05-r2-epoch",
+                last_applied_sequence: 1,
+                updated_at: now
+              })
+              await local.putRecord(conversation)
+              await local.putRecord(message)
+              await local.putRecord(draft)
+              await local.putRecord(cursor)
+              return {created: true, conversation, message, draft, cursor}
+            }, {conversationId: TEMP_CONVERSATION_ID, messageId: TEMP_MESSAGE_ID, label})
+          }
+
+          async function seedRepresentativeState(page, context, label) {
+            await page.waitForFunction(async () => {
+              try {
+                const local = await import("/assets/local_data.mjs")
+                return (await local.listRecords()).some(record =>
+                  record.type === "identity" && record.value?.participant_id && record.value?.token
+                )
+              } catch { return false }
+            }, null, {timeout: WAIT})
+
+            await page.locator("#conversation-language").selectOption("te")
+            await page.evaluate(async ({durableMemoryId, label}) => {
+              const local = await import("/assets/local_data.mjs")
+              const now = new Date().toISOString()
+              await local.putRecord({
+                id: durableMemoryId,
+                type: "memory",
+                schema_version: 1,
+                value: {text: `WT05 R2 durable lifecycle sentinel ${label}`},
+                updated_at: now
+              })
+
+              const sync = await import("/assets/encrypted_sync.mjs")
+              const key = await crypto.subtle.generateKey(
+                {name: "AES-GCM", length: 256},
+                false,
+                ["encrypt", "decrypt"]
+              )
+              await sync.storeSyncKey(key, "wt05-r2-disposable")
+            }, {durableMemoryId: DURABLE_MEMORY_ID, label})
+
+            await ensureTemporaryRecoveryCanary(page, label)
+
+            await context.addCookies([{
+              name: "wt05_disposable",
+              value: "1",
+              url: BASE,
+              httpOnly: false,
+              secure: false,
+              sameSite: "Lax"
+            }])
+          }
+
+          async function launchPersistent(profileDir, label) {
+            fs.mkdirSync(profileDir, {recursive: true})
+            const context = await chromium.launchPersistentContext(profileDir, {
+              headless: true,
+              viewport: {width: 1280, height: 800}
+            })
+            await context.addInitScript(() => {
+              if (!globalThis.__wt05NativeIndexedDB) globalThis.__wt05NativeIndexedDB = globalThis.indexedDB
+            })
+            const page = context.pages()[0] || await context.newPage()
+            const observations = attachRuntimeObservers(page, label)
+            return {context, page, observations}
+          }
+
+          async function freshHostileProfile(name, initScript) {
+            const dir = path.join(path.dirname(PROFILE_DIR), name)
+            fs.rmSync(dir, {recursive: true, force: true})
+            const context = await chromium.launchPersistentContext(dir, {
+              headless: true,
+              viewport: {width: 1100, height: 760}
+            })
+            await context.addInitScript(initScript)
+            const page = context.pages()[0] || await context.newPage()
+            const observations = attachRuntimeObservers(page, name)
+            return {context, page, observations, dir}
+          }
+
+          function participantIdFromState(state) {
+            return state?.primary?.entries?.find(record => record.type === "identity")?.value?.participant_id || null
+          }
+
+          function profileChromiumProcesses() {
+            let output = ""
+            try {
+              output = execFileSync("ps", ["-eo", "pid=,args="], {encoding: "utf8"})
+            } catch (error) {
+              throw new Error(`ps_failed:${error?.message || error}`)
+            }
+            return output
+              .split("\n")
+              .map(line => line.trim())
+              .filter(Boolean)
+              .filter(line => line.includes(PROFILE_DIR))
+              .filter(line => /\b(chrome|chromium)\b/i.test(line))
+              .map(line => {
+                const match = line.match(/^(\d+)\s+(.*)$/)
+                return match ? {pid: Number(match[1]), command: match[2]} : {pid: null, command: line}
+              })
+          }
+
+          async function waitForNoProfileChromium(timeoutMs = 8_000) {
+            const deadline = Date.now() + timeoutMs
+            let last = profileChromiumProcesses()
+            while (Date.now() < deadline) {
+              if (last.length === 0) return []
+              await new Promise(resolve => setTimeout(resolve, 200))
+              last = profileChromiumProcesses()
+            }
+            return last
+          }
+
+          async function explicitReconciliationProof(page) {
+            return page.evaluate(async ({timeoutMs}) => {
+              const readinessEvents = []
+              const startedAt = Date.now()
+              let resolver
+              const completed = new Promise(resolve => { resolver = resolve })
+              const listener = event => {
+                const detail = event?.detail || null
+                readinessEvents.push({
+                  status: detail?.status || null,
+                  canonical_state: detail?.canonical_state || null,
+                  captured_at_ms: Date.now() - startedAt
+                })
+                if (readinessEvents.some(item => item.status === "CANONICAL_STATE_PENDING") &&
+                    readinessEvents.some(item => item.status === "READY")) {
+                  resolver("pending_then_ready")
+                }
+              }
+              window.addEventListener("strangertalks:canonical-readiness", listener)
+              let returned = false
+              try {
+                returned = window.StrangerTalksF11?.reconcileCanonicalActivity?.() === true
+                if (!returned) resolver("api_returned_false")
+                const timeout = new Promise(resolve => setTimeout(() => resolve("timeout"), timeoutMs))
+                const outcome = await Promise.race([completed, timeout])
+                return {
+                  api_returned_true: returned,
+                  outcome,
+                  readiness_events: readinessEvents,
+                  final_readiness: window.StrangerTalksF11?.getReadiness?.() || null
+                }
+              } finally {
+                window.removeEventListener("strangertalks:canonical-readiness", listener)
+              }
+            }, {timeoutMs: 8_000})
+          }
+
+          fs.rmSync(PROFILE_DIR, {recursive: true, force: true})
+
+          await phase("WT05_SEED_STATE", async () => {
+            const launched = await launchPersistent(PROFILE_DIR, "primary")
+            primaryContext = launched.context
+            primaryPage = launched.page
+            await primaryContext.tracing.start({screenshots: true, snapshots: true})
+            primaryTraceActive = true
+
+            const readinessSettled = await waitForBoot(primaryPage)
+            if (!readinessSettled) throw new Error("initial_canonical_READY_not_observed")
+
+            await seedRepresentativeState(primaryPage, primaryContext, "primary")
+
+            console.log("WT05_TEMP_RECOVERY_CANARY_BEGIN")
+            const temporary = await captureRecoveryTuple(primaryPage, "seeded_before_any_explicit_reconciliation")
+            emit({phase: "WT05_TEMP_RECOVERY_CANARY", status: "observed", temporary})
+            console.log("WT05_TEMP_RECOVERY_CANARY_END")
+
+            const state = await captureState(primaryPage, primaryContext, "seeded", launched.observations)
+            const durable = state.primary?.entries?.find(record => record.id === DURABLE_MEMORY_ID) || null
+            return {
+              initial_ready: readinessSettled,
+              durable_sentinel: durable,
+              temporary_recovery_canary: temporary,
+              state
+            }
+          })
+
+          await phase("WT05_REFRESH", async () => {
+            const observations = attachRuntimeObservers(primaryPage, "refresh")
+            await primaryPage.reload({waitUntil: "domcontentloaded", timeout: WAIT})
+            await waitForAppModule(primaryPage)
+            const readinessSettled = await settleReadiness(primaryPage)
+            return {
+              readiness_settled: readinessSettled,
+              temporary_recovery_canary: await captureRecoveryTuple(primaryPage, "after_refresh"),
+              state: await captureState(primaryPage, primaryContext, "after_refresh", observations)
+            }
+          })
+
+          await phase("WT05_RECONNECT", async () => {
+            const observations = attachRuntimeObservers(primaryPage, "reconnect")
+            await primaryContext.setOffline(true)
+            await primaryPage.waitForTimeout(750)
+            const offline = await primaryPage.evaluate(() => navigator.onLine)
+
+            await primaryContext.setOffline(false)
+            await primaryPage.waitForFunction(() => navigator.onLine === true, null, {timeout: WAIT})
+            const online = await primaryPage.evaluate(() => navigator.onLine)
+
+            const canaryImmediatelyAfterRestore = await captureRecoveryTuple(
+              primaryPage,
+              "immediately_after_network_restore_before_explicit_reconcile"
+            )
+            const automaticReadinessSettled = await settleReadiness(primaryPage, 8_000)
+            const readinessBefore = await primaryPage.evaluate(() =>
+              window.StrangerTalksF11?.getReadiness?.() || null
+            )
+
+            const canaryFixture = await ensureTemporaryRecoveryCanary(
+              primaryPage,
+              "explicit-reconciliation-probe"
+            )
+            const canaryBefore = await captureRecoveryTuple(
+              primaryPage,
+              "explicit_reconciliation_before"
+            )
+
+            console.log("WT05_RECONCILIATION_PROOF_BEGIN")
+            const reconciliation = await explicitReconciliationProof(primaryPage)
+            const readinessAfter = await primaryPage.evaluate(() =>
+              window.StrangerTalksF11?.getReadiness?.() || null
+            )
+            const canaryAfter = await captureRecoveryTuple(
+              primaryPage,
+              "explicit_reconciliation_after"
+            )
+            const stateAfter = await captureState(
+              primaryPage,
+              primaryContext,
+              "after_explicit_session_reconcile",
+              observations
+            )
+            emit({
+              phase: "WT05_RECONCILIATION_PROOF",
+              status: "observed",
+              offline_navigator_online: offline,
+              restored_navigator_online: online,
+              automatic_readiness_settled_after_restore: automaticReadinessSettled,
+              readiness_before: readinessBefore,
+              canary_immediately_after_restore: canaryImmediatelyAfterRestore,
+              canary_fixture: canaryFixture,
+              canary_before: canaryBefore,
+              reconciliation,
+              readiness_after: readinessAfter,
+              canary_after: canaryAfter
+            })
+            console.log("WT05_RECONCILIATION_PROOF_END")
+
+            const sawPending = reconciliation?.readiness_events?.some(event => event.status === "CANONICAL_STATE_PENDING")
+            const sawReady = reconciliation?.readiness_events?.some(event => event.status === "READY")
+            if (!reconciliation?.api_returned_true || !sawPending || !sawReady) {
+              throw new Error(`explicit_reconciliation_not_proven:${JSON.stringify(reconciliation)}`)
+            }
+
+            return {
+              offline_navigator_online: offline,
+              restored_navigator_online: online,
+              automatic_readiness_settled_after_restore: automaticReadinessSettled,
+              readiness_before: readinessBefore,
+              canary_immediately_after_restore: canaryImmediatelyAfterRestore,
+              canary_fixture: canaryFixture,
+              canary_before: canaryBefore,
+              reconciliation,
+              readiness_after: readinessAfter,
+              canary_after: canaryAfter,
+              state: stateAfter
+            }
+          })
+
+          await phase("WT05_NEW_TAB", async () => {
+            const page = await primaryContext.newPage()
+            const observations = attachRuntimeObservers(page, "new-tab")
+            const readinessSettled = await waitForBoot(page)
+            const state = await captureState(page, primaryContext, "new_tab", observations)
+            return {readiness_settled: readinessSettled, state, open_pages: primaryContext.pages().length}
+          })
+
+          await phase("WT05_DUPLICATE_TAB", async () => {
+            console.log("WT05_CROSS_TAB_WRITE_BEGIN")
+            let tabA = primaryContext.pages().find(page => !page.isClosed()) || await primaryContext.newPage()
+            if (!tabA.url().startsWith(BASE)) {
+              await waitForBoot(tabA)
+            } else {
+              await waitForAppModule(tabA)
+            }
+            const tabB = await primaryContext.newPage()
+            const observationsB = attachRuntimeObservers(tabB, "duplicate-tab-b")
+            await waitForBoot(tabB)
+
+            const preA = await captureState(tabA, primaryContext, "cross_tab_A_before")
+            const preB = await captureState(tabB, primaryContext, "cross_tab_B_before", observationsB)
+
+            const written = await tabA.evaluate(async ({recordId}) => {
+              const local = await import("/assets/local_data.mjs")
+              const now = new Date().toISOString()
+              const record = {
+                id: recordId,
+                type: "memory",
+                schema_version: 1,
+                value: {text: "WT05 R2 cross-tab benign durable mutation"},
+                updated_at: now
+              }
+              await local.putRecord(record)
+              return await local.getRecord(recordId)
+            }, {recordId: CROSS_TAB_MEMORY_ID})
+
+            await tabB.reload({waitUntil: "domcontentloaded", timeout: WAIT})
+            await waitForAppModule(tabB)
+            const readinessSettled = await settleReadiness(tabB)
+            const observedB = await tabB.evaluate(async ({recordId}) => {
+              const local = await import("/assets/local_data.mjs")
+              return await local.getRecord(recordId)
+            }, {recordId: CROSS_TAB_MEMORY_ID})
+
+            const postA = await captureState(tabA, primaryContext, "cross_tab_A_after")
+            const postB = await captureState(tabB, primaryContext, "cross_tab_B_after", observationsB)
+            const participantIds = [
+              participantIdFromState(preA),
+              participantIdFromState(preB),
+              participantIdFromState(postA),
+              participantIdFromState(postB)
+            ].filter(Boolean)
+            const uniqueParticipantIds = [...new Set(participantIds)]
+
+            const result = {
+              canary_id: CROSS_TAB_MEMORY_ID,
+              tab_b_lifecycle: "page_reload",
+              tab_b_readiness_settled: readinessSettled,
+              written_in_tab_a: written,
+              observed_in_tab_b: observedB,
+              visibility: observedB ? "visible" : "not_visible",
+              canary_shape_valid: Boolean(
+                observedB?.id === CROSS_TAB_MEMORY_ID &&
+                observedB?.type === "memory" &&
+                observedB?.value?.text === "WT05 R2 cross-tab benign durable mutation"
+              ),
+              participant_ids: participantIds,
+              unique_participant_ids: uniqueParticipantIds,
+              duplicate_identity_observed: uniqueParticipantIds.length > 1,
+              pre_a: preA,
+              pre_b: preB,
+              post_a: postA,
+              post_b: postB
+            }
+            emit({phase: "WT05_CROSS_TAB_WRITE", status: "observed", result})
+            console.log("WT05_CROSS_TAB_WRITE_END")
+            return result
+          })
+
+          await phase("WT05_REOPEN", async () => {
+            for (const page of primaryContext.pages()) await page.close().catch(() => {})
+            primaryPage = await primaryContext.newPage()
+            const observations = attachRuntimeObservers(primaryPage, "reopen")
+            const readinessSettled = await waitForBoot(primaryPage)
+            return {
+              readiness_settled: readinessSettled,
+              state: await captureState(primaryPage, primaryContext, "after_close_all_and_reopen", observations)
+            }
+          })
+
+          await phase("WT05_BROWSER_RESTART", async () => {
+            console.log("WT05_BROWSER_PROCESS_BOUNDARY_BEGIN")
+            if (primaryTraceActive) {
+              await primaryContext.tracing.stop({
+                path: path.join(EVIDENCE_DIR, "primary-before-restart-trace.zip")
+              }).catch(() => {})
+              primaryTraceActive = false
+            }
+
+            const beforeRestartProcesses = profileChromiumProcesses()
+            await primaryContext.close()
+            const afterCloseProcesses = await waitForNoProfileChromium()
+
+            const relaunched = await launchPersistent(PROFILE_DIR, "browser-restart")
+            primaryContext = relaunched.context
+            primaryPage = relaunched.page
+            await primaryContext.tracing.start({screenshots: true, snapshots: true})
+            primaryTraceActive = true
+            const readinessSettled = await waitForBoot(primaryPage)
+            const afterRelaunchProcesses = profileChromiumProcesses()
+
+            const boundary = {
+              mechanism: "ps -eo pid=,args= filtered by exact WT05_PROFILE_DIR and chrome/chromium command",
+              before_restart_profile_processes: beforeRestartProcesses,
+              after_close_profile_processes: afterCloseProcesses,
+              after_relaunch_profile_processes: afterRelaunchProcesses
+            }
+            emit({phase: "WT05_BROWSER_PROCESS_BOUNDARY", status: "observed", boundary})
+            console.log("WT05_BROWSER_PROCESS_BOUNDARY_END")
+
+            if (beforeRestartProcesses.length === 0) {
+              throw new Error(`browser_process_boundary_no_pre_shutdown_process:${JSON.stringify(boundary)}`)
+            }
+            if (afterCloseProcesses.length !== 0) {
+              throw new Error(`browser_process_did_not_exit:${JSON.stringify(boundary)}`)
+            }
+            if (afterRelaunchProcesses.length === 0) {
+              throw new Error(`browser_process_relaunch_not_observed:${JSON.stringify(boundary)}`)
+            }
+
+            return {
+              readiness_settled: readinessSettled,
+              boundary,
+              state: await captureState(
+                primaryPage,
+                primaryContext,
+                "after_verified_full_chromium_restart",
+                relaunched.observations
+              )
+            }
+          })
+
+          await phase("WT05_INDEXEDDB_FAILURE", async () => {
+            const hostile = await freshHostileProfile("wt05-indexeddb-unavailable", () => {
+              Object.defineProperty(window, "indexedDB", {
+                configurable: true,
+                value: {open() { throw new Error("WT05 IndexedDB blocked") }}
+              })
+            })
+            try {
+              const readinessSettledAtBoot = await waitForBoot(hostile.page)
+              const before = await hostile.page.evaluate(async () => {
+                const local = await import("/assets/local_data.mjs")
+                await local.putRecord({
+                  id: "memory:wt05-ephemeral",
+                  type: "memory",
+                  schema_version: 1,
+                  value: {text: "WT05 ephemeral probe"},
+                  updated_at: new Date().toISOString()
+                })
+                let syncKeyResult
+                try {
+                  const sync = await import("/assets/encrypted_sync.mjs")
+                  const key = await crypto.subtle.generateKey(
+                    {name: "AES-GCM", length: 256},
+                    false,
+                    ["encrypt", "decrypt"]
+                  )
+                  await sync.storeSyncKey(key, "wt05-indexeddb-failure")
+                  syncKeyResult = {stored: true}
+                } catch (error) {
+                  syncKeyResult = {
+                    stored: false,
+                    error: {name: error?.name || "Error", message: String(error?.message || error)}
+                  }
+                }
+                return {
+                  storage_status: typeof indexedDB.storageStatus === "function" ? indexedDB.storageStatus() : null,
+                  record_present: (await local.listRecords()).some(record => record.id === "memory:wt05-ephemeral"),
+                  sync_key: syncKeyResult,
+                  readiness: window.StrangerTalksF11?.getReadiness?.() || null,
+                  user_visible_status: [...document.querySelectorAll('[role="status"], [aria-live]')]
+                    .map(node => (node.textContent || "").trim())
+                    .filter(Boolean)
+                    .slice(0, 20)
+                }
+              })
+              await hostile.page.reload({waitUntil: "domcontentloaded", timeout: WAIT})
+              await waitForAppModule(hostile.page)
+              const readinessSettledAfterRefresh = await settleReadiness(hostile.page)
+              const after = await hostile.page.evaluate(async () => {
+                const local = await import("/assets/local_data.mjs")
+                return {
+                  storage_status: typeof indexedDB.storageStatus === "function" ? indexedDB.storageStatus() : null,
+                  record_present: (await local.listRecords()).some(record => record.id === "memory:wt05-ephemeral"),
+                  readiness: window.StrangerTalksF11?.getReadiness?.() || null,
+                  user_visible_status: [...document.querySelectorAll('[role="status"], [aria-live]')]
+                    .map(node => (node.textContent || "").trim())
+                    .filter(Boolean)
+                    .slice(0, 20)
+                }
+              })
+              return {
+                boot: true,
+                readiness_settled_at_boot: readinessSettledAtBoot,
+                before_refresh: before,
+                after_refresh: after,
+                readiness_settled_after_refresh: readinessSettledAfterRefresh,
+                page_errors: hostile.observations.pageErrors,
+                console_errors: hostile.observations.consoleErrors
+              }
+            } finally {
+              await hostile.context.close().catch(() => {})
+            }
+          })
+
+          await phase("WT05_LOCALSTORAGE_FAILURE", async () => {
+            const hostile = await freshHostileProfile("wt05-localstorage-unavailable", () => {
+              Storage.prototype.getItem = () => { throw new Error("WT05 localStorage blocked") }
+              Storage.prototype.setItem = () => { throw new Error("WT05 localStorage blocked") }
+              Storage.prototype.removeItem = () => { throw new Error("WT05 localStorage blocked") }
+            })
+            try {
+              const readinessSettledAtBoot = await waitForBoot(hostile.page)
+              await hostile.page.locator("#conversation-language").selectOption("hi")
+              const before = await hostile.page.evaluate(() => ({
+                runtime_language: window.StrangerTalksF11?.getFutureConversationLanguage?.() || null,
+                readiness: window.StrangerTalksF11?.getReadiness?.() || null
+              }))
+              await hostile.page.reload({waitUntil: "domcontentloaded", timeout: WAIT})
+              await waitForAppModule(hostile.page)
+              const readinessSettledAfterRefresh = await settleReadiness(hostile.page)
+              const after = await hostile.page.evaluate(() => ({
+                runtime_language: window.StrangerTalksF11?.getFutureConversationLanguage?.() || null,
+                selected_language: document.querySelector("#conversation-language")?.value || null,
+                readiness: window.StrangerTalksF11?.getReadiness?.() || null
+              }))
+              return {
+                boot: true,
+                readiness_settled_at_boot: readinessSettledAtBoot,
+                before_refresh: before,
+                after_refresh: after,
+                readiness_settled_after_refresh: readinessSettledAfterRefresh,
+                durability_loss: before.runtime_language !== after.runtime_language,
+                page_errors: hostile.observations.pageErrors,
+                console_errors: hostile.observations.consoleErrors
+              }
+            } finally {
+              await hostile.context.close().catch(() => {})
+            }
+          })
+
+          await phase("WT05_DELETE_ALL", async () => {
+            await seedRepresentativeState(primaryPage, primaryContext, "delete-all")
+            const before = await captureState(primaryPage, primaryContext, "delete_all_before")
+            await primaryPage.locator('#bottom-nav [data-go="settings"]').click()
+            await primaryPage.locator('section[data-screen="settings"].active').waitFor({
+              state: "visible",
+              timeout: WAIT
+            })
+
+            let dialogText = null
+            primaryPage.once("dialog", async dialog => {
+              dialogText = dialog.message()
+              await dialog.accept()
+            })
+            await primaryPage.locator("#delete-all").click()
+            await primaryPage.waitForTimeout(1500)
+
+            const after = await captureState(primaryPage, primaryContext, "delete_all_after")
+            const beforeIdentity = participantIdFromState(before)
+            const afterIdentity = participantIdFromState(after)
+            return {
+              dialog_text: dialogText,
+              used_product_ui_action: true,
+              captured_surfaces: [
+                "strangertalks-local-v1",
+                "strangertalks-sync-key-v1",
+                "strangertalks.conversation-language.v1",
+                "cookies",
+                "participant identity"
+              ],
+              before,
+              after,
+              recreated_identity: {
+                before_participant_id: beforeIdentity,
+                after_participant_id: afterIdentity,
+                changed: Boolean(beforeIdentity && afterIdentity && beforeIdentity !== afterIdentity)
+              }
+            }
+          })
+
+          if (primaryTraceActive && primaryContext) {
+            await primaryContext.tracing.stop({
+              path: path.join(EVIDENCE_DIR, "primary-after-restart-trace.zip")
+            }).catch(() => {})
+            primaryTraceActive = false
+          }
+          await primaryContext?.close().catch(() => {})
+
+          emit({
+            phase: "WT05_SUMMARY",
+            status: failures.length === 0 ? "complete" : "incomplete",
+            failures
+          })
+
+          if (failures.length) process.exitCode = 1
+          WT05_NODE
+
+      - name: Execute lifecycle proof
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          node "$RUNNER_TEMP/wt05-browser-lifecycle-r2.mjs" \
+            2>&1 | tee "$WT05_EVIDENCE_DIR/lifecycle.log" || status=$?
+          exit "$status"
+
+      - name: Stop Phoenix
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$WT05_EVIDENCE_DIR/phoenix.pid" ]; then
+            kill "$(cat "$WT05_EVIDENCE_DIR/phoenix.pid")" 2>/dev/null || true
+          fi
+
+      - name: Preserve Phoenix log in job output on failure
+        if: failure()
+        shell: bash
+        run: |
+          cat "$WT05_EVIDENCE_DIR/phoenix.log" || true
+
+      - name: Upload WT-05 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt05-browser-lifecycle-r2-${{ github.run_id }}
+          path: ${{ runner.temp }}/wt05-evidence
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Prove frozen checkout stayed pristine
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$WT05_FROZEN_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$WT05_FROZEN_TREE"
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
