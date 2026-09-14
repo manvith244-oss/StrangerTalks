@@ -1,5 +1,3 @@
-Code.require_file("test/support/wt02_context_recorder.ex")
-
 alias StrangertalksNew.WT02ContextRecorder
 
 artifact = Path.join(System.tmp_dir!(), "wt02-r11a-r2-recorder-lifecycle-#{System.unique_integer([:positive])}.json")
@@ -9,7 +7,7 @@ System.put_env("WT02_TEAM6_SHA", "ac867b346426c782b90031b3d770a0d294761065")
 System.put_env("WT02_SEED", "synthetic-lifecycle")
 System.put_env("WT02_POSTGRES_VERSION", "NOT_USED")
 
-context = %{
+valid_context = %{
   pre_reset: %{monotonic: 101, synthetic: true},
   after_setup: %{queue_state_entry_count: 0, queue_state_expected_empty: true},
   results: [
@@ -59,44 +57,58 @@ wait_until = fn predicate, description ->
   |> Enum.find(&(&1 == :ok))
 end
 
-{:ok, formatter_pid} = GenServer.start_link(WT02ContextRecorder, [max_cases: 1])
-IO.puts("FORMATTER_PID=#{inspect(formatter_pid)}")
+start_formatter = fn red_context ->
+  {:ok, formatter_pid} = GenServer.start_link(WT02ContextRecorder, [max_cases: 1])
+  IO.puts("FORMATTER_PID=#{inspect(formatter_pid)}")
 
-case Process.whereis(WT02ContextRecorder) do
-  nil ->
+  recorder_pid = Process.whereis(WT02ContextRecorder)
+
+  if is_nil(recorder_pid) do
     IO.puts("NAMED_RECORDER=nil")
 
     try do
-      GenServer.call(WT02ContextRecorder, {:context, context}, 1_000)
+      GenServer.call(WT02ContextRecorder, {:context, red_context}, 1_000)
       raise "expected missing-recorder handoff to fail"
     catch
       :exit, reason ->
         IO.puts("RED_NO_PROCESS=#{inspect(reason)}")
         raise "synthetic RED: WT02ContextRecorder formatter is not registered as recorder"
     end
+  end
 
-  recorder_pid ->
-    IO.puts("NAMED_RECORDER=#{inspect(recorder_pid)}")
+  IO.puts("NAMED_RECORDER=#{inspect(recorder_pid)}")
 
-    if recorder_pid == formatter_pid do
-      raise "formatter pid must not be the dedicated recorder authority"
-    end
+  if recorder_pid == formatter_pid do
+    raise "formatter pid must not be the dedicated recorder authority"
+  end
+
+  formatter_pid
+end
+
+read_artifact = fn ->
+  wait_until.(fn -> File.exists?(artifact) end, "synthetic artifact")
+  artifact |> File.read!() |> Jason.decode!()
+end
+
+stop_round = fn formatter_pid ->
+  GenServer.cast(formatter_pid, {:suite_finished, %{run: 1}})
+  wait_until.(fn -> Process.whereis(WT02ContextRecorder) == nil end, "recorder shutdown")
+  GenServer.stop(formatter_pid, :normal)
 end
 
 unless function_exported?(WT02ContextRecorder, :record_context, 1) do
   raise "record_context/1 handoff authority is missing"
 end
 
-:ok = WT02ContextRecorder.record_context(context)
+formatter_pid = start_formatter.(valid_context)
+:ok = WT02ContextRecorder.record_context(valid_context)
 
 GenServer.cast(formatter_pid, {:test_finished, predecessor})
 GenServer.cast(formatter_pid, {:module_finished, predecessor_module})
 GenServer.cast(formatter_pid, {:test_started, target})
 GenServer.cast(formatter_pid, {:test_finished, target})
 
-wait_until.(fn -> File.exists?(artifact) end, "synthetic artifact")
-
-artifact_data = artifact |> File.read!() |> Jason.decode!()
+artifact_data = read_artifact.()
 
 unless artifact_data["pre_reset"]["synthetic"] == true, do: raise("PRE_RESET not preserved")
 unless artifact_data["after_setup"]["queue_state_expected_empty"] == true, do: raise("AFTER_SETUP not preserved")
@@ -111,11 +123,10 @@ IO.puts("CONTEXT_HANDOFF=PASS")
 IO.puts("FORMATTER_HISTORY=PASS")
 IO.puts("ARTIFACT_ASSEMBLY=PASS")
 
-GenServer.cast(formatter_pid, {:suite_finished, %{run: 1}})
-wait_until.(fn -> Process.whereis(WT02ContextRecorder) == nil end, "recorder shutdown")
+stop_round.(formatter_pid)
 IO.puts("RECORDER_SHUTDOWN=PASS")
 
-case WT02ContextRecorder.record_context(context) do
+case WT02ContextRecorder.record_context(valid_context) do
   {:error, {:recorder_unavailable, _reason}} ->
     IO.puts("OBSERVER_EFFECT_NONFATAL=PASS")
 
@@ -123,6 +134,49 @@ case WT02ContextRecorder.record_context(context) do
     raise "expected explicit nonfatal recorder-unavailable result, got #{inspect(other)}"
 end
 
-GenServer.stop(formatter_pid, :normal)
+File.rm(artifact)
+missing_result_context = %{valid_context | results: [hd(valid_context.results)]}
+formatter_pid = start_formatter.(missing_result_context)
+:ok = WT02ContextRecorder.record_context(missing_result_context)
+GenServer.cast(formatter_pid, {:test_started, target})
+GenServer.cast(formatter_pid, {:test_finished, target})
+missing_result_artifact = read_artifact.()
+
+if missing_result_artifact["classification"]["observation_valid"] != false,
+  do: raise("missing result unexpectedly valid")
+
+if missing_result_artifact["classification"]["target_contract_satisfied"] != false,
+  do: raise("missing result unexpectedly satisfied target contract")
+
+IO.puts("MISSING_RESULT_CANNOT_PASS=PASS")
+stop_round.(formatter_pid)
+
+File.rm(artifact)
+partial_context = %{
+  valid_context
+  | post_race: nil,
+    observation_error: "Postgrex.Error"
+}
+
+formatter_pid = start_formatter.(partial_context)
+:ok = WT02ContextRecorder.record_context(partial_context)
+GenServer.cast(formatter_pid, {:test_started, target})
+GenServer.cast(formatter_pid, {:test_finished, target})
+partial_artifact = read_artifact.()
+
+unless partial_artifact["pre_reset"]["synthetic"] == true, do: raise("partial PRE_RESET lost")
+unless partial_artifact["after_setup"]["queue_state_expected_empty"] == true, do: raise("partial AFTER_SETUP lost")
+unless is_nil(partial_artifact["post_race"]), do: raise("partial POST_RACE should be nil")
+
+if partial_artifact["classification"]["observation_valid"] != false,
+  do: raise("observation-error artifact unexpectedly valid")
+
+if partial_artifact["classification"]["target_contract_satisfied"] != false,
+  do: raise("invalid observation unexpectedly satisfied target contract")
+
+IO.puts("INVALID_OBSERVATION_CANNOT_PASS=PASS")
+IO.puts("PARTIAL_ARTIFACT_PRESERVED=PASS")
+stop_round.(formatter_pid)
+
 File.rm(artifact)
 IO.puts("SYNTHETIC_LIFECYCLE_GREEN=PASS")
