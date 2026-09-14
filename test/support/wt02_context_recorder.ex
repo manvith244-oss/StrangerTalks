@@ -6,8 +6,18 @@ defmodule StrangertalksNew.WT02ContextRecorder do
   alias StrangertalksNew.ConversationLifecycle.RecoverySweeper
   @target "concurrent second-intent attempts still create one Match and one Conversation"
 
-  def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
-  def init(opts), do: {:ok, %{opts: opts, tests: [], modules: [], context: nil, started: nil}}
+  def start_link(opts), do: GenServer.start_link(__MODULE__, {:recorder, opts}, name: __MODULE__)
+
+  def init({:recorder, opts}) do
+    {:ok, %{role: :recorder, opts: opts, tests: [], modules: [], context: nil, started: nil}}
+  end
+
+  def init(opts) when is_list(opts) do
+    case start_link(opts) do
+      {:ok, recorder} -> {:ok, %{role: :formatter, recorder: recorder}}
+      {:error, {:already_started, recorder}} -> {:ok, %{role: :formatter, recorder: recorder}}
+    end
+  end
 
   def pre_reset do
     keys = Agent.get(QueueState, &(&1 |> Map.keys() |> Enum.sort()))
@@ -33,7 +43,15 @@ defmodule StrangertalksNew.WT02ContextRecorder do
           %{base | observation_error: inspect(error.__struct__)}
       end
 
-    GenServer.call(__MODULE__, {:context, context})
+    record_context(context)
+  end
+
+  def record_context(context) do
+    try do
+      GenServer.call(__MODULE__, {:context, context}, 5000)
+    catch
+      :exit, reason -> {:error, {:recorder_unavailable, reason}}
+    end
   end
 
   defp post_race_snapshot(f, results) do
@@ -57,20 +75,31 @@ defmodule StrangertalksNew.WT02ContextRecorder do
         bounded_orphans: Enum.reject(conversations, &MapSet.member?(match_ids, &1.match_id))}}
   end
 
-  def handle_call({:context, c}, _from, s), do: {:reply, :ok, %{s | context: c}}
-  def handle_cast({:test_started, t}, s), do: {:noreply, %{s | started: if(target?(t), do: System.monotonic_time(), else: s.started)}}
-  def handle_cast({:test_finished, t}, s) do
+  def handle_call({:context, c}, _from, %{role: :recorder} = s), do: {:reply, :ok, %{s | context: c}}
+
+  def handle_cast(message, %{role: :formatter} = s) do
+    if recorder = Process.whereis(__MODULE__), do: GenServer.cast(recorder, message)
+    {:noreply, s}
+  end
+
+  def handle_cast({:test_started, t}, %{role: :recorder} = s),
+    do: {:noreply, %{s | started: if(target?(t), do: System.monotonic_time(), else: s.started)}}
+
+  def handle_cast({:test_finished, t}, %{role: :recorder} = s) do
     if target?(t), do: write_artifact(s, t)
     e = %{module: t.module, test: t.name, async: t.tags[:async], outcome: outcome(t.state), duration: t.time,
       formatter_finished_received_monotonic: System.monotonic_time()}
     {:noreply, %{s | tests: ring(s.tests, e, 32)}}
   end
-  def handle_cast({:module_finished, m}, s) do
+
+  def handle_cast({:module_finished, m}, %{role: :recorder} = s) do
     e = %{module: m.name, async: case m.tests do [t | _] -> t.tags[:async]; _ -> false end, test_count: length(m.tests),
       duration: Enum.sum(Enum.map(m.tests, & &1.time)), formatter_finished_received_monotonic: System.monotonic_time()}
     {:noreply, %{s | modules: ring(s.modules, e, 4)}}
   end
-  def handle_cast(_, s), do: {:noreply, s}
+
+  def handle_cast({:suite_finished, _times}, %{role: :recorder} = s), do: {:stop, :normal, s}
+  def handle_cast(_, %{role: :recorder} = s), do: {:noreply, s}
 
   defp write_artifact(s, t) do
     c = s.context || %{}; results = Map.get(c, :results, [])
