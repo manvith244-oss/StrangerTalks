@@ -1,0 +1,79 @@
+name: WT02 R11A R6 Recorder Finalization Synthetic Proof
+
+on:
+  push:
+    branches:
+      - wind-tunnel/wt02-r11a-r6-recorder-finalization
+
+permissions:
+  contents: read
+
+jobs:
+  recorder-finalization-proof:
+    runs-on: ubuntu-24.04
+    env:
+      MIX_ENV: test
+      R4_BASE: c994a1f87b9928a85ae4663a262b8d6895a5b48e
+
+    steps:
+      - name: Checkout diagnostic branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prove isolated R4 ancestry and forbidden-target guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git merge-base "$R4_BASE" HEAD)" = "$R4_BASE"
+          test "$(git rev-parse "$R4_BASE^{tree}")" = "6c1ee6c6f4eb112f146c33e8f5c02b81f15d2e9d"
+          ! grep -R --line-number --fixed-strings \
+            'mix test test/strangertalks_new/relationship_reconnections_test.exs:170 --seed 972822' \
+            .github/workflows/wt02-r11a-r6-recorder-finalization.yml \
+            test/support/wt02_context_recorder_real_exunit_harness.exs
+          echo "R4_ANCESTRY=PASS"
+          echo "REAL_TARGET_COMMAND_PRESENT=NO"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Compile diagnostic generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix compile
+          echo "COMPILE=PASS"
+
+      - name: Existing observation-truth synthetic regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start test/support/wt02_context_recorder_lifecycle_harness.exs
+
+      - name: Real ExUnit lifecycle finalization proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start test/support/wt02_context_recorder_real_exunit_harness.exs
+
+      - name: Diff hygiene
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          echo "GIT_DIFF_CHECK=PASS"
+          echo "GIT_STATUS_BEGIN"
+          git status --short
+          echo "GIT_STATUS_END"
