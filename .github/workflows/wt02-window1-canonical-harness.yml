@@ -1,0 +1,50 @@
+name: WT-02 R8A-R1 Canonical Window-1
+on:
+  push:
+    branches: [wind-tunnel/wt02-window1-canonical-harness]
+    paths: [.github/workflows/wt02-window1-canonical-harness.yml, test/diagnostics/wt02_window1_canonical_overlay.py]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  MIX_ENV: test
+  STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+jobs:
+  proof:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_USER: strangertalks_local, POSTGRES_PASSWORD: strangertalks_test, POSTGRES_DB: postgres}
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: erlef/setup-beam@v1
+        with: {elixir-version: "1.18.4", otp-version: "27.3.4"}
+      - name: Prove exact Canonical Window-1 three times
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/wt02-canonical"; evidence="$RUNNER_TEMP/wt02-evidence"; mkdir -p "$evidence"
+          git worktree add --detach "$root" 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          test "$(git -C "$root" rev-parse HEAD)" = 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          test "$(git -C "$root" rev-parse HEAD^{tree})" = 72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a
+          cd "$root"; python3 "$GITHUB_WORKSPACE/test/diagnostics/wt02_window1_canonical_overlay.py"
+          git diff > "$evidence/runtime-overlay.diff"; mix deps.get; : > "$evidence/summary.txt"
+          for run in 1 2 3; do
+            mix ecto.drop --force >/dev/null 2>&1 || true; mix ecto.create >/dev/null; mix ecto.migrate >/dev/null
+            log="$evidence/run${run}.log"; set +e
+            mix test test/strangertalks_new/relationship_reconnections_test.exs --only wt02_window1 --seed 0 --trace >"$log" 2>&1; rc=$?; set -e
+            if grep -q WT02_HARNESS_INVALID "$log"; then result=INVALID; elif test "$rc" -eq 0 && grep -q WT02_RESULT=PASS "$log"; then result=PASS; else result=FAIL; fi
+            echo "Run $run: $result" | tee -a "$evidence/summary.txt"
+            grep -E 'WT02_(BASELINE|PREPARE_COMMITTED|T2_RESULT|WINNER_SNAPSHOT|T1_RESULT|FINAL_SNAPSHOT|SEQUENCE|RESULT)' "$log" || true
+          done
+          test "$(grep -c ': PASS$' "$evidence/summary.txt")" -eq 3
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with: {name: "wt02-r8a-r1-${{ github.sha }}", path: "${{ runner.temp }}/wt02-evidence", if-no-files-found: error}
