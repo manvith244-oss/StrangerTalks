@@ -283,8 +283,15 @@ jobs:
 
               traced = trace_private_selection!(label)
               traced_now = traced.now
+              instant_compare = DateTime.compare(traced_now, now)
 
-              assert traced_now == now
+              append_trace(
+                "#{label} HARNESS_NOW=#{DateTime.to_iso8601(now)} HARNESS_NOW_MICROSECOND=#{inspect(now.microsecond)} " <>
+                  "TRACED_NOW=#{DateTime.to_iso8601(traced_now)} TRACED_NOW_MICROSECOND=#{inspect(traced_now.microsecond)} " <>
+                  "INSTANT_COMPARE=#{instant_compare}"
+              )
+
+              assert instant_compare == :eq
               assert traced.module == @matcher
               assert traced.function == :find_viable_partner
               assert MapSet.new([traced.p1_id | traced.candidate_ids]) == MapSet.new([a.participant_id, b.participant_id])
