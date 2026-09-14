@@ -30,7 +30,9 @@ jobs:
       WT02_POSTGRES_VERSION: "16"
     steps:
       - uses: actions/checkout@v4
-        with: {ref: "${{ github.sha }}"}
+        with:
+          ref: "${{ github.sha }}"
+          fetch-depth: 0
       - name: Verify diagnostic ancestry and scope
         run: |
           git merge-base --is-ancestor "$WT02_TEAM6_SHA" HEAD
