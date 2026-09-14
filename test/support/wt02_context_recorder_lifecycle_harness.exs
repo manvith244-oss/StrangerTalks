@@ -200,7 +200,7 @@ unless state_1.context[:synthetic_generation] == 1 and length(state_1.tests) == 
   raise "generation 1 synthetic state was not established"
 end
 
-case GenServer.start_link(WT02ContextRecorder, [max_cases: 1]) do
+case GenServer.start(WT02ContextRecorder, [max_cases: 1]) do
   {:error, {:stale_recorder, ^recorder_1}} -> :ok
   other -> raise "duplicate formatter did not reject stale recorder: #{inspect(other)}"
 end
