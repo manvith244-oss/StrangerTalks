@@ -1,0 +1,156 @@
+name: WT-02 R8B Window-1 Generation Comparison
+on:
+  push:
+    branches: [wind-tunnel/wt02-window1-generation-comparison]
+    paths: [.github/workflows/wt02-window1-generation-comparison.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  MIX_ENV: test
+  STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
+  STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+  STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+jobs:
+  comparison:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: {POSTGRES_USER: strangertalks_local, POSTGRES_PASSWORD: strangertalks_test, POSTGRES_DB: postgres}
+        ports: [5432:5432]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d postgres" --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: erlef/setup-beam@v1
+        with: {elixir-version: "1.18.4", otp-version: "27.3.4"}
+      - name: Compare exact Window-1 schedule on Team 5 and Team 6
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CANONICAL=30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          HARNESS_HEAD=9da15790712c6fbe837cdc783d6cf7941a1a84ae
+          HARNESS_OVERLAY_BLOB=0e296199d7bd760b3a774f5f53eaca57921f7008
+          TEAM5=c4b2ab30c5bea5131d87e239eb37205165330673
+          TEAM5_TREE=4b5693a10be35c741cd907e24ab8f98e163cca83
+          TEAM6=ac867b346426c782b90031b3d770a0d294761065
+          TEAM6_TREE=9ffa1efea0c624405ed435a0db2055f17113f784
+          TEAM5_BRANCH=wind-tunnel/wt02-terminal-repair
+          TEAM6_BRANCH=wind-tunnel/wt02-terminal-transport-repair
+
+          evidence="$RUNNER_TEMP/wt02-r8b-evidence"
+          mkdir -p "$evidence"
+          : > "$evidence/identity.txt"
+          : > "$evidence/summary.txt"
+
+          echo "controller_head=$(git rev-parse HEAD)" | tee -a "$evidence/identity.txt"
+          echo "controller_parent=$(git rev-parse HEAD^)" | tee -a "$evidence/identity.txt"
+          test "$(git rev-parse HEAD^)" = "$HARNESS_HEAD"
+          overlay_blob="$(git rev-parse HEAD:test/diagnostics/wt02_window1_canonical_overlay.py)"
+          echo "overlay_blob=$overlay_blob" | tee -a "$evidence/identity.txt"
+          test "$overlay_blob" = "$HARNESS_OVERLAY_BLOB"
+
+          remote_team5="$(git ls-remote --heads origin "refs/heads/$TEAM5_BRANCH" | awk '{print $1}')"
+          remote_team6="$(git ls-remote --heads origin "refs/heads/$TEAM6_BRANCH" | awk '{print $1}')"
+          echo "team5_expected=$TEAM5 team5_remote=$remote_team5" | tee -a "$evidence/identity.txt"
+          echo "team6_expected=$TEAM6 team6_remote=$remote_team6" | tee -a "$evidence/identity.txt"
+          test "$remote_team5" = "$TEAM5"
+          test "$remote_team6" = "$TEAM6"
+          test "$(git rev-parse "$TEAM5^{tree}")" = "$TEAM5_TREE"
+          test "$(git rev-parse "$TEAM6^{tree}")" = "$TEAM6_TREE"
+
+          for path in \
+            lib/strangertalks_new/relationship_reconnections.ex \
+            test/test_helper.exs \
+            test/strangertalks_new/relationship_reconnections_test.exs
+          do
+            canonical_blob="$(git rev-parse "$CANONICAL:$path")"
+            team5_blob="$(git rev-parse "$TEAM5:$path")"
+            team6_blob="$(git rev-parse "$TEAM6:$path")"
+            echo "$path canonical=$canonical_blob team5=$team5_blob team6=$team6_blob" | tee -a "$evidence/identity.txt"
+            test "$team5_blob" = "$canonical_blob"
+            test "$team6_blob" = "$canonical_blob"
+          done
+
+          run_generation() {
+            label="$1"
+            slug="$2"
+            sha="$3"
+            tree="$4"
+            root="$RUNNER_TEMP/wt02-r8b-$slug"
+
+            git worktree add --detach "$root" "$sha"
+            test "$(git -C "$root" rev-parse HEAD)" = "$sha"
+            test "$(git -C "$root" rev-parse HEAD^{tree})" = "$tree"
+            echo "$label head=$(git -C "$root" rev-parse HEAD) tree=$(git -C "$root" rev-parse HEAD^{tree})" | tee -a "$evidence/identity.txt"
+
+            cd "$root"
+            python3 "$GITHUB_WORKSPACE/test/diagnostics/wt02_window1_canonical_overlay.py"
+            git diff > "$evidence/$slug-runtime-overlay.diff"
+            mix deps.get
+
+            valid=0
+            attempt=0
+            while [ "$valid" -lt 3 ]; do
+              attempt=$((attempt + 1))
+              if [ "$attempt" -gt 9 ]; then
+                echo "$label: unable to obtain 3 valid runs within 9 attempts" | tee -a "$evidence/summary.txt"
+                exit 42
+              fi
+
+              mix ecto.drop --force >/dev/null 2>&1 || true
+              mix ecto.create >/dev/null
+              mix ecto.migrate >/dev/null
+
+              log="$evidence/$slug-attempt${attempt}.log"
+              set +e
+              mix test test/strangertalks_new/relationship_reconnections_test.exs --only wt02_window1 --seed 0 --trace >"$log" 2>&1
+              rc=$?
+              set -e
+
+              if grep -q WT02_HARNESS_INVALID "$log"; then
+                result=INVALID
+                echo "$label attempt $attempt: INVALID" | tee -a "$evidence/summary.txt"
+              else
+                valid=$((valid + 1))
+                if [ "$rc" -eq 0 ] && grep -q WT02_RESULT=PASS "$log"; then
+                  result=PASS
+                else
+                  result=FAIL
+                fi
+                cp "$log" "$evidence/$slug-run${valid}.log"
+                echo "$label run $valid (attempt $attempt): $result" | tee -a "$evidence/summary.txt"
+              fi
+
+              echo "----- $label attempt $attempt: $result -----"
+              grep -E 'WT02_(BASELINE|PREPARE_COMMITTED|T2_RESULT|WINNER_SNAPSHOT|T1_RESULT|FINAL_SNAPSHOT|SEQUENCE|RESULT|HARNESS_INVALID)' "$log" || true
+            done
+          }
+
+          run_generation "Team 5" team5 "$TEAM5" "$TEAM5_TREE"
+          run_generation "Team 6" team6 "$TEAM6" "$TEAM6_TREE"
+
+          cmp -s "$evidence/team5-runtime-overlay.diff" "$evidence/team6-runtime-overlay.diff"
+          echo "runtime_overlay_diff_team5_equals_team6=YES" | tee -a "$evidence/identity.txt"
+
+          team5_valid="$(grep -c '^Team 5 run ' "$evidence/summary.txt")"
+          team6_valid="$(grep -c '^Team 6 run ' "$evidence/summary.txt")"
+          test "$team5_valid" -eq 3
+          test "$team6_valid" -eq 3
+
+          team5_pass="$(grep '^Team 5 run ' "$evidence/summary.txt" | grep -c ': PASS$' || true)"
+          team6_pass="$(grep '^Team 6 run ' "$evidence/summary.txt" | grep -c ': PASS$' || true)"
+          team5_fail=$((3 - team5_pass))
+          team6_fail=$((3 - team6_pass))
+          echo "Team 5 aggregate: valid=3 pass=$team5_pass fail=$team5_fail" | tee -a "$evidence/summary.txt"
+          echo "Team 6 aggregate: valid=3 pass=$team6_pass fail=$team6_fail" | tee -a "$evidence/summary.txt"
+          echo "WT02_R8B_COMPLETE=YES"
+      - if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: "wt02-r8b-${{ github.sha }}"
+          path: "${{ runner.temp }}/wt02-r8b-evidence"
+          if-no-files-found: error
