@@ -1,0 +1,168 @@
+name: WT-02 RelationshipReconnections Race Matrix
+
+on:
+  push:
+    branches:
+      - wind-tunnel/wt02-reconnection-race-matrix
+    paths:
+      - .github/workflows/wt02-reconnection-race-matrix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wt02-reconnection-race-matrix-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  race-matrix:
+    name: ${{ matrix.target.label }} / seed ${{ matrix.seed }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - label: canonical
+            sha: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          - label: team5
+            sha: c4b2ab30c5bea5131d87e239eb37205165330673
+          - label: team6
+            sha: ac867b346426c782b90031b3d770a0d294761065
+        seed:
+          - 972822
+          - 15801
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      TARGET_TEST: test/strangertalks_new/relationship_reconnections_test.exs:160
+      TARGET_TEST_BLOB: ea40e75aab79830e98def0ab64217e62b1220431
+      MIX_LOCK_BLOB: 4a22438d4f9cf5553c303d258dd0cc78bd729cba
+      IMPLEMENTATION_BLOB: 46f5d5e0d17085e4affe4813426e0862393111ac
+      ATTEMPTS: "50"
+
+    steps:
+      - name: Checkout exact matrix target
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.target.sha }}
+          fetch-depth: 1
+          path: source
+
+      - name: Prove exact SHA and frozen blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git -C source rev-parse HEAD)"
+          test_blob="$(git -C source rev-parse "HEAD:test/strangertalks_new/relationship_reconnections_test.exs")"
+          lock_blob="$(git -C source rev-parse "HEAD:mix.lock")"
+          implementation_blob="$(git -C source rev-parse "HEAD:lib/strangertalks_new/relationship_reconnections.ex")"
+
+          printf 'label=%s\n' '${{ matrix.target.label }}'
+          printf 'expected_sha=%s\n' '${{ matrix.target.sha }}'
+          printf 'actual_sha=%s\n' "$actual_sha"
+          printf 'target_test_blob=%s\n' "$test_blob"
+          printf 'mix_lock_blob=%s\n' "$lock_blob"
+          printf 'implementation_blob=%s\n' "$implementation_blob"
+
+          test "$actual_sha" = '${{ matrix.target.sha }}'
+          test "$test_blob" = "$TARGET_TEST_BLOB"
+          test "$lock_blob" = "$MIX_LOCK_BLOB"
+          test "$implementation_blob" = "$IMPLEMENTATION_BLOB"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Hex, Rebar, and dependencies
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Execute focused race attempts without product verdict
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          label='${{ matrix.target.label }}'
+          seed='${{ matrix.seed }}'
+          log="results/${label}-seed-${seed}.log"
+          status_file="results/${label}-seed-${seed}-exit-codes.tsv"
+          metadata="results/${label}-seed-${seed}-metadata.txt"
+
+          {
+            echo "label=$label"
+            echo "sha=${{ matrix.target.sha }}"
+            echo "seed=$seed"
+            echo "attempts=$ATTEMPTS"
+            echo "target_test=$TARGET_TEST"
+            echo "target_test_blob=$TARGET_TEST_BLOB"
+            echo "mix_lock_blob=$MIX_LOCK_BLOB"
+            echo "implementation_blob=$IMPLEMENTATION_BLOB"
+            echo "runner_os=$RUNNER_OS"
+            echo "workflow_run_id=$GITHUB_RUN_ID"
+            echo "workflow_run_attempt=$GITHUB_RUN_ATTEMPT"
+          } > "$metadata"
+
+          printf 'attempt\texit_code\n' > "$status_file"
+          : > "$log"
+
+          for attempt in $(seq 1 "$ATTEMPTS"); do
+            {
+              echo "===== attempt=$attempt label=$label sha=${{ matrix.target.sha }} seed=$seed ====="
+            } | tee -a "$log"
+
+            set +e
+            (
+              cd source
+              mix test "$TARGET_TEST" --seed "$seed" --trace
+            ) 2>&1 | tee -a "$log"
+            code=${PIPESTATUS[0]}
+            set -e
+
+            printf '%s\t%s\n' "$attempt" "$code" >> "$status_file"
+            echo "===== attempt=$attempt exit_code=$code =====" | tee -a "$log"
+          done
+
+          awk -F '\t' '
+            NR > 1 { total += 1; if ($2 == 0) zero += 1; else nonzero += 1 }
+            END {
+              printf "attempts_recorded=%d\nexit_0=%d\nexit_nonzero=%d\n", total, zero, nonzero
+            }
+          ' "$status_file" | tee "results/${label}-seed-${seed}-counts.txt"
+
+          # Deliberately do not convert test outcomes into a product verdict here.
+          exit 0
+
+      - name: Upload diagnostic evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt02-${{ matrix.target.label }}-seed-${{ matrix.seed }}
+          path: results/
+          if-no-files-found: error
+          retention-days: 30
