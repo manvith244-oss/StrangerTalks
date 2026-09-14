@@ -21,18 +21,46 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Prove isolated R4 ancestry and forbidden-target guard
+      - name: Prove isolated R4 ancestry and bounded scope
         shell: bash
         run: |
           set -euo pipefail
           test "$(git merge-base "$R4_BASE" HEAD)" = "$R4_BASE"
           test "$(git rev-parse "$R4_BASE^{tree}")" = "6c1ee6c6f4eb112f146c33e8f5c02b81f15d2e9d"
-          ! grep -R --line-number --fixed-strings \
-            'mix test test/strangertalks_new/relationship_reconnections_test.exs:170 --seed 972822' \
-            .github/workflows/wt02-r11a-r6-recorder-finalization.yml \
-            test/support/wt02_context_recorder_real_exunit_harness.exs
-          echo "R4_ANCESTRY=PASS"
-          echo "REAL_TARGET_COMMAND_PRESENT=NO"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          base = "c994a1f87b9928a85ae4663a262b8d6895a5b48e"
+          allowed = {
+              ".github/workflows/wt02-r11a-r6-recorder-finalization.yml",
+              "test/support/wt02_context_recorder.ex",
+              "test/support/wt02_context_recorder_real_exunit_harness.exs",
+          }
+          changed = set(subprocess.check_output(
+              ["git", "diff", "--name-only", f"{base}...HEAD"], text=True
+          ).splitlines())
+          unexpected = changed - allowed
+          if unexpected:
+              raise SystemExit(f"SCOPE_EXPANDED={sorted(unexpected)}")
+
+          needle = (
+              "mix test "
+              + "test/strangertalks_new/"
+              + "relationship_reconnections_test.exs:170 "
+              + "--seed 972822"
+          )
+          for path in allowed:
+              text = Path(path).read_text()
+              if needle in text:
+                  raise SystemExit(f"REAL_TARGET_COMMAND_PRESENT={path}")
+
+          print("R4_ANCESTRY=PASS")
+          print("BOUNDED_SCOPE=PASS")
+          print("PRODUCT_FILES_CHANGED=NO")
+          print("REAL_TARGET_COMMAND_PRESENT=NO")
+          PY
 
       - name: Set up BEAM
         uses: erlef/setup-beam@v1
@@ -72,7 +100,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git diff --check
+          git diff --check "$R4_BASE"...HEAD
           echo "GIT_DIFF_CHECK=PASS"
           echo "GIT_STATUS_BEGIN"
           git status --short

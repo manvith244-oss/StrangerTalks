@@ -177,5 +177,40 @@ else
   raise "target finalization was not durable before ExUnit returned"
 end
 
+failure_target = %{
+  module: StrangertalksNew.RelationshipReconnectionsTest,
+  name: :"concurrent second-intent attempts still create one Match and one Conversation synthetic write failure",
+  tags: %{async: false},
+  state: nil,
+  time: 1
+}
+
+old_artifact = System.fetch_env!("WT02_ARTIFACT")
+System.put_env("WT02_ARTIFACT", System.tmp_dir!())
+old_trap_exit = Process.flag(:trap_exit, true)
+
+{:ok, failure_formatter} = GenServer.start_link(WT02ContextRecorder, [max_cases: 1])
+failure_ref = Process.monitor(failure_formatter)
+:ok = WT02ContextRecorder.record_context(valid_context)
+GenServer.cast(failure_formatter, {:test_started, failure_target})
+GenServer.cast(failure_formatter, {:test_finished, failure_target})
+
+failure_reason =
+  receive do
+    {:DOWN, ^failure_ref, :process, ^failure_formatter, reason} -> reason
+  after
+    2_000 -> raise "write failure did not terminate formatter observably"
+  end
+
+if failure_reason in [:normal, :shutdown] do
+  raise "write failure formatter exit was not diagnostic: #{inspect(failure_reason)}"
+end
+
+wait_until.(fn -> Process.whereis(WT02ContextRecorder) == nil end, "write-failure recorder shutdown")
+System.put_env("WT02_ARTIFACT", old_artifact)
+Process.flag(:trap_exit, old_trap_exit)
+IO.puts("WRITE_FAILURE_OBSERVABLE=PASS")
+IO.puts("WRITE_FAILURE_NO_ORPHAN_RECORDER=PASS")
+
 :persistent_term.erase({__MODULE__, :parent})
 :persistent_term.erase({__MODULE__, :context})

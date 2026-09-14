@@ -77,6 +77,34 @@ defmodule StrangertalksNew.WT02ContextRecorder do
 
   def handle_call({:context, c}, _from, %{role: :recorder} = s), do: {:reply, :ok, %{s | context: c}}
 
+  def handle_call({:finalize_test, t}, _from, %{role: :recorder} = s) do
+    write_artifact(s, t)
+    {:reply, :ok, remember_test(s, t)}
+  end
+
+  def handle_call({:suite_finished, _times}, _from, %{role: :recorder} = s),
+    do: {:stop, :normal, :ok, s}
+
+  def handle_cast({:test_finished, t} = message, %{role: :formatter, recorder: recorder} = s) do
+    if target?(t) do
+      case recorder_call(recorder, {:finalize_test, t}) do
+        :ok -> :ok
+        {:error, reason} -> raise "WT02 target finalization failed: #{inspect(reason)}"
+      end
+    else
+      if Process.alive?(recorder), do: GenServer.cast(recorder, message)
+    end
+
+    {:noreply, s}
+  end
+
+  def handle_cast({:suite_finished, times}, %{role: :formatter, recorder: recorder} = s) do
+    case recorder_call(recorder, {:suite_finished, times}) do
+      :ok -> {:noreply, s}
+      {:error, reason} -> raise "WT02 recorder shutdown failed: #{inspect(reason)}"
+    end
+  end
+
   def handle_cast(message, %{role: :formatter, recorder: recorder} = s) do
     if Process.alive?(recorder), do: GenServer.cast(recorder, message)
     {:noreply, s}
@@ -87,9 +115,7 @@ defmodule StrangertalksNew.WT02ContextRecorder do
 
   def handle_cast({:test_finished, t}, %{role: :recorder} = s) do
     if target?(t), do: write_artifact(s, t)
-    e = %{module: t.module, test: t.name, async: t.tags[:async], outcome: outcome(t.state), duration: t.time,
-      formatter_finished_received_monotonic: System.monotonic_time()}
-    {:noreply, %{s | tests: ring(s.tests, e, 32)}}
+    {:noreply, remember_test(s, t)}
   end
 
   def handle_cast({:module_finished, m}, %{role: :recorder} = s) do
@@ -100,6 +126,20 @@ defmodule StrangertalksNew.WT02ContextRecorder do
 
   def handle_cast({:suite_finished, _times}, %{role: :recorder} = s), do: {:stop, :normal, s}
   def handle_cast(_, %{role: :recorder} = s), do: {:noreply, s}
+
+  defp recorder_call(recorder, message) do
+    try do
+      GenServer.call(recorder, message, :infinity)
+    catch
+      :exit, reason -> {:error, {:recorder_unavailable, reason}}
+    end
+  end
+
+  defp remember_test(s, t) do
+    e = %{module: t.module, test: t.name, async: t.tags[:async], outcome: outcome(t.state), duration: t.time,
+      formatter_finished_received_monotonic: System.monotonic_time()}
+    %{s | tests: ring(s.tests, e, 32)}
+  end
 
   defp write_artifact(s, t) do
     c = s.context || %{}; results = Map.get(c, :results, [])
