@@ -1,4 +1,4 @@
-name: WT02 R11A-R4 Observation Truth RED
+name: WT02 R11A-R4 Observation Truth GREEN
 
 on:
   push:
@@ -45,11 +45,10 @@ jobs:
       - name: Compile diagnostic generation
         run: mix compile
 
-      - name: Run synthetic observation-truth RED harness only
+      - name: Run bounded synthetic observation-truth GREEN proof only
         run: mix run --no-start test/support/wt02_context_recorder_lifecycle_harness.exs
 
       - name: Diff hygiene
-        if: always()
         shell: bash
         run: |
           git diff --check
