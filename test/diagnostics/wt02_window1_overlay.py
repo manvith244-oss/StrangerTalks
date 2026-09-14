@@ -104,7 +104,7 @@ diagnostic = r'''  @tag :wt02_window1
     participant_states = Repo.all(from p in StrangertalksNew.Participant,
       where: p.participant_id in ^[f.a, f.b], select: {p.participant_id, p.presence_state})
     %{rows: reservations} = Repo.query!(
-      "SELECT match_id, participant_id, released_at FROM participant_pairing_reservations WHERE match_id = $1::uuid ORDER BY participant_id",
+      "SELECT match_id, participant_id, released_at FROM participant_pairing_reservations WHERE match_id::text = $1 ORDER BY participant_id",
       [match.match_id])
 
     assert conv.conversation_id == cid
