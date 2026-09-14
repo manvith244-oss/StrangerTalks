@@ -1,0 +1,327 @@
+name: WT02 R11B E5 Clean Recorder Validation
+
+on:
+  push:
+    branches:
+      - wind-tunnel/wt02-r11b-e5-clean-execution
+    paths:
+      - .github/workflows/wt02-r11b-e5-clean-recorder.yml
+
+permissions:
+  contents: read
+
+jobs:
+  clean-recorder-validation:
+    if: >-
+      ${{ github.ref == 'refs/heads/wind-tunnel/wt02-r11b-e5-clean-execution' &&
+          github.event.before == 'b77b84e36a54456a9ca211175efae769cb21c53e' &&
+          github.run_attempt == 1 }}
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      WT02_CONTEXT_RECORDER: "1"
+      WT02_TEAM6_SHA: ac867b346426c782b90031b3d770a0d294761065
+      WT02_SEED: "972822"
+      WT02_POSTGRES_VERSION: "16"
+      WT02_ARTIFACT: tmp/wt02-r11-clean.json
+      EXPECTED_R6_SHA: b77b84e36a54456a9ca211175efae769cb21c53e
+      EXPECTED_R6_TREE: 8debafbffb61620889fcbc00a17931a9bd733f43
+
+    steps:
+      - name: Prove one-shot event identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "EVENT=${GITHUB_EVENT_NAME}"
+          echo "REF=${GITHUB_REF}"
+          echo "WRAPPER_SHA=${GITHUB_SHA}"
+          echo "RUN_ID=${GITHUB_RUN_ID}"
+          echo "RUN_ATTEMPT=${GITHUB_RUN_ATTEMPT}"
+          echo "EVENT_BEFORE=${{ github.event.before }}"
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_REF" = "refs/heads/wind-tunnel/wt02-r11b-e5-clean-execution"
+          test "${{ github.event.before }}" = "b77b84e36a54456a9ca211175efae769cb21c53e"
+          test "$GITHUB_RUN_ATTEMPT" = "1"
+
+      - name: Checkout exact admitted R6 recorder generation
+        uses: actions/checkout@v4
+        with:
+          ref: b77b84e36a54456a9ca211175efae769cb21c53e
+          fetch-depth: 1
+
+      - name: Assert exact source-under-test identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "EXPECTED_R6_SHA=$EXPECTED_R6_SHA"
+          echo "OBSERVED_CHECKOUT_SHA=$actual_sha"
+          echo "EXPECTED_R6_TREE=$EXPECTED_R6_TREE"
+          echo "OBSERVED_CHECKOUT_TREE=$actual_tree"
+          test "$actual_sha" = "$EXPECTED_R6_SHA"
+          test "$actual_tree" = "$EXPECTED_R6_TREE"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Prepare disposable test database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Apply exact admitted E4 diagnostic overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_exactly_once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"OVERLAY_ANCHOR={path}=FAIL expected=1 observed={count}"
+                  )
+              p.write_text(s.replace(old, new, 1))
+
+          helper = "test/test_helper.exs"
+          replace_exactly_once(
+              helper,
+              "ExUnit.start()\n",
+              '''ExUnit.start()\n\nif System.get_env("WT02_CONTEXT_RECORDER") == "1" do\n  ExUnit.configure(formatters: [ExUnit.CLIFormatter, StrangertalksNew.WT02ContextRecorder])\nend\n'''
+          )
+
+          target = "test/strangertalks_new/relationship_reconnections_test.exs"
+          replace_exactly_once(
+              target,
+              '''  setup do\n    Agent.update(QueueState, fn _ -> %{} end)\n    fixture = relationship_fixture()\n    %{fixture: fixture}\n  end\n''',
+              '''  setup context do\n    target? =\n      System.get_env("WT02_CONTEXT_RECORDER") == "1" and\n        String.contains?(\n          to_string(context.test),\n          "concurrent second-intent attempts still create one Match and one Conversation"\n        )\n\n    if target?, do: StrangertalksNew.WT02ContextRecorder.pre_reset()\n    Agent.update(QueueState, fn _ -> %{} end)\n    fixture = relationship_fixture()\n    if target?, do: StrangertalksNew.WT02ContextRecorder.after_setup()\n    %{fixture: fixture}\n  end\n'''
+          )
+
+          replace_exactly_once(
+              target,
+              '''      |> Enum.map(fn {:ok, result} -> result end)\n\n    assert Enum.all?(results, &match?({:ok, %{status: "matched"}}, &1))\n    assert Repo.aggregate(Matching, :count, :match_id) == baseline_matches + 1\n    assert Repo.aggregate(Conversation, :count, :conversation_id) == baseline_conversations + 1\n''',
+              '''      |> Enum.map(fn {:ok, result} -> result end)\n\n    diagnostic_result = StrangertalksNew.WT02ContextRecorder.post_race(f, results)\n\n    StrangertalksNew.WT02ContextRecorderTargetGate.after_product_assertions!(\n      diagnostic_result,\n      fn ->\n        assert Enum.all?(results, &match?({:ok, %{status: "matched"}}, &1))\n        assert Repo.aggregate(Matching, :count, :match_id) == baseline_matches + 1\n        assert Repo.aggregate(Conversation, :count, :conversation_id) == baseline_conversations + 1\n      end\n    )\n'''
+          )
+          print("OVERLAY_APPLICATION=PASS")
+          PY
+
+      - name: Audit overlay with target-local sentinels
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git diff --check; then
+            echo "GIT_DIFF_CHECK=PASS"
+          else
+            echo "GIT_DIFF_CHECK=FAIL"
+            exit 1
+          fi
+
+          echo "--- E5 OVERLAY DIFF ---"
+          git diff -- test/test_helper.exs test/strangertalks_new/relationship_reconnections_test.exs
+          echo "--- END E5 OVERLAY DIFF ---"
+
+          mapfile -t changed < <(git diff --name-only | sort)
+          expected=(
+            "test/strangertalks_new/relationship_reconnections_test.exs"
+            "test/test_helper.exs"
+          )
+          printf 'OVERLAY_CHANGED_FILE=%s\n' "${changed[@]}"
+
+          if [ "${#changed[@]}" -eq 2 ] &&
+             [ "${changed[0]}" = "${expected[0]}" ] &&
+             [ "${changed[1]}" = "${expected[1]}" ]; then
+            echo "OVERLAY_SCOPE_EXACT_TWO=PASS"
+          else
+            echo "OVERLAY_SCOPE_EXACT_TWO=FAIL observed=${#changed[@]}"
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          path = Path("test/strangertalks_new/relationship_reconnections_test.exs")
+          text = path.read_text()
+          lines = text.splitlines()
+          wanted = "concurrent second-intent attempts still create one Match and one Conversation"
+
+          starts = []
+          for i, line in enumerate(lines, 1):
+              m = re.search(r'^\s*test\s+"([^"]+)"', line)
+              if m:
+                  starts.append((i, m.group(1)))
+
+          matches = [(i, name) for i, name in starts if name == wanted]
+          print(f"TARGET_TITLE_COUNT={len(matches)}")
+          if len(matches) != 1:
+              print("TARGET_TITLE_UNIQUE=FAIL")
+              sys.exit(1)
+          print("TARGET_TITLE_UNIQUE=PASS")
+
+          start = matches[0][0]
+          next_starts = [i for i, _ in starts if i > start]
+          end = (min(next_starts) - 1) if next_starts else len(lines)
+          target_text = "\n".join(lines[start - 1:end])
+          selector_line = 170
+
+          print(f"TARGET_SPAN={start}-{end}")
+          if start <= selector_line <= end:
+              print("TARGET_SELECTOR_IN_SPAN=PASS")
+          else:
+              print(
+                  f"TARGET_SELECTOR_IN_SPAN=FAIL selector={selector_line} span={start}-{end}"
+              )
+              sys.exit(1)
+          print(
+              "TARGET_SELECTOR="
+              f"test/strangertalks_new/relationship_reconnections_test.exs:{selector_line}"
+          )
+
+          matching_assert = (
+              "assert Repo.aggregate(Matching, :count, :match_id) == "
+              "baseline_matches + 1"
+          )
+          conversation_assert = (
+              "assert Repo.aggregate(Conversation, :count, :conversation_id) == "
+              "baseline_conversations + 1"
+          )
+
+          whole_matching = text.count(matching_assert)
+          whole_conversation = text.count(conversation_assert)
+          print(f"WHOLE_FILE_MATCH_COUNT_ASSERT_COUNT={whole_matching}")
+          print(f"WHOLE_FILE_CONVERSATION_COUNT_ASSERT_COUNT={whole_conversation}")
+          if whole_matching > 1 and whole_conversation > 1:
+              print("OLD_WHOLE_FILE_UNIQUENESS_RED=PASS")
+          else:
+              print(
+                  "OLD_WHOLE_FILE_UNIQUENESS_RED=FAIL "
+                  f"matching={whole_matching} conversation={whole_conversation}"
+              )
+              sys.exit(1)
+
+          checks = [
+              ("TARGET_HAS_ASYNC_STREAM", "Task.async_stream("),
+              ("TARGET_HAS_INFINITY_TIMEOUT", "timeout: :infinity"),
+              (
+                  "TARGET_HAS_POST_RACE",
+                  "diagnostic_result = "
+                  "StrangertalksNew.WT02ContextRecorder.post_race(f, results)",
+              ),
+              (
+                  "TARGET_HAS_GATE",
+                  "StrangertalksNew.WT02ContextRecorderTargetGate."
+                  "after_product_assertions!(",
+              ),
+              (
+                  "TARGET_NATIVE_MATCH_ASSERT",
+                  'assert Enum.all?(results, &match?({:ok, %{status: "matched"}}, &1))',
+              ),
+              ("TARGET_NATIVE_MATCH_COUNT_ASSERT", matching_assert),
+              ("TARGET_NATIVE_CONVERSATION_COUNT_ASSERT", conversation_assert),
+          ]
+
+          failed = False
+          for name, marker in checks:
+              count = target_text.count(marker)
+              print(f"{name}_COUNT={count}")
+              if count == 1:
+                  print(f"{name}=PASS")
+              else:
+                  print(f"{name}=FAIL observed={count} expected=1")
+                  failed = True
+
+          pre_reset_marker = "if target?, do: StrangertalksNew.WT02ContextRecorder.pre_reset()"
+          after_setup_marker = "if target?, do: StrangertalksNew.WT02ContextRecorder.after_setup()"
+
+          pre_count = text.count(pre_reset_marker)
+          print(f"PRE_RESET_INSERTION_COUNT={pre_count}")
+          if pre_count == 1:
+              print("PRE_RESET_INSERTION=PASS")
+          else:
+              print(f"PRE_RESET_INSERTION=FAIL observed={pre_count} expected=1")
+              failed = True
+
+          after_count = text.count(after_setup_marker)
+          print(f"AFTER_SETUP_INSERTION_COUNT={after_count}")
+          if after_count == 1:
+              print("AFTER_SETUP_INSERTION=PASS")
+          else:
+              print(f"AFTER_SETUP_INSERTION=FAIL observed={after_count} expected=1")
+              failed = True
+
+          if failed:
+              sys.exit(1)
+
+          print("TARGET_LOCAL_SENTINEL_GREEN=PASS")
+          PY
+
+      - name: Compile diagnostic code
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix compile
+          elixir -e 'Code.string_to_quoted!(File.read!("test/test_helper.exs")); Code.string_to_quoted!(File.read!("test/strangertalks_new/relationship_reconnections_test.exs"))'
+
+      - name: Run clean recorder target exactly once
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tmp
+          echo "TARGET_STARTED=1"
+          mix test test/strangertalks_new/relationship_reconnections_test.exs:170 --seed 972822
+
+      - name: Show bounded recorder artifact if present
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$WT02_ARTIFACT" ]; then
+            echo "RECORDER_ARTIFACT_PRESENT=1"
+            cat "$WT02_ARTIFACT"
+          else
+            echo "RECORDER_ARTIFACT_PRESENT=0"
+          fi
+
+      - name: Upload clean recorder artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt02-r11b-e5-clean-recorder
+          path: tmp/wt02-r11-clean.json
+          if-no-files-found: ignore
+          retention-days: 7
