@@ -1,20 +1,20 @@
-name: WT02 R11A-R2 Recorder Lifecycle
+name: WT02 R11A-R4 Observation Truth RED
 
 on:
   push:
     branches:
-      - wind-tunnel/wt02-r11a-r2-recorder-lifecycle
+      - wind-tunnel/wt02-r11a-r4-observation-truth
     paths:
       - test/support/wt02_context_recorder.ex
       - test/support/wt02_context_recorder_lifecycle_harness.exs
+      - test/support/wt02_context_recorder_target_gate.ex
       - .github/workflows/wt02-r11a-r2-recorder-lifecycle.yml
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  synthetic-lifecycle:
+  synthetic-observation-truth:
     runs-on: ubuntu-latest
     env:
       MIX_ENV: test
@@ -45,7 +45,7 @@ jobs:
       - name: Compile diagnostic generation
         run: mix compile
 
-      - name: Run synthetic recorder lifecycle harness only
+      - name: Run synthetic observation-truth RED harness only
         run: mix run --no-start test/support/wt02_context_recorder_lifecycle_harness.exs
 
       - name: Diff hygiene
