@@ -1,0 +1,593 @@
+name: WT-04 Authority Canary
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authority-canary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    services:
+      source_postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: wt04_admin
+          POSTGRES_PASSWORD: wt04_source_local
+          POSTGRES_DB: wt04_source
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U wt04_admin -d wt04_source"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      target_postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: wt04_admin
+          POSTGRES_PASSWORD: wt04_target_local
+          POSTGRES_DB: wt04_target
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd "pg_isready -U wt04_admin -d wt04_target"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      SOURCE_DATABASE_URL: postgresql://wt04_admin:wt04_source_local@127.0.0.1:55432/wt04_source
+      TARGET_DATABASE_URL: postgresql://wt04_admin:wt04_target_local@127.0.0.1:55433/wt04_target
+
+    steps:
+      - name: Checkout frozen canonical commit
+        uses: actions/checkout@v4
+        with:
+          ref: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          fetch-depth: 1
+
+      - name: Guard canonical identity and instrument blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          actual_sha="$(git rev-parse HEAD)"
+          actual_tree="$(git rev-parse 'HEAD^{tree}')"
+          backup_blob="$(git rev-parse HEAD:ops/postgres_backup.sh)"
+          restore_blob="$(git rev-parse HEAD:ops/postgres_restore.sh)"
+
+          printf 'canonical_sha=%s\n' "$actual_sha"
+          printf 'canonical_tree=%s\n' "$actual_tree"
+          printf 'backup_script_blob=%s\n' "$backup_blob"
+          printf 'restore_script_blob=%s\n' "$restore_blob"
+
+          test "$actual_sha" = "30717f4ee84a493697bb4965f4e8128b2e6af6b9"
+          test "$actual_tree" = "72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a"
+          test "$backup_blob" = "a2a03ec923bac416678ceb9c49cf8a2c3768dc02"
+          test "$restore_blob" = "cf854a3cca91eb1b5a808c24f8c46c7c56f9de96"
+
+      - name: Install PostgreSQL 17 client
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc |
+            sudo gpg --dearmor --yes -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" |
+            sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+
+      - name: Prove PostgreSQL 17 tooling and separate clusters
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+
+          psql --version
+          pg_dump --version
+          pg_restore --version
+
+          source_system_identifier="$(
+            psql "$SOURCE_DATABASE_URL" -X -At -v ON_ERROR_STOP=1 \
+              -c "SELECT system_identifier FROM pg_control_system();"
+          )"
+          target_system_identifier="$(
+            psql "$TARGET_DATABASE_URL" -X -At -v ON_ERROR_STOP=1 \
+              -c "SELECT system_identifier FROM pg_control_system();"
+          )"
+
+          printf 'source_server_version=%s\n' "$(
+            psql "$SOURCE_DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c "SHOW server_version;"
+          )"
+          printf 'target_server_version=%s\n' "$(
+            psql "$TARGET_DATABASE_URL" -X -At -v ON_ERROR_STOP=1 -c "SHOW server_version;"
+          )"
+          printf 'source_system_identifier=%s\n' "$source_system_identifier"
+          printf 'target_system_identifier=%s\n' "$target_system_identifier"
+
+          test "$source_system_identifier" != "$target_system_identifier"
+
+      - name: Create source authority canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+
+          psql "$SOURCE_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE wt04_canary_reader
+            NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS;
+
+          CREATE ROLE wt04_source_owner
+            NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT NOREPLICATION NOBYPASSRLS;
+
+          GRANT wt04_canary_reader TO wt04_source_owner;
+
+          REVOKE ALL ON SCHEMA public FROM PUBLIC;
+          GRANT USAGE ON SCHEMA public TO wt04_canary_reader;
+          GRANT USAGE, CREATE ON SCHEMA public TO wt04_source_owner;
+
+          CREATE TABLE public.wt04_authority_canary (
+            id integer PRIMARY KEY,
+            marker text NOT NULL
+          );
+
+          INSERT INTO public.wt04_authority_canary (id, marker)
+          VALUES
+            (1, 'alpha'),
+            (2, 'beta'),
+            (3, 'gamma');
+
+          ALTER TABLE public.wt04_authority_canary OWNER TO wt04_source_owner;
+          REVOKE ALL ON TABLE public.wt04_authority_canary FROM PUBLIC;
+          GRANT SELECT ON TABLE public.wt04_authority_canary TO wt04_canary_reader;
+
+          ALTER DEFAULT PRIVILEGES FOR ROLE wt04_source_owner IN SCHEMA public
+            GRANT SELECT ON TABLES TO wt04_canary_reader;
+
+          CREATE FUNCTION public.wt04_canary_echo(value integer)
+          RETURNS integer
+          LANGUAGE sql
+          IMMUTABLE
+          AS 'SELECT value + 7';
+
+          ALTER FUNCTION public.wt04_canary_echo(integer) OWNER TO wt04_source_owner;
+          REVOKE ALL ON FUNCTION public.wt04_canary_echo(integer) FROM PUBLIC;
+          GRANT EXECUTE ON FUNCTION public.wt04_canary_echo(integer) TO wt04_canary_reader;
+
+          ALTER TABLE public.wt04_authority_canary ENABLE ROW LEVEL SECURITY;
+          ALTER TABLE public.wt04_authority_canary FORCE ROW LEVEL SECURITY;
+
+          CREATE POLICY wt04_public_select
+            ON public.wt04_authority_canary
+            FOR SELECT
+            TO PUBLIC
+            USING (true);
+          SQL
+
+      - name: Capture source catalog evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+
+          psql "$SOURCE_DATABASE_URL" -X -At -v ON_ERROR_STOP=1 <<'SQL' | tee source-catalog.jsonl
+          SELECT json_build_object(
+            'category', 'server',
+            'server_version', current_setting('server_version')
+          );
+
+          SELECT json_build_object(
+            'category', 'roles',
+            'rows', COALESCE(
+              json_agg(
+                json_build_object(
+                  'rolname', rolname,
+                  'rolsuper', rolsuper,
+                  'rolinherit', rolinherit,
+                  'rolcreaterole', rolcreaterole,
+                  'rolcreatedb', rolcreatedb,
+                  'rolcanlogin', rolcanlogin,
+                  'rolreplication', rolreplication,
+                  'rolbypassrls', rolbypassrls
+                )
+                ORDER BY rolname
+              ),
+              '[]'::json
+            )
+          )
+          FROM pg_roles
+          WHERE rolname IN ('wt04_canary_reader', 'wt04_source_owner');
+
+          SELECT json_build_object(
+            'category', 'memberships',
+            'rows', COALESCE(
+              json_agg(
+                json_build_object(
+                  'role', role_role.rolname,
+                  'member', member_role.rolname,
+                  'admin_option', membership.admin_option
+                )
+                ORDER BY role_role.rolname, member_role.rolname
+              ),
+              '[]'::json
+            )
+          )
+          FROM pg_auth_members AS membership
+          JOIN pg_roles AS role_role ON role_role.oid = membership.roleid
+          JOIN pg_roles AS member_role ON member_role.oid = membership.member
+          WHERE role_role.rolname IN ('wt04_canary_reader', 'wt04_source_owner')
+             OR member_role.rolname IN ('wt04_canary_reader', 'wt04_source_owner');
+
+          SELECT json_build_object(
+            'category', 'schema',
+            'name', n.nspname,
+            'owner', pg_get_userbyid(n.nspowner),
+            'acl', COALESCE(n.nspacl::text, 'NULL')
+          )
+          FROM pg_namespace AS n
+          WHERE n.nspname = 'public';
+
+          SELECT json_build_object(
+            'category', 'table',
+            'name', c.relname,
+            'owner', pg_get_userbyid(c.relowner),
+            'acl', COALESCE(c.relacl::text, 'NULL'),
+            'rls_enabled', c.relrowsecurity,
+            'rls_forced', c.relforcerowsecurity
+          )
+          FROM pg_class AS c
+          JOIN pg_namespace AS n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public'
+            AND c.relname = 'wt04_authority_canary'
+            AND c.relkind = 'r';
+
+          SELECT json_build_object(
+            'category', 'function',
+            'identity', n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
+            'owner', pg_get_userbyid(p.proowner),
+            'acl', COALESCE(p.proacl::text, 'NULL')
+          )
+          FROM pg_proc AS p
+          JOIN pg_namespace AS n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public'
+            AND p.proname = 'wt04_canary_echo';
+
+          SELECT json_build_object(
+            'category', 'default_acl',
+            'rows', COALESCE(
+              json_agg(
+                json_build_object(
+                  'owner', owner_role.rolname,
+                  'schema', n.nspname,
+                  'object_type', d.defaclobjtype,
+                  'acl', d.defaclacl::text
+                )
+                ORDER BY owner_role.rolname, n.nspname, d.defaclobjtype
+              ),
+              '[]'::json
+            )
+          )
+          FROM pg_default_acl AS d
+          JOIN pg_roles AS owner_role ON owner_role.oid = d.defaclrole
+          LEFT JOIN pg_namespace AS n ON n.oid = d.defaclnamespace
+          WHERE owner_role.rolname = 'wt04_source_owner';
+
+          SELECT json_build_object(
+            'category', 'policy',
+            'rows', COALESCE(
+              json_agg(
+                json_build_object(
+                  'schemaname', schemaname,
+                  'tablename', tablename,
+                  'policyname', policyname,
+                  'permissive', permissive,
+                  'roles', roles,
+                  'cmd', cmd,
+                  'qual', qual,
+                  'with_check', with_check
+                )
+                ORDER BY policyname
+              ),
+              '[]'::json
+            )
+          )
+          FROM pg_policies
+          WHERE schemaname = 'public'
+            AND tablename = 'wt04_authority_canary';
+
+          SELECT json_build_object(
+            'category', 'table_data',
+            'rows', COALESCE(
+              json_agg(
+                json_build_object('id', id, 'marker', marker)
+                ORDER BY id
+              ),
+              '[]'::json
+            )
+          )
+          FROM public.wt04_authority_canary;
+          SQL
+
+      - name: Run unchanged canonical backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+          mkdir -p wt04-evidence
+
+          set +e
+          DATABASE_URL="$SOURCE_DATABASE_URL" \
+            bash ops/postgres_backup.sh wt04-evidence/source.dump \
+            > >(tee wt04-evidence/backup.stdout) \
+            2> >(tee wt04-evidence/backup.stderr >&2)
+          backup_exit=$?
+          set -e
+
+          printf 'backup_exit=%s\n' "$backup_exit"
+          if [[ -f wt04-evidence/source.dump ]]; then
+            printf 'backup_bytes=%s\n' "$(stat -c '%s' wt04-evidence/source.dump)"
+            printf 'backup_sha256=%s\n' "$(sha256sum wt04-evidence/source.dump | awk '{print $1}')"
+            pg_restore --list wt04-evidence/source.dump | tee wt04-evidence/restore-list.txt
+          else
+            printf 'backup_bytes=0\n'
+            printf 'backup_sha256=ABSENT\n'
+          fi
+
+          test "$backup_exit" -eq 0
+
+      - name: Prove target has no source canary roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+
+          psql "$TARGET_DATABASE_URL" -X -At -v ON_ERROR_STOP=1 <<'SQL' | tee wt04-evidence/target-prerestore.jsonl
+          SELECT json_build_object(
+            'category', 'target_pre_restore_roles',
+            'rows', COALESCE(
+              json_agg(rolname ORDER BY rolname),
+              '[]'::json
+            )
+          )
+          FROM pg_roles
+          WHERE rolname IN ('wt04_canary_reader', 'wt04_source_owner');
+          SQL
+
+          target_role_count="$(
+            psql "$TARGET_DATABASE_URL" -X -At -v ON_ERROR_STOP=1 \
+              -c "SELECT count(*) FROM pg_roles WHERE rolname IN ('wt04_canary_reader', 'wt04_source_owner');"
+          )"
+          printf 'target_pre_restore_canary_role_count=%s\n' "$target_role_count"
+          test "$target_role_count" = "0"
+
+      - name: Run unchanged canonical restore and preserve failure evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+
+          set +e
+          RESTORE_DATABASE_URL="$TARGET_DATABASE_URL" \
+          CONFIRM_RESTORE=RESTORE_STRANGERTALKS \
+            bash ops/postgres_restore.sh wt04-evidence/source.dump \
+            > >(tee wt04-evidence/restore.stdout) \
+            2> >(tee wt04-evidence/restore.stderr >&2)
+          restore_exit=$?
+          set -e
+
+          printf '%s\n' "$restore_exit" > wt04-evidence/restore.exit
+          printf 'restore_exit=%s\n' "$restore_exit"
+
+      - name: Capture target catalog evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="/usr/lib/postgresql/17/bin:$PATH"
+
+          psql "$TARGET_DATABASE_URL" -X -At -v ON_ERROR_STOP=1 <<'SQL' | tee wt04-evidence/target-catalog.jsonl
+          SELECT json_build_object(
+            'category', 'server',
+            'server_version', current_setting('server_version')
+          );
+
+          SELECT json_build_object(
+            'category', 'roles',
+            'rows', COALESCE(
+              json_agg(
+                json_build_object(
+                  'rolname', rolname,
+                  'rolsuper', rolsuper,
+                  'rolinherit', rolinherit,
+                  'rolcreaterole', rolcreaterole,
+                  'rolcreatedb', rolcreatedb,
+                  'rolcanlogin', rolcanlogin,
+                  'rolreplication', rolreplication,
+                  'rolbypassrls', rolbypassrls
+                )
+                ORDER BY rolname
+              ),
+              '[]'::json
+            )
+          )
+          FROM pg_roles
+          WHERE rolname IN ('wt04_canary_reader', 'wt04_source_owner');
+
+          SELECT json_build_object(
+            'category', 'memberships',
+            'rows', COALESCE(
+              json_agg(
+                json_build_object(
+                  'role', role_role.rolname,
+                  'member', member_role.rolname,
+                  'admin_option', membership.admin_option
+                )
+                ORDER BY role_role.rolname, member_role.rolname
+              ),
+              '[]'::json
+            )
+          )
+          FROM pg_auth_members AS membership
+          JOIN pg_roles AS role_role ON role_role.oid = membership.roleid
+          JOIN pg_roles AS member_role ON member_role.oid = membership.member
+          WHERE role_role.rolname IN ('wt04_canary_reader', 'wt04_source_owner')
+             OR member_role.rolname IN ('wt04_canary_reader', 'wt04_source_owner');
+
+          SELECT json_build_object(
+            'category', 'schema',
+            'name', n.nspname,
+            'owner', pg_get_userbyid(n.nspowner),
+            'acl', COALESCE(n.nspacl::text, 'NULL')
+          )
+          FROM pg_namespace AS n
+          WHERE n.nspname = 'public';
+
+          SELECT json_build_object(
+            'category', 'table',
+            'name', c.relname,
+            'owner', pg_get_userbyid(c.relowner),
+            'acl', COALESCE(c.relacl::text, 'NULL'),
+            'rls_enabled', c.relrowsecurity,
+            'rls_forced', c.relforcerowsecurity
+          )
+          FROM pg_class AS c
+          JOIN pg_namespace AS n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'public'
+            AND c.relname = 'wt04_authority_canary'
+            AND c.relkind = 'r';
+
+          SELECT json_build_object(
+            'category', 'function',
+            'identity', n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')',
+            'owner', pg_get_userbyid(p.proowner),
+            'acl', COALESCE(p.proacl::text, 'NULL')
+          )
+          FROM pg_proc AS p
+          JOIN pg_namespace AS n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'public'
+            AND p.proname = 'wt04_canary_echo';
+
+          SELECT json_build_object(
+            'category', 'default_acl',
+            'rows', COALESCE(
+              json_agg(
+                json_build_object(
+                  'owner', owner_role.rolname,
+                  'schema', n.nspname,
+                  'object_type', d.defaclobjtype,
+                  'acl', d.defaclacl::text
+                )
+                ORDER BY owner_role.rolname, n.nspname, d.defaclobjtype
+              ),
+              '[]'::json
+            )
+          )
+          FROM pg_default_acl AS d
+          JOIN pg_roles AS owner_role ON owner_role.oid = d.defaclrole
+          LEFT JOIN pg_namespace AS n ON n.oid = d.defaclnamespace
+          WHERE owner_role.rolname = 'wt04_source_owner';
+
+          SELECT json_build_object(
+            'category', 'policy',
+            'rows', COALESCE(
+              json_agg(
+                json_build_object(
+                  'schemaname', schemaname,
+                  'tablename', tablename,
+                  'policyname', policyname,
+                  'permissive', permissive,
+                  'roles', roles,
+                  'cmd', cmd,
+                  'qual', qual,
+                  'with_check', with_check
+                )
+                ORDER BY policyname
+              ),
+              '[]'::json
+            )
+          )
+          FROM pg_policies
+          WHERE schemaname = 'public'
+            AND tablename = 'wt04_authority_canary';
+
+          SELECT CASE
+            WHEN to_regclass('public.wt04_authority_canary') IS NULL THEN 'false'
+            ELSE 'true'
+          END AS wt04_table_exists \gset
+
+          \if :wt04_table_exists
+          SELECT json_build_object(
+            'category', 'table_data',
+            'table_present', true,
+            'rows', COALESCE(
+              json_agg(
+                json_build_object('id', id, 'marker', marker)
+                ORDER BY id
+              ),
+              '[]'::json
+            )
+          )
+          FROM public.wt04_authority_canary;
+          \else
+          SELECT json_build_object(
+            'category', 'table_data',
+            'table_present', false,
+            'rows', '[]'::json
+          );
+          \endif
+          SQL
+
+      - name: Emit normalized evidence summary
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo '=== SOURCE CATALOG ==='
+          cat source-catalog.jsonl 2>/dev/null || true
+          echo '=== BACKUP ==='
+          cat wt04-evidence/backup.stdout 2>/dev/null || true
+          cat wt04-evidence/backup.stderr 2>/dev/null || true
+          if [[ -f wt04-evidence/source.dump ]]; then
+            printf 'backup_bytes=%s\n' "$(stat -c '%s' wt04-evidence/source.dump)"
+            printf 'backup_sha256=%s\n' "$(sha256sum wt04-evidence/source.dump | awk '{print $1}')"
+          fi
+          echo '=== PG_RESTORE LIST ==='
+          cat wt04-evidence/restore-list.txt 2>/dev/null || true
+          echo '=== TARGET PRE-RESTORE ==='
+          cat wt04-evidence/target-prerestore.jsonl 2>/dev/null || true
+          echo '=== RESTORE ==='
+          cat wt04-evidence/restore.stdout 2>/dev/null || true
+          cat wt04-evidence/restore.stderr 2>/dev/null || true
+          printf 'restore_exit=%s\n' "$(cat wt04-evidence/restore.exit 2>/dev/null || printf 'MISSING')"
+          echo '=== TARGET CATALOG ==='
+          cat wt04-evidence/target-catalog.jsonl 2>/dev/null || true
+
+      - name: Preserve restore failure as workflow failure
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f wt04-evidence/restore.exit
+          restore_exit="$(cat wt04-evidence/restore.exit)"
+          printf 'restore_exit=%s\n' "$restore_exit"
+
+          if [[ "$restore_exit" -ne 0 ]]; then
+            echo "WT04_RESULT=RESTORE_FAILED_WITH_EVIDENCE"
+            exit "$restore_exit"
+          fi
+
+          echo "WT04_RESULT=RESTORE_COMPLETED_WITH_EVIDENCE"
