@@ -45,12 +45,21 @@ jobs:
       WT05_FROZEN_TREE: 72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a
 
     steps:
+      - name: Checkout diagnostic instrument
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Guard execution and stage exact diagnostic helpers
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_EVENT_NAME" = "push"
           test "$GITHUB_REF" = "refs/heads/diagnostic/wt05-same-account-rebind-r1"
+          mkdir -p "$RUNNER_TEMP/wt05-same-account-rebind-evidence"
+          printf 'WT05_EVIDENCE_DIR=%s\n' "$RUNNER_TEMP/wt05-same-account-rebind-evidence" >> "$GITHUB_ENV"
+          printf 'WT05_PROFILE_DIR=%s\n' "$RUNNER_TEMP/wt05-same-account-rebind-profile" >> "$GITHUB_ENV"
+          printf 'WT05_NEG_PROFILE_DIR=%s\n' "$RUNNER_TEMP/wt05-same-account-rebind-negative-profile" >> "$GITHUB_ENV"
           cp .github/diagnostics/wt05_3d_provider.exs "$RUNNER_TEMP/wt05_3d_provider.exs"
           cp .github/diagnostics/wt05_3d_browser.mjs "$RUNNER_TEMP/wt05_3d_browser.mjs"
           node --check "$RUNNER_TEMP/wt05_3d_browser.mjs"
@@ -106,15 +115,6 @@ jobs:
           mix ecto.create --quiet
           mix ecto.migrate --quiet
 
-      - name: Create evidence directory
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/wt05-same-account-rebind-evidence"
-          printf 'WT05_EVIDENCE_DIR=%s\n' "$RUNNER_TEMP/wt05-same-account-rebind-evidence" >> "$GITHUB_ENV"
-          printf 'WT05_PROFILE_DIR=%s\n' "$RUNNER_TEMP/wt05-same-account-rebind-profile" >> "$GITHUB_ENV"
-          printf 'WT05_NEG_PROFILE_DIR=%s\n' "$RUNNER_TEMP/wt05-same-account-rebind-negative-profile" >> "$GITHUB_ENV"
-
       - name: Start frozen Phoenix with disposable same-account provider
         shell: bash
         run: |
@@ -159,7 +159,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          if [ -f "$WT05_EVIDENCE_DIR/phoenix.pid" ]; then
+          if [ -n "${WT05_EVIDENCE_DIR:-}" ] && [ -f "$WT05_EVIDENCE_DIR/phoenix.pid" ]; then
             kill "$(cat "$WT05_EVIDENCE_DIR/phoenix.pid")" 2>/dev/null || true
           fi
 
@@ -168,7 +168,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wt05-delete-all-same-account-rebind-proof-${{ github.run_id }}
-          path: ${{ env.WT05_EVIDENCE_DIR }}
+          path: ${{ runner.temp }}/wt05-same-account-rebind-evidence
           if-no-files-found: warn
           retention-days: 7
 
