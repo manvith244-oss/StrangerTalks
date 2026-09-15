@@ -1,0 +1,184 @@
+name: WT-05 Same-Account Rebind Diagnostic R1
+
+on:
+  push:
+    branches:
+      - 'diagnostic/wt05-same-account-rebind-r1'
+    paths:
+      - '.github/workflows/wt05-same-account-rebind-r1.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wt05-same-account-rebind-r1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  same-account-rebind-proof:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
+      WT05_FROZEN_SHA: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+      WT05_FROZEN_TREE: 72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a
+
+    steps:
+      - name: Guard execution and stage exact diagnostic helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = "push"
+          test "$GITHUB_REF" = "refs/heads/diagnostic/wt05-same-account-rebind-r1"
+          cp .github/diagnostics/wt05_3d_provider.exs "$RUNNER_TEMP/wt05_3d_provider.exs"
+          cp .github/diagnostics/wt05_3d_browser.mjs "$RUNNER_TEMP/wt05_3d_browser.mjs"
+          node --check "$RUNNER_TEMP/wt05_3d_browser.mjs"
+          sha256sum "$RUNNER_TEMP/wt05_3d_provider.exs" "$RUNNER_TEMP/wt05_3d_browser.mjs"
+
+      - name: Checkout frozen canonical product generation
+        uses: actions/checkout@v4
+        with:
+          ref: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          fetch-depth: 1
+
+      - name: Prove frozen product identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$WT05_FROZEN_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$WT05_FROZEN_TREE"
+          printf 'WT05_PRODUCT_COMMIT=%s\n' "$(git rev-parse HEAD)"
+          printf 'WT05_PRODUCT_TREE=%s\n' "$(git rev-parse HEAD^{tree})"
+          printf 'WT05_APP_BLOB=%s\n' "$(git rev-parse HEAD:priv/static/assets/app.js)"
+          printf 'WT05_SYNC_BLOB=%s\n' "$(git rev-parse HEAD:priv/static/assets/encrypted_sync.mjs)"
+          printf 'WT05_LOCAL_BLOB=%s\n' "$(git rev-parse HEAD:priv/static/assets/local_data.mjs)"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Validate provider syntax and install frozen dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          elixir -e 'Code.string_to_quoted!(File.read!(hd(System.argv())))' "$RUNNER_TEMP/wt05_3d_provider.exs"
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          test "$(node -p "require('./node_modules/playwright/package.json').version")" = "1.62.1"
+          npx playwright install --with-deps chromium
+
+      - name: Prepare disposable PostgreSQL database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Create evidence directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/wt05-same-account-rebind-evidence"
+          printf 'WT05_EVIDENCE_DIR=%s\n' "$RUNNER_TEMP/wt05-same-account-rebind-evidence" >> "$GITHUB_ENV"
+          printf 'WT05_PROFILE_DIR=%s\n' "$RUNNER_TEMP/wt05-same-account-rebind-profile" >> "$GITHUB_ENV"
+          printf 'WT05_NEG_PROFILE_DIR=%s\n' "$RUNNER_TEMP/wt05-same-account-rebind-negative-profile" >> "$GITHUB_ENV"
+
+      - name: Start frozen Phoenix with disposable same-account provider
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start "$RUNNER_TEMP/wt05_3d_provider.exs" > "$WT05_EVIDENCE_DIR/phoenix.log" 2>&1 &
+          echo $! > "$WT05_EVIDENCE_DIR/phoenix.pid"
+
+          ready=0
+          for attempt in $(seq 1 60); do
+            if ! kill -0 "$(cat "$WT05_EVIDENCE_DIR/phoenix.pid")" 2>/dev/null; then
+              cat "$WT05_EVIDENCE_DIR/phoenix.log"
+              exit 1
+            fi
+            if curl --silent --fail "$STRANGERTALKS_BROWSER_BASE_URL/health/ready" > "$WT05_EVIDENCE_DIR/health-ready.json"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+
+          printf '{"kind":"runtime","commit":"%s","tree":"%s","postgres":"16","node":"%s","playwright":"%s","elixir":"%s","otp":"%s","provider_sha256":"%s","browser_sha256":"%s","health_ready":true}\n' \
+            "$WT05_FROZEN_SHA" \
+            "$WT05_FROZEN_TREE" \
+            "$(node --version)" \
+            "$(npx playwright --version | awk '{print $2}')" \
+            "$(elixir -e 'IO.write(System.version())')" \
+            "$(elixir -e 'IO.write(System.otp_release())')" \
+            "$(sha256sum "$RUNNER_TEMP/wt05_3d_provider.exs" | awk '{print $1}')" \
+            "$(sha256sum "$RUNNER_TEMP/wt05_3d_browser.mjs" | awk '{print $1}')" \
+            > "$WT05_EVIDENCE_DIR/runtime.jsonl"
+
+      - name: Execute one same-account rebind specimen
+        shell: bash
+        run: |
+          set -uo pipefail
+          status=0
+          node "$RUNNER_TEMP/wt05_3d_browser.mjs" 2>&1 | tee "$WT05_EVIDENCE_DIR/browser.log" || status=$?
+          exit "$status"
+
+      - name: Stop Phoenix
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$WT05_EVIDENCE_DIR/phoenix.pid" ]; then
+            kill "$(cat "$WT05_EVIDENCE_DIR/phoenix.pid")" 2>/dev/null || true
+          fi
+
+      - name: Upload WT-05 same-account evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt05-delete-all-same-account-rebind-proof-${{ github.run_id }}
+          path: ${{ env.WT05_EVIDENCE_DIR }}
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Prove frozen checkout stayed pristine
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$WT05_FROZEN_SHA"
+          test "$(git rev-parse HEAD^{tree})" = "$WT05_FROZEN_TREE"
+          git diff --check
+          git diff --exit-code -- .
+          test -z "$(git status --porcelain)"
