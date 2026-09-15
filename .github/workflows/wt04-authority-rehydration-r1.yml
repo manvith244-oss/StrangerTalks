@@ -1,0 +1,423 @@
+name: WT-04 Authority Rehydration Replay Proof
+
+on:
+  push:
+    tags:
+      - "diagnostic/wt04-authority-rehydration-r1-*"
+
+permissions:
+  contents: read
+
+jobs:
+  authority-rehydration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      FROZEN_COMMIT: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+      FROZEN_TREE: 72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a
+      BACKUP_BLOB: a2a03ec923bac416678ceb9c49cf8a2c3768dc02
+      RESTORE_BLOB: cf854a3cca91eb1b5a808c24f8c46c7c56f9de96
+      C1_BLOB: c051eb4f56ffb117eeb02955497186c382dd7d75
+      RPC_DEFAULTS_BLOB: da747b6e62854984de01ca3654793ba92e06b711
+      SCHEMA_BOUNDARY_BLOB: 2d7eb44599681162d75e3106ebb8c3dbe076ad9e
+      APP_ROLE: wt04_app_owner
+      SOURCE_DB: wt04_source
+      TARGET_DB: wt04_target
+
+    steps:
+      - name: Checkout frozen WT-04 generation
+        uses: actions/checkout@v4
+        with:
+          ref: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
+          fetch-depth: 1
+
+      - name: Guard frozen identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$GITHUB_REF" in
+            refs/tags/diagnostic/wt04-authority-rehydration-r1-*) ;;
+            *) echo "unexpected trigger: $GITHUB_REF" >&2; exit 2 ;;
+          esac
+          PROOF_DIR="$RUNNER_TEMP/wt04-authority-rehydration"
+          mkdir -p "$PROOF_DIR"
+          printf 'PROOF_DIR=%s\n' "$PROOF_DIR" >> "$GITHUB_ENV"
+          test "$(git rev-parse HEAD^{commit})" = "$FROZEN_COMMIT"
+          test "$(git rev-parse HEAD^{tree})" = "$FROZEN_TREE"
+          test "$(git hash-object ops/postgres_backup.sh)" = "$BACKUP_BLOB"
+          test "$(git hash-object ops/postgres_restore.sh)" = "$RESTORE_BLOB"
+          test "$(git hash-object priv/repo/migrations/20260909183500_secure_supabase_public_schema_c1.exs)" = "$C1_BLOB"
+          test "$(git hash-object priv/repo/migrations/20260910110008_harden_public_rpc_defaults_rpr.exs)" = "$RPC_DEFAULTS_BLOB"
+          test "$(git hash-object priv/repo/migrations/20260910192317_close_public_schema_data_api_boundary_rpr.exs)" = "$SCHEMA_BOUNDARY_BLOB"
+          {
+            echo "workflow_event_sha=$GITHUB_SHA"
+            echo "frozen_commit=$(git rev-parse HEAD^{commit})"
+            echo "frozen_tree=$(git rev-parse HEAD^{tree})"
+            echo "backup_blob=$(git hash-object ops/postgres_backup.sh)"
+            echo "restore_blob=$(git hash-object ops/postgres_restore.sh)"
+            echo "c1_blob=$C1_BLOB"
+            echo "rpc_defaults_blob=$RPC_DEFAULTS_BLOB"
+            echo "schema_boundary_blob=$SCHEMA_BOUNDARY_BLOB"
+          } > "$PROOF_DIR/canonical_identities.txt"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Resolve frozen dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Measure restore and authority replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC=wt04-source-pg
+          DST=wt04-target-pg
+          DUMP="$RUNNER_TEMP/wt04-source.dump"
+
+          wait_pg() {
+            for _ in $(seq 1 60); do
+              docker exec "$1" pg_isready -U postgres -d postgres >/dev/null 2>&1 && return 0
+              sleep 1
+            done
+            echo "postgres not ready: $1" >&2
+            return 1
+          }
+
+          start_cluster() {
+            local c=$1 db=$2
+            docker run -d --name "$c" -e POSTGRES_HOST_AUTH_METHOD=trust -p 127.0.0.1:5432:5432 postgres:17 >/dev/null
+            wait_pg "$c"
+            docker exec -i "$c" psql -X -v ON_ERROR_STOP=1 -U postgres -d postgres <<SQL
+          CREATE ROLE $APP_ROLE LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          CREATE ROLE anon NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          CREATE ROLE authenticated NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          CREATE ROLE service_role NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+          CREATE DATABASE $db OWNER $APP_ROLE;
+          SQL
+          }
+
+          snapshot() {
+            local c=$1 db=$2 label=$3 out="$PROOF_DIR/$3.snapshot.tsv"
+            docker exec -i "$c" psql -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -U "$APP_ROLE" -d "$db" > "$out" <<'SQL'
+          WITH api(role_name) AS (VALUES ('anon'),('authenticated'),('service_role')),
+          table_priv(privilege_name) AS (VALUES ('SELECT'),('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE'),('REFERENCES'),('TRIGGER')),
+          seq_priv(privilege_name) AS (VALUES ('USAGE'),('SELECT'),('UPDATE')),
+          pub_tables AS (
+            SELECT c.oid,c.relname,c.relowner,c.relacl,c.relrowsecurity,c.relforcerowsecurity
+            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname='public' AND c.relkind IN ('r','p')
+          ),
+          pub_sequences AS (
+            SELECT c.oid,c.relname,c.relowner,c.relacl
+            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname='public' AND c.relkind='S'
+          ),
+          pub_functions AS (
+            SELECT p.oid,p.proname,p.proowner,p.proacl,pg_get_function_identity_arguments(p.oid) AS args
+            FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+            WHERE n.nspname='public'
+          ), rows AS (
+            SELECT 'database_owner'::text cat,current_database() obj,''::text principal,'owner'::text attr,pg_get_userbyid(datdba)::text val
+            FROM pg_database WHERE datname=current_database()
+            UNION ALL SELECT 'schema','public','','owner',pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname='public'
+            UNION ALL SELECT 'schema','public','','acl',COALESCE(nspacl::text,'NULL') FROM pg_namespace WHERE nspname='public'
+            UNION ALL SELECT 'schema_public_effective','public','PUBLIC','USAGE',EXISTS(
+              SELECT 1 FROM pg_namespace n,LATERAL aclexplode(COALESCE(n.nspacl,acldefault('n',n.nspowner))) a
+              WHERE n.nspname='public' AND a.grantee=0 AND a.privilege_type='USAGE')::text
+            UNION ALL SELECT 'schema_public_effective','public','PUBLIC','CREATE',EXISTS(
+              SELECT 1 FROM pg_namespace n,LATERAL aclexplode(COALESCE(n.nspacl,acldefault('n',n.nspowner))) a
+              WHERE n.nspname='public' AND a.grantee=0 AND a.privilege_type='CREATE')::text
+            UNION ALL SELECT 'table_owner',relname,'','owner',pg_get_userbyid(relowner) FROM pub_tables
+            UNION ALL SELECT 'table_acl',relname,'','acl',COALESCE(relacl::text,'NULL') FROM pub_tables
+            UNION ALL SELECT 'sequence_owner',relname,'','owner',pg_get_userbyid(relowner) FROM pub_sequences
+            UNION ALL SELECT 'sequence_acl',relname,'','acl',COALESCE(relacl::text,'NULL') FROM pub_sequences
+            UNION ALL SELECT 'function_owner',proname||'('||args||')','','owner',pg_get_userbyid(proowner) FROM pub_functions
+            UNION ALL SELECT 'function_acl',proname||'('||args||')','','acl',COALESCE(proacl::text,'NULL') FROM pub_functions
+            UNION ALL SELECT 'function_public_effective',proname||'('||args||')','PUBLIC','EXECUTE',EXISTS(
+              SELECT 1 FROM aclexplode(COALESCE(proacl,acldefault('f',proowner))) a WHERE a.grantee=0 AND a.privilege_type='EXECUTE')::text FROM pub_functions
+            UNION ALL SELECT 'default_privilege',COALESCE(n.nspname,'<all_schemas>')||':'||d.defaclobjtype,pg_get_userbyid(d.defaclrole),'acl',d.defaclacl::text
+              FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid=d.defaclnamespace
+            UNION ALL SELECT 'api_schema_effective','public',a.role_name,p,has_schema_privilege(a.role_name,'public',p)::text
+              FROM api a CROSS JOIN (VALUES ('USAGE'),('CREATE')) x(p)
+            UNION ALL SELECT 'api_table_effective',t.relname,a.role_name,p.privilege_name,has_table_privilege(a.role_name,t.oid,p.privilege_name)::text
+              FROM api a CROSS JOIN pub_tables t CROSS JOIN table_priv p
+            UNION ALL SELECT 'api_sequence_effective',s.relname,a.role_name,p.privilege_name,has_sequence_privilege(a.role_name,s.oid,p.privilege_name)::text
+              FROM api a CROSS JOIN pub_sequences s CROSS JOIN seq_priv p
+            UNION ALL SELECT 'api_function_effective',f.proname||'('||f.args||')',a.role_name,'EXECUTE',has_function_privilege(a.role_name,f.oid,'EXECUTE')::text
+              FROM api a CROSS JOIN pub_functions f
+            UNION ALL SELECT 'app_owner_effective','public','wt04_app_owner','USAGE',has_schema_privilege('wt04_app_owner','public','USAGE')::text
+            UNION ALL SELECT 'app_owner_effective','public','wt04_app_owner','CREATE',has_schema_privilege('wt04_app_owner','public','CREATE')::text
+            UNION ALL SELECT 'app_owner_effective',t.relname,'wt04_app_owner','TABLE_ALL',(
+              has_table_privilege('wt04_app_owner',t.oid,'SELECT') AND has_table_privilege('wt04_app_owner',t.oid,'INSERT') AND
+              has_table_privilege('wt04_app_owner',t.oid,'UPDATE') AND has_table_privilege('wt04_app_owner',t.oid,'DELETE') AND
+              has_table_privilege('wt04_app_owner',t.oid,'TRUNCATE') AND has_table_privilege('wt04_app_owner',t.oid,'REFERENCES') AND
+              has_table_privilege('wt04_app_owner',t.oid,'TRIGGER'))::text FROM pub_tables t
+            UNION ALL SELECT 'app_owner_effective',s.relname,'wt04_app_owner','SEQUENCE_ALL',(
+              has_sequence_privilege('wt04_app_owner',s.oid,'USAGE') AND has_sequence_privilege('wt04_app_owner',s.oid,'SELECT') AND
+              has_sequence_privilege('wt04_app_owner',s.oid,'UPDATE'))::text FROM pub_sequences s
+            UNION ALL SELECT 'app_owner_effective',f.proname||'('||f.args||')','wt04_app_owner','EXECUTE',has_function_privilege('wt04_app_owner',f.oid,'EXECUTE')::text FROM pub_functions f
+            UNION ALL SELECT 'rls',relname,'','enabled',relrowsecurity::text FROM pub_tables
+            UNION ALL SELECT 'rls',relname,'','forced',relforcerowsecurity::text FROM pub_tables
+            UNION ALL SELECT 'policy',tablename,policyname,cmd,concat_ws('|',permissive,roles::text,COALESCE(qual,'NULL'),COALESCE(with_check,'NULL')) FROM pg_policies WHERE schemaname='public'
+            UNION ALL SELECT 'schema_migration',version::text,'','applied','true' FROM public.schema_migrations
+          )
+          SELECT cat,obj,principal,attr,val FROM rows ORDER BY cat,obj,principal,attr,val;
+          SQL
+          }
+
+          assert_source() {
+            docker exec -i "$1" psql -X -v ON_ERROR_STOP=1 -U "$APP_ROLE" -d "$2" <<'SQL'
+          DO $$
+          DECLARE missing integer;
+          BEGIN
+            IF current_user <> 'wt04_app_owner' OR (SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database()) <> 'wt04_app_owner' THEN
+              RAISE EXCEPTION 'invalid source owner identity';
+            END IF;
+            SELECT count(*) INTO missing FROM (VALUES
+              ('account_sessions'),('account_sync_states'),('analytics_records'),('boundary_blocks'),('composer_grants'),('conversations'),
+              ('google_account_links'),('google_oauth_attempts'),('learning_records'),('matches'),('memories'),('message_reactions'),('messages'),
+              ('participant_pairing_reservations'),('participants'),('private_accounts'),('queue_states'),('reflections'),('relationship_consents'),
+              ('relationship_reconnection_intents'),('relationships'),('report_safety_media'),('reports'),('safety_events'),('safety_reviews'),
+              ('source_rate_limits'),('schema_migrations')) x(name)
+            WHERE to_regclass(format('public.%I',name)) IS NULL;
+            IF missing <> 0 THEN RAISE EXCEPTION 'missing protected source objects: %',missing; END IF;
+            IF EXISTS (SELECT 1 FROM (VALUES ('anon'),('authenticated'),('service_role')) r(role_name)
+              WHERE has_schema_privilege(role_name,'public','USAGE') OR has_schema_privilege(role_name,'public','CREATE')) THEN
+              RAISE EXCEPTION 'source API schema boundary open';
+            END IF;
+            IF EXISTS (
+              SELECT 1 FROM (VALUES ('anon'),('authenticated'),('service_role')) r(role_name)
+              CROSS JOIN (VALUES
+                ('account_sessions'),('account_sync_states'),('analytics_records'),('boundary_blocks'),('composer_grants'),('conversations'),
+                ('google_account_links'),('google_oauth_attempts'),('learning_records'),('matches'),('memories'),('message_reactions'),('messages'),
+                ('participant_pairing_reservations'),('participants'),('private_accounts'),('queue_states'),('reflections'),('relationship_consents'),
+                ('relationship_reconnection_intents'),('relationships'),('report_safety_media'),('reports'),('safety_events'),('safety_reviews'),
+                ('source_rate_limits'),('schema_migrations')) t(name)
+              WHERE has_table_privilege(role_name,format('public.%I',name),'SELECT') OR has_table_privilege(role_name,format('public.%I',name),'INSERT')
+                 OR has_table_privilege(role_name,format('public.%I',name),'UPDATE') OR has_table_privilege(role_name,format('public.%I',name),'DELETE')
+                 OR has_table_privilege(role_name,format('public.%I',name),'TRUNCATE') OR has_table_privilege(role_name,format('public.%I',name),'REFERENCES')
+                 OR has_table_privilege(role_name,format('public.%I',name),'TRIGGER')) THEN
+              RAISE EXCEPTION 'source API protected-table boundary open';
+            END IF;
+            IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace CROSS JOIN (VALUES ('anon'),('authenticated'),('service_role')) r(role_name)
+              WHERE n.nspname='public' AND has_function_privilege(role_name,p.oid,'EXECUTE')) THEN
+              RAISE EXCEPTION 'source API function boundary open';
+            END IF;
+            IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace,
+              LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
+              WHERE n.nspname='public' AND a.grantee=0 AND a.privilege_type='EXECUTE') THEN
+              RAISE EXCEPTION 'source PUBLIC function boundary open';
+            END IF;
+            IF EXISTS (SELECT 1 FROM pg_namespace n,LATERAL aclexplode(COALESCE(n.nspacl,acldefault('n',n.nspowner))) a
+              WHERE n.nspname='public' AND a.grantee=0 AND a.privilege_type IN ('USAGE','CREATE')) THEN
+              RAISE EXCEPTION 'source PUBLIC schema boundary open';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version=20260909183500)
+              OR NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version=20260910110008)
+              OR NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version=20260910192317) THEN
+              RAISE EXCEPTION 'security migration history incomplete';
+            END IF;
+          END $$;
+          SQL
+          }
+
+          write_replay() {
+            cat > "$PROOF_DIR/authority_replay.sql" <<'SQL'
+          \set ON_ERROR_STOP on
+          -- 20260910192317_close_public_schema_data_api_boundary_rpr.exs @ 2d7eb44599681162d75e3106ebb8c3dbe076ad9e
+          REVOKE ALL PRIVILEGES ON SCHEMA public FROM PUBLIC;
+          DO $$ DECLARE r text; BEGIN FOREACH r IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname=r) THEN EXECUTE format('REVOKE ALL PRIVILEGES ON SCHEMA public FROM %I',r); END IF;
+          END LOOP; END $$;
+
+          -- 20260909183500_secure_supabase_public_schema_c1.exs @ c051eb4f56ffb117eeb02955497186c382dd7d75
+          DO $$ DECLARE r text; t text; protected text[] := ARRAY[
+            'account_sessions','account_sync_states','analytics_records','boundary_blocks','composer_grants','conversations',
+            'google_account_links','google_oauth_attempts','learning_records','matches','memories','message_reactions','messages',
+            'participant_pairing_reservations','participants','private_accounts','queue_states','reflections','relationship_consents',
+            'relationship_reconnection_intents','relationships','report_safety_media','reports','safety_events','safety_reviews',
+            'source_rate_limits','schema_migrations'];
+          BEGIN FOREACH r IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname=r) THEN
+              FOREACH t IN ARRAY protected LOOP
+                IF to_regclass(format('public.%I',t)) IS NOT NULL THEN EXECUTE format('REVOKE ALL PRIVILEGES ON TABLE public.%I FROM %I',t,r); END IF;
+              END LOOP;
+              EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES FROM %I',current_user,r);
+              EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE USAGE, SELECT, UPDATE ON SEQUENCES FROM %I',current_user,r);
+            END IF;
+          END LOOP; END $$;
+
+          -- 20260910110008_harden_public_rpc_defaults_rpr.exs @ da747b6e62854984de01ca3654793ba92e06b711
+          REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
+          DO $$ DECLARE r text; BEGIN
+            EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',current_user);
+            FOREACH r IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+              IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname=r) THEN
+                EXECUTE format('REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM %I',r);
+                EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I REVOKE EXECUTE ON FUNCTIONS FROM %I',current_user,r);
+              END IF;
+            END LOOP;
+          END $$;
+
+          -- 20260910192317 exact schema-scoped function-default closure
+          DO $$ DECLARE r text; BEGIN
+            EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC',current_user);
+            FOREACH r IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+              IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname=r) THEN
+                EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM %I',current_user,r);
+              END IF;
+            END LOOP;
+          END $$;
+          SQL
+            cat > "$PROOF_DIR/replay_traceability.txt" <<EOF
+          c1=$C1_BLOB protected tables + table defaults + sequence defaults
+          rpc_defaults=$RPC_DEFAULTS_BLOB existing function EXECUTE + global function defaults
+          schema_boundary=$SCHEMA_BOUNDARY_BLOB schema boundary + schema-scoped function defaults
+          ownership_replay=NONE
+          grants=NONE
+          EOF
+          }
+
+          future_proof() {
+            docker exec -i "$1" psql -X -v ON_ERROR_STOP=1 -U "$APP_ROLE" -d "$2" <<'SQL'
+          CREATE TABLE public.wt04_future_table_probe(id bigint);
+          CREATE SEQUENCE public.wt04_future_sequence_probe;
+          CREATE FUNCTION public.wt04_future_function_probe() RETURNS integer LANGUAGE sql AS 'SELECT 1';
+          SQL
+            docker exec -i "$1" psql -X -A -t -F $'\t' -v ON_ERROR_STOP=1 -U "$APP_ROLE" -d "$2" > "$PROOF_DIR/future_object_proof.tsv" <<'SQL'
+          WITH api(role_name) AS (VALUES ('anon'),('authenticated'),('service_role'))
+          SELECT 'table_owner','wt04_app_owner',pg_get_userbyid(relowner) FROM pg_class WHERE oid='public.wt04_future_table_probe'::regclass
+          UNION ALL SELECT 'sequence_owner','wt04_app_owner',pg_get_userbyid(relowner) FROM pg_class WHERE oid='public.wt04_future_sequence_probe'::regclass
+          UNION ALL SELECT 'function_owner','wt04_app_owner',pg_get_userbyid(proowner) FROM pg_proc WHERE oid='public.wt04_future_function_probe()'::regprocedure
+          UNION ALL SELECT 'api_table_forbidden',role_name,(has_table_privilege(role_name,'public.wt04_future_table_probe','SELECT') OR has_table_privilege(role_name,'public.wt04_future_table_probe','INSERT') OR has_table_privilege(role_name,'public.wt04_future_table_probe','UPDATE') OR has_table_privilege(role_name,'public.wt04_future_table_probe','DELETE') OR has_table_privilege(role_name,'public.wt04_future_table_probe','TRUNCATE') OR has_table_privilege(role_name,'public.wt04_future_table_probe','REFERENCES') OR has_table_privilege(role_name,'public.wt04_future_table_probe','TRIGGER'))::text FROM api
+          UNION ALL SELECT 'api_sequence_forbidden',role_name,(has_sequence_privilege(role_name,'public.wt04_future_sequence_probe','USAGE') OR has_sequence_privilege(role_name,'public.wt04_future_sequence_probe','SELECT') OR has_sequence_privilege(role_name,'public.wt04_future_sequence_probe','UPDATE'))::text FROM api
+          UNION ALL SELECT 'api_function_forbidden',role_name,has_function_privilege(role_name,'public.wt04_future_function_probe()','EXECUTE')::text FROM api
+          UNION ALL SELECT 'public_table_forbidden','PUBLIC',EXISTS(SELECT 1 FROM pg_class c,LATERAL aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) a WHERE c.oid='public.wt04_future_table_probe'::regclass AND a.grantee=0 AND a.privilege_type IN ('SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'))::text
+          UNION ALL SELECT 'public_sequence_forbidden','PUBLIC',EXISTS(SELECT 1 FROM pg_class c,LATERAL aclexplode(COALESCE(c.relacl,acldefault('S',c.relowner))) a WHERE c.oid='public.wt04_future_sequence_probe'::regclass AND a.grantee=0 AND a.privilege_type IN ('USAGE','SELECT','UPDATE'))::text
+          UNION ALL SELECT 'public_function_forbidden','PUBLIC',EXISTS(SELECT 1 FROM pg_proc p,LATERAL aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a WHERE p.oid='public.wt04_future_function_probe()'::regprocedure AND a.grantee=0 AND a.privilege_type='EXECUTE')::text
+          ORDER BY 1,2,3;
+          SQL
+            docker exec -i "$1" psql -X -v ON_ERROR_STOP=1 -U "$APP_ROLE" -d "$2" <<'SQL'
+          DROP FUNCTION public.wt04_future_function_probe();
+          DROP SEQUENCE public.wt04_future_sequence_probe;
+          DROP TABLE public.wt04_future_table_probe;
+          SQL
+          }
+
+          compare_snapshots() {
+            local cats='database_owner schema schema_public_effective table_owner table_acl sequence_owner sequence_acl function_owner function_acl function_public_effective default_privilege api_schema_effective api_table_effective api_sequence_effective api_function_effective app_owner_effective rls policy schema_migration'
+            printf 'category\tsource_vs_pre\tsource_vs_post\n' > "$PROOF_DIR/normalized_comparison_matrix.tsv"
+            for cat in $cats; do
+              grep -F "$cat"$'\t' "$PROOF_DIR/SOURCE.snapshot.tsv" > "$RUNNER_TEMP/s.$cat" || true
+              grep -F "$cat"$'\t' "$PROOF_DIR/POST_RESTORE_PRE_REHYDRATION.snapshot.tsv" > "$RUNNER_TEMP/p.$cat" || true
+              grep -F "$cat"$'\t' "$PROOF_DIR/POST_REHYDRATION.snapshot.tsv" > "$RUNNER_TEMP/r.$cat" || true
+              cmp -s "$RUNNER_TEMP/s.$cat" "$RUNNER_TEMP/p.$cat" && pre=MATCH || pre=DIFFERENT
+              cmp -s "$RUNNER_TEMP/s.$cat" "$RUNNER_TEMP/r.$cat" && post=MATCH || post=DIFFERENT
+              printf '%s\t%s\t%s\n' "$cat" "$pre" "$post" >> "$PROOF_DIR/normalized_comparison_matrix.tsv"
+            done
+            diff -u "$PROOF_DIR/SOURCE.snapshot.tsv" "$PROOF_DIR/POST_RESTORE_PRE_REHYDRATION.snapshot.tsv" > "$PROOF_DIR/source_vs_pre.diff" || true
+            diff -u "$PROOF_DIR/SOURCE.snapshot.tsv" "$PROOF_DIR/POST_REHYDRATION.snapshot.tsv" > "$PROOF_DIR/source_vs_post.diff" || true
+          }
+
+          docker pull postgres:17 >/dev/null
+          {
+            git --version
+            docker --version
+            elixir --version
+            mix --version
+            docker run --rm postgres:17 postgres --version
+            docker run --rm postgres:17 pg_dump --version
+            docker run --rm postgres:17 pg_restore --version
+          } > "$PROOF_DIR/runtime_versions.txt" 2>&1
+
+          start_cluster "$SRC" "$SOURCE_DB"
+          MIX_ENV=dev STRANGERTALKS_LOCAL_DB_USER="$APP_ROLE" STRANGERTALKS_LOCAL_DB_NAME="$SOURCE_DB" mix ecto.migrate 2>&1 | tee "$PROOF_DIR/source_migrate.log"
+          assert_source "$SRC" "$SOURCE_DB"
+          snapshot "$SRC" "$SOURCE_DB" SOURCE
+
+          docker cp ops/postgres_backup.sh "$SRC:/tmp/postgres_backup.sh"
+          set +e
+          docker exec -e DATABASE_URL="postgresql://$APP_ROLE@127.0.0.1:5432/$SOURCE_DB" "$SRC" bash /tmp/postgres_backup.sh /tmp/wt04.dump > "$PROOF_DIR/backup.log" 2>&1
+          backup_exit=$?
+          set -e
+          test "$backup_exit" -eq 0
+          docker cp "$SRC:/tmp/wt04.dump" "$DUMP"
+          test -s "$DUMP"
+          printf 'backup_exit=%s\ndump_size_bytes=%s\ndump_sha256=%s\n' "$backup_exit" "$(stat -c %s "$DUMP")" "$(sha256sum "$DUMP" | awk '{print $1}')" > "$PROOF_DIR/dump_metadata.txt"
+          docker rm -f "$SRC" >/dev/null
+
+          start_cluster "$DST" "$TARGET_DB"
+          docker cp ops/postgres_restore.sh "$DST:/tmp/postgres_restore.sh"
+          docker cp "$DUMP" "$DST:/tmp/wt04.dump"
+          set +e
+          docker exec -e RESTORE_DATABASE_URL="postgresql://$APP_ROLE@127.0.0.1:5432/$TARGET_DB" -e CONFIRM_RESTORE=RESTORE_STRANGERTALKS "$DST" bash /tmp/postgres_restore.sh /tmp/wt04.dump > "$PROOF_DIR/restore.log" 2>&1
+          restore_exit=$?
+          set -e
+          printf 'restore_exit=%s\n' "$restore_exit" >> "$PROOF_DIR/dump_metadata.txt"
+          test "$restore_exit" -eq 0
+          snapshot "$DST" "$TARGET_DB" POST_RESTORE_PRE_REHYDRATION
+
+          grep '^schema_migration' "$PROOF_DIR/POST_RESTORE_PRE_REHYDRATION.snapshot.tsv" > "$PROOF_DIR/schema_migrations.before.tsv"
+          for v in 20260909183500 20260910110008 20260910192317; do grep -q $'\t'"$v"$'\t' "$PROOF_DIR/schema_migrations.before.tsv"; done
+          MIX_ENV=dev STRANGERTALKS_LOCAL_DB_USER="$APP_ROLE" STRANGERTALKS_LOCAL_DB_NAME="$TARGET_DB" mix ecto.migrate 2>&1 | tee "$PROOF_DIR/ordinary_migrate.log"
+          snapshot "$DST" "$TARGET_DB" POST_ORDINARY_MIGRATE
+          grep '^schema_migration' "$PROOF_DIR/POST_ORDINARY_MIGRATE.snapshot.tsv" > "$PROOF_DIR/schema_migrations.after.tsv"
+          cmp -s "$PROOF_DIR/schema_migrations.before.tsv" "$PROOF_DIR/schema_migrations.after.tsv"
+          if cmp -s "$PROOF_DIR/POST_RESTORE_PRE_REHYDRATION.snapshot.tsv" "$PROOF_DIR/POST_ORDINARY_MIGRATE.snapshot.tsv"; then
+            ordinary_authority_snapshot_changed=no
+          else
+            ordinary_authority_snapshot_changed=yes
+          fi
+          cat > "$PROOF_DIR/migration_replay_observation.txt" <<EOF
+          security_migrations_already_recorded=yes
+          ordinary_migration_history_changed=no
+          ordinary_authority_snapshot_changed=$ordinary_authority_snapshot_changed
+          explicit_diagnostic_replay_selected=yes
+          explicit_replay_basis=recorded historical versions prevent Ecto from rerunning those migration callbacks
+          EOF
+
+          write_replay
+          docker exec -i "$DST" psql -X -v ON_ERROR_STOP=1 -U "$APP_ROLE" -d "$TARGET_DB" < "$PROOF_DIR/authority_replay.sql" > "$PROOF_DIR/explicit_replay.log" 2>&1
+          snapshot "$DST" "$TARGET_DB" POST_REHYDRATION
+          future_proof "$DST" "$TARGET_DB"
+          compare_snapshots
+
+          cat > "$PROOF_DIR/verdict_candidates.txt" <<'EOF'
+          AUTHORITY_REHYDRATION_REPLAY_CONFIRMED
+          AUTHORITY_REHYDRATION_REQUIRES_ADDITIONAL_CONTRACT
+          AUTHORITY_REHYDRATION_CONTRADICTS_FROZEN_SECURITY_MODEL
+          INVALID_EXECUTION_SPECIMEN
+          EOF
+          cat > "$PROOF_DIR/execution_model.txt" <<'EOF'
+          runtime_identity_relationship=Phoenix application principal == database owner
+          production_role_name_and_credentials=external/not asserted
+          disposable_owner=wt04_app_owner
+          restore_identity=wt04_app_owner
+          ownership_replay=none
+          outcome_classification=independent review
+          EOF
+
+      - name: Cleanup disposable PostgreSQL
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          docker rm -f wt04-source-pg wt04-target-pg >/dev/null 2>&1
+          exit 0
+
+      - name: Upload WT-04 authority evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wt04-authority-rehydration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/wt04-authority-rehydration
+          if-no-files-found: error
+          retention-days: 14
