@@ -143,7 +143,7 @@ jobs:
             UNION ALL SELECT 'function_acl',proname||'('||args||')','','acl',COALESCE(proacl::text,'NULL') FROM pub_functions
             UNION ALL SELECT 'function_public_effective',proname||'('||args||')','PUBLIC','EXECUTE',EXISTS(
               SELECT 1 FROM aclexplode(COALESCE(proacl,acldefault('f',proowner))) a WHERE a.grantee=0 AND a.privilege_type='EXECUTE')::text FROM pub_functions
-            UNION ALL SELECT 'default_privilege',COALESCE(n.nspname,'<all_schemas>')||':'||d.defaclobjtype,pg_get_userbyid(d.defaclrole),'acl',d.defaclacl::text
+            UNION ALL SELECT 'default_privilege',COALESCE(n.nspname,'<all_schemas>')||':'||d.defaclobjtype::text,pg_get_userbyid(d.defaclrole),'acl',d.defaclacl::text
               FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid=d.defaclnamespace
             UNION ALL SELECT 'api_schema_effective','public',a.role_name,p,has_schema_privilege(a.role_name,'public',p)::text
               FROM api a CROSS JOIN (VALUES ('USAGE'),('CREATE')) x(p)
