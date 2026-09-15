@@ -25,7 +25,8 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
     fixture
   end
 
-  test "text retry executes no payload transmission and does not rearm while TERMINATING", context do
+  test "text retry executes no payload transmission and does not rearm while TERMINATING",
+       context do
     register_both(context)
     message_id = Ecto.UUID.generate()
 
@@ -87,7 +88,8 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
     assert after_retry.pending[message_id].retry_token == nil
   end
 
-  test "voice retry executes no payload transmission and does not rearm while TERMINATING", context do
+  test "voice retry executes no payload transmission and does not rearm while TERMINATING",
+       context do
     register_both(context)
     {voice_note_id, attrs, binary} = voice_note_fixture()
 
@@ -100,6 +102,7 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
              )
 
     assert_receive {:conversation_voice_note, %{voice_note_id: ^voice_note_id}}
+
     assert_receive {:conversation_voice_note_status,
                     %{voice_note_id: ^voice_note_id, status: "sent_to_server"}}
 
@@ -143,8 +146,7 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
                message_id
              )
 
-    assert_receive {:conversation_message_status,
-                    %{message_id: ^message_id, status: "delivered"}}
+    assert_receive {:conversation_message_status, %{message_id: ^message_id, status: "delivered"}}
     refute_receive {:conversation_message, %{message_id: ^message_id}}, 100
 
     assert {:ok, settled} = state(context)
@@ -152,7 +154,8 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
     assert settled.completed[message_id].final_state == :delivered
   end
 
-  test "valid delivery progress settles while TERMINATING without retransmitting content", context do
+  test "valid delivery progress settles while TERMINATING without retransmitting content",
+       context do
     register_both(context)
     message_id = Ecto.UUID.generate()
 
@@ -169,8 +172,7 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
     assert {:ok, %{status: "applied", highest_contiguous_sequence: 1}} =
              report_progress(context, context.participant_b, 1)
 
-    assert_receive {:conversation_message_status,
-                    %{message_id: ^message_id, status: "delivered"}}
+    assert_receive {:conversation_message_status, %{message_id: ^message_id, status: "delivered"}}
     refute_receive {:conversation_message, %{message_id: ^message_id}}, 100
 
     assert {:ok, settled} = state(context)
@@ -191,6 +193,7 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
              )
 
     assert_receive {:conversation_voice_note, %{voice_note_id: ^voice_note_id}}
+
     assert_receive {:conversation_voice_note_status,
                     %{voice_note_id: ^voice_note_id, status: "sent_to_server"}}
 
@@ -207,6 +210,7 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
 
     assert_receive {:conversation_voice_note_status,
                     %{voice_note_id: ^voice_note_id, status: "delivered"}}
+
     refute_receive {:conversation_voice_note, %{voice_note_id: ^voice_note_id}}, 100
 
     assert {:ok, settled} = state(context)
@@ -217,9 +221,12 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
   test "reconnect cannot register or replay buffered content while TERMINATING", context do
     conversation_id = conversation_id(context)
     {:ok, pid} = ConversationServer.ensure_started(conversation_id)
-    assert :ok = ConversationServer.register_channel(conversation_id, context.participant_a, self())
+
+    assert :ok =
+             ConversationServer.register_channel(conversation_id, context.participant_a, self())
 
     message_id = Ecto.UUID.generate()
+
     assert {:ok, %{status: "sent"}} =
              append(context, context.participant_a, message_id, "buffered before freeze")
 
@@ -272,8 +279,7 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
     drain_mailbox()
 
     assert {:ok, %{status: "applied"}} = report_progress(context, context.participant_b, 1)
-    assert_receive {:conversation_message_status,
-                    %{message_id: ^message_id, status: "delivered"}}
+    assert_receive {:conversation_message_status, %{message_id: ^message_id, status: "delivered"}}
 
     force_lifecycle(pid, :ACTIVE)
     drain_mailbox()
@@ -284,8 +290,8 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
                context.participant_a
              )
 
-    refute_receive {:conversation_message_status,
-                    %{message_id: ^message_id, status: "failed"}}, 100
+    refute_receive {:conversation_message_status, %{message_id: ^message_id, status: "failed"}},
+                   100
   end
 
   test "explicit End persistence failure restores transport retry authority", context do
@@ -329,8 +335,13 @@ defmodule StrangertalksNew.WT02TerminalTransportAckTest do
   defp register_both(context) do
     conversation_id = conversation_id(context)
     {:ok, _pid} = ConversationServer.ensure_started(conversation_id)
-    assert :ok = ConversationServer.register_channel(conversation_id, context.participant_a, self())
-    assert :ok = ConversationServer.register_channel(conversation_id, context.participant_b, self())
+
+    assert :ok =
+             ConversationServer.register_channel(conversation_id, context.participant_a, self())
+
+    assert :ok =
+             ConversationServer.register_channel(conversation_id, context.participant_b, self())
+
     drain_mailbox()
   end
 
