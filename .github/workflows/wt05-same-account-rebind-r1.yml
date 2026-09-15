@@ -62,6 +62,16 @@ jobs:
           printf 'WT05_NEG_PROFILE_DIR=%s\n' "$RUNNER_TEMP/wt05-same-account-rebind-negative-profile" >> "$GITHUB_ENV"
           cp .github/diagnostics/wt05_3d_provider.exs "$RUNNER_TEMP/wt05_3d_provider.exs"
           cp .github/diagnostics/wt05_3d_browser.mjs "$RUNNER_TEMP/wt05_3d_browser.mjs"
+          python - "$RUNNER_TEMP/wt05_3d_browser.mjs" <<'PY'
+          import pathlib, sys
+          path = pathlib.Path(sys.argv[1])
+          text = path.read_text()
+          old = 'const record = {id, type: "memory", schema_version: 1, value: {text: marker}, updated_at: new Date().toISOString()}'
+          new = 'const record = {id, type: "memory", value: {text: marker}, updated_at: new Date().toISOString()}'
+          if text.count(old) != 1:
+              raise SystemExit("WT05_3D_FIXTURE_PATCH_PRECONDITION_FAILED")
+          path.write_text(text.replace(old, new))
+          PY
           node --check "$RUNNER_TEMP/wt05_3d_browser.mjs"
           sha256sum "$RUNNER_TEMP/wt05_3d_provider.exs" "$RUNNER_TEMP/wt05_3d_browser.mjs"
 
