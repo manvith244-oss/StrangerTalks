@@ -23,15 +23,36 @@ defmodule StrangertalksNewWeb.ExpressiveDiagnosticPrivacyTest do
     path = "/assets/expressive/bright-spark.svg"
     url = "http://www.example.com#{path}"
 
+    filter_id = :"expressive_privacy_#{System.unique_integer([:positive])}"
+
+    filter_fun = fn log_event, _extra ->
+      case log_event do
+        %{meta: %{pid: pid}} when pid == parent ->
+          log_event
+
+        _ ->
+          :stop
+      end
+    end
+
+    on_exit(fn ->
+      _ = :logger.remove_handler_filter(ExUnit.CaptureServer, filter_id)
+    end)
+
     {conn, retained_log} =
       fn -> get(conn, path) end
       |> then(fn request ->
         result = Process.put(:expressive_static_conn, nil)
 
         log =
-          capture_log([level: :info], fn ->
-            Process.put(:expressive_static_conn, request.())
-          end)
+          try do
+            capture_log([level: :info], fn ->
+              :ok = :logger.add_handler_filter(ExUnit.CaptureServer, filter_id, {filter_fun, nil})
+              Process.put(:expressive_static_conn, request.())
+            end)
+          after
+            _ = :logger.remove_handler_filter(ExUnit.CaptureServer, filter_id)
+          end
 
         {Process.get(:expressive_static_conn, result), log}
       end)
