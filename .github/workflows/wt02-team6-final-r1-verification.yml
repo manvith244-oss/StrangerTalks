@@ -1,0 +1,93 @@
+name: WT-02 Team 6 Final R1 Verification
+
+on:
+  push:
+    branches:
+      - wind-tunnel/wt02-team6-final-r1-verification
+  workflow_dispatch:
+
+concurrency:
+  group: wt02-team6-r1-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Switch to exact corrected candidate commit
+        run: |
+          git checkout e9731e3842f095c99eb38539f12fe2dd06f5c9ea
+
+      - name: Gate 1 — Checkout identity and cleanliness
+        run: |
+          echo "EXPECTED_SHA=e9731e3842f095c99eb38539f12fe2dd06f5c9ea"
+          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "e9731e3842f095c99eb38539f12fe2dd06f5c9ea"
+          echo "TREE=$(git rev-parse HEAD^{tree})"
+          test "$(git rev-parse HEAD^{tree})" = "72310bab210838fb00a632ab9161359071b47735"
+          git status --short
+          test -z "$(git status --short)"
+
+      - name: Gate 2 — Diff hygiene against base
+        run: |
+          git diff --check
+          git diff ac867b346426c782b90031b3d770a0d294761065..HEAD --stat
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Focused 1 — Expressive privacy test
+        run: mix test test/strangertalks_new_web/expressive_diagnostic_privacy_test.exs --trace
+
+      - name: Focused 2 — Team-6 transport and ACK contract
+        run: mix test test/strangertalks_new/wt02_terminal_transport_ack_test.exs --trace
+
+      - name: Focused 3 — Team-5 explicit-End contract
+        run: mix test test/strangertalks_new/wt02_explicit_end_server_core_test.exs --trace
+
+      - name: Gate 10 — Standard full precommit
+        run: mix precommit
+
+      - name: Gate 11 — Final format and worktree proof
+        run: |
+          mix format --check-formatted
+          git diff --check
+          git status --short
+          git diff --exit-code -- .
