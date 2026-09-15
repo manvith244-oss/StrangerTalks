@@ -33,13 +33,14 @@ jobs:
       POOL_SIZE: "5"
       FROZEN_APP_SHA: 30717f4ee84a493697bb4965f4e8128b2e6af6b9
       FROZEN_APP_TREE: 72d2672e9daff1b1e5e168d3ec7da9f47ac5dd4a
-      PROOF_DIR: ${{ runner.temp }}/wt07-a1-db-loss-proof
 
     steps:
       - name: Initialize proof transcript and reject production credentials
         shell: bash
         run: |
           set -euo pipefail
+          PROOF_DIR="$RUNNER_TEMP/wt07-a1-db-loss-proof"
+          echo "PROOF_DIR=$PROOF_DIR" >> "$GITHUB_ENV"
           mkdir -p "$PROOF_DIR"
           transcript="$PROOF_DIR/proof-transcript.txt"
           : > "$transcript"
