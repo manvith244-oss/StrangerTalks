@@ -90,7 +90,7 @@ constraint_snapshot() {
       ), ''),
       COALESCE(ind.relname, ''),
       COALESCE(parent_n.nspname || '.' || parent_rel.relname || '.' || parent.conname, ''),
-      COALESCE(c.conbin::text, '')
+      regexp_replace(COALESCE(c.conbin::text, ''), ' :location -?[0-9]+', ' :location 0', 'g')
     FROM pg_constraint AS c
     JOIN pg_namespace AS n ON n.oid = c.connamespace
     LEFT JOIN pg_class AS rel ON rel.oid = c.conrelid
@@ -174,8 +174,8 @@ index_snapshot() {
         SELECT string_agg(x.option::text, ',' ORDER BY x.ord)
         FROM unnest(i.indoption::smallint[]) WITH ORDINALITY AS x(option, ord)
       ), ''),
-      COALESCE(i.indexprs::text, ''),
-      COALESCE(i.indpred::text, '')
+      regexp_replace(COALESCE(i.indexprs::text, ''), ' :location -?[0-9]+', ' :location 0', 'g'),
+      regexp_replace(COALESCE(i.indpred::text, ''), ' :location -?[0-9]+', ' :location 0', 'g')
     FROM pg_index AS i
     JOIN pg_class AS idx ON idx.oid = i.indexrelid
     JOIN pg_class AS tbl ON tbl.oid = i.indrelid
