@@ -1,3 +1,5 @@
+Code.require_file("wt07_backup_semantic_schema_verifier_test.exs", __DIR__)
+
 defmodule StrangertalksNew.RprProductionMigrationWorkflowContractTest do
   use ExUnit.Case, async: true
 
