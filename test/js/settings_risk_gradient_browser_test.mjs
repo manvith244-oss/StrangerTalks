@@ -104,7 +104,7 @@ test("danger actions are isolated and confirmations state consequences and recov
       await dialog.dismiss()
     }))
     await app.page.locator("#delete-all").click()
-    assert.match(await dialogMessage, /Delete all local StrangerTalks data.*cannot be undone.*exported backup/is)
+    assert.match(await dialogMessage, /Delete saved StrangerTalks records.*does not delete encrypted Google sync.*Delete Google sync data/is)
     assert.deepEqual(app.errors, [])
   } finally {
     await app.context.close().catch(() => {})
