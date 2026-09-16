@@ -5,12 +5,65 @@ defmodule StrangertalksNew.Wt07BackupSemanticSchemaVerifierTest do
   @helper_path "ops/postgres_semantic_schema_compare.sh"
 
   setup_all do
-    for command <- ~w(bash psql pg_dump createdb dropdb) do
+    for command <- ~w(bash ruby psql pg_dump createdb dropdb) do
       assert System.find_executable(command),
              "#{command} must be available for WT-07 disposable PostgreSQL proof"
     end
 
     :ok
+  end
+
+  test "backup workflow parses as YAML" do
+    ruby = ~S(require "yaml"; YAML.load_file(ARGV.fetch(0)); puts "yaml_ok")
+    {output, status} = System.cmd("ruby", ["-e", ruby, @workflow_path], stderr_to_stdout: true)
+
+    assert status == 0, "YAML parse failed: #{output}"
+    assert output =~ "yaml_ok"
+  end
+
+  test "every backup workflow run block passes bash syntax validation" do
+    ruby = ~S'''
+    require "yaml"
+    require "base64"
+
+    document = YAML.load_file(ARGV.fetch(0))
+    runs = []
+    walk = lambda do |node|
+      case node
+      when Hash
+        node.each do |key, value|
+          runs << value if key.to_s == "run" && value.is_a?(String)
+          walk.call(value)
+        end
+      when Array
+        node.each { |value| walk.call(value) }
+      end
+    end
+    walk.call(document)
+    runs.each { |run| puts Base64.strict_encode64(run) }
+    '''
+
+    {output, status} = System.cmd("ruby", ["-e", ruby, @workflow_path], stderr_to_stdout: true)
+    assert status == 0, "failed to extract workflow shell blocks: #{output}"
+
+    run_blocks = output |> String.split("\n", trim: true) |> Enum.map(&Base.decode64!/1)
+    assert run_blocks != [], "expected at least one workflow run block"
+
+    Enum.with_index(run_blocks, 1)
+    |> Enum.each(fn {script, index} ->
+      path = Path.join(System.tmp_dir!(), "wt07_backup_workflow_run_#{index}.sh")
+      File.write!(path, script)
+
+      try do
+        {syntax_output, syntax_status} =
+          System.cmd("bash", ["-n", path], stderr_to_stdout: true)
+
+        assert syntax_status == 0,
+               "bash -n failed for workflow run block #{index}: #{syntax_output}"
+      after
+        File.rm(path)
+      end
+    end)
   end
 
   test "semantic helper passes bash syntax validation" do
