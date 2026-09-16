@@ -5,11 +5,17 @@ defmodule StrangertalksNew.Wt07BackupSemanticSchemaVerifierTest do
   @helper_path "ops/postgres_semantic_schema_compare.sh"
 
   setup_all do
-    for command <- ~w(bash psql createdb dropdb) do
-      assert System.find_executable(command), "#{command} must be available for WT-07 disposable PostgreSQL proof"
+    for command <- ~w(bash psql pg_dump createdb dropdb) do
+      assert System.find_executable(command),
+             "#{command} must be available for WT-07 disposable PostgreSQL proof"
     end
 
     :ok
+  end
+
+  test "semantic helper passes bash syntax validation" do
+    {output, status} = System.cmd("bash", ["-n", @helper_path], stderr_to_stdout: true)
+    assert status == 0, "bash -n failed: #{output}"
   end
 
   test "equivalent CHECK outer-array cast and element-cast forms compare equal" do
@@ -188,7 +194,9 @@ defmodule StrangertalksNew.Wt07BackupSemanticSchemaVerifierTest do
   end
 
   defp database_user, do: System.get_env("STRANGERTALKS_LOCAL_DB_USER", "strangertalks_local")
-  defp database_password, do: System.get_env("STRANGERTALKS_LOCAL_DB_PASSWORD", "strangertalks_test")
+
+  defp database_password,
+    do: System.get_env("STRANGERTALKS_LOCAL_DB_PASSWORD", "strangertalks_test")
 
   defp schema_sql(opts \\ []) do
     check_cast = Keyword.get(opts, :check_cast, :element)
