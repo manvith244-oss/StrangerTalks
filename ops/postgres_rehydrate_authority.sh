@@ -39,6 +39,10 @@ run_psql_val() {
   PGSSLMODE=${PGSSLMODE:-prefer} psql "$TARGET_URL" -X -v ON_ERROR_STOP=1 -At -c "$1" | tr -d '\r'
 }
 
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
+MIGRATIONS_DIR="${MIGRATIONS_DIR:-$REPO_ROOT/priv/repo/migrations}"
+
 # Explicit Canonical Manifest of 30 Application Tables
 CANONICAL_APP_TABLES=(
   account_sessions
@@ -73,34 +77,38 @@ CANONICAL_APP_TABLES=(
   source_rate_limits
 )
 
-# Pre-hangout 26 Application Tables
-PRE_HANGOUT_APP_TABLES=(
-  account_sessions
-  account_sync_states
-  analytics_records
-  boundary_blocks
-  composer_grants
-  conversations
-  google_account_links
-  google_oauth_attempts
-  learning_records
-  matches
-  memories
-  message_reactions
-  messages
-  participant_pairing_reservations
-  participants
-  private_accounts
-  queue_states
-  reflections
-  relationship_consents
-  relationship_reconnection_intents
-  relationships
-  report_safety_media
-  reports
-  safety_events
-  safety_reviews
-  source_rate_limits
+# Canonical introduction map for 30 application tables (table:introduced_at_version)
+TABLE_INTRO_MAP=(
+  "account_sessions:20260806034042"
+  "account_sync_states:20260806034848"
+  "analytics_records:20260703234500"
+  "boundary_blocks:20260704000001"
+  "composer_grants:20260820145713"
+  "conversations:20260702163000"
+  "google_account_links:20260806034042"
+  "google_oauth_attempts:20260806034042"
+  "hangout_memberships:20260910002000"
+  "hangout_messages:20260910002000"
+  "hangout_reports:20260910002000"
+  "hangout_rooms:20260910002000"
+  "learning_records:20260704000100"
+  "matches:20260701113000"
+  "memories:20260702172100"
+  "message_reactions:20260703014500"
+  "messages:20260702164300"
+  "participant_pairing_reservations:20260830044500"
+  "participants:20260701111335"
+  "private_accounts:20260806034042"
+  "queue_states:20260704000001"
+  "reflections:20260820145713"
+  "relationship_consents:20260805091809"
+  "relationship_reconnection_intents:20260806021959"
+  "relationships:20260703000000"
+  "report_safety_media:20260814075417"
+  "reports:20260703144144"
+  "safety_events:20260703192500"
+  "safety_reviews:20260805091809"
+  "source_rate_limits:20260826142000"
 )
 
 echo "=== STRANGERTALKS AUTHORITY REHYDRATION ==="
@@ -109,6 +117,15 @@ echo "url_provided=true (value redacted)"
 
 # 1. PLATFORM PRECONDITIONS
 echo "--- Checking Platform Preconditions ---"
+
+# Execution principal must strictly be postgres
+current_user=$(run_psql_val "SELECT current_user;")
+if [[ "$current_user" != "postgres" ]]; then
+  echo "error: execution user must be 'postgres' (found '$current_user')" >&2
+  exit 1
+fi
+echo "execution_user_verified=postgres"
+
 REQUIRED_ROLES=(postgres anon authenticated service_role authenticator pg_database_owner)
 for role in "${REQUIRED_ROLES[@]}"; do
   exists=$(run_psql_val "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$role');")
@@ -126,8 +143,64 @@ if [[ "$db_owner" != "postgres" ]]; then
 fi
 echo "database_owner_verified=postgres"
 
-# 2. CATALOG DRIFT GUARDS (Pre-check)
-echo "--- Evaluating Catalog State and Drift Guards ---"
+# 2. MIGRATION LEDGER VALIDATION & CATALOG DRIFT GUARDS
+echo "--- Evaluating Migration Ledger and Catalog Drift Guards ---"
+
+# Migration ledger public.schema_migrations is mandatory recovery truth
+has_schema_migrations=$(run_psql_val "SELECT to_regclass('public.schema_migrations') IS NOT NULL;")
+if [[ "$has_schema_migrations" != "t" ]]; then
+  echo "error: migration ledger 'public.schema_migrations' is missing" >&2
+  exit 1
+fi
+
+ledger_count=$(run_psql_val "SELECT count(*) FROM public.schema_migrations;")
+if [[ "$ledger_count" -eq 0 ]]; then
+  echo "error: migration ledger 'public.schema_migrations' is empty" >&2
+  exit 1
+fi
+
+db_versions_raw=$(run_psql_val "SELECT version FROM public.schema_migrations ORDER BY version ASC;")
+
+# Derive known migration versions from checked-out repository
+if [[ ! -d "$MIGRATIONS_DIR" ]]; then
+  echo "error: repository migrations directory not found: $MIGRATIONS_DIR" >&2
+  exit 1
+fi
+
+KNOWN_MIGRATIONS=()
+for f in "$MIGRATIONS_DIR"/*.exs; do
+  [[ -f "$f" ]] || continue
+  fname=$(basename "$f")
+  if [[ "$fname" =~ ^([0-9]+)_ ]]; then
+    KNOWN_MIGRATIONS+=("${BASH_REMATCH[1]}")
+  fi
+done
+
+if (( ${#KNOWN_MIGRATIONS[@]} == 0 )); then
+  echo "error: no repository migrations found in $MIGRATIONS_DIR" >&2
+  exit 1
+fi
+
+# Compare every DB ledger version against repository-known migrations
+IFS=$'\n' read -rd '' -a db_versions <<<"$db_versions_raw" || true
+for v in "${db_versions[@]}"; do
+  v=$(echo "$v" | tr -d '\r' | xargs)
+  [[ -n "$v" ]] || continue
+  found=0
+  for kv in "${KNOWN_MIGRATIONS[@]}"; do
+    if [[ "$v" == "$kv" ]]; then
+      found=1
+      break
+    fi
+  done
+  if (( found == 0 )); then
+    echo "error: unknown migration version in public.schema_migrations: '$v'" >&2
+    exit 1
+  fi
+done
+
+migration_head=$(run_psql_val "SELECT max(version) FROM public.schema_migrations;")
+echo "migration_head=$migration_head"
 
 # Detect unexpected public sequences
 unexpected_seq_count=$(run_psql_val "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'S';")
@@ -174,14 +247,6 @@ for tbl in "${current_public_tables[@]}"; do
   fi
 done
 
-# Check migration ledger if schema_migrations exists
-has_schema_migrations=$(run_psql_val "SELECT to_regclass('public.schema_migrations') IS NOT NULL;")
-migration_head=0
-if [[ "$has_schema_migrations" == "t" ]]; then
-  migration_head=$(run_psql_val "SELECT COALESCE(max(version), 0) FROM public.schema_migrations;")
-fi
-echo "migration_head=$migration_head"
-
 # Determine expected table manifest based on mode and migration head
 EXPECTED_TABLES=()
 if [[ "$MODE" == "post-migration" ]]; then
@@ -195,23 +260,21 @@ if [[ "$MODE" == "post-migration" ]]; then
     fi
   done
 else
-  # pre-migration mode: expect tables according to migration head or existing subset
-  if (( migration_head < 20260910002000 && migration_head > 0 )); then
-    # Pre-hangout generation
-    for canon in "${PRE_HANGOUT_APP_TABLES[@]}"; do
-      exists=$(run_psql_val "SELECT to_regclass('public.$canon') IS NOT NULL;")
-      if [[ "$exists" == "t" ]]; then
-        EXPECTED_TABLES+=("$canon")
+  # pre-migration mode: generation-aware deterministic manifest
+  # Every table whose introduction version <= migration_head MUST exist
+  # Tables introduced later (intro > migration_head) may legitimately be absent
+  for entry in "${TABLE_INTRO_MAP[@]}"; do
+    tbl="${entry%%:*}"
+    intro_ver="${entry##*:}"
+    exists=$(run_psql_val "SELECT to_regclass('public.$tbl') IS NOT NULL;")
+    if (( intro_ver <= migration_head )); then
+      if [[ "$exists" != "t" ]]; then
+        echo "error: missing historically-required application table in pre-migration: '$tbl' (introduced at $intro_ver, head is $migration_head)" >&2
+        exit 1
       fi
-    done
-  else
-    for canon in "${CANONICAL_APP_TABLES[@]}"; do
-      exists=$(run_psql_val "SELECT to_regclass('public.$canon') IS NOT NULL;")
-      if [[ "$exists" == "t" ]]; then
-        EXPECTED_TABLES+=("$canon")
-      fi
-    done
-  fi
+      EXPECTED_TABLES+=("$tbl")
+    fi
+  done
 fi
 echo "expected_manifest_tables_count=${#EXPECTED_TABLES[@]}"
 
@@ -240,9 +303,7 @@ run_psql_cmd -c "ALTER SCHEMA public OWNER TO pg_database_owner;" >/dev/null
 for tbl in "${EXPECTED_TABLES[@]}"; do
   run_psql_cmd -c "ALTER TABLE public.\"$tbl\" OWNER TO postgres;" >/dev/null
 done
-if [[ "$has_schema_migrations" == "t" ]]; then
-  run_psql_cmd -c "ALTER TABLE public.schema_migrations OWNER TO postgres;" >/dev/null
-fi
+run_psql_cmd -c "ALTER TABLE public.schema_migrations OWNER TO postgres;" >/dev/null
 echo "manifest_ownership_normalized=postgres"
 
 # 4. REASSERT AUTHORITY CONVERGENCE
@@ -266,17 +327,11 @@ REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC;
 DO $$
 DECLARE r text;
 BEGIN
-  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC', current_user);
-  IF current_user <> 'postgres' THEN
-    EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC';
-  END IF;
+  ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
   FOREACH r IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
       EXECUTE format('REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM %I', r);
-      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I REVOKE EXECUTE ON FUNCTIONS FROM %I', current_user, r);
-      IF current_user <> 'postgres' THEN
-        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM %I', r);
-      END IF;
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM %I', r);
     END IF;
   END LOOP;
 END $$;
@@ -285,40 +340,26 @@ END $$;
 DO $$
 DECLARE r text;
 BEGIN
-  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC', current_user);
-  IF current_user <> 'postgres' THEN
-    EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC';
-  END IF;
+  ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
   FOREACH r IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
-      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM %I', current_user, r);
-      IF current_user <> 'postgres' THEN
-        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM %I', r);
-      END IF;
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM %I', r);
     END IF;
   END LOOP;
 END $$;
 
--- 4. Default table and sequence privileges for creator
+-- 4. Default table and sequence privileges for creator postgres
 DO $$
 DECLARE r text;
 BEGIN
   FOREACH r IN ARRAY ARRAY['anon', 'authenticated', 'service_role'] LOOP
     IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
-      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLES FROM %I', current_user, r);
-      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE USAGE, SELECT, UPDATE ON SEQUENCES FROM %I', current_user, r);
-      IF current_user <> 'postgres' THEN
-        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLES FROM %I', r);
-        EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE USAGE, SELECT, UPDATE ON SEQUENCES FROM %I', r);
-      END IF;
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLES FROM %I', r);
+      EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE USAGE, SELECT, UPDATE ON SEQUENCES FROM %I', r);
     END IF;
   END LOOP;
-  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLES FROM PUBLIC', current_user);
-  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public REVOKE USAGE, SELECT, UPDATE ON SEQUENCES FROM PUBLIC', current_user);
-  IF current_user <> 'postgres' THEN
-    EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLES FROM PUBLIC';
-    EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE USAGE, SELECT, UPDATE ON SEQUENCES FROM PUBLIC';
-  END IF;
+  ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER, MAINTAIN ON TABLES FROM PUBLIC;
+  ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public REVOKE USAGE, SELECT, UPDATE ON SEQUENCES FROM PUBLIC;
 END $$;
 SQL
 )
@@ -336,14 +377,12 @@ REVOKE ALL PRIVILEGES ON TABLE public."$tbl" FROM PUBLIC;
 SQL
 done
 
-if [[ "$has_schema_migrations" == "t" ]]; then
-  run_psql_cmd <<SQL >/dev/null
+run_psql_cmd <<SQL >/dev/null
 REVOKE ALL PRIVILEGES ON TABLE public.schema_migrations FROM anon;
 REVOKE ALL PRIVILEGES ON TABLE public.schema_migrations FROM authenticated;
 REVOKE ALL PRIVILEGES ON TABLE public.schema_migrations FROM service_role;
 REVOKE ALL PRIVILEGES ON TABLE public.schema_migrations FROM PUBLIC;
 SQL
-fi
 echo "authority_boundaries_reasserted=true"
 
 # 5. POST-RECONCILIATION VERIFICATION
@@ -351,11 +390,9 @@ echo "--- Verifying Final Authority State ---"
 
 # Verify RLS on all expected manifest tables
 for tbl in "${EXPECTED_TABLES[@]}"; do
-  rls_state=$(run_psql_val "SELECT relrowsecurity FROM pg_class WHERE oid = 'public.\"$tbl\"'::regclass;")
-  force_state=$(run_psql_val "SELECT relforcerowsecurity FROM pg_class WHERE oid = 'public.\"$tbl\"'::regclass;")
-  tbl_owner=$(run_psql_val "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'public.\"$tbl\"'::regclass;")
-  if [[ "$rls_state" != "t" || "$force_state" != "f" || "$tbl_owner" != "postgres" ]]; then
-    echo "error: verification failed for table '$tbl' (rls=$rls_state, force=$force_state, owner=$tbl_owner)" >&2
+  row_check=$(run_psql_val "SELECT relrowsecurity || ':' || relforcerowsecurity || ':' || pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'public.\"$tbl\"'::regclass;")
+  if [[ "$row_check" != "t:f:postgres" && "$row_check" != "true:false:postgres" ]]; then
+    echo "error: verification failed for table '$tbl' (expected true:false:postgres, got $row_check)" >&2
     exit 1
   fi
 done

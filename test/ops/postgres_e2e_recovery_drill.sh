@@ -154,10 +154,60 @@ echo "=== STEP 5: Capturing PRE-REHYDRATION authority state ==="
 pre_rls=$(query_val "$TARGET_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relrowsecurity = true;")
 echo "pre_rehydration_rls_enabled_tables=$pre_rls (expected 0 after --no-acl)"
 
+# Snapshot initial provider default ACLs
+provider_defaults_before=$(query_val "$TARGET_DB" "SELECT COALESCE(array_to_string(d.defaclacl, ','), 'none') FROM pg_default_acl d JOIN pg_roles r ON r.oid = d.defaclrole WHERE r.rolname IN ('anon','authenticated','service_role','authenticator') ORDER BY r.rolname;")
+
+# Prove 1: Non-postgres execution identity hard-rejected
+set +e
+wrong_exec_out=$(CONFIRM_AUTHORITY_REHYDRATION="REHYDRATE_STRANGERTALKS_AUTHORITY" DATABASE_URL="postgresql://authenticator@127.0.0.1:$TEST_PG_PORT/$TARGET_DB" bash "$REPO_ROOT/ops/postgres_rehydrate_authority.sh" "pre-migration" 2>&1)
+wrong_exec_rc=$?
+set -e
+test "$wrong_exec_rc" -ne 0
+echo "drill_non_postgres_execution_hard_rejected=true"
+
+# Prove 2: Missing schema_migrations ledger hard-rejected
+run_psql "$TARGET_DB" "ALTER TABLE public.schema_migrations RENAME TO schema_migrations_hidden;"
+set +e
+missing_ledger_out=$(CONFIRM_AUTHORITY_REHYDRATION="REHYDRATE_STRANGERTALKS_AUTHORITY" DATABASE_URL="$RESTORE_DATABASE_URL" bash "$REPO_ROOT/ops/postgres_rehydrate_authority.sh" "pre-migration" 2>&1)
+missing_ledger_rc=$?
+set -e
+test "$missing_ledger_rc" -ne 0
+run_psql "$TARGET_DB" "ALTER TABLE public.schema_migrations_hidden RENAME TO schema_migrations;"
+echo "drill_missing_migration_ledger_hard_rejected=true"
+
+# Prove 3: Unknown migration ledger version hard-rejected
+run_psql "$TARGET_DB" "INSERT INTO public.schema_migrations (version, inserted_at) VALUES (19990101000000, now());"
+set +e
+unknown_ver_out=$(CONFIRM_AUTHORITY_REHYDRATION="REHYDRATE_STRANGERTALKS_AUTHORITY" DATABASE_URL="$RESTORE_DATABASE_URL" bash "$REPO_ROOT/ops/postgres_rehydrate_authority.sh" "pre-migration" 2>&1)
+unknown_ver_rc=$?
+set -e
+test "$unknown_ver_rc" -ne 0
+run_psql "$TARGET_DB" "DELETE FROM public.schema_migrations WHERE version = 19990101000000;"
+echo "drill_unknown_ledger_version_hard_rejected=true"
+
+# Prove 5: Missing historically-required object fails in pre-migration
+run_psql "$TARGET_DB" "DROP TABLE public.reports;"
+set +e
+missing_tbl_out=$(CONFIRM_AUTHORITY_REHYDRATION="REHYDRATE_STRANGERTALKS_AUTHORITY" DATABASE_URL="$RESTORE_DATABASE_URL" bash "$REPO_ROOT/ops/postgres_rehydrate_authority.sh" "pre-migration" 2>&1)
+missing_tbl_rc=$?
+set -e
+test "$missing_tbl_rc" -ne 0
+run_psql "$TARGET_DB" "CREATE TABLE public.reports (id bigint PRIMARY KEY, payload text, inserted_at timestamp without time zone DEFAULT now()); ALTER TABLE public.reports OWNER TO postgres; INSERT INTO public.reports (id, payload) VALUES (501, 'flagged incident');"
+echo "drill_missing_historically_required_object_fails=true"
+
 echo "=== STEP 6: Running Team 5-B command in pre-migration mode ==="
+# Prove 4 & 6: Generation-aware pre-manifest derived from head; genuinely future objects legitimately absent
 export DATABASE_URL="$RESTORE_DATABASE_URL"
 export CONFIRM_AUTHORITY_REHYDRATION="REHYDRATE_STRANGERTALKS_AUTHORITY"
 bash "$REPO_ROOT/ops/postgres_rehydrate_authority.sh" "pre-migration"
+pre_rls_count=$(query_val "$TARGET_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname != 'schema_migrations' AND c.relrowsecurity = true AND c.relforcerowsecurity = false;")
+test "$pre_rls_count" -eq 26
+# Verify future objects (hangout tables) are absent
+future_tbl_count=$(query_val "$TARGET_DB" "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname IN ('hangout_rooms','hangout_memberships','hangout_messages','hangout_reports');")
+test "$future_tbl_count" -eq 0
+# Verify ledger count unchanged by pre-migration rehydration
+pre_mig_ledger_count=$(query_val "$TARGET_DB" "SELECT count(*) FROM public.schema_migrations;")
+test "$pre_mig_ledger_count" -eq 1
 echo "pre_migration_rehydration_success=true"
 
 echo "=== STEP 7: Applying genuine forward migrations ==="
@@ -250,6 +300,9 @@ echo "=== STEP 16: Provider object safety ==="
 # Verify platform roles remain intact
 test "$(query_val "$TARGET_DB" "SELECT count(*) FROM pg_roles WHERE rolname IN ('postgres','anon','authenticated','service_role','authenticator','pg_database_owner');")" -eq 6
 echo "provider_roles_intact=true"
+provider_defaults_after=$(query_val "$TARGET_DB" "SELECT COALESCE(array_to_string(d.defaclacl, ','), 'none') FROM pg_default_acl d JOIN pg_roles r ON r.oid = d.defaclrole WHERE r.rolname IN ('anon','authenticated','service_role','authenticator') ORDER BY r.rolname;")
+test "$provider_defaults_before" = "$provider_defaults_after"
+echo "provider_defaults_unmodified=true"
 
 rm -f "$DUMP_FILE"
 echo "DRILL_COMPLETED_SUCCESSFULLY=true"

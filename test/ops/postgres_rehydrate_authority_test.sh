@@ -646,6 +646,229 @@ test_p_provider_object_safety() {
   return 0
 }
 
+test_q_wrong_execution_principal() {
+  echo "Running TEST Q — WRONG EXECUTION PRINCIPAL..."
+  setup_db "wt04_test_q"
+  create_tables "wt04_test_q" 30
+  # Ensure participants has RLS disabled initially
+  psql -h 127.0.0.1 -p "$TEST_PG_PORT" -U postgres -d "wt04_test_q" -c \
+    "ALTER TABLE public.participants DISABLE ROW LEVEL SECURITY;" >/dev/null 2>&1
+
+  # Create disposable alternate privileged role
+  psql -h 127.0.0.1 -p "$TEST_PG_PORT" -U postgres -d "wt04_test_q" <<'SQL' >/dev/null 2>&1
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'recovery_admin') THEN
+    CREATE ROLE recovery_admin LOGIN SUPERUSER;
+  END IF;
+END $$;
+SQL
+
+  # Snapshot initial default privileges for recovery_admin
+  local defacl_before
+  defacl_before=$(query_val "wt04_test_q" \
+    "SELECT COALESCE(array_to_string(defaclacl, ','), 'none') FROM pg_default_acl d JOIN pg_roles r ON r.oid = d.defaclrole WHERE r.rolname = 'recovery_admin';")
+
+  local alt_url="postgresql://recovery_admin@127.0.0.1:$TEST_PG_PORT/wt04_test_q"
+  set +e
+  local cmd_out
+  cmd_out=$(CONFIRM_AUTHORITY_REHYDRATION="REHYDRATE_STRANGERTALKS_AUTHORITY" DATABASE_URL="$alt_url" bash "$REHYDRATE_CMD" "post-migration" 2>&1)
+  local exit_code=$?
+  set -e
+
+  # Clean up role at end of test
+  psql -h 127.0.0.1 -p "$TEST_PG_PORT" -U postgres -d postgres -c "DROP ROLE IF EXISTS recovery_admin;" >/dev/null 2>&1
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    echo "TEST Q FAILED: expected nonzero exit code when run as non-postgres, got 0" >&2
+    return 1
+  fi
+
+  if [[ "$cmd_out" != *"execution user must be 'postgres'"* && "$cmd_out" != *"execution identity"* && "$cmd_out" != *"postgres"* ]]; then
+    echo "TEST Q FAILED: output lacked explicit postgres execution requirement: $cmd_out" >&2
+    return 1
+  fi
+
+  # Verify no StrangerTalks authority mutation (participants RLS still false)
+  local rls_status
+  rls_status=$(query_val "wt04_test_q" \
+    "SELECT relrowsecurity FROM pg_class WHERE relname = 'participants';")
+  if [[ "$rls_status" != "f" ]]; then
+    echo "TEST Q FAILED: StrangerTalks authority was mutated under alternate role" >&2
+    return 1
+  fi
+
+  # Verify alternate role default ACLs unchanged
+  local defacl_after
+  defacl_after=$(query_val "wt04_test_q" \
+    "SELECT COALESCE(array_to_string(defaclacl, ','), 'none') FROM pg_default_acl d JOIN pg_roles r ON r.oid = d.defaclrole WHERE r.rolname = 'recovery_admin';")
+  if [[ "$defacl_before" != "$defacl_after" ]]; then
+    echo "TEST Q FAILED: alternate role default privileges were mutated" >&2
+    return 1
+  fi
+
+  echo "TEST Q PASSED"
+  return 0
+}
+
+test_r_missing_schema_migrations() {
+  echo "Running TEST R — MISSING SCHEMA_MIGRATIONS..."
+  setup_db "wt04_test_r"
+  create_tables "wt04_test_r" 30
+  psql -h 127.0.0.1 -p "$TEST_PG_PORT" -U postgres -d "wt04_test_r" -c \
+    "DROP TABLE public.schema_migrations; ALTER TABLE public.participants DISABLE ROW LEVEL SECURITY;" >/dev/null 2>&1
+
+  set +e
+  local cmd_out
+  cmd_out=$(run_rehydration "wt04_test_r" "post-migration" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    echo "TEST R FAILED: expected rehydration to fail when schema_migrations is missing, but exited 0" >&2
+    return 1
+  fi
+
+  if [[ "$cmd_out" != *"schema_migrations"* ]]; then
+    echo "TEST R FAILED: error output did not mention missing schema_migrations: $cmd_out" >&2
+    return 1
+  fi
+
+  # Verify no mutation occurred (participants RLS still disabled)
+  local rls_status
+  rls_status=$(query_val "wt04_test_r" \
+    "SELECT relrowsecurity FROM pg_class WHERE relname = 'participants';")
+  if [[ "$rls_status" != "f" ]]; then
+    echo "TEST R FAILED: authority was mutated despite missing schema_migrations" >&2
+    return 1
+  fi
+
+  echo "TEST R PASSED"
+  return 0
+}
+
+test_s_unknown_ledger_version() {
+  echo "Running TEST S — UNKNOWN LEDGER VERSION..."
+  setup_db "wt04_test_s"
+  create_tables "wt04_test_s" 30
+  # Insert unknown migration version not present in priv/repo/migrations
+  psql -h 127.0.0.1 -p "$TEST_PG_PORT" -U postgres -d "wt04_test_s" -c \
+    "INSERT INTO public.schema_migrations (version, inserted_at) VALUES (19990101000000, now());
+     ALTER TABLE public.participants DISABLE ROW LEVEL SECURITY;" >/dev/null 2>&1
+
+  local count_before
+  count_before=$(query_val "wt04_test_s" "SELECT count(*) FROM public.schema_migrations;")
+
+  set +e
+  local cmd_out
+  cmd_out=$(run_rehydration "wt04_test_s" "post-migration" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    echo "TEST S FAILED: expected rehydration to fail on unknown ledger version, but exited 0" >&2
+    return 1
+  fi
+
+  if [[ "$cmd_out" != *"unknown migration version"* && "$cmd_out" != *"19990101000000"* ]]; then
+    echo "TEST S FAILED: error output did not mention unknown migration version: $cmd_out" >&2
+    return 1
+  fi
+
+  # Verify ledger remains untouched
+  local count_after fake_exists
+  count_after=$(query_val "wt04_test_s" "SELECT count(*) FROM public.schema_migrations;")
+  fake_exists=$(query_val "wt04_test_s" "SELECT count(*) FROM public.schema_migrations WHERE version = 19990101000000;")
+  if [[ "$count_before" != "$count_after" || "$fake_exists" -ne 1 ]]; then
+    echo "TEST S FAILED: migration ledger was altered or rewritten" >&2
+    return 1
+  fi
+
+  # Verify no authority mutation occurred
+  local rls_status
+  rls_status=$(query_val "wt04_test_s" \
+    "SELECT relrowsecurity FROM pg_class WHERE relname = 'participants';")
+  if [[ "$rls_status" != "f" ]]; then
+    echo "TEST S FAILED: authority was mutated despite unknown migration version" >&2
+    return 1
+  fi
+
+  echo "TEST S PASSED"
+  return 0
+}
+
+test_t_missing_historically_required_table() {
+  echo "Running TEST T — MISSING HISTORICALLY REQUIRED TABLE..."
+  setup_db "wt04_test_t"
+  create_tables "wt04_test_t" 26
+  # At head 20260909183500, reports (introduced at 20260703144144) is historically required.
+  # Drop reports and disable RLS on participants to detect mutation.
+  psql -h 127.0.0.1 -p "$TEST_PG_PORT" -U postgres -d "wt04_test_t" -c \
+    "DROP TABLE public.reports; ALTER TABLE public.participants DISABLE ROW LEVEL SECURITY;" >/dev/null 2>&1
+
+  set +e
+  local cmd_out
+  cmd_out=$(run_rehydration "wt04_test_t" "pre-migration" 2>&1)
+  local exit_code=$?
+  set -e
+
+  if [[ "$exit_code" -eq 0 ]]; then
+    echo "TEST T FAILED: expected pre-migration to fail on missing historically required table, but exited 0" >&2
+    return 1
+  fi
+
+  if [[ "$cmd_out" != *"reports"* ]]; then
+    echo "TEST T FAILED: error output did not mention missing required table 'reports': $cmd_out" >&2
+    return 1
+  fi
+
+  local rls_status
+  rls_status=$(query_val "wt04_test_t" \
+    "SELECT relrowsecurity FROM pg_class WHERE relname = 'participants';")
+  if [[ "$rls_status" != "f" ]]; then
+    echo "TEST T FAILED: authority was mutated despite missing historically required table" >&2
+    return 1
+  fi
+
+  echo "TEST T PASSED"
+  return 0
+}
+
+test_u_legitimate_later_table_absence() {
+  echo "Running TEST U — LEGITIMATE LATER TABLE ABSENCE..."
+  setup_db "wt04_test_u"
+  create_tables "wt04_test_u" 26
+  # DB is at head 20260909183500 with 26 pre-hangout tables.
+  # The 4 hangout tables (hangout_rooms, hangout_memberships, hangout_messages, hangout_reports)
+  # introduced at 20260910002000 are absent.
+
+  if ! run_rehydration "wt04_test_u" "pre-migration"; then
+    echo "TEST U FAILED: pre-migration rehydration failed when future tables are legitimately absent" >&2
+    return 1
+  fi
+
+  # Verify 26 historical tables have RLS enabled and FORCE is false
+  local rls_count
+  rls_count=$(query_val "wt04_test_u" \
+    "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname != 'schema_migrations' AND c.relrowsecurity = true AND c.relforcerowsecurity = false;")
+  if [[ "$rls_count" -ne 26 ]]; then
+    echo "TEST U FAILED: expected 26 tables with RLS enabled and FORCE false, got $rls_count" >&2
+    return 1
+  fi
+
+  # Verify future tables remain absent
+  local future_table_exists
+  future_table_exists=$(query_val "wt04_test_u" \
+    "SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relname IN ('hangout_rooms', 'hangout_memberships', 'hangout_messages', 'hangout_reports');")
+  if [[ "$future_table_exists" -ne 0 ]]; then
+    echo "TEST U FAILED: future tables were unexpectedly created" >&2
+    return 1
+  fi
+
+  echo "TEST U PASSED"
+  return 0
+}
+
 # --- MAIN ---
 ensure_cluster
 
@@ -677,6 +900,11 @@ case "$target_test" in
     run_case test_n_future_sequence_defaults
     run_case test_o_future_function_defaults
     run_case test_p_provider_object_safety
+    run_case test_q_wrong_execution_principal
+    run_case test_r_missing_schema_migrations
+    run_case test_s_unknown_ledger_version
+    run_case test_t_missing_historically_required_table
+    run_case test_u_legitimate_later_table_absence
     ;;
   test_a) run_case test_a_happy_path ;;
   test_b) run_case test_b_idempotency ;;
@@ -694,6 +922,11 @@ case "$target_test" in
   test_n) run_case test_n_future_sequence_defaults ;;
   test_o) run_case test_o_future_function_defaults ;;
   test_p) run_case test_p_provider_object_safety ;;
+  test_q) run_case test_q_wrong_execution_principal ;;
+  test_r) run_case test_r_missing_schema_migrations ;;
+  test_s) run_case test_s_unknown_ledger_version ;;
+  test_t) run_case test_t_missing_historically_required_table ;;
+  test_u) run_case test_u_legitimate_later_table_absence ;;
   *) echo "Unknown test target: $target_test" >&2; exit 1 ;;
 esac
 
