@@ -14,7 +14,7 @@ defmodule StrangertalksNew.Wt07BackupSemanticSchemaVerifierTest do
   end
 
   test "backup workflow parses as YAML" do
-    ruby = ~S(require "yaml"; YAML.load_file(ARGV.fetch(0)); puts "yaml_ok")
+    ruby = ~S|require "yaml"; YAML.load_file(ARGV.fetch(0)); puts "yaml_ok"|
     {output, status} = System.cmd("ruby", ["-e", ruby, @workflow_path], stderr_to_stdout: true)
 
     assert status == 0, "YAML parse failed: #{output}"
