@@ -62,8 +62,61 @@ test("danger actions are isolated from routine local-data actions", () => {
   assert.match(danger, /id="sync-delete"/)
 })
 
-test("local deletion confirmation states its consequence and recoverability", () => {
-  assert.match(app, /Delete all local StrangerTalks data from this browser\? This cannot be undone without an exported backup\./)
+test("Settings HTML button rejects broad deletion and requires bounded record wording", () => {
+  const dangerStart = settings.indexOf('data-settings-section="danger-zone"')
+  const danger = settings.slice(dangerStart)
+  assert.doesNotMatch(danger, /<button[^>]*id="delete-all"[^>]*>\s*Delete all local data\s*<\/button>/i)
+  assert.match(danger, /<button[^>]*id="delete-all"[^>]*>\s*Delete local StrangerTalks records\s*<\/button>/i)
+  assert.match(danger, /<button[^>]*id="sync-delete"[^>]*>\s*Delete Google sync data\s*<\/button>/i)
+})
+
+test("local deletion confirmation discloses continuity boundaries and rejects stale irreversibility", () => {
+  assert.doesNotMatch(app, /This cannot be undone without an exported backup/i)
+  assert.doesNotMatch(app, /Delete all local StrangerTalks data from this browser/i)
+  assert.match(app, /Delete saved StrangerTalks records from this browser and create a new anonymous identity\?/i)
+  assert.match(app, /does not delete encrypted Google sync/i)
+  assert.match(app, /(?:your\s+)?private account\/session/i)
+  assert.match(app, /this browser[’']s encrypted continuity key/i)
+  assert.match(app, /Eligible synced data can still be restored with the same private account/i)
+  assert.match(app, /use [“"]Delete Google sync data[”"] separately/i)
+})
+
+test("local deletion completion announces records cleared and continuity preserved", () => {
+  assert.doesNotMatch(app, /All prior local data was deleted/i)
+  assert.match(app, /Local StrangerTalks records were deleted and a new anonymous identity was created/i)
+  assert.match(app, /Encrypted Google sync, your private account\/session, and this browser[’']s continuity key were not deleted/i)
+  assert.match(app, /Eligible synced data can still be restored with [“"]Restore from Google\.[”"]/i)
+})
+
+test("privacy disclosure rejects stale export-only recovery claim and clarifies continuity", () => {
+  const privacyStart = settings.indexOf('data-settings-section="privacy-local-data"')
+  const continuityStart = settings.indexOf('data-settings-section="continuity-sync"')
+  const privacy = settings.slice(privacyStart, continuityStart)
+
+  assert.doesNotMatch(privacy, /StrangerTalks cannot recover a lost passphrase or deleted local data without an exported backup/i)
+  assert.match(privacy, /Encrypted backup files still require their passphrase/i)
+  assert.match(privacy, /Deleting local StrangerTalks records does not delete encrypted Google sync or this browser[’']s continuity key/i)
+  assert.match(privacy, /If eligible synced data exists, the same private account may restore it/i)
+})
+
+test("continuity section explicitly distinguishes local records from Google sync file", () => {
+  const continuityStart = settings.indexOf('data-settings-section="continuity-sync"')
+  const sessionsStart = settings.indexOf('data-settings-section="sessions-connection"')
+  const continuity = settings.slice(continuityStart, sessionsStart)
+
+  assert.match(continuity, /Encrypted Google sync is separate from this browser[’']s local record store/i)
+  assert.match(continuity, /Deleting local StrangerTalks records does not delete the Google sync file;\s*use [“"]Delete Google sync data[”"] to remove it/i)
+})
+
+test("Delete-All execution handler preserves continuity key and remote sync boundaries", () => {
+  const deleteAllMatch = app.match(/\$\("#delete-all"\)\.addEventListener\("click",\s*async\s*\(\)\s*=>\s*\{([\s\S]*?)\}\)/)
+  assert.ok(deleteAllMatch, "delete-all click listener is registered")
+  const handler = deleteAllMatch[1]
+  assert.match(handler, /clearRecords\(\)/)
+  assert.match(handler, /createIdentity\(false\)/)
+  assert.doesNotMatch(handler, /\/api\/account\/sync/)
+  assert.doesNotMatch(handler, /deleteSyncKey|clearSyncKey|storeSyncKey|loadSyncKey/)
+  assert.doesNotMatch(handler, /deleteDatabase/)
 })
 
 test("Settings styling is neutral and danger treatment uses semantic tokens", () => {
