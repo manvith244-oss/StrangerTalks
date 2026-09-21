@@ -83,6 +83,7 @@ jobs:
           git status --porcelain
           test -f ops/postgres_backup.sh
           test -f ops/postgres_restore.sh
+          test -f ops/postgres_semantic_schema_compare.sh
           test -f priv/certs/supabase-prod-ca-2021.crt
 
       - name: Reject database URL TLS overrides
@@ -147,6 +148,7 @@ jobs:
           counts="$work/source_counts.tsv"
           schema="$work/source_schema.sql"
           schema_norm="$work/source_schema.norm"
+          schema_replay="$work/source_schema.replay.sql"
           dump="$work/source.dump"
 
           psql "$SUPABASE_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c \
@@ -164,11 +166,14 @@ jobs:
 
           pg_dump --schema-only --no-owner --no-acl --schema=public "$SUPABASE_DATABASE_URL" > "$schema"
           grep -Ev '^(--|\\restrict |\\unrestrict |$)' "$schema" > "$schema_norm"
+          pg_dump --schema-only --no-owner --no-acl --clean --if-exists --schema=public \
+            "$SUPABASE_DATABASE_URL" > "$schema_replay"
 
           echo "PHASE2_SOURCE_ROW_COUNTS_BEGIN"
           cat "$counts"
           echo "PHASE2_SOURCE_ROW_COUNTS_END"
           echo "phase2_source_schema_sha256=$(sha256sum "$schema_norm" | awk '{print $1}')"
+          echo "phase2_source_schema_replay_sha256=$(sha256sum "$schema_replay" | awk '{print $1}')"
 
           DATABASE_URL="$SUPABASE_DATABASE_URL" bash ops/postgres_backup.sh "$dump"
           bytes=$(stat -c%s "$dump")
@@ -181,6 +186,7 @@ jobs:
           echo "SOURCE_TABLES=$tables" >> "$GITHUB_ENV"
           echo "SOURCE_COUNTS=$counts" >> "$GITHUB_ENV"
           echo "SOURCE_SCHEMA_NORM=$schema_norm" >> "$GITHUB_ENV"
+          echo "SOURCE_SCHEMA_REPLAY=$schema_replay" >> "$GITHUB_ENV"
 
       - name: Upload backup to Cloudflare R2 and download it back
         shell: bash
@@ -219,7 +225,7 @@ jobs:
           bash ops/postgres_restore.sh "$R2_DOWNLOADED_BACKUP"
           echo "phase2_restore_from_r2_completed=true"
 
-      - name: Verify restored row counts and schema match source
+      - name: Verify restored row counts and semantic schema match source
         shell: bash
         env:
           SCRATCH_DATABASE_URL: postgresql://postgres:scratch_restore_password@127.0.0.1:5432/strangertalks_restore
@@ -231,6 +237,7 @@ jobs:
           scratch_counts="$work/scratch_counts.tsv"
           scratch_schema="$work/scratch_schema.sql"
           scratch_schema_norm="$work/scratch_schema.norm"
+          scratch_schema_replay="$work/scratch_schema.replay.sql"
 
           psql "$SCRATCH_DATABASE_URL" -X -v ON_ERROR_STOP=1 -At -c \
             "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename" > "$scratch_tables"
@@ -255,12 +262,52 @@ jobs:
 
           pg_dump --schema-only --no-owner --no-acl --schema=public "$SCRATCH_DATABASE_URL" > "$scratch_schema"
           grep -Ev '^(--|\\restrict |\\unrestrict |$)' "$scratch_schema" > "$scratch_schema_norm"
+          pg_dump --schema-only --no-owner --no-acl --clean --if-exists --schema=public \
+            "$SCRATCH_DATABASE_URL" > "$scratch_schema_replay"
+
           source_schema_sha=$(sha256sum "$SOURCE_SCHEMA_NORM" | awk '{print $1}')
           scratch_schema_sha=$(sha256sum "$scratch_schema_norm" | awk '{print $1}')
           echo "phase2_source_schema_sha256=$source_schema_sha"
           echo "phase2_restored_schema_sha256=$scratch_schema_sha"
-          diff -u "$SOURCE_SCHEMA_NORM" "$scratch_schema_norm"
-          echo "phase2_schema_match=true"
+          echo "phase2_restored_schema_replay_sha256=$(sha256sum "$scratch_schema_replay" | awk '{print $1}')"
+
+          echo "PHASE2_RAW_SCHEMA_DIFF_BEGIN"
+          if diff -u "$SOURCE_SCHEMA_NORM" "$scratch_schema_norm"; then
+            echo "phase2_raw_schema_text_match=true"
+          else
+            echo "phase2_raw_schema_text_match=false"
+          fi
+          echo "phase2_raw_schema_difference_is_diagnostic=true"
+          echo "PHASE2_RAW_SCHEMA_DIFF_END"
+
+          export PGHOST=127.0.0.1
+          export PGPORT=5432
+          export PGUSER=postgres
+          export PGPASSWORD=scratch_restore_password
+          canonical_source_db="wt07_source_${GITHUB_RUN_ID}"
+          canonical_restored_db="wt07_restored_${GITHUB_RUN_ID}"
+
+          cleanup_canonical_databases() {
+            dropdb --if-exists --force "$canonical_source_db" >/dev/null 2>&1 || true
+            dropdb --if-exists --force "$canonical_restored_db" >/dev/null 2>&1 || true
+          }
+          trap cleanup_canonical_databases EXIT
+          cleanup_canonical_databases
+          createdb "$canonical_source_db"
+          createdb "$canonical_restored_db"
+
+          canonical_source_url="postgresql://postgres:scratch_restore_password@127.0.0.1:5432/${canonical_source_db}"
+          canonical_restored_url="postgresql://postgres:scratch_restore_password@127.0.0.1:5432/${canonical_restored_db}"
+
+          psql "$canonical_source_url" -X -v ON_ERROR_STOP=1 -f "$SOURCE_SCHEMA_REPLAY" >/dev/null
+          psql "$canonical_restored_url" -X -v ON_ERROR_STOP=1 -f "$scratch_schema_replay" >/dev/null
+
+          bash ops/postgres_semantic_schema_compare.sh \
+            "$canonical_source_url" "$canonical_restored_url" public
+          echo "phase2_semantic_schema_match=true"
+
+          cleanup_canonical_databases
+          trap - EXIT
           echo "PHASE2_RESTORE_PROOF=PASS"
 
       - name: Print free-tier footprint and final proof
