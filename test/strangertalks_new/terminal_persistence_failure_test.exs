@@ -81,7 +81,7 @@ defmodule StrangertalksNew.TerminalPersistenceFailureTest do
              )
   end
 
-  test "End persistence failure reports ending, emits no terminal authority, then converges only after durable retry" do
+  test "End persistence failure returns retryable error and restores active runtime without retry authority" do
     %{conversation: conversation, a: a, b: b} = queue_match()
     conversation_id = conversation.conversation_id
     pid = start_supervised!({ConversationServer, %{conversation_id: conversation_id}})
@@ -107,54 +107,34 @@ defmodule StrangertalksNew.TerminalPersistenceFailureTest do
     durable_active = Repo.get!(Conversation, conversation_id)
     assert durable_active.conversation_status == :ACTIVE
 
-    # Corrupt only the runtime copy of one required persistence field. The durable row
-    # remains valid and ACTIVE, but the first terminal changeset must fail validation.
     :sys.replace_state(pid, fn state ->
       %{state | conversation: %{state.conversation | participant_b_id: nil}}
     end)
 
-    assert {:ok, %{status: "ending"}} =
+    assert {:error, :end_not_committed} =
              ConversationServer.complete_conversation(conversation_id, a.participant_id)
 
-    # A persistence failure is not terminal authority: the durable row is still ACTIVE,
-    # no terminal event was delivered, and the runtime remains alive only to retry.
     after_failure = Repo.get!(Conversation, conversation_id)
     assert after_failure.conversation_status == :ACTIVE
+    assert after_failure.ended_at == nil
     refute_receive {:conversation_completed, _payload}, 100
     assert Process.alive?(pid)
 
-    terminating_state = :sys.get_state(pid)
-    assert terminating_state.lifecycle_status == :TERMINATING
-    assert %{retry_token: retry_token} = terminating_state.terminal_intent
-    assert is_reference(retry_token)
+    assert {:ok, state} = ConversationServer.inspect_state(conversation_id)
+    assert state.lifecycle_status == :ACTIVE
+    assert state.terminal_intent == nil
 
-    assert {:error, :conversation_terminating} =
+    assert_eventually(fn -> ConversationServer.lookup(conversation_id) == {:ok, pid} end)
+
+    :sys.replace_state(pid, fn state -> %{state | conversation: durable_active} end)
+
+    assert {:ok, %{status: "sent"}} =
              ConversationServer.append_message(
                conversation_id,
                a.participant_id,
                Ecto.UUID.generate(),
-               "must not mutate while terminal persistence is unresolved"
+               "failed End returns authority to the active conversation"
              )
-
-    # Repair the runtime copy to the canonical durable row and trigger the exact retry
-    # token. Only the successful durable write may now emit terminal authority.
-    :sys.replace_state(pid, fn state -> %{state | conversation: durable_active} end)
-    send(pid, {:retry_terminal_persistence, retry_token})
-
-    assert_receive {:conversation_completed, %{status: "ended", reason: "participant_completed"}},
-                   1_000
-
-    assert_eventually(fn ->
-      ConversationServer.lookup(conversation_id) == {:error, :not_started}
-    end)
-
-    terminal = Repo.get!(Conversation, conversation_id)
-    assert terminal.conversation_status == :ENDED
-    assert terminal.ending_type == :NATURAL_END
-    assert terminal.ending_initiator == a.participant_id
-    assert terminal.conversation_completed == true
-
-    assert {:error, :terminal_conversation} = ConversationServer.ensure_started(conversation_id)
   end
 
   defp queue_match do
