@@ -6,6 +6,7 @@ defmodule StrangertalksNew.Reports do
   alias StrangertalksNew.ConversationLifecycle.ConversationServer
   alias StrangertalksNew.SafetyReview
   alias StrangertalksNew.ReportSafetyMedia
+  alias StrangertalksNew.Reports.{ReportEvidenceItem, SafetySubject}
   alias Ecto.Multi
 
   @categories %{
@@ -17,9 +18,78 @@ defmodule StrangertalksNew.Reports do
   }
   @max_evidence_bytes 4_096
   @default_safety_media_aggregate_limit 52_428_800
+  @max_selected_evidence 5
+  @max_context_evidence 20
+  @max_context_window_seconds 15 * 60
 
   def max_evidence_bytes, do: @max_evidence_bytes
   def max_safety_media_aggregate_bytes, do: @default_safety_media_aggregate_limit
+  def max_selected_evidence, do: @max_selected_evidence
+  def max_context_evidence, do: @max_context_evidence
+  def max_context_window_seconds, do: @max_context_window_seconds
+
+  def validate_evidence_items(items) when is_list(items) do
+    selected_count =
+      Enum.count(items, fn item ->
+        role = item[:evidence_role] || Map.get(item, "evidence_role")
+        role in [:SELECTED, "SELECTED"]
+      end)
+
+    context_count =
+      Enum.count(items, fn item ->
+        role = item[:evidence_role] || Map.get(item, "evidence_role")
+        role in [:CONTEXT_EXPANSION, "CONTEXT_EXPANSION"]
+      end)
+
+    cond do
+      selected_count > @max_selected_evidence ->
+        {:error, :selected_evidence_limit_exceeded}
+
+      context_count > @max_context_evidence ->
+        {:error, :context_evidence_limit_exceeded}
+
+      true ->
+        context_timestamps =
+          items
+          |> Enum.filter(fn item ->
+            role = item[:evidence_role] || Map.get(item, "evidence_role")
+            role in [:CONTEXT_EXPANSION, "CONTEXT_EXPANSION"]
+          end)
+          |> Enum.map(fn item ->
+            item[:source_timestamp] || Map.get(item, "source_timestamp")
+          end)
+          |> Enum.filter(&is_struct(&1, DateTime))
+
+        if length(context_timestamps) >= 2 do
+          min_time = Enum.min(context_timestamps, DateTime)
+          max_time = Enum.max(context_timestamps, DateTime)
+
+          if DateTime.diff(max_time, min_time, :second) > @max_context_window_seconds do
+            {:error, :context_window_exceeded}
+          else
+            :ok
+          end
+        else
+          :ok
+        end
+    end
+  end
+
+  def validate_evidence_items(_), do: {:error, :invalid_evidence_items}
+
+  def list_safety_subjects(report_id) when is_binary(report_id) do
+    Repo.all(
+      from s in SafetySubject, where: s.report_id == ^report_id, order_by: [asc: s.created_at]
+    )
+  end
+
+  def list_evidence_items(report_id) when is_binary(report_id) do
+    Repo.all(
+      from e in ReportEvidenceItem,
+        where: e.report_id == ^report_id,
+        order_by: [asc: e.captured_at]
+    )
+  end
 
   def create_report(attrs \\ %{}) do
     %Report{}
@@ -208,6 +278,9 @@ defmodule StrangertalksNew.Reports do
          media_origin
        ) do
     now = DateTime.utc_now()
+    rich_evidence_expiry = DateTime.add(now, 90 * 86_400, :second)
+    reporter_unlink = DateTime.add(now, 180 * 86_400, :second)
+    minimal_record_expiry = DateTime.add(now, 365 * 86_400, :second)
 
     {reporter_context, media_evidence} =
       case evidence do
@@ -240,12 +313,80 @@ defmodule StrangertalksNew.Reports do
           report_status: :SUBMITTED,
           reporter_context: reporter_context,
           deduplication_key: key,
-          media_origin: media_origin
+          media_origin: media_origin,
+          retention_policy_version: "v1",
+          rich_evidence_expires_at: rich_evidence_expiry,
+          reporter_unlink_at: reporter_unlink,
+          minimal_record_expires_at: minimal_record_expiry
         }),
         on_conflict: :nothing,
         conflict_target: [:deduplication_key]
       )
       |> Multi.run(:report, fn repo, _ -> {:ok, repo.get_by!(Report, deduplication_key: key)} end)
+      |> Multi.run(:reporter_subject, fn repo, %{report: report} ->
+        case repo.get_by(SafetySubject, report_id: report.report_id, subject_role: :REPORTER) do
+          nil ->
+            %SafetySubject{}
+            |> SafetySubject.changeset(%{
+              report_id: report.report_id,
+              subject_role: :REPORTER,
+              source_participant_id: reporter_id,
+              created_at: now
+            })
+            |> repo.insert()
+
+          existing ->
+            {:ok, existing}
+        end
+      end)
+      |> Multi.run(:reported_subject, fn repo, %{report: report} ->
+        case repo.get_by(SafetySubject, report_id: report.report_id, subject_role: :REPORTED) do
+          nil ->
+            %SafetySubject{}
+            |> SafetySubject.changeset(%{
+              report_id: report.report_id,
+              subject_role: :REPORTED,
+              source_participant_id: reported_id,
+              created_at: now
+            })
+            |> repo.insert()
+
+          existing ->
+            {:ok, existing}
+        end
+      end)
+      |> Multi.run(:evidence_item, fn repo, %{report: report, reported_subject: reported_sub} ->
+        case repo.get_by(ReportEvidenceItem,
+               report_id: report.report_id,
+               evidence_role: :SELECTED
+             ) do
+          nil ->
+            {snap, m_type, m_bytes, b_size} =
+              if media_evidence != nil do
+                {reporter_context, media_evidence.media_type, media_evidence.binary,
+                 media_evidence.byte_size}
+              else
+                {reporter_context, nil, nil, nil}
+              end
+
+            %ReportEvidenceItem{}
+            |> ReportEvidenceItem.changeset(%{
+              report_id: report.report_id,
+              subject_id: reported_sub.subject_id,
+              source_kind: :CONVERSATION,
+              evidence_role: :SELECTED,
+              content_snapshot: snap,
+              media_type: m_type,
+              media_bytes: m_bytes,
+              byte_size: b_size,
+              captured_at: now
+            })
+            |> repo.insert()
+
+          existing ->
+            {:ok, existing}
+        end
+      end)
       |> Multi.run(:review_attempt, fn repo, %{report: report} ->
         SafetyReview.changeset(%SafetyReview{}, %{
           report_id: report.report_id,
