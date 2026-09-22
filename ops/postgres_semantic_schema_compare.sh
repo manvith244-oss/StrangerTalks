@@ -21,7 +21,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 server_major() {
-  psql "$1" -X -v ON_ERROR_STOP=1 -Atc \
+  psql -X -v ON_ERROR_STOP=1 -d "$1" -Atc \
     "SELECT current_setting('server_version_num')::integer / 10000"
 }
 
@@ -40,7 +40,7 @@ constraint_snapshot() {
   local database_url=$1
   local output=$2
 
-  psql "$database_url" -X -v ON_ERROR_STOP=1 -A -t -F $'\t' -c "
+  psql -X -v ON_ERROR_STOP=1 -d "$database_url" -A -t -F $'\t' -c "
     SELECT
       n.nspname,
       COALESCE(rel.relname, typ.typname, ''),
@@ -90,7 +90,7 @@ constraint_snapshot() {
       ), ''),
       COALESCE(ind.relname, ''),
       COALESCE(parent_n.nspname || '.' || parent_rel.relname || '.' || parent.conname, ''),
-      regexp_replace(COALESCE(c.conbin::text, ''), ' :location -?[0-9]+', ' :location 0', 'g')
+      COALESCE(pg_get_expr(c.conbin, c.conrelid, true), '')
     FROM pg_constraint AS c
     JOIN pg_namespace AS n ON n.oid = c.connamespace
     LEFT JOIN pg_class AS rel ON rel.oid = c.conrelid
@@ -110,7 +110,7 @@ constraint_diagnostic() {
   local database_url=$1
   local output=$2
 
-  psql "$database_url" -X -v ON_ERROR_STOP=1 -A -t -F $'\t' -c "
+  psql -X -v ON_ERROR_STOP=1 -d "$database_url" -A -t -F $'\t' -c "
     SELECT n.nspname, COALESCE(rel.relname, typ.typname, ''), c.conname,
            pg_get_constraintdef(c.oid, false)
     FROM pg_constraint AS c
@@ -126,7 +126,7 @@ index_snapshot() {
   local database_url=$1
   local output=$2
 
-  psql "$database_url" -X -v ON_ERROR_STOP=1 -A -t -F $'\t' -c "
+  psql -X -v ON_ERROR_STOP=1 -d "$database_url" -A -t -F $'\t' -c "
     SELECT
       n.nspname,
       tbl.relname,
@@ -174,8 +174,8 @@ index_snapshot() {
         SELECT string_agg(x.option::text, ',' ORDER BY x.ord)
         FROM unnest(i.indoption::smallint[]) WITH ORDINALITY AS x(option, ord)
       ), ''),
-      regexp_replace(COALESCE(i.indexprs::text, ''), ' :location -?[0-9]+', ' :location 0', 'g'),
-      regexp_replace(COALESCE(i.indpred::text, ''), ' :location -?[0-9]+', ' :location 0', 'g')
+      COALESCE(pg_get_expr(i.indexprs, i.indrelid, true), ''),
+      COALESCE(pg_get_expr(i.indpred, i.indrelid, true), '')
     FROM pg_index AS i
     JOIN pg_class AS idx ON idx.oid = i.indexrelid
     JOIN pg_class AS tbl ON tbl.oid = i.indrelid
@@ -190,7 +190,7 @@ index_diagnostic() {
   local database_url=$1
   local output=$2
 
-  psql "$database_url" -X -v ON_ERROR_STOP=1 -A -t -F $'\t' -c "
+  psql -X -v ON_ERROR_STOP=1 -d "$database_url" -A -t -F $'\t' -c "
     SELECT n.nspname, tbl.relname, idx.relname,
            pg_get_indexdef(i.indexrelid, 0, false),
            COALESCE(pg_get_expr(i.indexprs, i.indrelid, false), ''),
@@ -209,7 +209,7 @@ canonical_dump() {
   local output=$2
   local raw="$output.raw"
 
-  pg_dump --schema-only --no-owner --no-acl --schema="$schema" "$database_url" > "$raw"
+  pg_dump --schema-only --no-owner --no-acl --schema="$schema" -d "$database_url" > "$raw"
   grep -Ev '^(--|\\restrict |\\unrestrict |$)' "$raw" > "$output"
 }
 
