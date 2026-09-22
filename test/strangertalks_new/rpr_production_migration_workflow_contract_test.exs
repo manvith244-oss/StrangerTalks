@@ -7,7 +7,7 @@ defmodule StrangertalksNew.RprProductionMigrationWorkflowContractTest do
   @live_path ".github/workflows/rpr-production-migration-live.yml"
   @backup_path ".github/workflows/postgres-r2-backup.yml"
   @bundled_ca "priv/certs/supabase-prod-ca-2021.crt"
-  @migration_tree "662fa9e49daaa8832fb4175c1366fbedbd1ad1a6"
+  @migration_tree "20219b3127b08e9db677d2251a0cdcefae3fa4a1"
   @owner_actor "manvith244-oss"
 
   test "PR rehearsal is incapable of receiving production secrets or mutating production" do
@@ -70,5 +70,45 @@ defmodule StrangertalksNew.RprProductionMigrationWorkflowContractTest do
 
     assert workflow =~
              ~r/backup-restore-proof:\n\s+if:.*github\.event_name == 'schedule'.*github\.actor == '#{@owner_actor}'.*github\.triggering_actor == '#{@owner_actor}'.*github\.ref == 'refs\/heads\/main'.*\n\s+runs-on:/
+  end
+
+  test "closure and live workflows agree on exact generation identities and fail closed on mismatch" do
+    rehearsal = File.read!(@rehearsal_path)
+    live = File.read!(@live_path)
+
+    assert rehearsal =~ "EXPECTED_PRODUCTION_HEAD: \"20260914175320\""
+    assert live =~ "EXPECTED_PRODUCTION_HEAD: \"20260914175320\""
+
+    assert rehearsal =~ "EXPECTED_REPOSITORY_HEAD: \"20260915120000\""
+    assert live =~ "EXPECTED_REPOSITORY_HEAD: \"20260915120000\""
+
+    assert rehearsal =~ "EXPECTED_MIGRATIONS_TREE: \"#{@migration_tree}\""
+    assert live =~ "EXPECTED_MIGRATIONS_TREE: \"#{@migration_tree}\""
+
+    assert rehearsal =~ "expected 32 application tables after upgrade"
+    assert live =~ "expected 32 application tables after production migration"
+
+    assert rehearsal =~ "test \"$migration_tree\" = \"$EXPECTED_MIGRATIONS_TREE\""
+    assert rehearsal =~ "test \"$repo_latest\" = \"$EXPECTED_REPOSITORY_HEAD\""
+    assert live =~ "test \"$migration_tree\" = \"$EXPECTED_MIGRATIONS_TREE\""
+    assert live =~ "test \"$repo_latest\" = \"$EXPECTED_REPOSITORY_HEAD\""
+    assert live =~ "test \"$actual\" = \"$EXPECTED_PRODUCTION_HEAD\""
+
+    assert rehearsal =~
+             "test \"$(git rev-parse HEAD:priv/repo/migrations)\" = \"$EXPECTED_MIGRATIONS_TREE\""
+
+    assert live =~
+             "test \"$(git rev-parse HEAD:priv/repo/migrations)\" = \"$EXPECTED_MIGRATIONS_TREE\""
+
+    assert rehearsal =~ "expected 30 application tables at baseline"
+    assert rehearsal =~ "baseline application tables without RLS"
+    assert rehearsal =~ "retains public schema authority at baseline"
+    assert rehearsal =~ "Data API table grants exist at baseline"
+    assert rehearsal =~ "application tables without RLS after upgrade"
+    assert rehearsal =~ "retains public schema authority"
+    assert rehearsal =~ "Data API table grants remain after upgrade"
+    assert live =~ "application tables without RLS after production migration"
+    assert live =~ "retains public schema authority"
+    assert live =~ "Data API table grants remain after production migration"
   end
 end
