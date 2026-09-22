@@ -102,25 +102,25 @@ jobs:
           test "$actual" = "$EXPECTED_PRODUCTION_HEAD"
           echo "REHEARSAL_PRODUCTION_HEAD=$actual"
 
-      - name: Inject current Supabase-like insecure Data API ACL state
-        run: |
-          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
-          GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
-          GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
-          GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
-          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER ON TABLES TO anon, authenticated, service_role;
-          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO anon, authenticated, service_role;
-          ALTER DEFAULT PRIVILEGES FOR ROLE strangertalks_local IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC, anon, authenticated, service_role;
-          ALTER DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC, anon, authenticated, service_role;
-          SQL
-
-      - name: Prove hostile pre-state is actually exposed
+      - name: Prove production baseline security contract
         run: |
           set -euo pipefail
-          for role in anon authenticated service_role; do
-            psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -Atc "SELECT has_schema_privilege('$role','public','USAGE')" | grep -qx t
-            psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -Atc "SELECT has_table_privilege('$role','public.participants','SELECT')" | grep -qx t
-          done
+          psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE app_count integer; bad_rls integer; api_grants integer; role_name text;
+          BEGIN
+            SELECT count(*) INTO app_count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations';
+            IF app_count <> 30 THEN RAISE EXCEPTION 'expected 30 application tables at baseline, got %', app_count; END IF;
+            SELECT count(*) INTO bad_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations' AND NOT c.relrowsecurity;
+            IF bad_rls <> 0 THEN RAISE EXCEPTION 'baseline application tables without RLS: %', bad_rls; END IF;
+            FOREACH role_name IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP
+              IF has_schema_privilege(role_name, 'public', 'USAGE') OR has_schema_privilege(role_name, 'public', 'CREATE') THEN RAISE EXCEPTION '% retains public schema authority at baseline', role_name; END IF;
+            END LOOP;
+            SELECT count(*) INTO api_grants FROM information_schema.table_privileges WHERE table_schema = 'public' AND grantee IN ('anon','authenticated','service_role');
+            IF api_grants <> 0 THEN RAISE EXCEPTION 'Data API table grants exist at baseline: %', api_grants; END IF;
+          END
+          $$;
+          SQL
 
       - name: Apply exact pending canonical migration chain
         run: |
