@@ -46,7 +46,12 @@ defmodule StrangertalksNew.Wt07BackupSemanticSchemaVerifierTest do
     {output, status} = System.cmd("ruby", ["-e", ruby, @workflow_path], stderr_to_stdout: true)
     assert status == 0, "failed to extract workflow shell blocks: #{output}"
 
-    run_blocks = output |> String.split("\n", trim: true) |> Enum.map(&Base.decode64!/1)
+    run_blocks =
+      output
+      |> String.replace("\r", "")
+      |> String.split("\n", trim: true)
+      |> Enum.map(&Base.decode64!/1)
+
     assert run_blocks != [], "expected at least one workflow run block"
 
     Enum.with_index(run_blocks, 1)
@@ -91,6 +96,42 @@ defmodule StrangertalksNew.Wt07BackupSemanticSchemaVerifierTest do
 
     refute source_sql == target_sql
     assert_semantic_match(source_sql, target_sql)
+  end
+
+  test "equivalent schemas with different internal type/enum OIDs compare equal" do
+    source_sql = """
+    CREATE TYPE presence_state AS ENUM ('online', 'offline');
+    CREATE TABLE participants (id uuid PRIMARY KEY, presence presence_state);
+    CREATE INDEX idx_participants_presence ON participants (presence) WHERE (presence = 'online');
+    """
+
+    target_sql = """
+    CREATE TYPE dummy_pad AS ENUM ('a', 'b');
+    DROP TYPE dummy_pad;
+    CREATE TYPE presence_state AS ENUM ('online', 'offline');
+    CREATE TABLE participants (id uuid PRIMARY KEY, presence presence_state);
+    CREATE INDEX idx_participants_presence ON participants (presence) WHERE (presence = 'online');
+    """
+
+    assert_semantic_match(source_sql, target_sql)
+  end
+
+  test "changing partial-index enum predicate value fails semantic comparison" do
+    source_sql = """
+    CREATE TYPE presence_state AS ENUM ('online', 'offline');
+    CREATE TABLE participants (id uuid PRIMARY KEY, presence presence_state);
+    CREATE INDEX idx_participants_presence ON participants (presence) WHERE (presence = 'online');
+    """
+
+    target_sql = """
+    CREATE TYPE dummy_pad AS ENUM ('a', 'b');
+    DROP TYPE dummy_pad;
+    CREATE TYPE presence_state AS ENUM ('online', 'offline');
+    CREATE TABLE participants (id uuid PRIMARY KEY, presence presence_state);
+    CREATE INDEX idx_participants_presence ON participants (presence) WHERE (presence = 'offline');
+    """
+
+    assert_semantic_mismatch(source_sql, target_sql)
   end
 
   test "changing MEDIA_ORIGIN fails semantic comparison" do
@@ -186,6 +227,8 @@ defmodule StrangertalksNew.Wt07BackupSemanticSchemaVerifierTest do
     source_db = "wt07_src_#{suffix}"
     target_db = "wt07_dst_#{suffix}"
 
+    drop_database!(source_db)
+    drop_database!(target_db)
     create_database!(source_db)
     create_database!(target_db)
 
@@ -235,7 +278,7 @@ defmodule StrangertalksNew.Wt07BackupSemanticSchemaVerifierTest do
     {output, status} =
       System.cmd(
         "psql",
-        [database_url, "-X", "-v", "ON_ERROR_STOP=1", "-c", sql],
+        ["-X", "-v", "ON_ERROR_STOP=1", "-d", database_url, "-c", sql],
         stderr_to_stdout: true
       )
 
