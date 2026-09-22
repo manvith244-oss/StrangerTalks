@@ -28,6 +28,11 @@ defmodule StrangertalksNew.Report do
       values: [:CONVERSATION, :HANGOUT],
       default: :CONVERSATION
 
+    field :retention_policy_version, :string, default: "v1"
+    field :rich_evidence_expires_at, :utc_datetime_usec
+    field :reporter_unlink_at, :utc_datetime_usec
+    field :minimal_record_expires_at, :utc_datetime_usec
+
     belongs_to :reporting_participant, StrangertalksNew.Participant,
       foreign_key: :reporting_participant_id,
       references: :participant_id
@@ -45,6 +50,8 @@ defmodule StrangertalksNew.Report do
       references: :message_id
 
     has_one :safety_media, StrangertalksNew.ReportSafetyMedia, foreign_key: :report_id
+    has_many :safety_subjects, StrangertalksNew.Reports.SafetySubject, foreign_key: :report_id
+    has_many :evidence_items, StrangertalksNew.Reports.ReportEvidenceItem, foreign_key: :report_id
   end
 
   def changeset(report, attrs) do
@@ -62,7 +69,11 @@ defmodule StrangertalksNew.Report do
       :resolution_outcome,
       :reporter_context,
       :deduplication_key,
-      :media_origin
+      :media_origin,
+      :retention_policy_version,
+      :rich_evidence_expires_at,
+      :reporter_unlink_at,
+      :minimal_record_expires_at
     ])
     |> validate_required([
       :created_at,
@@ -82,6 +93,7 @@ defmodule StrangertalksNew.Report do
     |> check_constraint(:media_origin, name: :reports_media_origin_check)
     |> check_constraint(:source_kind, name: :reports_source_kind_check)
     |> check_constraint(:source_kind, name: :reports_source_authority_check)
+    |> check_constraint(:minimal_record_expires_at, name: :reports_retention_chronology_check)
   end
 
   defp validate_self_reporting(changeset) do

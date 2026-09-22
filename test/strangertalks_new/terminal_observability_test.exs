@@ -87,7 +87,7 @@ defmodule StrangertalksNew.TerminalObservabilityTest do
       %{state | conversation: %{state.conversation | participant_b_id: nil}}
     end)
 
-    assert {:ok, %{status: "ending"}} =
+    assert {:error, :end_not_committed} =
              ConversationServer.complete_conversation(
                conversation.conversation_id,
                a.participant_id

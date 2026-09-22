@@ -569,7 +569,7 @@ defmodule StrangertalksNew.ConversationDeliveryTest do
     assert {:error, :conversation_terminating} =
              append(context, context.participant_a, Ecto.UUID.generate(), "rejected")
 
-    assert {:error, :conversation_terminating} =
+    assert {:error, :unknown_message} =
              ConversationServer.acknowledge_message(
                conversation_id,
                context.participant_b,
