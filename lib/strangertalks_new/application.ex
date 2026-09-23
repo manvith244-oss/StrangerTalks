@@ -5,9 +5,29 @@ defmodule StrangertalksNew.Application do
 
   use Application
 
+  alias StrangertalksNew.Experiments.Hearth.Runtime
+
   @impl true
   def start(_type, _args) do
-    children = [
+    mode = if Runtime.standalone?(), do: :hearth_standalone, else: :canonical
+
+    opts = [strategy: :one_for_one, name: StrangertalksNew.Supervisor]
+    Supervisor.start_link(children_for_mode(mode), opts)
+  end
+
+  def children_for_mode(:hearth_standalone) do
+    [
+      StrangertalksNewWeb.Telemetry,
+      {Phoenix.PubSub, name: StrangertalksNew.PubSub},
+      StrangertalksNew.RateLimiter,
+      StrangertalksNew.Experiments.Hearth.Supervisor,
+      StrangertalksNew.Experiments.Hearth.TelemetryLogger,
+      StrangertalksNewWeb.Endpoint
+    ]
+  end
+
+  def children_for_mode(:canonical) do
+    [
       StrangertalksNewWeb.Telemetry,
       StrangertalksNew.Repo,
       {DNSCluster, query: Application.get_env(:strangertalks_new, :dns_cluster_query) || :ignore},
@@ -41,11 +61,6 @@ defmodule StrangertalksNew.Application do
       # process-owned presence registrations.
       StrangertalksNewWeb.TransportSupervisor
     ]
-
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
-    opts = [strategy: :one_for_one, name: StrangertalksNew.Supervisor]
-    Supervisor.start_link(children, opts)
   end
 
   # Tell Phoenix to update the endpoint configuration
