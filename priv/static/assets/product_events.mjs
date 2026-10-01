@@ -187,14 +187,13 @@ export function createTalkLanguageObserver(tracker) {
 
 export function createQueueEventObserver(tracker) {
   let intentCode = null
-  let interactionLanguage = null
   let requestCapturePromise = null
   let joinedCapturePromise = null
   let matchedCapturePromise = null
   let queueJoinedInFlow = false
   let matchedInFlow = false
   const resetState = () => {
-    intentCode = null; interactionLanguage = null; requestCapturePromise = null
+    intentCode = null; requestCapturePromise = null
     joinedCapturePromise = null; matchedCapturePromise = null; queueJoinedInFlow = false; matchedInFlow = false
   }
   const syncFlow = createFlowSynchronizer(tracker, resetState)
@@ -228,7 +227,7 @@ export function createQueueEventObserver(tracker) {
     },
     matched() {
       syncFlow()
-      if (!intentCode || !interactionLanguage || (!queueJoinedInFlow && !joinedCapturePromise) || matchedInFlow || matchedCapturePromise) return Promise.resolve(false)
+      if (!intentCode || (!queueJoinedInFlow && !joinedCapturePromise) || matchedInFlow || matchedCapturePromise) return Promise.resolve(false)
       const flowAttemptId = tracker.flowAttemptId
       const prerequisite = joinedCapturePromise
       const capturedIntentCode = intentCode

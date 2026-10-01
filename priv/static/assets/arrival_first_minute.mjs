@@ -56,6 +56,26 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
     arrivalLede?.after(trustCue)
   }
 
+  let feedback = documentRef.querySelector("#arrival-feedback")
+  if (!feedback) {
+    feedback = documentRef.createElement("p")
+    feedback.id = "arrival-feedback"
+    feedback.setAttribute("role", "status")
+    feedback.setAttribute("aria-live", "polite")
+    feedback.hidden = true
+    trustCue.after(feedback)
+  }
+
+  const setFeedback = (message) => {
+    feedback.textContent = message || ""
+    feedback.hidden = !message
+  }
+  const clearFeedback = () => setFeedback("")
+  const queueDoorLabel = () => documentRef.querySelector("#queue-door")?.textContent?.trim() || "the same option"
+  const restoreQueueCopy = () => {
+    if (queueLede) queueLede.textContent = `Looking for someone who chose ${queueDoorLabel()} too.`
+  }
+
   const setDoorBusy = (busy) => {
     joinInFlight = busy
     doorGrid.setAttribute("aria-busy", busy ? "true" : "false")
