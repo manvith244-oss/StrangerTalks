@@ -564,6 +564,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngineTest do
                MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "te", nil, nil)
 
       assert duplicate.queue_attempt_id == first.queue_attempt_id
+
       assert is_nil(
                Agent.get(QueueState, &Map.fetch!(&1, participant.participant_id)).conversation_language
              )
@@ -574,7 +575,13 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngineTest do
       {:ok, participant_2} = StrangertalksNew.Participants.create_participant(%{})
 
       assert {:ok, _} =
-               MatchmakingEngine.join_queue(participant_1.participant_id, :EXPLORE, "en", nil, nil)
+               MatchmakingEngine.join_queue(
+                 participant_1.participant_id,
+                 :EXPLORE,
+                 "en",
+                 nil,
+                 nil
+               )
 
       assert {:ok, _} =
                MatchmakingEngine.join_queue(
