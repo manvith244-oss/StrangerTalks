@@ -153,7 +153,6 @@ async function bootFresh(browser, {controllableSocket = false} = {}) {
   assert.ok(bootstrap.status >= 200 && bootstrap.status < 300, "participant bootstrap succeeds")
   await waitForParticipantJoin(observed)
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible"})
-  await page.locator("#conversation-language").selectOption("en")
   return {
     context,
     socketControl,
@@ -284,7 +283,7 @@ async function matchPair(browser, door = "Advice", {controllableA = false, contr
   return {a, b, conversationTopic: conversationA}
 }
 
-test("explicit Telugu Conversation Language survives Match and refresh", {timeout: 60_000}, async () => {
+test("language-free Match remains language-null across refresh", {timeout: 60_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let a
   let b
@@ -292,15 +291,13 @@ test("explicit Telugu Conversation Language survives Match and refresh", {timeou
   try {
     a = await bootFresh(browser)
     b = await bootFresh(browser)
-    await a.page.locator("#conversation-language").selectOption("te")
-    await b.page.locator("#conversation-language").selectOption("te")
 
     await clickDoorAndQueue(a.page, "Advice")
     await b.page.locator('button.door:has-text("Advice")').click()
     const [conversationA, conversationB] = await Promise.all([waitForConversation(a), waitForConversation(b)])
     assert.equal(conversationA, conversationB)
-    assert.equal(await a.page.locator("#conversation-language").inputValue(), "te")
-    assert.equal(await b.page.locator("#conversation-language").inputValue(), "te")
+    assert.equal(await a.page.locator("#conversation-language").count(), 0)
+    assert.equal(await b.page.locator("#conversation-language").count(), 0)
 
     for (const participant of [a, b]) {
       const mark = participant.journal.mark()
@@ -309,12 +306,12 @@ test("explicit Telugu Conversation Language survives Match and refresh", {timeou
       const reconciliation = await participant.journal.waitFor(
         event => event.type === "frame_received" && event.event === "phx_reply" &&
           event.body?.response?.snapshot?.canonical_state === "CONVERSATION",
-        "Telugu Conversation reconciliation",
+        "language-free Conversation reconciliation",
         mark
       )
-      assert.equal(reconciliation.body.response.snapshot.conversation.conversation_language, "te")
+      assert.equal(reconciliation.body.response.snapshot.conversation.conversation_language, null)
       assert.equal(await waitForConversation(participant, mark), conversationA)
-      assert.equal(await participant.page.locator("#conversation-language").inputValue(), "te")
+      assert.equal(await participant.page.locator("#conversation-language").count(), 0)
     }
 
     assertClean(a)
