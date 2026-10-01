@@ -101,7 +101,7 @@ defmodule StrangertalksNew.ConversationIcebreakerTest do
     end
   end
 
-  test "missing persisted Match language fails Conversation Start closed with no English fallback",
+  test "missing persisted Match language falls back to English Conversation Start",
        _context do
     fixture = conversation_fixture(nil)
 
@@ -110,8 +110,10 @@ defmodule StrangertalksNew.ConversationIcebreakerTest do
         {ConversationServer, %{conversation_id: fixture.conversation.conversation_id}}
       )
 
-    assert {:ok, %{icebreaker: :retired}} =
+    assert {:ok, %{icebreaker: {:active, identity}}} =
              ConversationServer.inspect_state(fixture.conversation.conversation_id)
+
+    assert String.starts_with?(identity, "en/")
 
     assert {:ok, joined} =
              ConversationServer.sync_and_register_channel(
@@ -122,7 +124,7 @@ defmodule StrangertalksNew.ConversationIcebreakerTest do
                0
              )
 
-    assert joined.icebreaker == %{status: "retired"}
+    assert joined.icebreaker == %{status: "active", identity: identity}
   end
 
   test "first canonical text retires once while preserving ordinary sequence and delivery",

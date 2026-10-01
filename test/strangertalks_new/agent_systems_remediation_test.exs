@@ -12,11 +12,11 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
     :ok
   end
 
-  test "en te hi queue authority reaches persisted Match and language-qualified Conversation Start" do
+  test "legacy en te hi queue values are ignored and null Match language uses English Conversation Start" do
     for language <- ["en", "te", "hi"] do
       %{match: match, conversation: conversation, a: a, b: b} = queue_match(language)
 
-      assert match.conversation_language == language
+      assert is_nil(match.conversation_language)
 
       pid =
         start_supervised!({ConversationServer, %{conversation_id: conversation.conversation_id}})
@@ -24,9 +24,9 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
       assert {:ok, %{icebreaker: {:active, identity}}} =
                ConversationServer.inspect_state(conversation.conversation_id)
 
-      assert String.starts_with?(identity, "#{language}/")
+      assert String.starts_with?(identity, "en/")
 
-      assert {:ok, %{language: ^language, text: text}} =
+      assert {:ok, %{language: "en", text: text}} =
                StrangertalksNew.IcebreakerCatalog.fetch(identity)
 
       assert is_binary(text) and text != ""
@@ -77,7 +77,7 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
 
     match = Repo.get!(StrangertalksNew.Matching, match_id)
     conversation = Repo.get_by!(StrangertalksNew.Conversation, match_id: match_id)
-    assert match.conversation_language == "en"
+    assert is_nil(match.conversation_language)
 
     _pid =
       start_supervised!({ConversationServer, %{conversation_id: conversation.conversation_id}})
@@ -120,7 +120,7 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
     assert Map.has_key?(queue, b.participant_id)
   end
 
-  test "Conversation recovery keeps Match-authoritative language and rejects an outsider" do
+  test "Conversation recovery keeps English fallback for null Match language and rejects an outsider" do
     %{conversation: conversation, a: a} = queue_match("hi")
 
     old_pid =
@@ -129,7 +129,7 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
     assert {:ok, %{icebreaker: {:active, before_identity}}} =
              ConversationServer.inspect_state(conversation.conversation_id)
 
-    assert String.starts_with?(before_identity, "hi/")
+    assert String.starts_with?(before_identity, "en/")
 
     {:ok, outsider} = StrangertalksNew.Participants.create_participant(%{})
 
@@ -298,8 +298,8 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
       refute source =~ "agent_accuracy"
     end
 
-    assert participant_channel =~
-             "MatchmakingEngine.join_queue(participant_id, door, language, nil, nil)"
+    assert participant_channel =~ ~s(Map.get(params, "conversation_language"))
+    refute participant_channel =~ "ConversationLanguages.normalize"
 
     refute learning_context =~ "Application.put_env"
     refute analytics_context =~ "Application.put_env"
