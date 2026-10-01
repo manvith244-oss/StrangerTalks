@@ -519,10 +519,22 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngineTest do
       {:ok, participant_2} = StrangertalksNew.Participants.create_participant(%{})
 
       assert {:ok, _} =
-               MatchmakingEngine.join_queue(participant_1.participant_id, :EXPLORE, "en", nil, nil)
+               MatchmakingEngine.join_queue(
+                 participant_1.participant_id,
+                 :EXPLORE,
+                 "en",
+                 nil,
+                 nil
+               )
 
       assert {:ok, _} =
-               MatchmakingEngine.join_queue(participant_2.participant_id, :EXPLORE, "te", nil, nil)
+               MatchmakingEngine.join_queue(
+                 participant_2.participant_id,
+                 :EXPLORE,
+                 "te",
+                 nil,
+                 nil
+               )
 
       assert {:ok, [_]} = MatchmakingEngine.evaluate_pending_matches()
       match = Repo.one!(StrangertalksNew.Matching)
@@ -552,7 +564,9 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngineTest do
                MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "te", nil, nil)
 
       assert duplicate.queue_attempt_id == first.queue_attempt_id
-      assert is_nil(Agent.get(QueueState, &Map.fetch!(&1, participant.participant_id)).conversation_language)
+      assert is_nil(
+               Agent.get(QueueState, &Map.fetch!(&1, participant.participant_id)).conversation_language
+             )
     end
 
     test "different Doors still do not match before scarcity relaxation" do
@@ -563,7 +577,13 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngineTest do
                MatchmakingEngine.join_queue(participant_1.participant_id, :EXPLORE, "en", nil, nil)
 
       assert {:ok, _} =
-               MatchmakingEngine.join_queue(participant_2.participant_id, :SOMETHING_REAL, "te", nil, nil)
+               MatchmakingEngine.join_queue(
+                 participant_2.participant_id,
+                 :SOMETHING_REAL,
+                 "te",
+                 nil,
+                 nil
+               )
 
       assert {:ok, []} = MatchmakingEngine.evaluate_pending_matches()
       assert Repo.aggregate(StrangertalksNew.Matching, :count, :match_id) == 0
