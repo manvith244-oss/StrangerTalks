@@ -334,8 +334,6 @@ Socket.prototype.channel = function(topic, params) {
 document.addEventListener("click", (event) => {
   const door = event.target.closest(".door")
   if (!door) return
-  const language = node("#conversation-language")?.value
-  if (!language) return
   selectedDoor = door.querySelector("strong")?.textContent?.trim() || null
   renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor})
   queueMicrotask(() => renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor}))
