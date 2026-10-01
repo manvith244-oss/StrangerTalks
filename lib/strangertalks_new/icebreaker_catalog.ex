@@ -64,7 +64,7 @@ defmodule StrangertalksNew.IcebreakerCatalog do
   def identity_for(conversation_id) when is_binary(conversation_id) do
     with %Conversation{match_id: match_id} <- Repo.get(Conversation, conversation_id),
          %Matching{conversation_language: language} <- Repo.get(Matching, match_id),
-         {:ok, normalized_language} <- ConversationLanguages.normalize(language) do
+         {:ok, normalized_language} <- ConversationLanguages.normalize(language || "en") do
       identity_for(conversation_id, normalized_language)
     else
       _ -> nil

@@ -2,7 +2,6 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
   use Phoenix.Channel, log_join: false, log_handle_in: false
 
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
-  alias StrangertalksNew.ConversationLanguages
   alias StrangertalksNew.QueueEngine.ParticipantConnectionTracker
   alias StrangertalksNew.QueueEngine.QueueState
   alias StrangertalksNew.RelationshipReconnections
@@ -76,9 +75,6 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
 
         {:reply, {:error, StrangertalksNew.DomainError.to_channel_payload(:invalid_door_type)},
          socket}
-
-      {:error, reason} when reason in [:language_required, :invalid_conversation_language] ->
-        {:reply, {:error, StrangertalksNew.DomainError.to_channel_payload(reason)}, socket}
 
       {:error, :participant_busy} ->
         StrangertalksNew.Telemetry.failure(
@@ -406,7 +402,7 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
     end
   end
 
-  defp queue_entry_status(participant_id, door, language) do
+  defp queue_entry_status(participant_id, door) do
     Agent.get(QueueState, fn state ->
       case Map.get(state, participant_id) do
         nil ->

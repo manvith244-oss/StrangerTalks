@@ -10,7 +10,6 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
   alias Ecto.Multi
   alias StrangertalksNew.Conversation
-  alias StrangertalksNew.ConversationLanguages
   alias StrangertalksNew.Matching
   alias StrangertalksNew.MatchingRules
   alias StrangertalksNew.Participant
@@ -43,12 +42,11 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
              (is_binary(conversation_language) or is_nil(conversation_language)) and
              (is_integer(media_overlap) or is_nil(media_overlap)) and
              (is_number(keystroke_profile) or is_nil(keystroke_profile)) do
-    with :ok <- validate_door(door_type),
-         {:ok, normalized_language} <- ConversationLanguages.normalize(conversation_language) do
+    with :ok <- validate_door(door_type) do
       put_queue_entry(
         participant_id,
         door_type,
-        normalized_language,
+        nil,
         media_overlap,
         keystroke_profile,
         nil
@@ -65,10 +63,8 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
         conversation_id
       )
       when is_binary(participant_id) and is_atom(door_type) and is_binary(conversation_id) do
-    with :ok <- validate_door(door_type),
-         {:ok, normalized_language} <-
-           ConversationLanguages.normalize(conversation_language) do
-      put_queue_entry(participant_id, door_type, normalized_language, nil, nil, conversation_id)
+    with :ok <- validate_door(door_type) do
+      put_queue_entry(participant_id, door_type, nil, nil, nil, conversation_id)
     end
   end
 
@@ -122,10 +118,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
                 nil ->
                   {{:inserted, entry_payload}, Map.put(state, participant_id, entry_payload)}
 
-                %{
-                  door_selection: ^door_type,
-                  conversation_language: ^conversation_language
-                } = existing_entry ->
+                %{door_selection: ^door_type} = existing_entry ->
                   {{:same_entry, existing_entry}, state}
 
                 _entry ->
@@ -384,15 +377,13 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   defp find_viable_partner(p1, candidates, now) do
     exact_partner =
       Enum.find(candidates, fn p2 ->
-        language_compatible?(p1, p2) and p1.door_selection == p2.door_selection and
-          safe_pair?(p1, p2)
+        p1.door_selection == p2.door_selection and safe_pair?(p1, p2)
       end)
 
     cross_partner =
       if is_nil(exact_partner) and scarcity_qualified?(p1, now) do
         Enum.find(candidates, fn p2 ->
-          language_compatible?(p1, p2) and scarcity_qualified?(p2, now) and
-            approved_cross_door?(p1, p2) and safe_pair?(p1, p2)
+          scarcity_qualified?(p2, now) and approved_cross_door?(p1, p2) and safe_pair?(p1, p2)
         end)
       end
 
@@ -414,11 +405,6 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
   defp safe_pair?(p1, p2),
     do: not MatchingRules.check_safety_veto?(p1.participant_id, p2.participant_id)
-
-  defp language_compatible?(p1, p2) do
-    language = Map.get(p1, :conversation_language)
-    is_binary(language) and language == Map.get(p2, :conversation_language)
-  end
 
   defp persist_match_and_conversation(p1, p2, score) do
     started_at = System.monotonic_time()
@@ -445,17 +431,14 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
     activity_a = resolve_active_conversation(p1.participant_id)
     activity_b = resolve_active_conversation(p2.participant_id)
 
-    with %{door_selection: door_a, conversation_language: language_a, queue_attempt_id: attempt_a} <-
+    with %{door_selection: door_a, queue_attempt_id: attempt_a} <-
            Map.get(queue_state, p1.participant_id),
          ^door_a <- p1.door_selection,
-         ^language_a <- p1.conversation_language,
          ^attempt_a <- p1.queue_attempt_id,
-         %{door_selection: door_b, conversation_language: language_b, queue_attempt_id: attempt_b} <-
+         %{door_selection: door_b, queue_attempt_id: attempt_b} <-
            Map.get(queue_state, p2.participant_id),
          ^door_b <- p2.door_selection,
-         ^language_b <- p2.conversation_language,
          ^attempt_b <- p2.queue_attempt_id,
-         ^language_a <- language_b,
          false <- MatchingRules.check_safety_veto?(p1.participant_id, p2.participant_id),
          :available <- activity_a,
          :available <- activity_b do
@@ -480,7 +463,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
         participant_b_id: p2.participant_id,
         participant_a_door_type: p1.door_selection,
         participant_b_door_type: p2.door_selection,
-        conversation_language: p1.conversation_language,
+        conversation_language: nil,
         door_type: common_door(p1, p2),
         compatibility_score: score / 100,
         compatibility_version: "compatibility_v1",
