@@ -6,7 +6,7 @@ A01 is the first model-backed StrangerTalks Agent. It is participant-scoped and 
 
 ## Invocation
 
-A participant explicitly opens **Ask StrangerTalks** inside the Conversation and requests help. The browser sends the current draft only as part of that explicit request. The server independently authenticates the participant and resolves the Conversation, Match language, membership, safety state, lifecycle state, and bounded recent text context.
+A participant explicitly opens **Ask StrangerTalks** inside the Conversation and requests help. The browser sends the current draft only as part of that explicit request. The server independently authenticates the participant and resolves the Conversation, effective content language (persisted Match language when present, otherwise English), membership, safety state, lifecycle state, and bounded recent text context.
 
 The client fails closed when local Conversation authority is ambiguous. It does not guess that the newest locally retained/recovering Conversation is the one the participant intends to ask about.
 
@@ -34,7 +34,7 @@ Supported tones are `natural`, `warm`, `funny`, `direct`, `thoughtful`, `light`,
 
 The model can receive only the bounded A01 projection:
 
-- authoritative Conversation Language;
+- effective Conversation content language (persisted Match language when present, otherwise English);
 - Door when relevant;
 - requested mode/tone;
 - explicit participant request;
@@ -56,11 +56,11 @@ Before model invocation, A01 requires:
 
 - authenticated participant membership;
 - Conversation status in `PENDING`, `ACTIVE`, or `PAUSED`;
-- valid persisted Match language;
+- effective Conversation content language, using English when persisted Match language is absent;
 - no authoritative BoundaryBlock/CLOSED-Relationship veto;
 - a live authoritative `ConversationServer` runtime from which bounded context can be projected.
 
-After model generation, the same persisted authority is re-read and the live runtime is rechecked. A result is discarded as stale if Conversation status, Match language, safety authority, Conversation runtime epoch, next message sequence, transcript fingerprint, or canonical starter identity changed during generation. A ConversationServer restart therefore invalidates an in-flight result even if the durable Conversation itself remains recoverable.
+After model generation, the same persisted authority is re-read and the live runtime is rechecked. A result is discarded as stale if Conversation status, effective content language, safety authority, Conversation runtime epoch, next message sequence, transcript fingerprint, or canonical starter identity changed during generation. A ConversationServer restart therefore invalidates an in-flight result even if the durable Conversation itself remains recoverable.
 
 The browser separately protects the participant draft: a suggestion cannot overwrite a draft that changed after the request started.
 
