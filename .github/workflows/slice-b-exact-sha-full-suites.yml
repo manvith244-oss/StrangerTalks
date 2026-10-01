@@ -1,0 +1,90 @@
+name: Slice B Exact SHA Full Suites
+on:
+  push:
+    branches: [verify-slice-b-f1e720f]
+permissions:
+  contents: read
+jobs:
+  full-suites:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      TARGET_SHA: f1e720f2312561e91c8ad1ce6701cad169a188ae
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+      - name: Prove exact tested SHA
+        run: |
+          echo "EXPECTED_SHA=$TARGET_SHA"
+          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Prepare database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Start Phoenix
+        run: |
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 30)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/slice-b-phoenix.log 2>&1 &
+          echo $! > /tmp/slice-b-phoenix.pid
+          for attempt in $(seq 1 60); do
+            curl -fsS http://localhost:4000/ >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/slice-b-phoenix.log
+          exit 1
+      - name: Full Node suite
+        run: node --test --test-concurrency=1 test/js/*.mjs
+      - name: Reset database
+        run: |
+          kill "$(cat /tmp/slice-b-phoenix.pid)" 2>/dev/null || true
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Full Elixir suite
+        run: mix precommit
+      - name: Final exact SHA
+        run: |
+          echo "TESTED_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
