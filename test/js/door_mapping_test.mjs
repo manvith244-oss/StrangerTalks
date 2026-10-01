@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import {CONVERSATION_LANGUAGES, DOORS, backendDoorFor, doorLabelForBackend, queuePayloadFor} from "../../priv/static/assets/door_mapping.mjs"
+import {DOORS, backendDoorFor, doorLabelForBackend, queuePayloadFor} from "../../priv/static/assets/door_mapping.mjs"
 
 test("every visible Door maps to its locked canonical backend value", () => {
   assert.deepEqual(Object.fromEntries(DOORS.map(({label, value}) => [label, value])), {
@@ -17,7 +17,7 @@ test("Hang Out stays outside the canonical pair-matching Door taxonomy", () => {
   assert.equal(DOORS.length, 4)
   assert.equal(backendDoorFor("Hang Out"), null)
   assert.equal(doorLabelForBackend("HANGOUTS"), null)
-  assert.equal(queuePayloadFor("Hang Out", "en"), null)
+  assert.equal(queuePayloadFor("Hang Out"), null)
 })
 
 test("unmapped labels cannot produce a queue value", () => {
@@ -26,12 +26,7 @@ test("unmapped labels cannot produce a queue value", () => {
   assert.equal(queuePayloadFor("Something invented"), null)
 })
 
-test("browser queue payload requires a controlled explicit Conversation Language", () => {
-  assert.deepEqual(CONVERSATION_LANGUAGES.map(({value}) => value), ["en", "te", "hi"])
-  assert.equal(queuePayloadFor("Deep Talk", null), null)
-  assert.equal(queuePayloadFor("Deep Talk", "xx"), null)
-  assert.deepEqual(queuePayloadFor("Deep Talk", "te"), {
-    door_type: "SOMETHING_REAL",
-    conversation_language: "te"
-  })
+test("browser queue payload contains only the selected Door", () => {
+  assert.deepEqual(queuePayloadFor("Deep Talk"), {door_type: "SOMETHING_REAL"})
+  assert.deepEqual(Object.keys(queuePayloadFor("Advice")), ["door_type"])
 })

@@ -16,7 +16,6 @@ async function openReady(browser, options = {}) {
   const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
   assert.ok(response?.ok())
   await page.locator("button.door").first().waitFor({state: "visible"})
-  await page.locator("#conversation-language").selectOption("en")
   return {context, page, errors}
 }
 
@@ -68,8 +67,7 @@ test("rapid repeated Door activation emits one queue join", {timeout: 45_000}, a
     const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
     assert.ok(response?.ok())
     await page.locator("button.door").first().waitFor({state: "visible"})
-    await page.locator("#conversation-language").selectOption("en")
-
+  
     const door = page.getByRole("button", {name: /Advice/})
     await door.click({clickCount: 2, delay: 10})
     await waitQueued(page)
@@ -107,8 +105,8 @@ test("200 percent browser zoom keeps Arrival and queue primary controls reachabl
     const cdp = await session.context.newCDPSession(page)
     await cdp.send("Emulation.setPageScaleFactor", {pageScaleFactor: 2})
 
-    const languageBox = await page.locator("#conversation-language").boundingBox()
-    assert.ok(languageBox)
+    const doorBox = await page.locator("button.door").first().boundingBox()
+    assert.ok(doorBox)
     await page.getByRole("button", {name: /Deep Talk/}).click()
     await waitQueued(page)
     const leaveBox = await page.locator("#leave-queue").boundingBox()

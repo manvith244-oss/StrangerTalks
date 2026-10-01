@@ -1,5 +1,5 @@
 import {Socket} from "/vendor/phoenix.mjs"
-import {CONVERSATION_LANGUAGES, DOORS, doorLabelForBackend, queuePayloadFor} from "./door_mapping.mjs"
+import {DOORS, doorLabelForBackend, queuePayloadFor} from "./door_mapping.mjs"
 import {
   activeConversations, chooseConversationRetention, clearRecords, conversationSyncCursor, decryptBackup,
   deleteAllKeptConversations, deleteKeptConversation, deleteRecord, encryptBackup,
@@ -45,7 +45,6 @@ import {createRouteRuntimeState} from "./route_runtime.mjs"
 import {createNavigationHistory} from "./navigation_history.mjs"
 
 const identityKey = "strangertalks.identity.v1"
-const conversationLanguageKey = "strangertalks.conversation-language.v1"
 const SOCKET_RECONNECT_BASE_MS = [250, 500, 1000, 2000, 5000]
 const SOCKET_RECONNECT_CAP_MS = 10000
 const CHANNEL_REJOIN_BASE_MS = [1000, 2000, 5000]
@@ -72,7 +71,6 @@ const app = {
   conversationId: null,
   currentEpochId: null,
   selectedDoor: null,
-  conversationLanguage: localStorage.getItem(conversationLanguageKey),
   queueAttemptId: null,
   sessionReconciliationGuard: createSessionReconciliationGuard(),
   rendered: new Set(),
@@ -419,18 +417,12 @@ async function reconcileWithServer(snapshot, expectedRevision = null) {
     bindQueueAttempt(null)
     const id = snapshot.conversation.conversation_id
     app.selectedDoor = doorLabelForBackend(snapshot.conversation.door_type) || DOORS[0].label
-    app.conversationLanguage = snapshot.conversation.conversation_language
-    if (app.conversationLanguage) localStorage.setItem(conversationLanguageKey, app.conversationLanguage)
-    if ($("#conversation-language")) $("#conversation-language").value = app.conversationLanguage || ""
     updateDoorLabels()
     await handleMatchedConversation({status: "matched", conversation_id: id})
   } else if (snapshot.canonical_state === "QUEUED" && snapshot.queue) {
     if (app.conversation || app.conversationId) releaseConversationRuntime()
     bindQueueAttempt(snapshot.queue.queue_attempt_id)
     app.selectedDoor = doorLabelForBackend(snapshot.queue.door_type) || DOORS[0].label
-    app.conversationLanguage = snapshot.queue.conversation_language
-    if (app.conversationLanguage) localStorage.setItem(conversationLanguageKey, app.conversationLanguage)
-    if ($("#conversation-language")) $("#conversation-language").value = app.conversationLanguage || ""
     updateDoorLabels()
     announce(`Looking for someone who chose ${app.selectedDoor} too.`)
     show("queue")
@@ -3594,8 +3586,8 @@ async function startMatchingFor(doorLabel) {
   app.sessionReconciliationGuard.transition()
   app.selectedDoor = doorLabel
   updateDoorLabels()
-  const payload = queuePayloadFor(app.selectedDoor, app.conversationLanguage)
-  if (!payload) return announce("Choose a Conversation Language first.")
+  const payload = queuePayloadFor(app.selectedDoor)
+  if (!payload) return announce("Could not start matching right now. Please try again.")
   show("queue")
   try {
     await ensureBootstrap()
@@ -4860,18 +4852,5 @@ renderPromptCardsUI()
 renderLocalViews().catch(() => {})
 app.voice.mediaType = selectVoiceMediaType(globalThis.MediaRecorder)
 if (!app.voice.mediaType || !navigator.mediaDevices?.getUserMedia) { $("#voice-start").disabled = true; $("#voice-unavailable").hidden = false; $("#voice-unavailable").textContent = "Voice recording is unavailable in this browser. Text messaging still works." }
-const languageSelect = $("#conversation-language")
-CONVERSATION_LANGUAGES.forEach(({label, value}) => {
-  const option = document.createElement("option")
-  option.value = value
-  option.textContent = label
-  languageSelect.append(option)
-})
-if (CONVERSATION_LANGUAGES.some(({value}) => value === app.conversationLanguage)) languageSelect.value = app.conversationLanguage
-languageSelect.addEventListener("change", () => {
-  app.conversationLanguage = languageSelect.value || null
-  if (app.conversationLanguage) localStorage.setItem(conversationLanguageKey, app.conversationLanguage)
-  else localStorage.removeItem(conversationLanguageKey)
-})
 
 ensureBootstrap().then(async () => { const settings = await getRecord("settings:privacy"); if (settings?.value.reduced_motion) { $("#reduced-motion").checked = true; document.body.classList.add("reduce-motion") } const accountResult = new URLSearchParams(location.search).get("account"); if (accountResult === "connected" && app.account.connected) await restoreFromGoogle(true).catch(() => announce("Connected privately. Unlock encrypted sync from You when you are ready.")); if (accountResult) history.replaceState(history.state, "", location.pathname) }).catch(() => announce("StrangerTalks could not start. Please reload."))
