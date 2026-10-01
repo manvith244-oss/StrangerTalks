@@ -22,7 +22,6 @@ async function bootFresh(browser, viewport = {width: 390, height: 844}) {
   await page.waitForFunction(() => document.documentElement.dataset.instagramChatBooted === "true")
   await page.waitForFunction(() => document.querySelector("#doors")?.children.length > 0)
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: 15_000})
-  await page.locator("#conversation-language").selectOption("en")
   return {context, page, loads}
 }
 

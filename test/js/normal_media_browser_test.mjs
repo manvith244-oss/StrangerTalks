@@ -41,7 +41,6 @@ async function boot(browser, viewport = {width: 390, height: 844}) {
   const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
   assert.ok(response?.ok(), "root page loads")
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: WAIT_MS})
-  await page.locator("#conversation-language").selectOption("en")
   await page.locator("#normal-media-picker-btn").waitFor({state: "attached", timeout: WAIT_MS})
   return {context, page, pageErrors, consoleErrors}
 }
@@ -130,7 +129,6 @@ async function blockConversation(page) {
 async function fadeToDoors(page) {
   await page.locator("#fade-conversation").click()
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: WAIT_MS})
-  await page.locator("#conversation-language").selectOption("en")
 }
 
 async function holdRecipientMediaList(page) {

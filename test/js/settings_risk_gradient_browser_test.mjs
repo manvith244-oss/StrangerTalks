@@ -25,7 +25,6 @@ async function openSettings(page) {
 }
 
 async function returnToSettingsAfterQueue(page, door) {
-  await page.locator("#conversation-language").selectOption("en")
   await page.getByRole("button", {name: new RegExp(door)}).click()
   await page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: WAIT})
   await page.locator("#leave-queue").waitFor({state: "visible", timeout: WAIT})

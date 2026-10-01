@@ -81,7 +81,6 @@ async function freshPage(browser, label) {
     "successful ParticipantChannel join"
   )
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: 15_000})
-  await page.locator("#conversation-language").selectOption("en")
   return {context, page, frames}
 }
 

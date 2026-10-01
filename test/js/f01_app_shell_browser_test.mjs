@@ -92,7 +92,6 @@ async function bootObserved(browser, viewport, path = "/") {
   await page.waitForFunction(() => document.querySelectorAll("#doors button.door").length > 0, null, {timeout: WAIT_MS})
   const observed = {context, page, journal}
   await waitForParticipantJoin(observed)
-  await page.locator("#conversation-language").selectOption("en")
   return observed
 }
 
