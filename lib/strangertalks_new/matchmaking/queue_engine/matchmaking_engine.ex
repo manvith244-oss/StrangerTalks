@@ -59,7 +59,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
   def requeue_transition_survivor(
         participant_id,
         door_type,
-        conversation_language,
+        _conversation_language,
         conversation_id
       )
       when is_binary(participant_id) and is_atom(door_type) and is_binary(conversation_id) do
