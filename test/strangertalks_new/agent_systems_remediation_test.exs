@@ -298,7 +298,7 @@ defmodule StrangertalksNew.AgentSystemsRemediationTest do
       refute source =~ "agent_accuracy"
     end
 
-    assert participant_channel =~ ~s(Map.get(params, "conversation_language"))
+    assert participant_channel =~ "Map.get(params, \\"conversation_language\\")"
     refute participant_channel =~ "ConversationLanguages.normalize"
 
     refute learning_context =~ "Application.put_env"
