@@ -131,7 +131,7 @@ test("required device matrix can enter and leave matchmaking without squeezed or
       try {
         const {page} = fresh
         await assertNoHorizontalOverflow(page, `${label} arrival`)
-        await assertPrimaryControlReachable(page, "button.door", `${label} arrival`)
+        await assertPrimaryControlReachable(page, "button.door:first-of-type", `${label} arrival`)
         await page.getByRole("button", {name: /Distract/}).click()
         await waitForQueue(page)
         await assertNoHorizontalOverflow(page, `${label} queue`)
