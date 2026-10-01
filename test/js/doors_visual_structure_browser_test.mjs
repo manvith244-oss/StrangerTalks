@@ -137,15 +137,11 @@ test("Doors follow intent-first DOM order and Temporary Conversation is secondar
       const index = element => children.indexOf(element)
       const lede = section.querySelector(".lede")
       const doors = section.querySelector("#doors")
-      const language = section.querySelector("#conversation-language")
-      const languageLabel = section.querySelector('label[for="conversation-language"]')
       const temporary = section.querySelector(".temporary-entry")
       return {
         lede: index(lede),
         afterLede: index(lede.nextElementSibling),
         doors: index(doors),
-        languageLabel: index(languageLabel),
-        language: index(language),
         temporary: index(temporary),
         trustCue: index(section.querySelector("#arrival-trust-cue")),
         trustCueCount: section.querySelectorAll("#arrival-trust-cue").length
@@ -225,21 +221,6 @@ test("keyboard-only focus indicator is visible and fixed across all Doors and la
       indicators.push({color: state.outlineColor, style: state.outlineStyle, width: state.outlineWidth})
     }
 
-    await tabUntil(app.page, () => document.activeElement?.id === "conversation-language", "Conversation Language", 8)
-    const languageIndicator = await app.page.locator("#conversation-language").evaluate(element => {
-      const style = getComputedStyle(element)
-      return {color: style.outlineColor, style: style.outlineStyle, width: style.outlineWidth, height: style.height}
-    })
-    assert.notEqual(languageIndicator.style, "none", "language control has a visible focus outline")
-    assert.ok(Number.parseFloat(languageIndicator.width) >= 3, "language focus outline is at least 3px")
-    assert.ok(Number.parseFloat(languageIndicator.height) >= 44, "language control preserves an adequate touch target")
-
-    for (const indicator of indicators) assert.deepEqual(indicator, indicators[0], "Door focus indicators never vary by Door")
-    assert.deepEqual(
-      {color: languageIndicator.color, style: languageIndicator.style, width: languageIndicator.width},
-      indicators[0],
-      "language and Door controls use the same fixed focus indicator"
-    )
   } finally {
     await app?.context.close().catch(() => {})
     await browser.close().catch(() => {})

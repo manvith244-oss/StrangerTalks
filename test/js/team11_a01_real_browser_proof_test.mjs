@@ -96,7 +96,6 @@ async function bootFresh(browser, viewport = {width: 390, height: 844}, contextO
 }
 
 async function selectLanguageAndQueue(observed, door = "Advice") {
-  await observed.page.locator("#conversation-language").selectOption("en")
   await observed.page.getByRole("button", {name: new RegExp(door)}).click()
   await observed.page.locator('[data-screen="queue"].active').waitFor({state: "visible", timeout: WAIT_MS})
   await observed.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: WAIT_MS})
@@ -118,7 +117,6 @@ async function matchPair(browser, door = "Advice") {
   const b = await bootFresh(browser)
 
   await selectLanguageAndQueue(a, door)
-  await b.page.locator("#conversation-language").selectOption("en")
   await b.page.getByRole("button", {name: new RegExp(door)}).click()
 
   const [topicA, topicB] = await Promise.all([
@@ -279,7 +277,6 @@ test("Control A: canonical desktop Matching -> Conversation journey", {timeout: 
     b = await bootFresh(browser, desktopViewport, desktopOptions)
 
     await selectLanguageAndQueue(a, "Advice")
-    await b.page.locator("#conversation-language").selectOption("en")
     await b.page.getByRole("button", {name: /Advice/}).click()
 
     const [topicA, topicB] = await Promise.all([

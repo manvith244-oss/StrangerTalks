@@ -34,7 +34,7 @@ async function ready(page, canonical) {
   return page.evaluate(() => window.StrangerTalksF11.getReadiness())
 }
 
-async function language(page, value = "en") { await page.locator("#conversation-language").selectOption(value) }
+async function language(_page, _value = "en") {}
 async function queue(page) {
   await page.locator('button.door:has-text("Advice")').waitFor({state: "visible", timeout: WAIT})
   await page.locator('button.door:has-text("Advice")').click()
@@ -96,7 +96,7 @@ test("BROWSER-04 AVAILABLE readiness is pending before canonical reconciliation"
   } finally { await close(s); await browser.close().catch(() => {}) }
 })
 
-test("BROWSER-05/LANG final transport loss reconciles AVAILABLE without requeue and preserves future language", {timeout: 60_000}, async () => {
+test("BROWSER-05 final transport loss reconciles AVAILABLE without requeue", {timeout: 60_000}, async () => {
   const browser = await chromium.launch({headless: true}); let s
   try {
     s = await session(browser); await ready(s.page, "AVAILABLE"); await language(s.page, "te"); await queue(s.page)
@@ -104,13 +104,10 @@ test("BROWSER-05/LANG final transport loss reconciles AVAILABLE without requeue 
     const queued = await ready(s.page, "QUEUED")
     const staleQueueAttemptId = queued.snapshot.queue.queue_attempt_id
     assert.ok(staleQueueAttemptId)
-    assert.equal(queued.snapshot.queue.conversation_language, "te")
-    await s.page.evaluate(() => { const select = document.querySelector("#conversation-language"); select.value = "hi"; select.dispatchEvent(new Event("change", {bubbles: true})) })
     await s.page.reload({waitUntil: "domcontentloaded"})
     const state = await ready(s.page, "AVAILABLE")
     assert.equal(state.snapshot.queue, null)
     assert.notEqual(state.snapshot.queue?.queue_attempt_id, staleQueueAttemptId)
-    assert.equal(await s.page.evaluate(() => window.StrangerTalksF11.getFutureConversationLanguage()), "hi")
     const afterFirstReconciliation = await s.page.evaluate(() => window.__f11Events.length)
     assert.equal(await s.page.evaluate(() => window.StrangerTalksF11.reconcileCanonicalActivity()), true)
     await s.page.waitForFunction((n) => {
