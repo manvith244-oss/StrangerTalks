@@ -354,6 +354,13 @@ defmodule StrangertalksNew.DomainError do
       action: :reconnect,
       http_status: 503
     },
+    end_not_committed: %{
+      code: "END_NOT_COMMITTED",
+      category: :transport,
+      retryable: true,
+      action: :none,
+      http_status: 503
+    },
     media_unavailable: %{
       code: "MEDIA_UNAVAILABLE",
       category: :transport,

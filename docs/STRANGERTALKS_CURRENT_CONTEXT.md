@@ -55,7 +55,7 @@ Historical/superseded reference: `mix strangertalks.agents learning [limit]` is 
 
 - Matchmaking final authority: `Matchmaking.MatchmakingEngine` under `ParticipantActivityLock`.
 - Durable safety veto / boundary enforcement: deterministic `MatchingRules` and canonical safety services.
-- Conversation Language: persisted Match authority (`en`, `te`, `hi`).
+- Four Doors matchmaking has no language authority or language eligibility signal. New Matches leave `conversation_language` null; Conversation Start/Companion use English when that nullable field is absent.
 - Conversation Start: curated `IcebreakerCatalog` / ConversationServer authority.
 - Participant message authorship: ordinary Send boundary only.
 - Recovery: persisted Conversation/Match state + ConversationServer lifecycle rules.

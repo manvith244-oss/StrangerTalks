@@ -22,16 +22,12 @@ defmodule StrangertalksNew.QueueEngine.Matcher do
   Computes the historical compatibility score for regression-only callers.
   """
   def compute_match_score(participant_a, participant_b) do
-    if participant_a.language != participant_b.language do
-      0
-    else
-      s_intent = score_intent(participant_a.intent_vibe_vector, participant_b.intent_vibe_vector)
-      s_media = score_media_overlap(participant_a.media_mask, participant_b.media_mask)
-      s_history = 15
-      s_tempo = score_tempo(participant_a.typing_rate, participant_b.typing_rate)
+    s_intent = score_intent(participant_a.intent_vibe_vector, participant_b.intent_vibe_vector)
+    s_media = score_media_overlap(participant_a.media_mask, participant_b.media_mask)
+    s_history = 15
+    s_tempo = score_tempo(participant_a.typing_rate, participant_b.typing_rate)
 
-      s_intent + 20 + s_media + s_history + s_tempo
-    end
+    s_intent + 20 + s_media + s_history + s_tempo
   end
 
   defp score_intent(vector_a, vector_b) do

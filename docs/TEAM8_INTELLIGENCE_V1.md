@@ -175,7 +175,7 @@ Their continued V1 product necessity remains with their owning product/safety bo
 | Safety | PRODUCT/GOVERNANCE + deterministic Safety services; Team 4 owns policy |
 | Learning | ANALYTICS / LEARNING COMPONENT implemented by deterministic Team 8 report |
 | Category Intelligence | normal curated/rule-based Conversation-start behavior where active |
-| Language Intelligence | explicit participant language + deterministic qualification; no inference Agent |
+| Language Intelligence | conversation assistance/localization only; not a Four Doors matchmaking signal |
 | Complexity Intelligence | FUTURE RESEARCH |
 | Confidence Intelligence | FUTURE RESEARCH / reject profiling in V1 |
 | Trend Intelligence | FUTURE/ADVISORY RESEARCH; no automatic publication |
@@ -190,7 +190,7 @@ Their continued V1 product necessity remains with their owning product/safety bo
 | Story Engine | FUTURE RESEARCH |
 | Conversation Start | normal product/catalog service |
 | Expression Confidence | FUTURE RESEARCH; no participant profiling in V1 |
-| Language Detection | SUPERSEDED by explicit attempt language for matchmaking V1 |
+| Language Detection | SUPERSEDED; Four Doors matchmaking does not use language |
 | Language Anxiety Reduction | PRODUCT / GOVERNANCE principle, not Agent |
 | Trust & Safety Intelligence | Team 4 safety rules/review services, not hidden participant scoring |
 | Serendipity | PRODUCT/GOVERNANCE principle or future research, not Agent |

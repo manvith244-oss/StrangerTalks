@@ -59,7 +59,6 @@ async function bootFresh(browser) {
   const conversationFrames = observeConversationFrames(page)
   await preparePage(page)
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: 15_000})
-  await page.locator("#conversation-language").selectOption("en")
   return {context, page, conversationEndFrames, conversationFrames}
 }
 
@@ -386,7 +385,6 @@ test("X05-08 delayed A GIF callback cannot mutate B after accepted Conversation 
     await pair.a.page.locator('section[data-screen="ended"].active').waitFor({state: "visible", timeout: 15_000})
 
     await showPresentation(pair.a.page, "doors")
-    await pair.a.page.locator("#conversation-language").selectOption("en")
     nextPeer = await bootFresh(browser)
     await queue(pair.a.page)
     await pair.a.page.locator('section[data-screen="queue"].active').waitFor({state: "visible", timeout: 10_000})

@@ -88,7 +88,6 @@ async function freshPage(browser, {recordQueueFrames = false} = {}) {
 async function waitForReadyDoors(page, errors = []) {
   await waitForBootExit(page, errors)
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: 15_000})
-  await page.locator("#conversation-language").selectOption("en")
 }
 
 async function startQueueTransitionRecording(page) {

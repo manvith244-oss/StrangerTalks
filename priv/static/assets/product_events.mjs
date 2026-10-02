@@ -45,11 +45,8 @@ const EVENT_SCHEMAS = Object.freeze({
     })
   }),
   st_queue_requested: Object.freeze({
-    required: Object.freeze(["intent_code", "interaction_language"]),
-    properties: Object.freeze({
-      intent_code: (value) => FOUR_DOOR_INTENTS.has(value),
-      interaction_language: (value) => TALK_LANGUAGE_CODES.has(value)
-    })
+    required: Object.freeze(["intent_code"]),
+    properties: Object.freeze({intent_code: (value) => FOUR_DOOR_INTENTS.has(value)})
   }),
   st_queue_joined: Object.freeze({
     required: Object.freeze(["intent_code"]),
@@ -190,34 +187,32 @@ export function createTalkLanguageObserver(tracker) {
 
 export function createQueueEventObserver(tracker) {
   let intentCode = null
-  let interactionLanguage = null
   let requestCapturePromise = null
   let joinedCapturePromise = null
   let matchedCapturePromise = null
   let queueJoinedInFlow = false
   let matchedInFlow = false
   const resetState = () => {
-    intentCode = null; interactionLanguage = null; requestCapturePromise = null
+    intentCode = null; requestCapturePromise = null
     joinedCapturePromise = null; matchedCapturePromise = null; queueJoinedInFlow = false; matchedInFlow = false
   }
   const syncFlow = createFlowSynchronizer(tracker, resetState)
 
   return {
-    requested(nextIntentCode, nextInteractionLanguage) {
+    requested(nextIntentCode) {
       syncFlow()
-      if (!isIntentCode(nextIntentCode) || !isTalkLanguageCode(nextInteractionLanguage) || queueJoinedInFlow || joinedCapturePromise) return Promise.resolve(false)
+      if (!isIntentCode(nextIntentCode) || queueJoinedInFlow || joinedCapturePromise) return Promise.resolve(false)
       intentCode = nextIntentCode
-      interactionLanguage = nextInteractionLanguage
       matchedCapturePromise = null
       matchedInFlow = false
       const flowAttemptId = tracker.flowAttemptId
-      const capturePromise = tracker.capture("st_queue_requested", {intent_code: nextIntentCode, interaction_language: nextInteractionLanguage})
+      const capturePromise = tracker.capture("st_queue_requested", {intent_code: nextIntentCode})
       requestCapturePromise = capturePromise
       return capturePromise.then((recorded) => tracker.flowAttemptId === flowAttemptId && requestCapturePromise === capturePromise ? recorded : false)
     },
     joined() {
       syncFlow()
-      if (!intentCode || !interactionLanguage || !requestCapturePromise || queueJoinedInFlow || joinedCapturePromise) return Promise.resolve(false)
+      if (!intentCode || !requestCapturePromise || queueJoinedInFlow || joinedCapturePromise) return Promise.resolve(false)
       const flowAttemptId = tracker.flowAttemptId
       const prerequisite = requestCapturePromise
       const capturedIntentCode = intentCode
@@ -232,7 +227,7 @@ export function createQueueEventObserver(tracker) {
     },
     matched() {
       syncFlow()
-      if (!intentCode || !interactionLanguage || (!queueJoinedInFlow && !joinedCapturePromise) || matchedInFlow || matchedCapturePromise) return Promise.resolve(false)
+      if (!intentCode || (!queueJoinedInFlow && !joinedCapturePromise) || matchedInFlow || matchedCapturePromise) return Promise.resolve(false)
       const flowAttemptId = tracker.flowAttemptId
       const prerequisite = joinedCapturePromise
       const capturedIntentCode = intentCode

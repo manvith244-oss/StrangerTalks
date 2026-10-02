@@ -20,9 +20,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  EXPECTED_PRODUCTION_HEAD: "20260821191324"
-  EXPECTED_REPOSITORY_HEAD: "20260914175320"
-  EXPECTED_MIGRATIONS_TREE: "662fa9e49daaa8832fb4175c1366fbedbd1ad1a6"
+  EXPECTED_PRODUCTION_HEAD: "20260914175320"
+  EXPECTED_REPOSITORY_HEAD: "20260915120000"
+  EXPECTED_MIGRATIONS_TREE: "20219b3127b08e9db677d2251a0cdcefae3fa4a1"
 
 jobs:
   backup-before-live-migration:
@@ -142,7 +142,7 @@ jobs:
           DECLARE app_count integer; bad_rls integer; api_grants integer; role_name text;
           BEGIN
             SELECT count(*) INTO app_count FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations';
-            IF app_count <> 30 THEN RAISE EXCEPTION 'expected 30 application tables after production migration, got %', app_count; END IF;
+            IF app_count <> 32 THEN RAISE EXCEPTION 'expected 32 application tables after production migration, got %', app_count; END IF;
             SELECT count(*) INTO bad_rls FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND c.relname <> 'schema_migrations' AND NOT c.relrowsecurity;
             IF bad_rls <> 0 THEN RAISE EXCEPTION 'application tables without RLS after production migration: %', bad_rls; END IF;
             FOREACH role_name IN ARRAY ARRAY['anon','authenticated','service_role'] LOOP

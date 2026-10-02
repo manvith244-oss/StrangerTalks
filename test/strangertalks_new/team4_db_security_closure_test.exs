@@ -29,10 +29,12 @@ defmodule StrangertalksNew.Team4DbSecurityClosureTest do
     relationship_consents
     relationship_reconnection_intents
     relationships
+    report_evidence_items
     report_safety_media
     reports
     safety_events
     safety_reviews
+    safety_subjects
     source_rate_limits
   )
 

@@ -71,7 +71,7 @@ async function assertPrimaryControlReachable(page, selector, label) {
   assert.ok(box.y >= -1 && box.y < viewport.height, `${label}: primary control begins inside viewport`)
 }
 
-test("first visit is self-explanatory and missing language cannot silently enter queue", {timeout: 45_000}, async () => {
+test("first visit is self-explanatory and a Door tap enters queue without language", {timeout: 45_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let fresh
   try {
@@ -80,16 +80,7 @@ test("first visit is self-explanatory and missing language cannot silently enter
 
     await page.getByText("Anonymous, one-to-one conversation with another person. No profile required.").waitFor({state: "visible"})
     assert.equal(await page.locator("button.door").count(), 4)
-    assert.equal(await page.locator("#conversation-language").inputValue(), "")
-
-    await page.getByRole("button", {name: /Advice/}).click()
-    await page.getByText("Choose a Conversation Language before picking a Door.").waitFor({state: "visible"})
-    assert.equal(await page.locator('section[data-screen="doors"]').getAttribute("class").then(value => value.includes("active")), true)
-    assert.equal(await page.locator("#conversation-language").getAttribute("aria-invalid"), "true")
-    assert.equal(await page.evaluate(() => document.activeElement?.id), "conversation-language")
-
-    await page.locator("#conversation-language").selectOption("en")
-    assert.equal(await page.locator("#conversation-language").getAttribute("aria-invalid"), null)
+    assert.equal(await page.locator("#conversation-language").count(), 0)
     await page.getByRole("button", {name: /Advice/}).click()
     await waitForQueue(page)
     await page.waitForFunction(() => document.activeElement === document.querySelector('section[data-screen="queue"] h1'))
@@ -121,7 +112,6 @@ test("participant bootstrap failure becomes a visible recoverable state", {timeo
     await panel.waitFor({state: "visible", timeout: 12_000})
     await panel.getByRole("heading", {name: "StrangerTalks couldn't connect"}).waitFor({state: "visible"})
     await panel.getByRole("button", {name: "Retry"}).waitFor({state: "visible"})
-    assert.equal(await page.locator("#conversation-language").isDisabled(), true)
     assert.equal(await page.locator("button.door:not([disabled])").count(), 0)
     assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Retry")
   } finally {
@@ -141,9 +131,10 @@ test("required device matrix can enter and leave matchmaking without squeezed or
       try {
         const {page} = fresh
         await assertNoHorizontalOverflow(page, `${label} arrival`)
-        await assertPrimaryControlReachable(page, "#conversation-language", `${label} arrival`)
-        await page.locator("#conversation-language").selectOption("en")
-        await page.getByRole("button", {name: /Distract/}).click()
+        const primaryDoor = page.getByRole("button", {name: /Distract/})
+        await primaryDoor.scrollIntoViewIfNeeded()
+        await assertPrimaryControlReachable(page, 'button[data-door="KEEP_IT_LIGHT"]', `${label} arrival`)
+        await primaryDoor.click()
         await waitForQueue(page)
         await assertNoHorizontalOverflow(page, `${label} queue`)
         await assertPrimaryControlReachable(page, "#leave-queue", `${label} queue`)
@@ -168,8 +159,6 @@ test("two isolated fresh participants reach one usable Conversation and can talk
   try {
     a = await openFresh(browser, {width: 390, height: 844})
     b = await openFresh(browser, {width: 390, height: 844})
-    await a.page.locator("#conversation-language").selectOption("en")
-    await b.page.locator("#conversation-language").selectOption("en")
 
     await a.page.getByRole("button", {name: /Deep Talk/}).click()
     await waitForQueue(a.page)
@@ -216,8 +205,6 @@ test("arrival screen focus does not steal focus from active Conversation content
   try {
     a = await openFresh(browser, {width: 1280, height: 800})
     b = await openFresh(browser, {width: 1280, height: 800})
-    await a.page.locator("#conversation-language").selectOption("en")
-    await b.page.locator("#conversation-language").selectOption("en")
 
     await a.page.getByRole("button", {name: /Advice/}).click()
     await waitForQueue(a.page)

@@ -514,95 +514,87 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngineTest do
   end
 
   describe "Dynamic Matrix Pipeline Verification" do
-    test "same-Door candidates with different Conversation Languages do not match" do
+    test "same-Door candidates with different legacy languages match and Match language stays nil" do
       {:ok, participant_1} = StrangertalksNew.Participants.create_participant(%{})
       {:ok, participant_2} = StrangertalksNew.Participants.create_participant(%{})
-      p1 = participant_1.participant_id
-      p2 = participant_2.participant_id
 
-      MatchmakingEngine.join_queue(p1, :EXPLORE, "en", 1, 5.0)
-      MatchmakingEngine.join_queue(p2, :EXPLORE, "te", 7, 900.0)
+      assert {:ok, _} =
+               MatchmakingEngine.join_queue(
+                 participant_1.participant_id,
+                 :EXPLORE,
+                 "en",
+                 nil,
+                 nil
+               )
 
-      assert {:ok, []} = MatchmakingEngine.evaluate_pending_matches()
-      assert Repo.aggregate(StrangertalksNew.Matching, :count, :match_id) == 0
-      assert Repo.aggregate(StrangertalksNew.Conversation, :count, :conversation_id) == 0
+      assert {:ok, _} =
+               MatchmakingEngine.join_queue(
+                 participant_2.participant_id,
+                 :EXPLORE,
+                 "te",
+                 nil,
+                 nil
+               )
+
+      assert {:ok, [_]} = MatchmakingEngine.evaluate_pending_matches()
+      match = Repo.one!(StrangertalksNew.Matching)
+      assert is_nil(match.conversation_language)
     end
 
-    test "missing or invalid Conversation Language is rejected before QueueState" do
-      {:ok, participant} = StrangertalksNew.Participants.create_participant(%{})
+    test "same-Door candidates with no language field match" do
+      {:ok, participant_1} = StrangertalksNew.Participants.create_participant(%{})
+      {:ok, participant_2} = StrangertalksNew.Participants.create_participant(%{})
 
-      assert {:error, :language_required} =
-               MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, nil, nil, nil)
+      assert {:ok, _} =
+               MatchmakingEngine.join_queue(participant_1.participant_id, :EXPLORE, nil, nil, nil)
 
-      assert {:error, :invalid_conversation_language} =
-               MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "xx", nil, nil)
+      assert {:ok, _} =
+               MatchmakingEngine.join_queue(participant_2.participant_id, :EXPLORE, nil, nil, nil)
 
-      refute Agent.get(QueueState, &Map.has_key?(&1, participant.participant_id))
+      assert {:ok, [_]} = MatchmakingEngine.evaluate_pending_matches()
     end
 
-    test "Conversation Language is immutable within an attempt and change requires a new attempt" do
+    test "legacy language values are ignored and do not change queue attempt identity" do
       {:ok, participant} = StrangertalksNew.Participants.create_participant(%{})
 
       assert {:ok, first} =
-               MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "te", nil, nil)
+               MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "xx", nil, nil)
 
       assert {:ok, duplicate} =
-               MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "TE", nil, nil)
+               MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "te", nil, nil)
 
       assert duplicate.queue_attempt_id == first.queue_attempt_id
 
-      assert {:error, :already_queued_different_door} =
-               MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "en", nil, nil)
-
-      assert Agent.get(QueueState, &Map.fetch!(&1, participant.participant_id)).conversation_language ==
-               "te"
-
-      assert :ok = MatchmakingEngine.leave_queue(participant.participant_id)
-
-      assert {:ok, second} =
-               MatchmakingEngine.join_queue(participant.participant_id, :EXPLORE, "en", nil, nil)
-
-      refute second.queue_attempt_id == first.queue_attempt_id
+      assert is_nil(
+               Agent.get(QueueState, &Map.fetch!(&1, participant.participant_id)).conversation_language
+             )
     end
 
-    test "scarcity and long wait never relax different Conversation Languages" do
-      {:ok, a} = StrangertalksNew.Participants.create_participant(%{})
-      {:ok, b} = StrangertalksNew.Participants.create_participant(%{})
-      assert {:ok, _} = MatchmakingEngine.join_queue(a.participant_id, :JUST_TALK, "te", nil, nil)
-      assert {:ok, _} = MatchmakingEngine.join_queue(b.participant_id, :EXPLORE, "en", nil, nil)
-      age_queue_entries([a, b], 600_000)
+    test "different Doors still do not match before scarcity relaxation" do
+      {:ok, participant_1} = StrangertalksNew.Participants.create_participant(%{})
+      {:ok, participant_2} = StrangertalksNew.Participants.create_participant(%{})
+
+      assert {:ok, _} =
+               MatchmakingEngine.join_queue(
+                 participant_1.participant_id,
+                 :EXPLORE,
+                 "en",
+                 nil,
+                 nil
+               )
+
+      assert {:ok, _} =
+               MatchmakingEngine.join_queue(
+                 participant_2.participant_id,
+                 :SOMETHING_REAL,
+                 "te",
+                 nil,
+                 nil
+               )
 
       assert {:ok, []} = MatchmakingEngine.evaluate_pending_matches()
       assert Repo.aggregate(StrangertalksNew.Matching, :count, :match_id) == 0
       assert Repo.aggregate(StrangertalksNew.Conversation, :count, :conversation_id) == 0
-    end
-
-    test "language mismatch is skipped and search continues to same-language candidate" do
-      [a, b, c] =
-        for language <- ["te", "en", "te"] do
-          {:ok, participant} = StrangertalksNew.Participants.create_participant(%{})
-
-          assert {:ok, _} =
-                   MatchmakingEngine.join_queue(
-                     participant.participant_id,
-                     :EXPLORE,
-                     language,
-                     nil,
-                     nil
-                   )
-
-          participant
-        end
-
-      set_queue_age_order([a, b, c])
-      assert {:ok, [_]} = MatchmakingEngine.evaluate_pending_matches()
-      match = Repo.one!(StrangertalksNew.Matching)
-
-      assert MapSet.new([match.participant_a_id, match.participant_b_id]) ==
-               MapSet.new([a.participant_id, c.participant_id])
-
-      assert match.conversation_language == "te"
-      assert Agent.get(QueueState, &Map.keys/1) == [b.participant_id]
     end
 
     test "matching doors persist a match and pending conversation before removing both participants" do

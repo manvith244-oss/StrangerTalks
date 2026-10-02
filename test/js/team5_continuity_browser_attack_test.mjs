@@ -13,7 +13,6 @@ async function boot(browser) {
   assert.ok(response?.ok(), "root page loads")
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: WAIT})
   await page.waitForFunction(() => document.querySelectorAll("#doors .door").length > 0, null, {timeout: WAIT})
-  await page.locator("#conversation-language").selectOption("en")
   return {context, page}
 }
 

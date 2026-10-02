@@ -1,5 +1,5 @@
 import {Socket} from "/vendor/phoenix.mjs"
-import {CONVERSATION_LANGUAGES, DOORS, doorLabelForBackend, queuePayloadFor} from "./door_mapping.mjs"
+import {DOORS, doorLabelForBackend, queuePayloadFor} from "./door_mapping.mjs"
 import {
   activeConversations, chooseConversationRetention, clearRecords, conversationSyncCursor, decryptBackup,
   deleteAllKeptConversations, deleteKeptConversation, deleteRecord, encryptBackup,
@@ -45,7 +45,6 @@ import {createRouteRuntimeState} from "./route_runtime.mjs"
 import {createNavigationHistory} from "./navigation_history.mjs"
 
 const identityKey = "strangertalks.identity.v1"
-const conversationLanguageKey = "strangertalks.conversation-language.v1"
 const SOCKET_RECONNECT_BASE_MS = [250, 500, 1000, 2000, 5000]
 const SOCKET_RECONNECT_CAP_MS = 10000
 const CHANNEL_REJOIN_BASE_MS = [1000, 2000, 5000]
@@ -72,7 +71,6 @@ const app = {
   conversationId: null,
   currentEpochId: null,
   selectedDoor: null,
-  conversationLanguage: localStorage.getItem(conversationLanguageKey),
   queueAttemptId: null,
   sessionReconciliationGuard: createSessionReconciliationGuard(),
   rendered: new Set(),
@@ -419,18 +417,12 @@ async function reconcileWithServer(snapshot, expectedRevision = null) {
     bindQueueAttempt(null)
     const id = snapshot.conversation.conversation_id
     app.selectedDoor = doorLabelForBackend(snapshot.conversation.door_type) || DOORS[0].label
-    app.conversationLanguage = snapshot.conversation.conversation_language
-    if (app.conversationLanguage) localStorage.setItem(conversationLanguageKey, app.conversationLanguage)
-    if ($("#conversation-language")) $("#conversation-language").value = app.conversationLanguage || ""
     updateDoorLabels()
     await handleMatchedConversation({status: "matched", conversation_id: id})
   } else if (snapshot.canonical_state === "QUEUED" && snapshot.queue) {
     if (app.conversation || app.conversationId) releaseConversationRuntime()
     bindQueueAttempt(snapshot.queue.queue_attempt_id)
     app.selectedDoor = doorLabelForBackend(snapshot.queue.door_type) || DOORS[0].label
-    app.conversationLanguage = snapshot.queue.conversation_language
-    if (app.conversationLanguage) localStorage.setItem(conversationLanguageKey, app.conversationLanguage)
-    if ($("#conversation-language")) $("#conversation-language").value = app.conversationLanguage || ""
     updateDoorLabels()
     announce(`Looking for someone who chose ${app.selectedDoor} too.`)
     show("queue")
@@ -3594,8 +3586,8 @@ async function startMatchingFor(doorLabel) {
   app.sessionReconciliationGuard.transition()
   app.selectedDoor = doorLabel
   updateDoorLabels()
-  const payload = queuePayloadFor(app.selectedDoor, app.conversationLanguage)
-  if (!payload) return announce("Choose a Conversation Language first.")
+  const payload = queuePayloadFor(app.selectedDoor)
+  if (!payload) return announce("Could not start matching right now. Please try again.")
   show("queue")
   try {
     await ensureBootstrap()
@@ -4365,7 +4357,7 @@ $("#delete-kept-all").addEventListener("click", async () => { if (!confirm("Dele
 $("#memory-form").addEventListener("submit", async (event) => { event.preventDefault(); const text = $("#memory-note").value.trim(); if (!text) return; await putRecord({id: `memory:${crypto.randomUUID()}`, type: "memory", value: {text}, updated_at: now()}); event.target.reset(); renderLocalViews(); await offerContinuity(); await maybeAutoSync() })
 $("#reduced-motion").addEventListener("change", async (event) => { document.body.classList.toggle("reduce-motion", event.target.checked); await putRecord({id: "settings:privacy", type: "settings", value: {reduced_motion: event.target.checked}, updated_at: now()}) })
 $("#view-data").addEventListener("click", renderDataInventory)
-$("#delete-all").addEventListener("click", async () => { if (!confirm("Delete all local StrangerTalks data from this browser? This cannot be undone without an exported backup.")) return; await clearRecords(); releaseAllVoiceUrls(); clearVoicePreview(); app.socket?.disconnect(); app.identity = null; await createIdentity(false); connectSocket(); renderLocalViews(); renderDataInventory(); announce("All prior local data was deleted. A new anonymous identity was created.") })
+$("#delete-all").addEventListener("click", async () => { if (!confirm("Delete saved StrangerTalks records from this browser and create a new anonymous identity? This does not delete encrypted Google sync, your private account/session, or this browser’s encrypted continuity key. Eligible synced data can still be restored with the same private account. To remove the Google copy, use “Delete Google sync data” separately.")) return; await clearRecords(); releaseAllVoiceUrls(); clearVoicePreview(); app.socket?.disconnect(); app.identity = null; await createIdentity(false); connectSocket(); renderLocalViews(); renderDataInventory(); announce("Local StrangerTalks records were deleted and a new anonymous identity was created. Encrypted Google sync, your private account/session, and this browser’s continuity key were not deleted. Eligible synced data can still be restored with “Restore from Google.”") })
 $("#export-data").addEventListener("click", async () => { const passphrase = prompt("Choose a backup passphrase. It cannot be recovered if lost."); if (!passphrase) return; const envelope = await encryptBackup(await listRecords(), passphrase); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([JSON.stringify(envelope)], {type: "application/json"})); link.download = `strangertalks-backup-${now().slice(0, 10)}.json`; link.click(); URL.revokeObjectURL(link.href); announce("Encrypted backup exported. Keep its passphrase safe.") })
 $("#import-data").addEventListener("change", async (event) => { const file = event.target.files[0]; if (!file) return; const passphrase = prompt("Enter this backup’s passphrase."); if (!passphrase) return; try { await importRecords(await decryptBackup(JSON.parse(await file.text()), passphrase)); await renderLocalViews(); await renderDataInventory(); announce("Backup merged. Newer records won for matching stable IDs.") } catch { announce("Backup could not be opened. Check the file and passphrase.") } finally { event.target.value = "" } })
 $("#account-link").addEventListener("click", () => startGoogle("link").catch(() => announce("Private Google connection could not start.")))
@@ -4860,18 +4852,5 @@ renderPromptCardsUI()
 renderLocalViews().catch(() => {})
 app.voice.mediaType = selectVoiceMediaType(globalThis.MediaRecorder)
 if (!app.voice.mediaType || !navigator.mediaDevices?.getUserMedia) { $("#voice-start").disabled = true; $("#voice-unavailable").hidden = false; $("#voice-unavailable").textContent = "Voice recording is unavailable in this browser. Text messaging still works." }
-const languageSelect = $("#conversation-language")
-CONVERSATION_LANGUAGES.forEach(({label, value}) => {
-  const option = document.createElement("option")
-  option.value = value
-  option.textContent = label
-  languageSelect.append(option)
-})
-if (CONVERSATION_LANGUAGES.some(({value}) => value === app.conversationLanguage)) languageSelect.value = app.conversationLanguage
-languageSelect.addEventListener("change", () => {
-  app.conversationLanguage = languageSelect.value || null
-  if (app.conversationLanguage) localStorage.setItem(conversationLanguageKey, app.conversationLanguage)
-  else localStorage.removeItem(conversationLanguageKey)
-})
 
 ensureBootstrap().then(async () => { const settings = await getRecord("settings:privacy"); if (settings?.value.reduced_motion) { $("#reduced-motion").checked = true; document.body.classList.add("reduce-motion") } const accountResult = new URLSearchParams(location.search).get("account"); if (accountResult === "connected" && app.account.connected) await restoreFromGoogle(true).catch(() => announce("Connected privately. Unlock encrypted sync from You when you are ready.")); if (accountResult) history.replaceState(history.state, "", location.pathname) }).catch(() => announce("StrangerTalks could not start. Please reload."))
