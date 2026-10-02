@@ -67,7 +67,7 @@ test("rapid repeated Door activation emits one queue join", {timeout: 45_000}, a
     const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
     assert.ok(response?.ok())
     await page.locator("button.door").first().waitFor({state: "visible"})
-  
+
     const door = page.getByRole("button", {name: /Advice/})
     await door.click({clickCount: 2, delay: 10})
     await waitQueued(page)
