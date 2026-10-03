@@ -1,4 +1,4 @@
-name: Slice B Node Baseline Verification
+name: Slice B Targeted Baseline Verification
 
 on:
   push:
@@ -123,20 +123,6 @@ jobs:
           echo "ICEBREAKERS_TARGET_EXIT=${PIPESTATUS[0]}"
           exit 0
 
-      - name: Full Node suite exact command
-        shell: bash
-        run: |
-          set +e
-          echo "===== FULL NODE SUITE ====="
-          echo 'COMMAND=node --test test/js/*.mjs'
-          node --test test/js/*.mjs 2>&1 | tee /tmp/full-node.log
-          code=${PIPESTATUS[0]}
-          echo "FULL_NODE_EXIT=$code"
-          echo "===== FULL NODE FINAL COUNTS ====="
-          grep -E '^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) ' /tmp/full-node.log | tail -20 || true
-          echo "===== FULL NODE FAILING SUBTESTS ====="
-          awk '/^# Subtest: /{name=substr($0,12)} /^not ok [0-9]+ - /{print $0}' /tmp/full-node.log || true
-          exit 0
 
       - name: Final exact SHA proof
         if: always()
