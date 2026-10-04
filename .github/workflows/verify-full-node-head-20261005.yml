@@ -1,0 +1,131 @@
+name: Slice B Full Node Head Verification
+
+on:
+  push:
+    branches:
+      - verify/node-baseline-20261004
+
+permissions:
+  contents: read
+
+jobs:
+  full-node-head:
+    name: full-node-branch-head
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      EXPECTED_SHA: 5d924da2f2e3cfada8ee51b9ed0faac07041596e
+    steps:
+      - name: Checkout exact branch-head SHA
+        uses: actions/checkout@v4
+        with:
+          ref: 5d924da2f2e3cfada8ee51b9ed0faac07041596e
+          fetch-depth: 0
+
+      - name: Prove exact SHA
+        run: |
+          echo "EXPECTED_SHA=$EXPECTED_SHA"
+          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install ffmpeg, dependencies, and Chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -1
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+          node --help | grep -- '--test-force-exit'
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.create --quiet || true
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix browser server
+        run: |
+          mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/browser.log 2>&1 &
+          echo $! > /tmp/browser.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost:4000/ >/dev/null; then
+              echo "PHOENIX_READY=1"
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/browser.pid)" 2>/dev/null; then
+              cat /tmp/browser.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/browser.log
+          exit 1
+
+      - name: Full Node suite on exact branch head
+        shell: bash
+        run: |
+          set +e
+          echo "===== FULL NODE SUITE BRANCH HEAD ====="
+          echo 'BASE_COMMAND=node --test test/js/*.mjs'
+          echo 'EXECUTED_COMMAND=node --test --test-force-exit test/js/*.mjs'
+          node --test --test-force-exit test/js/*.mjs 2>&1 | tee /tmp/full-node.log
+          code=${PIPESTATUS[0]}
+          echo "FULL_NODE_EXIT=$code"
+          echo "===== FULL NODE FINAL COUNTS ====="
+          grep -E '^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) ' /tmp/full-node.log | tail -8 || true
+          echo "===== FULL NODE FAILING SUBTESTS ====="
+          grep -E '^not ok [0-9]+ - ' /tmp/full-node.log || true
+          exit 0
+
+      - name: Final exact SHA proof
+        if: always()
+        run: |
+          echo "FINAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Browser log tail
+        if: always()
+        run: tail -200 /tmp/browser.log || true
+
+      - name: Stop browser server
+        if: always()
+        run: |
+          if [ -f /tmp/browser.pid ]; then kill "$(cat /tmp/browser.pid)" 2>/dev/null || true; fi
