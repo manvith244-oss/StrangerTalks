@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - verify/node-baseline-20261004
+  pull_request:
+    branches:
+      - verify/node-baseline-20261004
 
 permissions:
   contents: read
