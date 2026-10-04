@@ -1,0 +1,189 @@
+name: Slice B baseline audit
+
+on:
+  push:
+    branches:
+      - audit/slice-b-baseline-2026-10-04
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    name: ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: old-main
+            target_sha: fb73a1faec28393624af09da50845d84a3e5c128
+          - label: branch-head
+            target_sha: 5d924da2f2e3cfada8ee51b9ed0faac07041596e
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://localhost:4000
+      TARGET_SHA: ${{ matrix.target_sha }}
+
+    steps:
+      - name: Checkout exact target SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.target_sha }}
+          fetch-depth: 0
+
+      - name: Prove exact checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "AUDIT_LABEL=${{ matrix.label }}"
+          echo "EXPECTED_SHA=$TARGET_SHA"
+          echo "ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -n 1
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+          node --version
+          npx playwright --version
+
+      - name: Prepare browser database
+        run: |
+          mix ecto.drop --quiet || true
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start Phoenix browser server
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            repo = repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 30)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo, repo)
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/slice-b-baseline-phoenix.log 2>&1 &
+          echo $! > /tmp/slice-b-baseline-phoenix.pid
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://localhost:4000/ >/dev/null; then
+              echo "PHOENIX_READY=true"
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/slice-b-baseline-phoenix.pid)" 2>/dev/null; then
+              cat /tmp/slice-b-baseline-phoenix.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/slice-b-baseline-phoenix.log
+          exit 1
+
+      - name: Focused baseline tests
+        shell: bash
+        run: |
+          set +e
+
+          echo "===== TEAM6_200_PERCENT_ZOOM_BEGIN ====="
+          node --test --test-concurrency=1             --test-name-pattern='keyboard, Escape, reduced motion, forced contrast and 200 percent zoom retain core access'             test/js/team6_product_ux_browser_test.mjs
+          TEAM6_STATUS=$?
+          echo "TEAM6_STATUS=$TEAM6_STATUS"
+          echo "===== TEAM6_200_PERCENT_ZOOM_END ====="
+
+          echo "===== F11_BROWSER_06_BEGIN ====="
+          node --test --test-concurrency=1             --test-name-pattern='BROWSER-06 Conversation recovery stays pending until canonical CONVERSATION'             test/js/f11_browser_hostile_test.mjs
+          F11_06_STATUS=$?
+          echo "F11_BROWSER_06_STATUS=$F11_06_STATUS"
+          echo "===== F11_BROWSER_06_END ====="
+
+          echo "===== F11_BROWSER_07_BEGIN ====="
+          node --test --test-concurrency=1             --test-name-pattern='BROWSER-07/F-BLK-006 pending retention survives refresh without ACTIVE resurrection and cleans after choice'             test/js/f11_browser_hostile_test.mjs
+          F11_07_STATUS=$?
+          echo "F11_BROWSER_07_STATUS=$F11_07_STATUS"
+          echo "===== F11_BROWSER_07_END ====="
+
+          echo "===== ICEBREAKERS_SOURCE_REGEX_BEGIN ====="
+          node --test             --test-name-pattern='1K JOIN and sync share canonical truth while retirement listens independently of message rendering'             test/js/icebreakers_test.mjs
+          ICE_STATUS=$?
+          echo "ICEBREAKERS_SOURCE_REGEX_STATUS=$ICE_STATUS"
+          echo "===== ICEBREAKERS_SOURCE_REGEX_END ====="
+
+          echo "FOCUSED_STATUS_SUMMARY TEAM6=$TEAM6_STATUS F11_06=$F11_06_STATUS F11_07=$F11_07_STATUS ICE=$ICE_STATUS"
+          exit 0
+
+      - name: Full Node suite exact command
+        shell: bash
+        run: |
+          set +e
+          echo "===== FULL_NODE_BEGIN ====="
+          echo "FULL_NODE_SHA=$(git rev-parse HEAD)"
+          echo "FULL_NODE_COMMAND=node --test test/js/*.mjs"
+          node --test test/js/*.mjs
+          FULL_NODE_STATUS=$?
+          echo "FULL_NODE_STATUS=$FULL_NODE_STATUS"
+          echo "===== FULL_NODE_END ====="
+          exit 0
+
+      - name: Stop browser server
+        if: always()
+        shell: bash
+        run: |
+          if [ -f /tmp/slice-b-baseline-phoenix.pid ]; then
+            kill "$(cat /tmp/slice-b-baseline-phoenix.pid)" 2>/dev/null || true
+          fi
+
+      - name: Browser server log
+        if: always()
+        run: |
+          echo "===== PHOENIX_LOG_BEGIN ====="
+          cat /tmp/slice-b-baseline-phoenix.log || true
+          echo "===== PHOENIX_LOG_END ====="
+
+      - name: Final exact SHA proof
+        if: always()
+        shell: bash
+        run: |
+          echo "AUDIT_LABEL=${{ matrix.label }}"
+          echo "AUDIT_TESTED_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
