@@ -1,0 +1,1 @@
+Trigger-only file for isolated CI verification of exact branch-head SHA 5d924da2f2e3cfada8ee51b9ed0faac07041596e. Do not merge.
