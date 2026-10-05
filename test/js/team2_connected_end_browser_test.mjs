@@ -6,9 +6,7 @@ const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://127.0.0.1
 
 async function prepareUiPage(page) {
   await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
-  await page.waitForSelector("#conversation-language")
   await page.waitForFunction(() => document.querySelectorAll(".door").length >= 4)
-  await page.selectOption("#conversation-language", "en")
 }
 
 async function uiJoinQueue(page) {
@@ -77,7 +75,6 @@ test("connected two-browser normal End converges both clients and releases later
     // A dismisses terminal UI and immediately enters a later valid Conversation with C.
     await pageA.click("#fade-conversation")
     await pageA.waitForSelector('section[data-screen="doors"].active')
-    await pageA.selectOption("#conversation-language", "en")
 
     pageC = await contextC.newPage()
     await prepareUiPage(pageC)

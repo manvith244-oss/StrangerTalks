@@ -1,8 +1,7 @@
-import {intentEvents, talkLanguageEvents} from "./product_events.mjs"
+import {intentEvents} from "./product_events.mjs"
 
 const FIRST_MINUTE_FAILURE = "StrangerTalks could not start. Please reload."
 const FIRST_MINUTE_FOCUS_SCREENS = new Set(["doors", "queue", "match", "conversation"])
-const DIRECT_LANGUAGE_KEYS = new Set(["Enter", " ", "ArrowDown", "ArrowUp"])
 
 function appendDescriptionId(element, id) {
   if (!element || !id) return
@@ -39,16 +38,14 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
 
   const doorsScreen = documentRef.querySelector('[data-screen="doors"]')
   const doorGrid = documentRef.querySelector("#doors")
-  const languageSelect = documentRef.querySelector("#conversation-language")
   const status = documentRef.querySelector("#status")
   const queueLede = documentRef.querySelector("#queue-lede")
   const leaveQueue = documentRef.querySelector("#leave-queue")
 
-  if (!doorsScreen || !doorGrid || !languageSelect || !status) return
+  if (!doorsScreen || !doorGrid || !status) return
 
   let joinInFlight = false
   let screenFocusScheduled = false
-  const validLanguageValues = () => Array.from(languageSelect.options).map(({value}) => value).filter(Boolean)
 
   const arrivalLede = doorsScreen.querySelector(":scope > .lede")
   let trustCue = documentRef.querySelector("#arrival-trust-cue")
@@ -59,14 +56,6 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
     arrivalLede?.after(trustCue)
   }
 
-  let languageHelp = documentRef.querySelector("#conversation-language-help")
-  if (!languageHelp) {
-    languageHelp = documentRef.createElement("p")
-    languageHelp.id = "conversation-language-help"
-    languageHelp.textContent = "Choose the language you want both people to use."
-    languageSelect.after(languageHelp)
-  }
-
   let feedback = documentRef.querySelector("#arrival-feedback")
   if (!feedback) {
     feedback = documentRef.createElement("p")
@@ -74,25 +63,17 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
     feedback.setAttribute("role", "status")
     feedback.setAttribute("aria-live", "polite")
     feedback.hidden = true
-    languageHelp.after(feedback)
+    trustCue.after(feedback)
   }
 
-  appendDescriptionId(languageSelect, languageHelp.id)
-  appendDescriptionId(languageSelect, feedback.id)
-
-  const setFeedback = (message, {languageError = false} = {}) => {
+  const setFeedback = (message) => {
     feedback.textContent = message || ""
     feedback.hidden = !message
-    if (languageError) languageSelect.setAttribute("aria-invalid", "true")
-    else languageSelect.removeAttribute("aria-invalid")
   }
-
   const clearFeedback = () => setFeedback("")
-
   const queueDoorLabel = () => documentRef.querySelector("#queue-door")?.textContent?.trim() || "the same option"
-  const queueLanguageLabel = () => languageSelect.selectedOptions?.[0]?.textContent?.trim() || "your selected language"
   const restoreQueueCopy = () => {
-    if (queueLede) queueLede.textContent = `Looking for someone who chose ${queueDoorLabel()} in ${queueLanguageLabel()}.`
+    if (queueLede) queueLede.textContent = `Looking for someone who chose ${queueDoorLabel()} too.`
   }
 
   const setDoorBusy = (busy) => {
@@ -120,7 +101,6 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
 
     panel.append(title, copy, retry)
     trustCue.after(panel)
-    languageSelect.disabled = true
     doorGrid.querySelectorAll("button.door").forEach((button) => { button.disabled = true })
     return panel
   }
@@ -131,17 +111,6 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
 
     void intentEvents.select(door.dataset.door)
 
-    if (!languageSelect.value) {
-      void talkLanguageEvents.opened("required_after_intent")
-      event.preventDefault()
-      event.stopImmediatePropagation()
-      setDoorBusy(false)
-      setFeedback("Choose a Conversation Language before picking a Door.", {languageError: true})
-      status.textContent = "Choose a Conversation Language before picking a Door."
-      languageSelect.focus()
-      return
-    }
-
     if (joinInFlight) {
       event.preventDefault()
       event.stopImmediatePropagation()
@@ -151,18 +120,6 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
     clearFeedback()
     setDoorBusy(true)
   }, true)
-
-  languageSelect.addEventListener("pointerdown", () => {
-    void talkLanguageEvents.opened("direct")
-  })
-  languageSelect.addEventListener("keydown", (event) => {
-    if (event.repeat) return
-    if (DIRECT_LANGUAGE_KEYS.has(event.key)) void talkLanguageEvents.opened("direct")
-  })
-  languageSelect.addEventListener("change", () => {
-    void talkLanguageEvents.selected(languageSelect.value, validLanguageValues())
-    if (languageSelect.value) clearFeedback()
-  })
 
   leaveQueue?.addEventListener("click", () => {
     queueMicrotask(() => {

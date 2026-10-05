@@ -71,7 +71,6 @@ test("privacy allowlist drops content, identity, location and token-shaped paylo
   const {events, tracker} = recordingTracker()
   assert.equal(await tracker.capture("st_queue_requested", {
     intent_code: doorValues[0],
-    interaction_language: languageValues[0],
     content: "private words",
     message_body: "private words",
     participant_id: "private-id",
@@ -89,7 +88,6 @@ test("privacy allowlist drops content, identity, location and token-shaped paylo
       flow_attempt_id: "flow-1",
       test_traffic: false,
       intent_code: doorValues[0],
-      interaction_language: languageValues[0]
     }
   })
 
@@ -107,7 +105,7 @@ test("authoritative funnel cannot skip request, joined or match stages", async (
   assert.equal(await queue.matched(), false)
   assert.equal(await queue.firstMessageAccepted(), false)
 
-  assert.equal(await queue.requested(doorValues[1], languageValues[0]), true)
+  assert.equal(await queue.requested(doorValues[1]), true)
   assert.equal(await queue.matched(), false)
   assert.equal(await queue.joined(), true)
   assert.equal(await queue.firstMessageAccepted(), false)
@@ -134,7 +132,7 @@ test("a failed upstream sink write truncates later funnel stages", async () => {
   })
   const queue = createQueueEventObserver(tracker)
 
-  assert.equal(await queue.requested(doorValues[2], languageValues[0]), true)
+  assert.equal(await queue.requested(doorValues[2]), true)
   assert.equal(await queue.joined(), false)
   assert.equal(await queue.matched(), false)
   assert.equal(await queue.firstMessageAccepted(), false)
@@ -147,7 +145,7 @@ test("confirmed cancellation rotates ephemeral flow authority and resets observe
   const queue = createQueueEventObserver(tracker)
 
   await intents.select(doorValues[0])
-  await queue.requested(doorValues[0], languageValues[0])
+  await queue.requested(doorValues[0])
   await queue.joined()
   assert.equal(await captureFlowCancelled(tracker, {stage: "queue", reasonCode: "user_requested"}), true)
   assert.equal(tracker.flowAttemptId, "flow-2")
@@ -191,6 +189,5 @@ test("runtime milestones are bound to authoritative server outcomes, not optimis
   assert.doesNotMatch(reconcileBlock, /queueEvents\.(joined|matched)\(/)
 
   assert.match(arrival, /intentEvents\.select\(/)
-  assert.match(arrival, /talkLanguageEvents\.opened\("required_after_intent"\)/)
-  assert.match(arrival, /talkLanguageEvents\.selected\(/)
+  assert.doesNotMatch(arrival, /conversation-language|required_after_intent|talkLanguageEvents/)
 })

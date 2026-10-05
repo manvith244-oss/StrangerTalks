@@ -126,7 +126,6 @@ async function bootFresh(browser, {controllableSocket = false} = {}) {
   assert.ok(bootstrap.status >= 200 && bootstrap.status < 300, "participant bootstrap succeeds")
   await waitForParticipantJoin(observed)
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible"})
-  await page.locator("#conversation-language").selectOption("en")
 
   return {
     context,

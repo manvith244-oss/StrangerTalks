@@ -65,7 +65,7 @@ The following historical names remain absorbed into explicit deterministic owner
 - Compatibility Agent -> MatchmakingEngine algorithm/rules
 - Opportunity Agent -> Matchmaking strategy/policy
 - Scarcity Agent -> Matchmaking strategy/policy
-- Language Intelligence Agent -> language normalization + matching/start rules
+- Language Intelligence Agent -> language assistance/start rules only; language is not a Four Doors matchmaking signal
 - Icebreaker Lead / Category / Complexity / Confidence agents -> Conversation Start / curated content rules
 - Safety Agent -> deterministic Safety Gate / Safety Services / designated review authority
 - Learning Agent / Icebreaker Learning Agent -> deterministic analytics/recommendations under A02 organizational responsibility
@@ -127,7 +127,7 @@ A01 remains participant-invoked through the authenticated Conversation Companion
 
 Matchmaking authority remains `Matchmaking.MatchmakingEngine` under `ParticipantActivityLock`, with persisted safety veto and active-Conversation checks immediately before atomic Match + Conversation creation.
 
-Conversation Language remains Match-authoritative (`en`, `te`, `hi`). `IcebreakerCatalog` remains the canonical curated Conversation Start source; A01 may read the active starter but A04 cannot publish to it.
+Four Doors matchmaking has no language authority. New Matches leave `conversation_language` null; `IcebreakerCatalog` and A01 use English when the nullable Match language is absent. `IcebreakerCatalog` remains the canonical curated Conversation Start source; A04 cannot publish to it.
 
 Conversation recovery reconstructs from persisted Conversation/Match state. Terminal durable Conversations are not resurrected. `ParticipantActivityLock` remains a single-node V1 serialization boundary; horizontal authoritative BEAM scaling requires a separate distributed-coordination design.
 

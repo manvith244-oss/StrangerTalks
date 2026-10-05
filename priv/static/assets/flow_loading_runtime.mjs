@@ -1,6 +1,6 @@
 import {Socket} from "/vendor/phoenix.mjs"
 import {FLOW_PHASE, createOperationGuard, loadingPresentation} from "./flow_loading.mjs"
-import {captureFlowCancelled, entranceAttempts, intentEvents, productEvents, queueEvents, talkLanguageEvents} from "./product_events.mjs"
+import {captureFlowCancelled, entranceAttempts, intentEvents, productEvents, queueEvents} from "./product_events.mjs"
 
 const APP_ENTRY = "/assets/expression_runtime.mjs?v=20260824_v2"
 const BOOT_WATCHDOG_MS = 15_000
@@ -86,19 +86,11 @@ function stopBootWatchers() {
   startupFailureObserver = null
 }
 
-function languageValues(select) {
-  return Array.from(select?.options || []).map(({value}) => value).filter(Boolean)
-}
-
 function captureCurrentEntrance({newAttempt = false} = {}) {
-  const languageSelect = node("#conversation-language")
   void entranceAttempts.entranceReady({
-    rememberedTalkLanguage: languageSelect?.value || null,
+    rememberedTalkLanguage: null,
     viewportWidth: globalThis.innerWidth
   }, {newAttempt})
-  if (languageSelect?.value) {
-    void talkLanguageEvents.remembered(languageSelect.value, languageValues(languageSelect))
-  }
 }
 
 function installEntranceAttemptObserver(initialScreen) {
@@ -253,7 +245,7 @@ function patchParticipantChannel(channel) {
 
   const originalPush = channel.push.bind(channel)
   channel.push = function(event, payload = {}, timeout) {
-    if (event === "queue:join") void queueEvents.requested(payload?.door_type, payload?.conversation_language)
+    if (event === "queue:join") void queueEvents.requested(payload?.door_type)
     const push = originalPush(event, payload, timeout)
     withQueueCompletion(push, event, payload)
     return push
@@ -342,8 +334,6 @@ Socket.prototype.channel = function(topic, params) {
 document.addEventListener("click", (event) => {
   const door = event.target.closest(".door")
   if (!door) return
-  const language = node("#conversation-language")?.value
-  if (!language) return
   selectedDoor = door.querySelector("strong")?.textContent?.trim() || null
   renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor})
   queueMicrotask(() => renderQueue(FLOW_PHASE.MATCHMAKING_ADMISSION, {door: selectedDoor}))

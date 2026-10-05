@@ -1,9 +1,7 @@
 const LOCAL_DB_NAME = "strangertalks-local-v1"
 const LOCAL_STORE = "records"
 const LIVE_SCHEMA_VERSION = 1
-const LANGUAGE_KEY = "strangertalks.conversation-language.v1"
 const IDENTITY_KEY = "strangertalks.identity.v1"
-const VALID_LANGUAGES = new Set(["en", "te", "hi"])
 const TERMINAL_RETENTION_STATUSES = new Set(["kept", "summary_only", "faded"])
 const CONNECTION_STATES = new Set(["connected", "reconnecting", "recovery", "ended"])
 const RECONNECT_STATES = new Set(["idle", "waiting_for_mutual_availability", "matched", "unavailable"])
@@ -11,8 +9,6 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 
 const runtime = {
   installed: false,
-  futureLanguage: null,
-  languageWriteAuthorized: false,
   readiness: createCanonicalReadiness(),
   reconciliationGate: createCanonicalReconciliationGate(),
   memoryIndexedDB: createMemoryIndexedDB(),
@@ -47,25 +43,6 @@ export function safeStorageRemove(storage, key) {
   } catch (_error) {
     return false
   }
-}
-
-export function createFutureLanguageState(initialFuture = null) {
-  let future = VALID_LANGUAGES.has(initialFuture) ? initialFuture : null
-  let current = null
-  return {
-    future: () => future,
-    current: () => current,
-    setFuture(value) { future = VALID_LANGUAGES.has(value) ? value : null; return future },
-    setCurrentCanonical(value) { current = VALID_LANGUAGES.has(value) ? value : null; return current },
-    clearCurrent() { current = null },
-    languageForNewAttempt(fallback = null) { return future || (VALID_LANGUAGES.has(fallback) ? fallback : null) }
-  }
-}
-
-export function futureConversationLanguageForQueue(fallback = null) {
-  return VALID_LANGUAGES.has(runtime.futureLanguage)
-    ? runtime.futureLanguage
-    : (VALID_LANGUAGES.has(fallback) ? fallback : null)
 }
 
 export function createCanonicalReadiness() {
@@ -546,46 +523,6 @@ function patchSocketChannels(SocketClass) {
   }
 }
 
-function installSafeLocalStorage() {
-  if (typeof globalThis.localStorage === "undefined") return
-  const storage = globalThis.localStorage
-  runtime.futureLanguage = safeStorageGet(storage, LANGUAGE_KEY, null)
-  if (!VALID_LANGUAGES.has(runtime.futureLanguage)) runtime.futureLanguage = null
-
-  const proto = Object.getPrototypeOf(storage)
-  if (!proto || proto.__f11SafeStoragePatched) return
-  const originalGet = proto.getItem
-  const originalSet = proto.setItem
-  const originalRemove = proto.removeItem
-  Object.defineProperty(proto, "__f11SafeStoragePatched", {value: true, configurable: true})
-  proto.getItem = function(key) {
-    if (key === LANGUAGE_KEY && VALID_LANGUAGES.has(runtime.futureLanguage)) return runtime.futureLanguage
-    try { return originalGet.call(this, key) } catch (_error) { return key === LANGUAGE_KEY ? runtime.futureLanguage : null }
-  }
-  proto.setItem = function(key, value) {
-    if (key === LANGUAGE_KEY) {
-      if (!runtime.languageWriteAuthorized) return
-      runtime.futureLanguage = VALID_LANGUAGES.has(String(value)) ? String(value) : null
-    }
-    try { return originalSet.call(this, key, value) } catch (_error) { return undefined }
-  }
-  proto.removeItem = function(key) {
-    if (key === LANGUAGE_KEY) {
-      if (!runtime.languageWriteAuthorized) return
-      runtime.futureLanguage = null
-    }
-    try { return originalRemove.call(this, key) } catch (_error) { return undefined }
-  }
-
-  if (typeof document !== "undefined") {
-    document.addEventListener("change", (event) => {
-      if (event.target?.id !== "conversation-language") return
-      runtime.languageWriteAuthorized = true
-      queueMicrotask(() => { runtime.languageWriteAuthorized = false })
-    }, true)
-  }
-}
-
 function installResilientIndexedDB() {
   if (!globalThis.indexedDB || globalThis.indexedDB.__f11Resilient) return
   runtime.nativeIndexedDB = globalThis.indexedDB
@@ -610,7 +547,6 @@ function exposeReadinessContract() {
   const api = {
     getReadiness: () => runtime.readiness.get(),
     subscribeReadiness: (listener) => runtime.readiness.subscribe(listener),
-    getFutureConversationLanguage: () => runtime.futureLanguage,
     reconcileCanonicalActivity() {
       if (!runtime.participantChannel) return false
       try { runtime.participantChannel.push("session:reconcile", {}); return true } catch (_error) { return false }
@@ -623,7 +559,6 @@ function exposeReadinessContract() {
 export function installF11Runtime({SocketClass} = {}) {
   if (runtime.installed) return globalThis.StrangerTalksF11 || null
   runtime.installed = true
-  installSafeLocalStorage()
   installResilientIndexedDB()
   patchSocketChannels(SocketClass)
   installVisibilityReconciliation()

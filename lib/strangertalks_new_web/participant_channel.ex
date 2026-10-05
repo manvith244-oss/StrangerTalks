@@ -2,7 +2,6 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
   use Phoenix.Channel, log_join: false, log_handle_in: false
 
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
-  alias StrangertalksNew.ConversationLanguages
   alias StrangertalksNew.QueueEngine.ParticipantConnectionTracker
   alias StrangertalksNew.QueueEngine.QueueState
   alias StrangertalksNew.RelationshipReconnections
@@ -40,18 +39,24 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
   @impl true
   def handle_in(
         event,
-        %{"door_type" => door_type, "conversation_language" => conversation_language} = params,
+        %{"door_type" => door_type} = params,
         socket
       )
       when event in ["join_queue", "queue:join"] and is_binary(door_type) do
     participant_id = socket.assigns.participant_id
 
-    with true <- map_size(params) == 2,
+    with true <- Map.drop(params, ["conversation_language"]) == %{"door_type" => door_type},
          {:ok, door} <- door_from_string(door_type),
-         {:ok, language} <- ConversationLanguages.normalize(conversation_language),
-         :not_queued <- queue_entry_status(participant_id, door, language),
+         :not_queued <- queue_entry_status(participant_id, door),
          :ok <- rate_limit(socket, :queue_join, 10, 60_000),
-         {:ok, result} <- MatchmakingEngine.join_queue(participant_id, door, language, nil, nil) do
+         {:ok, result} <-
+           MatchmakingEngine.join_queue(
+             participant_id,
+             door,
+             Map.get(params, "conversation_language"),
+             nil,
+             nil
+           ) do
       send(self(), :evaluate_pending_matches)
       payload = %{status: "queued", queue_attempt_id: result.queue_attempt_id}
       push(socket, "queue:status", payload)
@@ -76,9 +81,6 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
 
         {:reply, {:error, StrangertalksNew.DomainError.to_channel_payload(:invalid_door_type)},
          socket}
-
-      {:error, reason} when reason in [:language_required, :invalid_conversation_language] ->
-        {:reply, {:error, StrangertalksNew.DomainError.to_channel_payload(reason)}, socket}
 
       {:error, :participant_busy} ->
         StrangertalksNew.Telemetry.failure(
@@ -106,12 +108,6 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
         {:reply, {:error, StrangertalksNew.DomainError.to_channel_payload(:queue_join_failed)},
          socket}
     end
-  end
-
-  def handle_in(event, %{"door_type" => _door_type}, socket)
-      when event in ["join_queue", "queue:join"] do
-    {:reply, {:error, StrangertalksNew.DomainError.to_channel_payload(:language_required)},
-     socket}
   end
 
   def handle_in("join_queue", _params, socket) do
@@ -406,17 +402,13 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
     end
   end
 
-  defp queue_entry_status(participant_id, door, language) do
+  defp queue_entry_status(participant_id, door) do
     Agent.get(QueueState, fn state ->
       case Map.get(state, participant_id) do
         nil ->
           :not_queued
 
-        %{
-          door_selection: ^door,
-          conversation_language: ^language,
-          queue_attempt_id: queue_attempt_id
-        } ->
+        %{door_selection: ^door, queue_attempt_id: queue_attempt_id} ->
           {:same_entry, queue_attempt_id}
 
         _entry ->

@@ -5,7 +5,6 @@ import {
   cleanupConversationRecoveryRecords,
   cleanupParticipantBoundRecords,
   createCanonicalReadiness,
-  createFutureLanguageState,
   createMemoryIndexedDB,
   createResilientIndexedDB,
   findPendingTerminalRetention,
@@ -140,26 +139,10 @@ test("PARTICIPANT-01 removes participant-bound recovery while preserving retaine
   assert.equal(ids.has("settings:privacy"), true)
 })
 
-test("LANG-01 canonical current language never overwrites future/default preference", () => {
-  const state = createFutureLanguageState("te")
-  state.setCurrentCanonical("en")
-  assert.equal(state.current(), "en")
-  assert.equal(state.future(), "te")
-  assert.equal(state.languageForNewAttempt("en"), "te")
-})
-
-test("LANG-02 changing future preference while QUEUED does not mutate current attempt", () => {
-  const state = createFutureLanguageState("te")
-  state.setCurrentCanonical("en")
-  state.setFuture("hi")
-  assert.equal(state.current(), "en")
-  assert.equal(state.future(), "hi")
-})
-
 test("READINESS-01 canonical activity remains pending until a SessionReconciliation snapshot is accepted", () => {
   const readiness = createCanonicalReadiness()
   assert.equal(readiness.get().status, "CANONICAL_STATE_PENDING")
-  readiness.accept({participant_id: participantA, canonical_state: "QUEUED", queue: {queue_attempt_id: "attempt-1", conversation_language: "en"}, conversation: null})
+  readiness.accept({participant_id: participantA, canonical_state: "QUEUED", queue: {queue_attempt_id: "attempt-1"}, conversation: null})
   assert.equal(readiness.get().status, "READY")
   assert.equal(readiness.get().canonical_state, "QUEUED")
 })

@@ -89,22 +89,19 @@ async function hideOverlayStates(page) {
   })
 }
 
-test("Arrival language, Queue and human-facing labels are truthful", {timeout: 60_000}, async () => {
+test("Arrival Queue and human-facing labels are truthful without language gating", {timeout: 60_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let session
   try {
     session = await openPage(browser)
     const {page} = session
     await page.screenshot({path: path.join(SCREENSHOTS, "390x844-arrival.png"), fullPage: true})
-    await page.getByRole("button", {name: /Advice/}).click()
-    await page.getByText("Choose a Conversation Language before picking a Door.").waitFor({state: "visible"})
-    assert.equal(await page.locator("#conversation-language").getAttribute("aria-invalid"), "true")
-    await page.locator("#conversation-language").selectOption("en")
-    const selectedLanguage = (await page.locator("#conversation-language option:checked").innerText()).trim()
+    assert.equal(await page.locator("#conversation-language").count(), 0)
     await page.getByRole("button", {name: /Advice/}).click()
     await page.locator('[data-screen="queue"].active').waitFor({state: "visible", timeout: 12_000})
     assert.equal((await page.locator("#leave-queue").innerText()).trim(), "Leave Queue")
-    assert.ok((await page.locator("#queue-lede").innerText()).includes(selectedLanguage), "Queue keeps selected language visible")
+    assert.match(await page.locator("#queue-lede").innerText(), /Advice/)
+    assert.doesNotMatch(await page.locator("#queue-lede").innerText(), /English|Telugu|Hindi/)
     await page.screenshot({path: path.join(SCREENSHOTS, "390x844-queue.png"), fullPage: true})
     await assertNoOverflow(page, "Queue")
     assert.deepEqual(session.errors, [])

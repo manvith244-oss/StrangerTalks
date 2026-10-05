@@ -138,17 +138,22 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     assert map_size(queue_state()) == 1
   end
 
-  test "queue admission requires a supported explicit Conversation Language" do
+  test "queue admission accepts missing or legacy Conversation Language and ignores it" do
     participant = participant_fixture()
     socket = joined_socket(participant)
 
     ref = push(socket, "queue:join", %{"door_type" => "EXPLORE"})
-    assert_reply ref, :error, %{code: "LANGUAGE_REQUIRED"}
-    refute queue_entry(participant.participant_id)
+    assert_reply ref, :ok, %{status: "queued", queue_attempt_id: attempt_id}
+    assert is_nil(queue_entry(participant.participant_id).conversation_language)
 
-    ref = push(socket, "queue:join", %{"door_type" => "EXPLORE", "conversation_language" => "xx"})
-    assert_reply ref, :error, %{code: "INVALID_CONVERSATION_LANGUAGE"}
-    refute queue_entry(participant.participant_id)
+    ref =
+      push(socket, "queue:join", %{
+        "door_type" => "EXPLORE",
+        "conversation_language" => "xx"
+      })
+
+    assert_reply ref, :ok, %{status: "queued", queue_attempt_id: ^attempt_id}
+    assert is_nil(queue_entry(participant.participant_id).conversation_language)
   end
 
   test "stale Attempt-1 Cancel cannot remove Attempt 2 or emit queue_left" do

@@ -102,7 +102,6 @@ function assertClean(observed) {
 }
 
 async function selectLanguageAndQueue(observed, door = "Advice") {
-  await observed.page.locator("#conversation-language").selectOption("en")
   await observed.page.getByRole("button", {name: new RegExp(door)}).click()
   await observed.page.locator('[data-screen="queue"].active').waitFor({state: "visible", timeout: WAIT_MS})
   await observed.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: WAIT_MS})
@@ -123,7 +122,6 @@ async function matchPair(browser, door = "Advice") {
   const a = await bootFresh(browser)
   const b = await bootFresh(browser)
   await selectLanguageAndQueue(a, door)
-  await b.page.locator("#conversation-language").selectOption("en")
   const markA = a.journal.mark()
   const markB = b.journal.mark()
   await b.page.getByRole("button", {name: new RegExp(door)}).click()
@@ -147,20 +145,16 @@ async function sendAndReceive(sender, receiver, topic, text) {
 
 const PNG_1X1 = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2Qf8AAAAASUVORK5CYII=", "base64")
 
-test("real Team 6 Arrival -> language -> Door -> Queue -> Leave Queue", {timeout: 60_000}, async () => {
+test("real Team 6 Arrival -> Door -> Queue -> Leave Queue", {timeout: 60_000}, async () => {
   const browser = await chromium.launch({headless: true})
   let user
   try {
     user = await bootFresh(browser)
     await user.page.screenshot({path: path.join(SCREENSHOTS, "real-390x844-arrival.png"), fullPage: true})
 
-    await user.page.getByRole("button", {name: /Advice/}).click()
-    await user.page.getByText("Choose a Conversation Language before picking a Door.").waitFor({state: "visible"})
-    assert.equal(await user.page.locator("#conversation-language").getAttribute("aria-invalid"), "true")
-
     await selectLanguageAndQueue(user, "Advice")
     assert.equal((await user.page.locator("#leave-queue").innerText()).trim(), "Leave Queue")
-    assert.match(await user.page.locator("#queue-lede").innerText(), /English/)
+    assert.match(await user.page.locator("#queue-lede").innerText(), /Advice/)
     await assertNoOverflow(user.page, "real Queue")
     await user.page.screenshot({path: path.join(SCREENSHOTS, "real-390x844-queue.png"), fullPage: true})
 

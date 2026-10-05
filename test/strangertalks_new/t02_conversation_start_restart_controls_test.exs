@@ -350,19 +350,23 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
              )
   end
 
-  test "missing language stays fail-closed across real replacement without inventing a starter" do
+  test "missing Match language uses stable English fallback across real replacement" do
     fixture = conversation_fixture(nil)
     conversation_id = fixture.conversation.conversation_id
 
     old_pid = start_runtime(conversation_id, :initial)
 
-    assert {:ok, %{icebreaker: :retired}} = ConversationServer.inspect_state(conversation_id)
+    assert {:ok, %{icebreaker: {:active, identity}}} =
+             ConversationServer.inspect_state(conversation_id)
+
+    assert String.starts_with?(identity, "en/")
     assert Matches.get_match(fixture.match.match_id).conversation_started == false
 
     replacement_pid = replace_runtime(conversation_id, old_pid)
     refute replacement_pid == old_pid
 
-    assert {:ok, %{icebreaker: :retired}} = ConversationServer.inspect_state(conversation_id)
+    assert {:ok, %{icebreaker: {:active, ^identity}}} =
+             ConversationServer.inspect_state(conversation_id)
 
     assert {:ok, sync} =
              ConversationServer.sync_and_register_channel(
@@ -373,7 +377,7 @@ defmodule StrangertalksNew.T02ConversationStartRestartControlsTest do
                0
              )
 
-    assert sync.icebreaker == %{status: "retired"}
+    assert sync.icebreaker == %{status: "active", identity: identity}
     assert Matches.get_match(fixture.match.match_id).conversation_started == false
   end
 

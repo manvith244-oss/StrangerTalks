@@ -111,7 +111,6 @@ async function boot(browser, {controllable = false, viewport = {width: 1280, hei
   assert.ok(bootstrap.status >= 200 && bootstrap.status < 300)
   const joined = await participantJoin(observed)
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible"})
-  await page.locator("#conversation-language").selectOption("en")
   return {
     ...observed,
     context,

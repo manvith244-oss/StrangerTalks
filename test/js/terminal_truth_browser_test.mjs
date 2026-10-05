@@ -128,9 +128,7 @@ async function assertNoCanonicalConversation(page) {
 
 async function prepareUiPage(page) {
   await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
-  await page.waitForSelector("#conversation-language")
   await page.waitForFunction(() => document.querySelectorAll(".door").length >= 4)
-  await page.selectOption("#conversation-language", "en")
 }
 
 async function uiJoinQueue(page) {
@@ -372,7 +370,6 @@ test("real UI Block collapses local transient authority and stale Conversation A
     // A now enters a completely new Conversation with C.
     await a1.click("#fade-conversation")
     await a1.waitForSelector('section[data-screen="doors"].active')
-    await a1.selectOption("#conversation-language", "en")
     c = await contextC.newPage()
     await prepareUiPage(c)
     await Promise.all([uiJoinQueue(a1), uiJoinQueue(c)])

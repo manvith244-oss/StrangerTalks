@@ -121,7 +121,6 @@ function assertClean(observed) {
 }
 
 async function selectLanguageAndQueue(observed, door = "Advice") {
-  await observed.page.locator("#conversation-language").selectOption("en")
   await observed.page.getByRole("button", {name: new RegExp(door)}).click()
   await observed.page.locator('[data-screen="queue"].active').waitFor({state: "visible", timeout: WAIT_MS})
   await observed.page.getByRole("status").filter({hasText: "Queue status: queued"}).waitFor({state: "visible", timeout: WAIT_MS})
@@ -142,7 +141,6 @@ async function matchPair(browser) {
   const a = await bootFresh(browser, VIEWPORTS.compact)
   const b = await bootFresh(browser, VIEWPORTS.compact)
   await selectLanguageAndQueue(a)
-  await b.page.locator("#conversation-language").selectOption("en")
   const markA = a.journal.mark()
   const markB = b.journal.mark()
   await b.page.getByRole("button", {name: /Advice/}).click()
@@ -202,7 +200,6 @@ test("F-10 queue resize preserves one queue attempt and desktop layout continuit
 
     assert.equal(await user.page.locator('[data-screen="queue"]').getAttribute("class").then(value => value.includes("active")), true, "queue screen remains active")
     assert.equal(sentCount(user, participantTopic, "queue:join"), 1, "resize and breakpoint crossing do not submit another queue attempt")
-    assert.equal(await user.page.locator("#conversation-language").inputValue(), "en", "selected language survives resize")
     assertClean(user)
   } finally {
     await user?.context.close().catch(() => {})
@@ -215,11 +212,6 @@ test("F-10 standard keyboard controls operate Matchmaking and Settings", {timeou
   let user
   try {
     user = await bootFresh(browser, VIEWPORTS.standard)
-
-    const language = user.page.locator("#conversation-language")
-    await language.focus()
-    await user.page.keyboard.press("ArrowDown")
-    assert.equal(await language.inputValue(), "en", "native select changes language from keyboard")
 
     const advice = user.page.getByRole("button", {name: /Advice/})
     await advice.focus()
