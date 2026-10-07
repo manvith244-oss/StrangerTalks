@@ -59,6 +59,14 @@ jobs:
           mix local.rebar --force
           mix deps.get
 
+      - name: Format check and exact remediation diff
+        run: |
+          if ! mix format --check-formatted; then
+            mix format
+            git diff -- test/strangertalks_new/team1_launch_load_matrix_test.exs
+            exit 1
+          fi
+
       - name: Focused scarcity, queue and concurrency regressions
         run: |
           mix test \
