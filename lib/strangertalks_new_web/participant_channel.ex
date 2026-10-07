@@ -346,6 +346,11 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
         socket
       ) do
     if socket.assigns.participant_id == participant_id do
+      # Survivor requeue does not pass through queue:join, so it needs its
+      # own initial evaluation and scarcity-boundary wake-up.
+      send(self(), :evaluate_pending_matches)
+      schedule_scarcity_recheck(participant_id, queue_attempt_id)
+
       push(socket, "queue:status", %{
         status: "queued",
         conversation_id: conversation_id,
