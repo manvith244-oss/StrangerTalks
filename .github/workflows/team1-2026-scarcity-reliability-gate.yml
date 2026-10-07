@@ -18,7 +18,9 @@ jobs:
     timeout-minutes: 35
     services:
       postgres:
-        image: postgres:17
+        # Match the Ubuntu 24.04 runner's pg_dump 16 to avoid artificial
+        # semantic-backup test failures from a client/server major mismatch.
+        image: postgres:16
         env:
           POSTGRES_USER: strangertalks_local
           POSTGRES_PASSWORD: strangertalks_test
