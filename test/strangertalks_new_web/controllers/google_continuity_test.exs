@@ -65,6 +65,25 @@ defmodule StrangertalksNewWeb.GoogleContinuityTest do
     :ok
   end
 
+  test "account session bearer credentials are never cacheable", %{conn: conn} do
+    result = link_participant(participant(), "session-cache-boundary")
+
+    response_conn =
+      conn
+      |> put_req_cookie("strangertalks_account", result.raw_token)
+      |> get(~p"/api/account/session")
+
+    assert get_resp_header(response_conn, "cache-control") == ["no-store, private"]
+    assert %{"participant_token" => _, "csrf_token" => _} = json_response(response_conn, 200)
+  end
+
+  test "disconnected session responses also explicitly prevent caching", %{conn: conn} do
+    response_conn = get(conn, ~p"/api/account/session")
+
+    assert get_resp_header(response_conn, "cache-control") == ["no-store, private"]
+    assert %{"connected" => false} = json_response(response_conn, 200)
+  end
+
   test "guest flow remains available while Google continuity is disabled", %{conn: conn} do
     Application.put_env(:strangertalks_new, :google_continuity, enabled: false)
     assert %{"token" => _} = conn |> post(~p"/api/participants", %{}) |> json_response(201)
