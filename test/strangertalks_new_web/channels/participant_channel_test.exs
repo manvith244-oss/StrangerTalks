@@ -832,8 +832,10 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
 
     # Simulate both participants crossing the scarcity boundary, but only the
     # replacement queue attempt may use the wake-up. No wall-clock sleep.
+    participant_ids = [participant_a.participant_id, participant_b.participant_id]
+
     Agent.update(QueueState, fn state ->
-      Enum.reduce([participant_a.participant_id, participant_b.participant_id], state, fn id, acc ->
+      Enum.reduce(participant_ids, state, fn id, acc ->
         Map.update!(acc, id, fn entry ->
           Map.put(entry, :queue_entry_time, DateTime.add(DateTime.utc_now(), -20, :second))
         end)
@@ -872,8 +874,10 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
       _ = :sys.get_state(socket.channel_pid)
     end
 
+    participant_ids = [participant_a.participant_id, participant_b.participant_id]
+
     Agent.update(QueueState, fn state ->
-      Enum.reduce([participant_a.participant_id, participant_b.participant_id], state, fn id, acc ->
+      Enum.reduce(participant_ids, state, fn id, acc ->
         Map.update!(acc, id, fn entry ->
           Map.put(entry, :queue_entry_time, DateTime.add(DateTime.utc_now(), -20, :second))
         end)
