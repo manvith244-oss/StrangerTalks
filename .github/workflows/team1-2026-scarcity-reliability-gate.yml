@@ -67,6 +67,10 @@ jobs:
             test/strangertalks_new/matchmaking_reconciliation_fail_closed_test.exs \
             --trace
 
+      - name: Synthetic 2/10/50/100/200 participant authority and latency matrix
+        run: |
+          mix test test/strangertalks_new/team1_launch_load_matrix_test.exs --trace
+
       - name: Full repository precommit
         run: mix precommit
 
