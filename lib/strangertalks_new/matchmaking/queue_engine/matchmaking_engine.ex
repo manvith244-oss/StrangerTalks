@@ -19,6 +19,9 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
   @pubsub_topic "strangertalks:matchmaking"
   @scarcity_wait_ms 15_000
+
+  @doc false
+  def scarcity_wait_ms, do: @scarcity_wait_ms
   @valid_doors MapSet.new([:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL])
   @approved_cross_door_pairs MapSet.new([
                                MapSet.new([:JUST_TALK, :EXPLORE]),
