@@ -410,6 +410,29 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     assert_reply ref, :error, %{reason: "participant_busy"}
   end
 
+  test "approved cross-Door pair matches after scarcity threshold without another join" do
+    participant_a = participant_fixture()
+    participant_b = participant_fixture()
+    socket_a = joined_socket(participant_a)
+    socket_b = joined_socket(participant_b)
+
+    ref_a = push(socket_a, "queue:join", %{"door_type" => "JUST_TALK"})
+    assert_reply ref_a, :ok, %{status: "queued"}
+
+    ref_b = push(socket_b, "queue:join", %{"door_type" => "EXPLORE"})
+    assert_reply ref_b, :ok, %{status: "queued"}
+
+    refute_push "match_found", _payload, 100
+
+    # No third queue join, manual evaluator call, or test-clock manipulation.
+    # The queued channels themselves must re-evaluate at the 15-second boundary.
+    assert_push "match_found", %{status: "matched", conversation_id: conversation_id}, 20_000
+    assert_push "match_found", %{status: "matched", conversation_id: ^conversation_id}, 2_000
+    assert Repo.aggregate(Matching, :count, :match_id) == 1
+    assert Repo.get!(Conversation, conversation_id).conversation_status == :PENDING
+    assert map_size(queue_state()) == 0
+  end
+
   test "different doors remain queued and receive no match notification" do
     participant_a = participant_fixture()
     participant_b = participant_fixture()
