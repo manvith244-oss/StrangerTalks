@@ -33,7 +33,7 @@ body.st-chat-mode .conversation #messages > .message {
   [data-screen="ended"]
 ).screen.active {
   opacity: 1;
-  transform: translateY(0);
+  transform: none;
 }
 
 @starting-style {

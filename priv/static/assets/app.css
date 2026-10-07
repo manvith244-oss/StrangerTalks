@@ -804,17 +804,57 @@ section[data-screen="conversation"] .message.voice-note strong {
   letter-spacing: 0.02em;
 }
 
-section[data-screen="conversation"] .voice-sheet {
-  max-width: 800px;
-  margin: 0.5rem auto;
-  border-radius: 24px;
-  border: 1px solid rgba(255, 252, 235, 0.14);
-  background: rgba(20, 23, 34, 0.96);
-  backdrop-filter: blur(24px) saturate(140%);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
+body:has(.voice-sheet:not([hidden])) main {
+  position: relative;
+  z-index: 40;
 }
 
-section[data-screen="conversation"] .voice-sheet button.primary {
+section[data-screen="conversation"] .voice-sheet,
+body.st-chat-mode .voice-sheet {
+  position: fixed;
+  z-index: 50;
+  inset-inline: max(0.75rem, env(safe-area-inset-left, 0px));
+  bottom: max(0.75rem, env(safe-area-inset-bottom, 0px));
+  max-width: min(calc(100vw - 1.5rem), 38rem);
+  max-height: min(85dvh, 32rem);
+  margin-inline: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--st-space-6);
+  border-radius: 24px;
+  border: 1px solid rgba(255, 252, 235, 0.16);
+  background: rgba(20, 23, 34, 0.98);
+  backdrop-filter: blur(24px) saturate(140%);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.75);
+}
+
+section[data-screen="conversation"] .voice-sheet[hidden],
+body.st-chat-mode .voice-sheet[hidden] {
+  display: none !important;
+}
+
+section[data-screen="conversation"] .voice-sheet > div:has(#voice-warning-continue),
+body.st-chat-mode .voice-sheet > div:has(#voice-warning-continue) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--st-space-3);
+  margin-top: var(--st-space-4);
+}
+
+@media (max-width: 32rem) {
+  section[data-screen="conversation"] .voice-sheet,
+  body.st-chat-mode .voice-sheet {
+    inset-inline: 0.5rem;
+    bottom: 0.5rem;
+    max-width: calc(100vw - 1rem);
+    max-height: calc(100dvh - 1rem);
+    padding: var(--st-space-4);
+  }
+}
+
+section[data-screen="conversation"] .voice-sheet button.primary,
+body.st-chat-mode .voice-sheet button.primary {
   background: var(--mood-primary);
 }
 

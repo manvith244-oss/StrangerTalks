@@ -39,11 +39,12 @@ body.st-chat-mode .conversation-head:has(.overflow[open]) {
   z-index: 90;
 }
 
-/* Active Conversation keeps its composer above the compact primary navigation. */
+/* Active Conversation keeps its composer above the compact primary navigation,
+   with an intrinsic floor so extreme zoom or short viewports do not collapse to 0px. */
 @media (max-width: 61.999rem) {
   body:has([data-screen="conversation"].active) .conversation.active {
-    height: calc(100dvh - 7rem - var(--bottom-nav-block-size));
-    min-height: min(24rem, calc(100dvh - 7rem - var(--bottom-nav-block-size)));
+    height: max(22rem, calc(100dvh - 7rem - var(--bottom-nav-block-size)));
+    min-height: 22rem;
   }
 }
 
