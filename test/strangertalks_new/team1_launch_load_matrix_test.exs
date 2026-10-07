@@ -46,6 +46,7 @@ defmodule StrangertalksNew.Team1LaunchLoadMatrixTest do
       join_ms = System.monotonic_time(:millisecond) - join_start
 
       assert length(join_results) == count
+
       assert Enum.all?(join_results, fn
                {:ok, {:ok, %{status: :queued}}} -> true
                _ -> false
@@ -73,6 +74,7 @@ defmodule StrangertalksNew.Team1LaunchLoadMatrixTest do
 
       committed_matches = Repo.all(Matching)
       conversations = Repo.all(Conversation)
+
       matched_participants =
         Enum.flat_map(committed_matches, &[&1.participant_a_id, &1.participant_b_id])
 
