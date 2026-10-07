@@ -807,6 +807,96 @@ defmodule StrangertalksNewWeb.ParticipantChannelTest do
     assert participant_socket_a.channel_pid
   end
 
+  test "stale scarcity timer cannot match a replacement queue attempt" do
+    participant_a = participant_fixture()
+    participant_b = participant_fixture()
+    socket_a = joined_socket(participant_a)
+    socket_b = joined_socket(participant_b)
+
+    first_join = push(socket_a, "queue:join", %{"door_type" => "JUST_TALK"})
+    assert_reply first_join, :ok, %{queue_attempt_id: old_attempt_id}
+
+    other_join = push(socket_b, "queue:join", %{"door_type" => "EXPLORE"})
+    assert_reply other_join, :ok, %{status: "queued"}
+
+    _ = :sys.get_state(socket_a.channel_pid)
+    _ = :sys.get_state(socket_b.channel_pid)
+
+    leave = push(socket_a, "queue:leave", %{"queue_attempt_id" => old_attempt_id})
+    assert_reply leave, :ok, %{status: "left"}
+
+    replacement = push(socket_a, "queue:join", %{"door_type" => "JUST_TALK"})
+    assert_reply replacement, :ok, %{queue_attempt_id: new_attempt_id}
+    refute new_attempt_id == old_attempt_id
+    _ = :sys.get_state(socket_a.channel_pid)
+
+    # Simulate both participants crossing the scarcity boundary, but only the
+    # replacement queue attempt may use the wake-up. No wall-clock sleep.
+    participant_ids = [participant_a.participant_id, participant_b.participant_id]
+
+    Agent.update(QueueState, fn state ->
+      Enum.reduce(participant_ids, state, fn id, acc ->
+        Map.update!(acc, id, fn entry ->
+          Map.put(entry, :queue_entry_time, DateTime.add(DateTime.utc_now(), -20, :second))
+        end)
+      end)
+    end)
+
+    send(socket_a.channel_pid, {:evaluate_pending_matches, old_attempt_id})
+    _ = :sys.get_state(socket_a.channel_pid)
+    assert Repo.aggregate(Matching, :count, :match_id) == 0
+    assert map_size(queue_state()) == 2
+
+    send(socket_a.channel_pid, {:evaluate_pending_matches, new_attempt_id})
+    assert_push "match_found", %{status: "matched", conversation_id: conversation_id}
+    assert_push "match_found", %{status: "matched", conversation_id: ^conversation_id}
+    assert Repo.aggregate(Matching, :count, :match_id) == 1
+    assert map_size(queue_state()) == 0
+  end
+
+  test "duplicate-tab scarcity wake-ups cannot create duplicate matches" do
+    participant_a = participant_fixture()
+    participant_b = participant_fixture()
+    first_tab = joined_socket(participant_a)
+    second_tab = joined_socket(participant_a)
+    other_tab = joined_socket(participant_b)
+
+    first_join = push(first_tab, "queue:join", %{"door_type" => "JUST_TALK"})
+    assert_reply first_join, :ok, %{queue_attempt_id: attempt_a}
+
+    second_join = push(second_tab, "queue:join", %{"door_type" => "JUST_TALK"})
+    assert_reply second_join, :ok, %{queue_attempt_id: ^attempt_a}
+
+    other_join = push(other_tab, "queue:join", %{"door_type" => "EXPLORE"})
+    assert_reply other_join, :ok, %{queue_attempt_id: attempt_b}
+
+    for socket <- [first_tab, second_tab, other_tab] do
+      _ = :sys.get_state(socket.channel_pid)
+    end
+
+    participant_ids = [participant_a.participant_id, participant_b.participant_id]
+
+    Agent.update(QueueState, fn state ->
+      Enum.reduce(participant_ids, state, fn id, acc ->
+        Map.update!(acc, id, fn entry ->
+          Map.put(entry, :queue_entry_time, DateTime.add(DateTime.utc_now(), -20, :second))
+        end)
+      end)
+    end)
+
+    send(first_tab.channel_pid, {:evaluate_pending_matches, attempt_a})
+    send(second_tab.channel_pid, {:evaluate_pending_matches, attempt_a})
+    send(other_tab.channel_pid, {:evaluate_pending_matches, attempt_b})
+
+    for socket <- [first_tab, second_tab, other_tab] do
+      _ = :sys.get_state(socket.channel_pid)
+    end
+
+    assert Repo.aggregate(Matching, :count, :match_id) == 1
+    assert Repo.aggregate(Conversation, :count, :conversation_id) == 1
+    assert map_size(queue_state()) == 0
+  end
+
   defp participant_fixture do
     {:ok, participant} = Participants.create_participant(%{})
     participant
