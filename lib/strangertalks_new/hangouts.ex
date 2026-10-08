@@ -2,6 +2,7 @@ defmodule StrangertalksNew.Hangouts do
   import Ecto.Query
 
   alias StrangertalksNew.Hangouts.{
+    BetaGate,
     HangoutMembership,
     HangoutMessage,
     HangoutRoom,
@@ -25,18 +26,22 @@ defmodule StrangertalksNew.Hangouts do
   def create_room(attrs \\ %{})
 
   def create_room(attrs) when is_map(attrs) do
-    canonical_attrs = canonical_room_attrs(attrs)
+    if BetaGate.enabled?() do
+      canonical_attrs = canonical_room_attrs(attrs)
 
-    Repo.transaction(fn ->
-      %HangoutRoom{}
-      |> HangoutRoom.changeset(canonical_attrs)
-      |> Repo.insert()
-      |> case do
-        {:ok, room} -> room
-        {:error, changeset} -> Repo.rollback({:invalid_room, changeset})
-      end
-    end)
-    |> normalize_transaction()
+      Repo.transaction(fn ->
+        %HangoutRoom{}
+        |> HangoutRoom.changeset(canonical_attrs)
+        |> Repo.insert()
+        |> case do
+          {:ok, room} -> room
+          {:error, changeset} -> Repo.rollback({:invalid_room, changeset})
+        end
+      end)
+      |> normalize_transaction()
+    else
+      {:error, :feature_unavailable}
+    end
   end
 
   def create_room(_attrs), do: {:error, :invalid_room_input}
@@ -46,6 +51,9 @@ defmodule StrangertalksNew.Hangouts do
     unique_participant_ids = Enum.uniq(participant_ids)
 
     cond do
+      not BetaGate.enabled?() ->
+        {:error, :feature_unavailable}
+
       unique_participant_ids == [] ->
         {:error, :invalid_formation_input}
 

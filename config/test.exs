@@ -75,3 +75,7 @@ config :strangertalks_new, :turn_provider_credentials, %{
     client: StrangertalksNew.TurnCredentialTestClient
   }
 }
+
+# Existing Hangouts tests exercise the enabled behavior explicitly in an isolated test DB.
+# Production and missing configuration remain disabled by default.
+config :strangertalks_new, :hangouts_public_beta_enabled, true
