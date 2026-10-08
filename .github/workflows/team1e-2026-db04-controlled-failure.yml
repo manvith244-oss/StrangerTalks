@@ -100,10 +100,12 @@ jobs:
           test -s "$TEAM1E_TRANSACTION_PROOF_DIR/passed"
           cat "$TEAM1E_TRANSACTION_PROOF_DIR/result.txt"
           trap - EXIT
+      # The outage probe requires a persistent pool; ExUnit explicitly requires
+      # the SQL sandbox. Never reuse the probe's pool setting for tests.
       - name: Focused postcommit Channel regression
-        run: mix test test/strangertalks_new_web/channels/team1e_postcommit_recovery_test.exs
+        run: env -u STRANGERTALKS_PERSISTENT_TEST_SERVER mix test test/strangertalks_new_web/channels/team1e_postcommit_recovery_test.exs
       - name: Full candidate precommit
-        run: mix precommit
+        run: env -u STRANGERTALKS_PERSISTENT_TEST_SERVER mix precommit
       - name: Source checkout cleanliness
         run: |
           git diff --check
