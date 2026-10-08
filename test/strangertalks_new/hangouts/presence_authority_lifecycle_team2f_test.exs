@@ -48,6 +48,7 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
 
     [participant | _] = members
     {:ok, _pid} = RoomServer.ensure_started(room.room_id)
+
     on_exit(fn ->
       case RoomServer.lookup(room.room_id) do
         {:ok, pid} -> Process.exit(pid, :shutdown)
@@ -56,10 +57,18 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
     end)
 
     test_pid = self()
+
     channel_pid =
       spawn(fn ->
-        send(test_pid, {:registered, self(),
-          PresenceAuthority.register(room.room_id, participant.participant_id, Ecto.UUID.generate())})
+        send(
+          test_pid,
+          {:registered, self(),
+           PresenceAuthority.register(
+             room.room_id,
+             participant.participant_id,
+             Ecto.UUID.generate()
+           )}
+        )
 
         receive do
           :close -> :ok
@@ -93,8 +102,13 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
     assert_receive {:DOWN, ^monitor, :process, ^authority_pid, :killed}, 2_000
 
     successor = await_restarted_authority(authority_pid)
+
     assert {:error, :presence_authority_recovering} =
-             PresenceAuthority.register(room.room_id, participant.participant_id, Ecto.UUID.generate())
+             PresenceAuthority.register(
+               room.room_id,
+               participant.participant_id,
+               Ecto.UUID.generate()
+             )
 
     assert Process.whereis(StrangertalksNew.Repo) != nil
     assert [{^channel_pid, _, _, _}] = :ets.lookup(@ledger, channel_pid)
@@ -103,16 +117,26 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
     # its room transaction, so the obsolete lease is now safe to discard only
     # after PostgreSQL is queryable and confirms the room no longer exists.
     replacement_owner = Sandbox.start_owner!(Repo, shared: true)
-    on_exit(fn -> if Process.alive?(replacement_owner), do: Sandbox.stop_owner(replacement_owner) end)
+
+    on_exit(fn ->
+      if Process.alive?(replacement_owner), do: Sandbox.stop_owner(replacement_owner)
+    end)
 
     assert eventually(fn -> :ets.lookup(@ledger, channel_pid) == [] end)
+
     assert {:error, :room_not_found} =
              RoomServer.snapshot(room.room_id, participant.participant_id)
+
     assert Process.whereis(PresenceAuthority) == successor
     assert is_pid(Process.whereis(StrangertalksNew.Repo))
     assert {:ok, %{rows: [[1]]}} = Repo.query("SELECT 1")
+
     assert :ok =
-             PresenceAuthority.register(room.room_id, participant.participant_id, Ecto.UUID.generate())
+             PresenceAuthority.register(
+               room.room_id,
+               participant.participant_id,
+               Ecto.UUID.generate()
+             )
 
     assert :ok = PresenceAuthority.unregister(room.room_id, participant.participant_id)
   end
@@ -122,7 +146,9 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
 
   defp await_restarted_authority(previous, tries) do
     case Process.whereis(PresenceAuthority) do
-      pid when is_pid(pid) and pid != previous -> pid
+      pid when is_pid(pid) and pid != previous ->
+        pid
+
       _ ->
         receive do
         after
