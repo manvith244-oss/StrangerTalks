@@ -1,6 +1,7 @@
 // Team 2E: real Phoenix WebSocket protocol test, isolated local test server only.
 // No production endpoint or credentials; user identities are freshly issued by the disposable test DB.
 import assert from "node:assert/strict"
+import fs from "node:fs"
 
 const base = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://127.0.0.1:4002"
 const wsUrl = base.replace(/^http/, "ws") + "/socket/websocket?vsn=2.0.0"
@@ -75,8 +76,17 @@ async function connect(token) {
 
 async function main() {
   const gate = process.env.STRANGERTALKS_TEAM2E_GATE || "unknown"
-  const alice = await createParticipant()
-  const bob = await createParticipant()
+  // Reuse disposable CI identities across restarts. Creating fresh participants each time
+  // would hit the actual issuance-rate limiter and misclassify a healthy rate limit as a gate failure.
+  const fixturePath = process.env.STRANGERTALKS_TEAM2E_FIXTURE_PATH
+  let fixtures
+  if (fixturePath && fs.existsSync(fixturePath)) {
+    fixtures = JSON.parse(fs.readFileSync(fixturePath, "utf8"))
+  } else {
+    fixtures = [await createParticipant(), await createParticipant()]
+    if (fixturePath) fs.writeFileSync(fixturePath, JSON.stringify(fixtures), {mode: 0o600})
+  }
+  const [alice, bob] = fixtures
   const session = await connect(alice.token)
   try {
     const cases = [
