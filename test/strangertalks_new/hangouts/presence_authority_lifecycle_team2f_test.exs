@@ -122,15 +122,8 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
       if Process.alive?(replacement_owner), do: Sandbox.stop_owner(replacement_owner)
     end)
 
-    assert eventually(fn -> :ets.lookup(@ledger, channel_pid) == [] end)
-
-    assert {:error, :room_not_found} =
-             RoomServer.snapshot(room.room_id, participant.participant_id)
-
-    assert Process.whereis(PresenceAuthority) == successor
-    assert is_pid(Process.whereis(StrangertalksNew.Repo))
-    assert {:ok, %{rows: [[1]]}} = Repo.query("SELECT 1")
-
+    # A newly available DB must permit immediate on-demand reconciliation
+    # at the next registration, without waiting for the background retry timer.
     assert :ok =
              PresenceAuthority.register(
                room.room_id,
@@ -138,7 +131,15 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
                Ecto.UUID.generate()
              )
 
+    assert :ets.lookup(@ledger, channel_pid) == []
     assert :ok = PresenceAuthority.unregister(room.room_id, participant.participant_id)
+
+    assert {:error, :room_not_found} =
+             RoomServer.snapshot(room.room_id, participant.participant_id)
+
+    assert Process.whereis(PresenceAuthority) == successor
+    assert is_pid(Process.whereis(StrangertalksNew.Repo))
+    assert {:ok, %{rows: [[1]]}} = Repo.query("SELECT 1")
   end
 
   defp await_restarted_authority(previous, tries \\ 40)
