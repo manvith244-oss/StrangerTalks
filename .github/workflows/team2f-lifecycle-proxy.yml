@@ -1,0 +1,74 @@
+name: Team 2F Presence Lifecycle Reproduction
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/team2f-lifecycle-proxy.yml"
+      - "test/strangertalks_new/hangouts/presence_authority_lifecycle_team2f_test.exs"
+      - "lib/strangertalks_new/hangouts/presence_authority.ex"
+  workflow_dispatch:
+
+concurrency:
+  group: team2f-lifecycle-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-presence-reproduction:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+    steps:
+      - name: Check out exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify commit identity
+        run: |
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "TEAM2F_EXPECTED_SHA=$expected"
+          echo "TEAM2F_ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$expected"
+      - name: Set up Elixir OTP
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install and migrate disposable test DB
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+      - name: Focused deterministic sandbox-owner and ETS restart regression
+        run: mix test test/strangertalks_new/hangouts/presence_authority_lifecycle_team2f_test.exs --trace --max-cases 1
+      - name: Existing presence lease regressions
+        run: mix test test/strangertalks_new_web/hangout_presence_lease_security_test.exs --trace
+      - name: Compile warnings and formatting
+        run: |
+          mix compile --warnings-as-errors
+          mix format --check-formatted
+      - name: Clean branch
+        run: |
+          git diff --exit-code -- .
+          echo "TEAM2F_TESTED_SHA=$(git rev-parse HEAD)"
