@@ -135,7 +135,7 @@ jobs:
               tail -n 80 "/tmp/team2e-$gate.log"
               exit 1
             fi
-            node test/js/hangouts_hostile_wss_test.mjs
+            STRANGERTALKS_TEAM2E_GATE="$gate" node test/js/hangouts_hostile_wss_test.mjs
             count_after="$(get_hangout_count)"
             echo "TEAM2E_DURABLE_HANGOUT_ROW_COUNT_BEFORE=$count_before AFTER=$count_after"
             test "$count_after" = "$count_before"
