@@ -12,11 +12,12 @@ defmodule StrangertalksNewWeb.HangoutLobbyChannel do
         {:error, %{reason: "feature_unavailable"}}
 
       participant_id == socket.assigns.participant_id ->
-      :ok = Phoenix.PubSub.subscribe(@pubsub, topic(participant_id))
+        :ok = Phoenix.PubSub.subscribe(@pubsub, topic(participant_id))
 
-      {:ok, %{status: "connected"},
-       socket
-       |> assign(:lobby_participant_id, participant_id)}
+        {:ok, %{status: "connected"},
+         socket
+         |> assign(:lobby_participant_id, participant_id)}
+
       true ->
         {:error, %{reason: "participant_mismatch"}}
     end
