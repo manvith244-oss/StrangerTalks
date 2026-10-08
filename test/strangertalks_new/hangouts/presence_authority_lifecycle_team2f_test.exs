@@ -99,16 +99,15 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
     assert Process.whereis(StrangertalksNew.Repo) != nil
     assert [{^channel_pid, _, _, _}] = :ets.lookup(@ledger, channel_pid)
 
-    # Restore an independent sandbox owner; previously durable ACTIVE member
-    # must eventually be disconnected without crashing unrelated application services.
+    # Restore an independent sandbox owner. The former test owner rolled back
+    # its room transaction, so the obsolete lease is now safe to discard only
+    # after PostgreSQL is queryable and confirms the room no longer exists.
     replacement_owner = Sandbox.start_owner!(Repo, shared: true)
     on_exit(fn -> if Process.alive?(replacement_owner), do: Sandbox.stop_owner(replacement_owner) end)
 
     assert eventually(fn -> :ets.lookup(@ledger, channel_pid) == [] end)
-    assert {:ok, snapshot} = RoomServer.snapshot(room.room_id, participant.participant_id)
-    assert Enum.any?(snapshot.members, fn member ->
-      member.self and member.status == :DISCONNECTED
-    end)
+    assert {:error, :room_not_found} =
+             RoomServer.snapshot(room.room_id, participant.participant_id)
     assert Process.whereis(PresenceAuthority) == successor
     assert is_pid(Process.whereis(StrangertalksNew.Repo))
     assert :ok =
