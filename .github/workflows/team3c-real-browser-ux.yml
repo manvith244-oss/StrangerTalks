@@ -1,9 +1,10 @@
-name: Team 3C Isolated Real-Browser UX Proof
+name: Team 3D Isolated Real-Browser UX Proof
 
 on:
   push:
     branches:
       - team3c/2026-10-08-browser-ux-proof
+      - team3d/2026-10-08-browser-startup-closure
   pull_request:
     branches:
       - main
@@ -13,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: team3c-browser-${{ github.event.pull_request.number || github.ref }}
+  group: team3d-browser-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -174,6 +175,7 @@ jobs:
           name: team3c-browser-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
             tmp/team6-real-ux-screenshots/
+            tmp/team3d-ci-diagnostics/
             tmp/arrival-first-60-screenshots/
           if-no-files-found: warn
           retention-days: 7
@@ -182,5 +184,6 @@ jobs:
         if: failure()
         run: |
           if [ -f /tmp/team3c-phoenix.log ]; then
-            grep -E '(^\*\* |error|ERROR|failed|Failed|exception|Exception)' /tmp/team3c-phoenix.log | head -n 35 || true
+            mkdir -p tmp/team3d-ci-diagnostics
+            grep -E '(^\*\* |error|ERROR|failed|Failed|exception|Exception)' /tmp/team3c-phoenix.log | head -n 35 | tee tmp/team3d-ci-diagnostics/phoenix-errors.txt || true
           fi
