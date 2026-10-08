@@ -1,12 +1,40 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {chromium} from "playwright"
+import {HANGOUTS_PUBLIC_BETA_UI_ENABLED} from "../../priv/static/assets/hangouts.mjs"
 
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL
 const TIMEOUT_MS = 30_000
 
 if (!BASE_URL) {
   test("Hangouts Playwright browser proof (skipped: STRANGERTALKS_BROWSER_BASE_URL not set)", {skip: true}, () => {})
+} else if (!HANGOUTS_PUBLIC_BETA_UI_ENABLED) {
+  // The old enabled-flow suite below remains intact for a future approved rollout.
+  // During the excluded beta it would claim a feature that is deliberately unavailable.
+  test("Hangouts beta exclusion: entry hidden, click bypass rejected, Four Doors still present", async () => {
+    const browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
+    })
+
+    try {
+      const page = await browser.newPage({viewport: {width: 390, height: 844}})
+      await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
+      await page.waitForFunction(() => document.documentElement.dataset.hangoutsBooted === "true", null, {timeout: TIMEOUT_MS})
+
+      assert.equal(await page.isVisible("#hangout-entry-banner"), false)
+      assert.equal(await page.isVisible("[data-screen='hangout-entry']"), false)
+
+      await page.evaluate(() => document.getElementById("btn-enter-hangout")?.click())
+      assert.equal(await page.isVisible("[data-screen='hangout-entry']"), false)
+
+      const status = await page.locator("#status").textContent()
+      assert.match(status || "", /Hangouts are not available during this beta/i)
+      assert.ok((await page.locator("#doors").count()) > 0)
+    } finally {
+      await browser.close()
+    }
+  })
 } else {
   test.describe("Hangouts V1 Real Multi-Browser Playwright Proof", {timeout: 120_000}, () => {
     let browser

@@ -402,6 +402,54 @@ defmodule StrangertalksNewWeb.HangoutChannelTest do
              |> subscribe_and_join(HangoutChannel, "hangout:#{room.room_id}", %{})
   end
 
+  test "default-off beta gate denies direct room join and stale-client sends without deleting messages" do
+    {room, [member | _]} = active_room!()
+
+    assert {:ok, _snapshot, existing_socket} =
+             member
+             |> connected_socket()
+             |> subscribe_and_join(HangoutChannel, "hangout:#{room.room_id}", %{})
+
+    assert {:ok, %{sequence: 1}} =
+             RoomServer.send_message(room.room_id, member.participant_id, %{
+               client_message_id: "prior-to-beta-stop",
+               body: "synthetic persisted fixture"
+             })
+
+    before_count = Repo.aggregate(HangoutMessage, :count, :message_id)
+
+    try do
+      Application.put_env(:strangertalks_new, :hangouts_public_beta_enabled, false)
+
+      assert {:error, %{reason: "feature_unavailable"}} =
+               member
+               |> connected_socket()
+               |> subscribe_and_join(HangoutChannel, "hangout:#{room.room_id}", %{})
+
+      ref =
+        push(existing_socket, "message:send", %{
+          "client_message_id" => "old-bundle-bypass",
+          "body" => "must not be persisted"
+        })
+
+      assert_reply ref, :error, %{reason: "feature_unavailable"}
+      assert Repo.aggregate(HangoutMessage, :count, :message_id) == before_count
+
+      denied =
+        Hangouts.create_formed_room(
+          [member.participant_id, Ecto.UUID.generate(), Ecto.UUID.generate()],
+          %{language_tag: "en"}
+        )
+
+      assert denied == {:error, :feature_unavailable}
+      assert Repo.aggregate(HangoutMessage, :count, :message_id) == before_count
+      message_id = Repo.one!(from m in HangoutMessage, select: m.message_id)
+      assert Repo.get!(HangoutMessage, message_id).body == "synthetic persisted fixture"
+    after
+      Application.put_env(:strangertalks_new, :hangouts_public_beta_enabled, true)
+    end
+  end
+
   defp connected_socket(participant) do
     token = ParticipantToken.sign(participant.participant_id)
     {:ok, socket} = connect(UserSocket, %{}, connect_info: %{auth_token: token})

@@ -142,6 +142,9 @@ function renderBootFailure() {
     retry.addEventListener("click", () => location.reload())
     bridge.append(retry)
   }
+  // The failed authority gate hides the Doors, so put keyboard focus on the
+  // one actionable recovery control. Never reveal Doors without a valid join.
+  bridge.querySelector("button")?.focus({preventScroll: true})
 }
 
 function installBootWatchers() {
