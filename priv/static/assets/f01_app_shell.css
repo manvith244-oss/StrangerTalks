@@ -52,7 +52,7 @@ body.st-chat-mode .conversation-head:has(.overflow[open]) {
 @media (min-width: 62rem) {
   body {
     display: grid;
-    grid-template-columns: 11rem minmax(0, 1fr);
+    grid-template-columns: 11rem minmax(0, 1fr) 11rem;
     grid-template-rows: auto minmax(0, 1fr);
     min-height: 100dvh;
   }

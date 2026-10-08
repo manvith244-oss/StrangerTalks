@@ -320,7 +320,8 @@ body.st-chat-mode #icebreaker-card p {
 }
 
 body.st-chat-mode #icebreaker-dismiss {
-  min-height: 32px;
+  min-height: 44px;
+  min-width: 44px;
   padding: 4px 8px;
   border: 0;
   background: transparent;
@@ -647,10 +648,10 @@ body.st-chat-mode .reply-staging-content strong { font-size: 10.5px; color: #cfc
 body.st-chat-mode .reply-staging-content p { margin-top: 2px; color: var(--ig-chat-muted); font-size: 10.5px; }
 
 body.st-chat-mode #reply-cancel {
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
-  min-height: 34px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
   border: 0;
   border-radius: 50%;
@@ -756,7 +757,7 @@ body.st-chat-mode .voice-controls #expressive-open,
 body.st-chat-mode .voice-controls #companion-control {
   display: inline-flex;
   flex: 0 0 auto;
-  min-height: 42px;
+  min-height: 44px;
   align-items: center;
   gap: 7px;
   padding: 7px 11px;
@@ -825,7 +826,7 @@ body.st-chat-mode .companion-panel button,
 body.st-chat-mode .expressive-picker button,
 body.st-chat-mode .voice-sheet button,
 body.st-chat-mode .atmosphere-chooser button {
-  min-height: 42px;
+  min-height: 44px;
 }
 
 body.st-chat-mode .pinned-panel {
@@ -919,7 +920,7 @@ body.st-chat-mode .ig-double-tap-hint {
 
 /* Small phones */
 @media (max-width: 390px) {
-  :root { --ig-chat-header-h: 58px; --ig-chat-touch: 42px; }
+  :root { --ig-chat-header-h: 58px; --ig-chat-touch: 44px; }
   body.st-chat-mode .conversation-head { padding-inline: 5px; }
   body.st-chat-mode .conversation-head-actions { gap: 0; }
   body.st-chat-mode .conversation-identity .signature-ribbon { width: 36px; height: 36px; flex-basis: 36px; }
@@ -934,7 +935,7 @@ body.st-chat-mode .ig-double-tap-hint {
 
 /* Short landscape phones */
 @media (max-height: 520px) and (orientation: landscape) {
-  :root { --ig-chat-header-h: 50px; --ig-chat-composer-min-h: 50px; --ig-chat-touch: 40px; }
+  :root { --ig-chat-header-h: 50px; --ig-chat-composer-min-h: 50px; --ig-chat-touch: 44px; }
   body.st-chat-mode .conversation-head { padding-top: calc(4px + env(safe-area-inset-top, 0px)); padding-bottom: 4px; }
   body.st-chat-mode .conversation-identity .signature-ribbon { width: 34px; height: 34px; flex-basis: 34px; }
   body.st-chat-mode .temporary-conversation-cue { display: none; }
