@@ -57,6 +57,13 @@ end
 
 config :strangertalks_new, :google_continuity, google_continuity
 
+# Public Hangouts are unavailable unless deliberately enabled at runtime.
+# An approved release must also ship a matching frontend activation change.
+if config_env() == :prod do
+  config :strangertalks_new, :hangouts_public_beta_enabled,
+    System.get_env("HANGOUTS_PUBLIC_BETA_ENABLED") == "true"
+end
+
 if config_env() == :prod do
   turn_oracle_urls =
     System.get_env("TURN_ORACLE_URLS", "")
