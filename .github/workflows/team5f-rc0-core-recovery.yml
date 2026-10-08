@@ -71,7 +71,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$TEAM1E_TRANSACTION_PROOF_DIR"
-          printf 'tested_sha=%s\nisolated_postgres=16\n' "$GITHUB_SHA" > "$TEAM1E_TRANSACTION_PROOF_DIR/identity.txt"
+          printf 'tested_sha=%s\nisolated_postgres=16\n' "$EXPECTED_SHA" > "$TEAM1E_TRANSACTION_PROOF_DIR/identity.txt"
           mix run --no-compile test/ops/team1e_controlled_transaction_probe.exs > "$TEAM1E_TRANSACTION_PROOF_DIR/probe.log" 2>&1 &
           probe_pid=$!
           trap 'docker start "$POSTGRES_CONTAINER_ID" >/dev/null 2>&1 || true; kill "$probe_pid" 2>/dev/null || true' EXIT
