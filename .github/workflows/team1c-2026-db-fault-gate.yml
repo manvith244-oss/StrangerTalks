@@ -158,6 +158,6 @@ jobs:
       - name: Verify no generated changes
         run: |
           git diff --check
-          git diff -- test/ops/team1c_disposable_db_outage_probe.exs test/ops/team1d_safety_veto_db_outage_probe.exs lib/strangertalks_new/session_reconciliation.ex lib/strangertalks_new/matchmaking/queue_engine/matchmaking_engine.ex lib/strangertalks_new/matching_rules.ex
+          git diff -- test/ops/team1c_disposable_db_outage_probe.exs test/ops/team1d_safety_veto_db_outage_probe.exs test/ops/team1d_transaction_and_notification_probe.exs lib/strangertalks_new/session_reconciliation.ex lib/strangertalks_new/matchmaking/queue_engine/matchmaking_engine.ex lib/strangertalks_new/matching_rules.ex
           git status --short
           test -z "$(git status --porcelain)"
