@@ -158,17 +158,4 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
     end
   end
 
-  defp eventually(predicate, tries \\ 100)
-  defp eventually(predicate, 0), do: predicate.()
-
-  defp eventually(predicate, tries) do
-    if predicate.() do
-      true
-    else
-      receive do
-      after
-        20 -> eventually(predicate, tries - 1)
-      end
-    end
-  end
 end
