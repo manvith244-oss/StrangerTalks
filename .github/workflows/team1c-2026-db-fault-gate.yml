@@ -157,5 +157,6 @@ jobs:
       - name: Verify no generated changes
         run: |
           git diff --check
+          git diff -- test/ops/team1c_disposable_db_outage_probe.exs lib/strangertalks_new/session_reconciliation.ex lib/strangertalks_new/matchmaking/queue_engine/matchmaking_engine.ex
           git status --short
           test -z "$(git status --porcelain)"

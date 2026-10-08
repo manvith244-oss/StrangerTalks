@@ -35,6 +35,17 @@ defmodule StrangertalksNew.SessionReconciliation do
     ParticipantActivityLock.with_participants([participant_id], fn ->
       do_reconcile(participant_id)
     end)
+  rescue
+    _error in DBConnection.ConnectionError ->
+      # A disconnected database is not evidence that a participant is available.
+      # Return a controlled, retryable failure without logging IDs or query data.
+      StrangertalksNew.Telemetry.failure(
+        [:recovery, :reconciliation_failed],
+        :conversation_unavailable,
+        %{failure_kind: :database_connection}
+      )
+
+      {:error, :conversation_unavailable}
   end
 
   defp do_reconcile(participant_id) do
