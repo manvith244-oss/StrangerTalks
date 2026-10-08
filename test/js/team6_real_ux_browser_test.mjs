@@ -194,7 +194,7 @@ async function matchPair(browser, door = "Advice") {
 async function sendAndReceive(sender, receiver, topic, text) {
   const mark = sender.journal.mark()
   await sender.page.locator("#message-input").fill(text)
-  await sender.page.locator("#message-form button.primary").click()
+  await sender.page.locator("#message-form").getByRole("button", {name: "Send message", exact: true}).click()
   await sender.journal.waitFor(
     event => event.type === "frame_sent" && event.topic === topic && event.event === "message:send" && event.body?.content === text,
     "real composer message send",
