@@ -229,3 +229,84 @@ test("real Team 6 matched Conversation reaches composer, tools, expressions, eph
     await browser.close().catch(() => {})
   }
 })
+
+/*
+ * G3-003 regression: uses an actual two-participant matched Conversation.
+ * It checks the visible warning and clicks its Cancel button at the physical
+ * hit-test coordinates. This is NOT a 400%-zoom or screen-reader certification.
+ */
+test("Team 3B: Voice Privacy Cancel is reachable in a real compact Conversation", {timeout: 150_000}, async () => {
+  const browser = await chromium.launch({headless: true})
+  let pair
+  try {
+    pair = await matchPair(browser, "Advice")
+    const page = pair.a.page
+    for (const viewport of [
+      {width: 320, height: 568},
+      {width: 390, height: 844},
+      {width: 844, height: 390}
+    ]) {
+      await page.setViewportSize(viewport)
+      const isOpen = await page.locator("#message-form").evaluate(form => form.classList.contains("ig-tray-open"))
+      if (!isOpen) await page.locator(".ig-compose-plus").click()
+      await page.locator("#voice-warning-help").click()
+      await page.locator("#voice-warning").waitFor({state: "visible", timeout: WAIT_MS})
+
+      const geometry = await page.evaluate(() => {
+        const sheet = document.querySelector("#voice-warning")
+        const cancel = document.querySelector("#voice-warning-cancel")
+        const rect = sheet.getBoundingClientRect()
+        const button = cancel.getBoundingClientRect()
+        const x = button.left + button.width / 2
+        const y = button.top + button.height / 2
+        const hit = document.elementFromPoint(x, y)
+        const nav = document.querySelector("#bottom-nav")
+        const navVisible = !!nav && getComputedStyle(nav).display !== "none" && nav.getClientRects().length > 0
+        const navRect = navVisible ? nav.getBoundingClientRect() : null
+        const navButton = navVisible ? [...nav.querySelectorAll("button")].find(button => {
+          const style = getComputedStyle(button)
+          return style.display !== "none" && style.visibility !== "hidden"
+        }) : null
+        const navButtonRect = navButton?.getBoundingClientRect()
+        const navX = navButtonRect ? navButtonRect.left + navButtonRect.width / 2 : 0
+        const navY = navButtonRect ? navButtonRect.top + navButtonRect.height / 2 : 0
+        const navTarget = navButtonRect ? document.elementFromPoint(navX, navY) : null
+        const navHit = !!navButton && (navTarget === navButton || navButton.contains(navTarget))
+        const overlapsNav = !!navRect && rect.top < navRect.bottom && rect.bottom > navRect.top &&
+          rect.left < navRect.right && rect.right > navRect.left
+        return {
+          navVisible,
+          navHit,
+          overlapsNav,
+          top: rect.top,
+          bottom: rect.bottom,
+          left: rect.left,
+          right: rect.right,
+          viewportWidth: innerWidth,
+          viewportHeight: innerHeight,
+          cancelX: x,
+          cancelY: y,
+          cancelHit: hit === cancel || cancel.contains(hit)
+        }
+      })
+      const label = `${viewport.width}x${viewport.height}`
+      assert.ok(geometry.top >= -1, `${label}: Voice Privacy starts above viewport ${JSON.stringify(geometry)}`)
+      assert.ok(geometry.bottom <= geometry.viewportHeight + 1, `${label}: Voice Privacy extends below viewport ${JSON.stringify(geometry)}`)
+      assert.ok(geometry.left >= -1 && geometry.right <= geometry.viewportWidth + 1, `${label}: Voice Privacy overflows horizontally`)
+      assert.ok(geometry.cancelHit, `${label}: Cancel cannot receive a pointer at its center ${JSON.stringify(geometry)}`)
+      assert.ok(geometry.navVisible, `${label}: mobile primary navigation must remain visible`)
+      assert.ok(!geometry.overlapsNav, `${label}: Voice Privacy overlaps primary navigation ${JSON.stringify(geometry)}`)
+      assert.ok(geometry.navHit, `${label}: primary navigation control is pointer-blocked ${JSON.stringify(geometry)}`)
+      await page.screenshot({path: path.join(SCREENSHOTS, `team3b-${label}-voice-privacy-before-cancel.png`), fullPage: false})
+      await page.mouse.click(geometry.cancelX, geometry.cancelY)
+      await page.locator("#voice-warning").waitFor({state: "hidden", timeout: WAIT_MS})
+      await page.screenshot({path: path.join(SCREENSHOTS, `team3b-${label}-voice-privacy-after-cancel.png`), fullPage: false})
+    }
+    assertClean(pair.a)
+    assertClean(pair.b)
+  } finally {
+    await pair?.a.context.close().catch(() => {})
+    await pair?.b.context.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+})
