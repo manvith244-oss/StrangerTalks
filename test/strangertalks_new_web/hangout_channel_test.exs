@@ -443,8 +443,8 @@ defmodule StrangertalksNewWeb.HangoutChannelTest do
 
       assert denied == {:error, :feature_unavailable}
       assert Repo.aggregate(HangoutMessage, :count, :message_id) == before_count
-      assert Repo.get!(HangoutMessage, Repo.one!(from m in HangoutMessage, select: m.message_id)).body ==
-               "synthetic persisted fixture"
+      message_id = Repo.one!(from m in HangoutMessage, select: m.message_id)
+      assert Repo.get!(HangoutMessage, message_id).body == "synthetic persisted fixture"
     after
       Application.put_env(:strangertalks_new, :hangouts_public_beta_enabled, true)
     end
