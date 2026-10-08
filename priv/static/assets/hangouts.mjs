@@ -1,3 +1,7 @@
+// Beta exclusion: frontend is intentionally off even if an old browser bundle still
+// tries to join; Phoenix channel and matcher gates are the security authority.
+export const HANGOUTS_PUBLIC_BETA_UI_ENABLED = false
+
 export const HANGOUTS_PHASES = Object.freeze({
   ENTRY: "ENTRY",
   WAITING: "WAITING",
@@ -665,13 +669,21 @@ export function setupHangoutsBrowser() {
     if (target) {
       event.preventDefault()
       event.stopImmediatePropagation()
-      presentHangoutScreen("hangout-entry")
+      if (HANGOUTS_PUBLIC_BETA_UI_ENABLED) {
+        presentHangoutScreen("hangout-entry")
+      } else {
+        announce("Hangouts are not available during this beta.")
+      }
     }
   }, true)
 
   const joinBtn = document.getElementById("hangout-join-queue-btn")
   if (joinBtn) {
     joinBtn.addEventListener("click", () => {
+      if (!HANGOUTS_PUBLIC_BETA_UI_ENABLED) {
+        announce("Hangouts are not available during this beta.")
+        return
+      }
       const select = document.getElementById("hangout-language")
       const customInput = document.getElementById("hangout-language-custom")
       const lang = select?.value === "custom" ? customInput?.value : select?.value
