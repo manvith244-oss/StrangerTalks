@@ -67,6 +67,18 @@ jobs:
 
       - name: Existing presence lease regressions
         run: mix test test/strangertalks_new_web/hangout_presence_lease_security_test.exs --trace
+      - name: Disposable retention and protected safety evidence regressions
+        run: |
+          mix test test/strangertalks_new/retention_cleanup_db_test.exs test/strangertalks_new/retention_closure_db_test.exs --max-cases 1
+
+      - name: Dependency security advisory audit
+        id: dependency_audit
+        continue-on-error: true
+        run: mix hex.audit
+
+      - name: Record non-mutating dependency audit verdict
+        run: echo "TEAM2F_DEPENDENCY_AUDIT_OUTCOME=${{ steps.dependency_audit.outcome }}"
+
       - name: Compile warnings and formatting
         run: |
           mix compile --warnings-as-errors
