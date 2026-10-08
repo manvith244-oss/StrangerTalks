@@ -260,7 +260,24 @@ test("Team 3B: Voice Privacy Cancel is reachable in a real compact Conversation"
         const x = button.left + button.width / 2
         const y = button.top + button.height / 2
         const hit = document.elementFromPoint(x, y)
+        const nav = document.querySelector("#bottom-nav")
+        const navVisible = !!nav && getComputedStyle(nav).display !== "none" && nav.getClientRects().length > 0
+        const navRect = navVisible ? nav.getBoundingClientRect() : null
+        const navButton = navVisible ? [...nav.querySelectorAll("button")].find(button => {
+          const style = getComputedStyle(button)
+          return style.display !== "none" && style.visibility !== "hidden"
+        }) : null
+        const navButtonRect = navButton?.getBoundingClientRect()
+        const navX = navButtonRect ? navButtonRect.left + navButtonRect.width / 2 : 0
+        const navY = navButtonRect ? navButtonRect.top + navButtonRect.height / 2 : 0
+        const navTarget = navButtonRect ? document.elementFromPoint(navX, navY) : null
+        const navHit = !!navButton && (navTarget === navButton || navButton.contains(navTarget))
+        const overlapsNav = !!navRect && rect.top < navRect.bottom && rect.bottom > navRect.top &&
+          rect.left < navRect.right && rect.right > navRect.left
         return {
+          navVisible,
+          navHit,
+          overlapsNav,
           top: rect.top,
           bottom: rect.bottom,
           left: rect.left,
@@ -277,6 +294,9 @@ test("Team 3B: Voice Privacy Cancel is reachable in a real compact Conversation"
       assert.ok(geometry.bottom <= geometry.viewportHeight + 1, `${label}: Voice Privacy extends below viewport ${JSON.stringify(geometry)}`)
       assert.ok(geometry.left >= -1 && geometry.right <= geometry.viewportWidth + 1, `${label}: Voice Privacy overflows horizontally`)
       assert.ok(geometry.cancelHit, `${label}: Cancel cannot receive a pointer at its center ${JSON.stringify(geometry)}`)
+      assert.ok(geometry.navVisible, `${label}: mobile primary navigation must remain visible`)
+      assert.ok(!geometry.overlapsNav, `${label}: Voice Privacy overlaps primary navigation ${JSON.stringify(geometry)}`)
+      assert.ok(geometry.navHit, `${label}: primary navigation control is pointer-blocked ${JSON.stringify(geometry)}`)
       await page.screenshot({path: path.join(SCREENSHOTS, `team3b-${label}-voice-privacy-before-cancel.png`), fullPage: false})
       await page.mouse.click(geometry.cancelX, geometry.cancelY)
       await page.locator("#voice-warning").waitFor({state: "hidden", timeout: WAIT_MS})
