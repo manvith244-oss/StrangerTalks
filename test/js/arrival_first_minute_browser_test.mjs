@@ -288,6 +288,9 @@ test("arrival screen focus does not steal focus from active Conversation content
       b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 20_000})
     ])
 
+    // The last click was in participant B's browser context. Bring participant A
+    // to the foreground before asserting keyboard focus inside its Conversation.
+    await a.page.bringToFront()
     const target = a.page.locator('section[data-screen="conversation"] #message-input')
     await target.focus()
     const focusSnapshot = async () => a.page.evaluate(() => ({
