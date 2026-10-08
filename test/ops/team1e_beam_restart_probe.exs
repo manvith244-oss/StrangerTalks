@@ -89,7 +89,7 @@ defmodule Team1EBeamRestartProbe do
 
   defp reservation_count do
     %{rows: [[count]]} =
-      Repo.query!("SELECT count(*)::int FROM participant_pairing_reservations")
+      Repo.query!("SELECT count(*)::int FROM participant_pairing_reservations WHERE released_at IS NULL")
     count
   end
 
