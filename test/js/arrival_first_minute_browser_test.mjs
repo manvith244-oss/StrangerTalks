@@ -108,12 +108,20 @@ test("participant bootstrap failure becomes a visible recoverable state", {timeo
     const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
     assert.ok(response?.ok(), "root shell still loads")
 
-    const panel = page.locator("#arrival-startup-failure")
+    // The authoritative boot bridge supersedes the older Arrival panel:
+    // failed authority must keep all Doors hidden until the Retry succeeds.
+    const panel = page.locator('#boot-bridge[data-state="error"]')
     await panel.waitFor({state: "visible", timeout: 12_000})
-    await panel.getByRole("heading", {name: "StrangerTalks couldn't connect"}).waitFor({state: "visible"})
-    await panel.getByRole("button", {name: "Retry"}).waitFor({state: "visible"})
-    assert.equal(await page.locator("button.door:not([disabled])").count(), 0)
-    assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Retry")
+    await panel.getByRole("heading", {name: "StrangerTalks can’t confirm your session."}).waitFor({state: "visible"})
+    const retry = panel.getByRole("button", {name: "Reload StrangerTalks"})
+    await retry.waitFor({state: "visible"})
+    assert.equal(await page.locator("button.door:visible").count(), 0, "Doors remain hidden without session authority")
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Reload StrangerTalks")
+    await context.unroute("**/api/participants")
+    await retry.click()
+    await page.locator('section[data-screen="doors"].active button.door').first().waitFor({state: "visible", timeout: 15_000})
+    assert.equal(await page.locator("#boot-bridge").isVisible(), false, "successful recovery hides boot bridge")
+    assert.equal(await page.locator("body.flow-booting").count(), 0)
   } finally {
     await context.close().catch(() => {})
     await browser.close().catch(() => {})
