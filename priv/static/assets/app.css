@@ -1591,8 +1591,15 @@ emoji-picker {
 
 .temporary-entry h2,
 .temporary-entry p { margin: 0; }
-.temporary-entry h2 { font-size: 1rem; }
-.temporary-entry p { margin-top: var(--st-space-2); color: var(--st-text-muted); }
+#arrival-trust-cue {
+  max-inline-size: 65ch;
+}
+
+.temporary-entry p {
+  max-inline-size: 65ch;
+  margin-top: var(--st-space-2);
+  color: var(--st-text-muted);
+}
 
 .text-action {
   min-height: 2.75rem;
