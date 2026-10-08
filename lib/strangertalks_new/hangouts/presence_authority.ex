@@ -227,6 +227,7 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
       case RoomServer.disconnect(room_id, participant_id) do
         {:ok, _result} = success ->
           {:ok, success}
+
         # Room/membership may already have been deleted or revoked, including
         # after a test-sandbox owner rolls back its uncommitted fixtures.
         # Only these proven terminal states can discharge an obsolete lease.
