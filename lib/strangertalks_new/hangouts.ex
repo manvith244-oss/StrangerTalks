@@ -26,19 +26,21 @@ defmodule StrangertalksNew.Hangouts do
   def create_room(attrs \\ %{})
 
   def create_room(attrs) when is_map(attrs) do
-    with :ok <- BetaGate.require_enabled() do
+    if BetaGate.enabled?() do
       canonical_attrs = canonical_room_attrs(attrs)
 
-    Repo.transaction(fn ->
-      %HangoutRoom{}
-      |> HangoutRoom.changeset(canonical_attrs)
-      |> Repo.insert()
-      |> case do
-        {:ok, room} -> room
-        {:error, changeset} -> Repo.rollback({:invalid_room, changeset})
-      end
-    end)
-    |> normalize_transaction()
+      Repo.transaction(fn ->
+        %HangoutRoom{}
+        |> HangoutRoom.changeset(canonical_attrs)
+        |> Repo.insert()
+        |> case do
+          {:ok, room} -> room
+          {:error, changeset} -> Repo.rollback({:invalid_room, changeset})
+        end
+      end)
+      |> normalize_transaction()
+    else
+      {:error, :feature_unavailable}
     end
   end
 
