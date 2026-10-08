@@ -10,7 +10,7 @@ defmodule StrangertalksNew.Hangouts.Matcher do
   use GenServer
 
   alias StrangertalksNew.Hangouts
-  alias StrangertalksNew.Hangouts.{HangoutRoom, Observability, RoomServer}
+  alias StrangertalksNew.Hangouts.{BetaGate, HangoutRoom, Observability, RoomServer}
   alias StrangertalksNew.MatchingRules
 
   @default_config [minimum_size: 3, target_size: 4, max_size: 6]
@@ -52,6 +52,9 @@ defmodule StrangertalksNew.Hangouts.Matcher do
   @impl true
   def handle_call({:enqueue, participant_id, language_tag}, _from, state) do
     cond do
+      not BetaGate.enabled?() ->
+        {:reply, {:error, :feature_unavailable}, state}
+
       not valid_language_tag?(language_tag) ->
         {:reply, {:error, :invalid_language_tag}, state}
 
@@ -99,7 +102,8 @@ defmodule StrangertalksNew.Hangouts.Matcher do
   end
 
   def handle_call({:try_form, language_tag}, _from, state) do
-    with :ok <- validate_language_tag(language_tag),
+    with :ok <- BetaGate.require_enabled(),
+         :ok <- validate_language_tag(language_tag),
          {:ok, config} <- matcher_config() do
       {reply, next_state} = form_room(language_tag, state, config, 0)
       {:reply, reply, next_state}
