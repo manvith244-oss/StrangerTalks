@@ -62,11 +62,15 @@ defmodule Team1CDBProbe do
       raise "DB-02: outage caused unexpected durable match/conversation"
     end
 
+    if class(db_result) == :ok do
+      raise "DB-01: PostgreSQL outage was not observed"
+    end
+
     if successful?(join_result) or offline_report.new_participant_queued do
       raise "DB-01: queue admission succeeded without a database-backed authority decision"
     end
 
-    if match?({:ok, _}, reconcile_result) do
+    if class(reconcile_result) == :ok do
       raise "DB-03: reconciliation succeeded despite unavailable database"
     end
 
