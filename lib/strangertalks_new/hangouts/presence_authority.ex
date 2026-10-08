@@ -222,9 +222,15 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
     try do
       case RoomServer.disconnect(room_id, participant_id) do
         {:ok, _result} = success -> {:ok, success}
-        # A terminated room has no ongoing presence to disconnect.
-        {:error, :terminal_room} = terminal -> {:ok, terminal}
-        {:error, _reason} -> :retry
+        # Room/membership may already have been deleted or revoked, including
+        # after a test-sandbox owner rolls back its uncommitted fixtures.
+        # Only these proven terminal states can discharge an obsolete lease.
+        {:error, reason} = terminal
+        when reason in [:terminal_room, :room_not_found, :membership_not_found, :membership_not_active] ->
+          {:ok, terminal}
+
+        {:error, _reason} ->
+          :retry
       end
     rescue
       _error -> :retry
