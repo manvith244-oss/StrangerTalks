@@ -205,6 +205,46 @@ defmodule StrangertalksNewWeb.HangoutLobbyChannelTest do
     refute a.participant_id in room_members and b.participant_id in room_members
   end
 
+  test "disabled beta gate rejects direct lobby joins, old socket queue admission and matcher calls" do
+    participant = participant!()
+    {:ok, _reply, existing_socket} = join_lobby(participant)
+
+    try do
+      Application.put_env(:strangertalks_new, :hangouts_public_beta_enabled, false)
+
+      assert {:error, %{reason: "feature_unavailable"}} =
+               participant
+               |> connected_socket()
+               |> subscribe_and_join(
+                 HangoutLobbyChannel,
+                 "hangout_lobby:#{participant.participant_id}",
+                 %{}
+               )
+
+      ref = push(existing_socket, "queue:join", %{"language_tag" => "en"})
+      assert_reply ref, :error, %{reason: "feature_unavailable"}
+
+      assert {:error, :feature_unavailable} = Matcher.enqueue(participant.participant_id, "en")
+      assert {:error, :feature_unavailable} = Matcher.try_form("en")
+    after
+      Application.put_env(:strangertalks_new, :hangouts_public_beta_enabled, true)
+    end
+  end
+
+  test "missing and malformed beta configuration fails closed" do
+    try do
+      for setting <- [false, nil, "true", "1", 1, %{}] do
+        Application.put_env(:strangertalks_new, :hangouts_public_beta_enabled, setting)
+        refute StrangertalksNew.Hangouts.BetaGate.enabled?()
+      end
+
+      Application.delete_env(:strangertalks_new, :hangouts_public_beta_enabled)
+      refute StrangertalksNew.Hangouts.BetaGate.enabled?()
+    after
+      Application.put_env(:strangertalks_new, :hangouts_public_beta_enabled, true)
+    end
+  end
+
   defp join_lobby(participant) do
     socket = connected_socket(participant)
 

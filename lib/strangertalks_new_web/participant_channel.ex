@@ -23,6 +23,9 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
 
       case SessionReconciliation.reconcile(participant_id) do
         {:ok, snapshot} ->
+          # A reconnecting tab may inherit an existing queue attempt after its
+          # original channel (and its timer) has disappeared.
+          schedule_snapshot_scarcity_recheck(participant_id, snapshot)
           {:ok, %{status: "connected", snapshot: snapshot}, socket}
 
         {:error, reason} ->
@@ -58,11 +61,14 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
              nil
            ) do
       send(self(), :evaluate_pending_matches)
+      schedule_scarcity_recheck(participant_id, result.queue_attempt_id)
       payload = %{status: "queued", queue_attempt_id: result.queue_attempt_id}
       push(socket, "queue:status", payload)
       {:reply, {:ok, payload}, socket}
     else
       {:same_entry, queue_attempt_id} ->
+        # The original tab can disappear while this tab retains the same attempt.
+        schedule_scarcity_recheck(participant_id, queue_attempt_id)
         {:reply, {:ok, %{status: "queued", queue_attempt_id: queue_attempt_id}}, socket}
 
       :different_entry ->
@@ -280,6 +286,21 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
     {:noreply, socket}
   end
 
+  def handle_info({:evaluate_pending_matches, expected_attempt_id}, socket) do
+    participant_id = socket.assigns.participant_id
+
+    current_attempt? =
+      Agent.get(QueueState, fn state ->
+        case Map.get(state, participant_id) do
+          %{queue_attempt_id: ^expected_attempt_id} -> true
+          _ -> false
+        end
+      end)
+
+    if current_attempt?, do: MatchmakingEngine.evaluate_pending_matches()
+    {:noreply, socket}
+  end
+
   def handle_info(
         {:match_event, :match_created, _match_id, conversation_id, participant_a_id,
          participant_b_id, _score},
@@ -325,6 +346,11 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
         socket
       ) do
     if socket.assigns.participant_id == participant_id do
+      # Survivor requeue does not pass through queue:join, so it needs its
+      # own initial evaluation and scarcity-boundary wake-up.
+      send(self(), :evaluate_pending_matches)
+      schedule_scarcity_recheck(participant_id, queue_attempt_id)
+
       push(socket, "queue:status", %{
         status: "queued",
         conversation_id: conversation_id,
@@ -399,6 +425,45 @@ defmodule StrangertalksNewWeb.ParticipantChannel do
     case Map.fetch(@doors, door_type) do
       {:ok, door} -> {:ok, door}
       :error -> {:error, :invalid_door_type}
+    end
+  end
+
+  defp schedule_snapshot_scarcity_recheck(
+         participant_id,
+         %{canonical_state: :QUEUED, queue: %{queue_attempt_id: attempt_id}}
+       ) do
+    schedule_scarcity_recheck(participant_id, attempt_id)
+  end
+
+  defp schedule_snapshot_scarcity_recheck(_participant_id, _snapshot), do: :ok
+
+  defp schedule_scarcity_recheck(participant_id, queue_attempt_id) do
+    entry_time =
+      Agent.get(QueueState, fn state ->
+        case Map.get(state, participant_id) do
+          %{queue_attempt_id: ^queue_attempt_id, queue_entry_time: queued_at} -> queued_at
+          _ -> nil
+        end
+      end)
+
+    case entry_time do
+      %DateTime{} = queued_at ->
+        remaining_ms =
+          MatchmakingEngine.scarcity_wait_ms() -
+            DateTime.diff(DateTime.utc_now(), queued_at, :millisecond)
+
+        # Allow a few milliseconds for rounded wall-clock differences; a tick
+        # before the exact eligibility boundary would otherwise be lost.
+        Process.send_after(
+          self(),
+          {:evaluate_pending_matches, queue_attempt_id},
+          max(0, remaining_ms) + 5
+        )
+
+        :ok
+
+      _ ->
+        :ok
     end
   end
 

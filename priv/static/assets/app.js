@@ -4308,6 +4308,9 @@ $("#fade-conversation").addEventListener("click", () => applyRetention("faded").
 function openReportForm({targetMessageId = null, trigger = $("#report-open")} = {}) {
   app.reportTargetMessageId = targetMessageId
   app.reportReturnFocus = trigger
+  // A visible Report form must not be covered by the open safety dropdown.
+  const triggerMenu = trigger?.closest("details.overflow")
+  if (triggerMenu) triggerMenu.open = false
   const evidence = $("#report-evidence")
   const disclosure = $("#report-target-disclosure")
   evidence.disabled = Boolean(targetMessageId)
@@ -4329,6 +4332,8 @@ function closeReportForm() {
   app.reportTargetMessageId = null
   const target = app.reportReturnFocus
   app.reportReturnFocus = null
+  const triggerMenu = target?.closest("details.overflow")
+  if (triggerMenu) triggerMenu.open = true
   target?.focus()
 }
 

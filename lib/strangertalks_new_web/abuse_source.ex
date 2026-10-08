@@ -39,6 +39,13 @@ defmodule StrangertalksNewWeb.AbuseSource do
     end
   end
 
+  # Normalize IPv4-mapped IPv6 addresses so one client cannot obtain separate
+  # source-rate-limit buckets merely by switching its address representation.
+  defp ip_to_string({0, 0, 0, 0, 0, 0xFFFF, high, low})
+       when high in 0..0xFFFF and low in 0..0xFFFF do
+    ip_to_string({div(high, 256), rem(high, 256), div(low, 256), rem(low, 256)})
+  end
+
   defp ip_to_string(ip) when is_tuple(ip) and tuple_size(ip) in [4, 8] do
     case :inet.ntoa(ip) do
       {:error, _reason} -> :error
@@ -47,6 +54,11 @@ defmodule StrangertalksNewWeb.AbuseSource do
   end
 
   defp ip_to_string(_ip), do: :error
+
+  defp private_or_local?({0, 0, 0, 0, 0, 0xFFFF, high, low})
+       when high in 0..0xFFFF and low in 0..0xFFFF do
+    private_or_local?({div(high, 256), rem(high, 256), div(low, 256), rem(low, 256)})
+  end
 
   defp private_or_local?({10, _, _, _}), do: true
   defp private_or_local?({127, _, _, _}), do: true

@@ -230,8 +230,34 @@ async function openConversationInfo(page) {
 }
 
 async function sendMessage(page, text) {
-  await page.locator("#message-input").fill(text)
-  await page.locator('section[data-screen="conversation"].active #message-form').getByRole("button", {name: "Send message"}).click()
+  const input = page.locator("#message-input")
+  await input.fill(text)
+  const send = page.locator('section[data-screen="conversation"].active #message-form').getByRole("button", {name: "Send message"})
+  try {
+    await send.waitFor({state: "visible", timeout: 4000})
+  } catch (error) {
+    // Log only sanitized UI state; never log draft or conversation contents.
+    const ui = await page.evaluate(() => {
+      const form = document.querySelector("#message-form")
+      const input = document.querySelector("#message-input")
+      const button = form?.querySelector('button[aria-label="Send message"]')
+      const style = button ? getComputedStyle(button) : null
+      const rectangle = button?.getBoundingClientRect()
+      return {
+        activeScreen: document.querySelector("section.screen.active")?.dataset.screen ?? null,
+        composerClass: form?.className ?? null,
+        hasDraft: Boolean(input?.value.trim()),
+        inputFocused: document.activeElement === input,
+        sendDisplay: style?.display ?? null,
+        sendVisibility: style?.visibility ?? null,
+        sendOpacity: style?.opacity ?? null,
+        sendBox: rectangle ? {width: rectangle.width, height: rectangle.height} : null,
+        mode: document.body.classList.contains("st-chat-mode")
+      }
+    })
+    throw new Error(`Send button remained hidden after filling composer: ${JSON.stringify(ui)}; cause=${error?.name || "unknown"}`)
+  }
+  await send.click()
   const message = exactMessage(page, text)
   await message.waitFor({state: "visible"})
   return message
@@ -720,6 +746,9 @@ test("browser-layer disconnect recovers and catches up exactly once", {timeout: 
     await exactMessage(a.page, "E2E offline catchup").waitFor({state: "visible"})
     assert.equal(await exactMessage(a.page, "E2E offline catchup").count(), 1)
     assert.equal(await exactMessage(a.page, "E2E before offline").count(), 1)
+    // Prove recovered participants can still compose and click Send naturally.
+    // A visible Conversation surface alone does not establish Send accessibility.
+    await sendAndReceive(a, b, "E2E sent after socket recovery", conversationTopic)
     assert.ok(a.failedRequests.length >= failedBeforeOffline, "offline failures are bounded to the intentional outage")
 
     assertClean(b)

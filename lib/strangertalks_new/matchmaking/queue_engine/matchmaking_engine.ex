@@ -19,6 +19,9 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
   @pubsub_topic "strangertalks:matchmaking"
   @scarcity_wait_ms 15_000
+
+  @doc false
+  def scarcity_wait_ms, do: @scarcity_wait_ms
   @valid_doors MapSet.new([:JUST_TALK, :KEEP_IT_LIGHT, :EXPLORE, :SOMETHING_REAL])
   @approved_cross_door_pairs MapSet.new([
                                MapSet.new([:JUST_TALK, :EXPLORE]),
@@ -128,6 +131,9 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
           {:busy, _active_conv} ->
             {:error, :participant_busy}
+
+          {:error, :queue_join_failed} ->
+            {:error, :queue_join_failed}
         end
       end)
 
@@ -321,6 +327,9 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
       {:ok, matches_created} ->
         {:ok, matches_created}
 
+      {:error, :database_unavailable} ->
+        {:error, :database_unavailable}
+
       _ ->
         {:ok, []}
     end
@@ -362,6 +371,11 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
             else
               process_matching_pool([p1 | remaining_pool], matched_acc)
             end
+
+          {:error, :database_unavailable} ->
+            # Do not acknowledge evaluation after a failed/uncertain transaction.
+            # A later caller must reconcile canonical state before any new pairing.
+            {:error, :database_unavailable}
 
           {:error, _reason} ->
             process_matching_pool(rest, matched_acc)
@@ -569,7 +583,40 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
       {:invalid_participants, missing_participant_ids}
     end
+  rescue
+    _error in DBConnection.ConnectionError ->
+      unavailable_match_persistence()
+
+    error in Postgrex.Error ->
+      if unavailable_postgres_error?(error) do
+        unavailable_match_persistence()
+      else
+        reraise error, __STACKTRACE__
+      end
   end
+
+  defp unavailable_match_persistence do
+    # Failure is reported without guessing whether a lost connection committed.
+    # Queue attempts remain until authoritative reconciliation establishes reality.
+    StrangertalksNew.Telemetry.failure(
+      [:match, :persistence_failed],
+      :database_unavailable,
+      %{failure_kind: :connection}
+    )
+
+    {:error, :database_unavailable}
+  end
+
+  defp unavailable_postgres_error?(%Postgrex.Error{postgres: postgres})
+       when is_map(postgres) do
+    pg_code = Map.get(postgres, :pg_code)
+    code = Map.get(postgres, :code)
+
+    pg_code in ["57P01", "57P02", "57P03", "08000", "08001", "08003", "08004", "08006", "08P01"] or
+      code in [:admin_shutdown, :crash_shutdown, :cannot_connect_now, :connection_failure]
+  end
+
+  defp unavailable_postgres_error?(_error), do: false
 
   defp acquire_pairing_reservations(repo, match_id, participant_ids, acquired_at) do
     ordered_participant_ids = participant_ids |> Enum.map(&canonical_uuid!/1) |> Enum.sort()
@@ -622,6 +669,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
     case StrangertalksNew.SessionReconciliation.reconcile(participant_id) do
       {:ok, %{canonical_state: :CONVERSATION, conversation: conv}} -> {:busy, conv}
       {:ok, _snapshot} -> :available
+      {:error, :conversation_unavailable} -> {:error, :queue_join_failed}
       {:error, reason} -> {:busy, {:reconciliation_error, reason}}
     end
   end

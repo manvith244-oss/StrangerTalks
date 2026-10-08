@@ -1,0 +1,91 @@
+name: Team 1 2026 Scarcity Reliability Gate
+
+on:
+  push:
+    branches:
+      - team1/2026-10-08-scarcity-clock-wakeup
+
+permissions:
+  contents: read
+
+concurrency:
+  group: team1-scarcity-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  isolated-core-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        # Match the Ubuntu 24.04 runner's pg_dump 16 to avoid artificial
+        # semantic-backup test failures from a client/server major mismatch.
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Record tested SHA
+        run: |
+          echo "TESTED_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Install Elixir and Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+
+      - name: Format check and exact remediation diff
+        run: |
+          if ! mix format --check-formatted; then
+            mix format
+            git diff -- test/strangertalks_new/team1_launch_load_matrix_test.exs
+            exit 1
+          fi
+
+      - name: Focused scarcity, queue and concurrency regressions
+        run: |
+          mix test \
+            test/strangertalks_new_web/channels/participant_channel_test.exs \
+            test/strangertalks_new/matchmaking_engine_test.exs \
+            test/strangertalks_new/matchmaking_hostile_concurrency_test.exs \
+            test/strangertalks_new/matchmaking_core_authority_test.exs \
+            test/strangertalks_new/matchmaking_reconciliation_fail_closed_test.exs \
+            --trace
+
+      - name: Synthetic 2/10/50/100/200 participant authority and latency matrix
+        run: |
+          mix test test/strangertalks_new/team1_launch_load_matrix_test.exs --trace
+
+      - name: Full repository precommit
+        run: mix precommit
+
+      - name: Verify checkout not modified
+        run: |
+          git diff --check
+          git status --short
+          test -z "$(git status --porcelain)"

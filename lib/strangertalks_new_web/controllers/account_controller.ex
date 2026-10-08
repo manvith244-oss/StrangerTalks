@@ -5,6 +5,9 @@ defmodule StrangertalksNewWeb.AccountController do
   alias StrangertalksNewWeb.{AccountCSRF, GoogleAuthController, ParticipantToken}
 
   def session(conn, _params) do
+    # This GET endpoint can return a live participant bearer token and CSRF token.
+    conn = put_resp_header(conn, "cache-control", "no-store, private")
+
     if StrangertalksNew.GoogleContinuity.enabled?() do
       with {:ok, account_session} <- current_session(conn),
            true <- rate_allowed?(:account_session, account_session.account_id, 60) do
