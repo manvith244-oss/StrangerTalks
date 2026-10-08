@@ -22,11 +22,17 @@ config :strangertalks_new, StrangertalksNew.Repo,
 
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
+test_port = String.to_integer(System.get_env("PORT", "4002"))
+
 config :strangertalks_new, StrangertalksNewWeb.Endpoint,
   http: [
     ip: {127, 0, 0, 1},
-    port: String.to_integer(System.get_env("PORT", "4002"))
+    port: test_port
   ],
+  # Keep WebSocket CSRF origin validation enabled. The isolated browser harness
+  # uses 127.0.0.1 while the default endpoint URL is localhost; permit only the
+  # two local loopback origins on this test port, never arbitrary origins.
+  check_origin: ["http://127.0.0.1:#{test_port}", "http://localhost:#{test_port}"],
   secret_key_base: "mfafzOU4EbAel4JLxny9QB4VWYDuUr8ZpaIyBpUkWOQEgQi1RcRQKADLWXmTAOgj",
   server: false
 
@@ -75,3 +81,16 @@ config :strangertalks_new, :turn_provider_credentials, %{
     client: StrangertalksNew.TurnCredentialTestClient
   }
 }
+
+# Only the disposable real-browser Phoenix server multiplexes many synthetic
+# browser contexts through 127.0.0.1. Keep bounded source admission enabled,
+# but budget for the test matrix instead of exhausting the production 6/min IP
+# quota. All ordinary mix tests retain ParticipantIssuance's production defaults.
+if System.get_env("STRANGERTALKS_PERSISTENT_TEST_SERVER") == "1" do
+  config :strangertalks_new, :participant_issuance_policies,
+    [
+      {:participant_issuance_burst, 200, 60_000},
+      {:participant_recent_identity_slots, 500, 15 * 60_000},
+      {:participant_identity_rotation, 1_000, 60 * 60_000}
+    ]
+end
