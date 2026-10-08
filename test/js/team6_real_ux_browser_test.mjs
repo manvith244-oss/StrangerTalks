@@ -274,6 +274,7 @@ test("real Team 6 matched Conversation reaches composer, tools, expressions, eph
     await overflow.click()
     await a.page.locator("#report-open").click()
     await a.page.locator("#report-form").waitFor({state: "visible", timeout: WAIT_MS})
+    assert.equal(await a.page.locator(".conversation-head-actions .overflow").evaluate(node => node.open), false, "safety dropdown must not cover the Report form")
     const reportLabels = (await a.page.locator("#report-category option").allTextContents()).map(text => text.trim())
     assert.deepEqual(reportLabels, ["Choose…", "Spam", "Harassment", "Sexual misconduct", "Malicious links", "Threats"])
     await assertNoOverflow(a.page, "real Report")
