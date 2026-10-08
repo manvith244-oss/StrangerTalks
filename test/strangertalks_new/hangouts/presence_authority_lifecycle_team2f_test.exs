@@ -110,6 +110,7 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
              RoomServer.snapshot(room.room_id, participant.participant_id)
     assert Process.whereis(PresenceAuthority) == successor
     assert is_pid(Process.whereis(StrangertalksNew.Repo))
+    assert {:ok, %{rows: [[1]]}} = Repo.query("SELECT 1")
     assert :ok =
              PresenceAuthority.register(room.room_id, participant.participant_id, Ecto.UUID.generate())
 
