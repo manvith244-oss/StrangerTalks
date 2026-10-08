@@ -55,6 +55,7 @@ defmodule StrangertalksNewWeb.Team1EPostcommitRecoveryTest do
 
     assert recovered.canonical_state == :CONVERSATION
     assert recovered.conversation.conversation_id == conversation_id
+
     assert {:error, :participant_busy} =
              MatchmakingEngine.join_queue(a.participant_id, :EXPLORE, nil, nil, nil)
 
