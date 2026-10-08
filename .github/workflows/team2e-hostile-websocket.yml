@@ -45,6 +45,9 @@ jobs:
       STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4002
       PGPASSWORD: strangertalks_test
       STRANGERTALKS_TEAM2E_FIXTURE_PATH: /tmp/team2e-wss-fixtures.json
+      STRANGERTALKS_TEAM2E_STALE_FIXTURE_PATH: /tmp/team2e-stale-fixture.json
+      STRANGERTALKS_TEAM2E_DISABLE_TRIGGER: /tmp/team2e-disable.trigger
+      STRANGERTALKS_TEAM2E_DISABLE_ACK: /tmp/team2e-disable.ack
 
     steps:
       - name: Checkout exact candidate SHA
@@ -144,6 +147,77 @@ jobs:
             trap - EXIT
             sleep 1
           done
+
+      - name: Compile-check stale WebSocket protocol test
+        run: node --check test/js/hangouts_stale_wss_test.mjs
+
+      - name: Hostile stale-client WebSocket safety proof in disposable room
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f "$STRANGERTALKS_TEAM2E_STALE_FIXTURE_PATH" "$STRANGERTALKS_TEAM2E_DISABLE_TRIGGER" "$STRANGERTALKS_TEAM2E_DISABLE_ACK"
+          mix run --no-start -e '
+            repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+            Application.put_env(:strangertalks_new, StrangertalksNew.Repo,
+              repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
+            endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint,
+              Keyword.put(endpoint, :server, true))
+            Application.put_env(:strangertalks_new, :hangouts_public_beta_enabled, true)
+            {:ok, _apps} = Application.ensure_all_started(:strangertalks_new)
+            members =
+              Enum.map(1..4, fn _ ->
+                {:ok, participant} = StrangertalksNew.Participants.create_participant(%{})
+                %{participant_id: participant.participant_id,
+                  token: StrangertalksNewWeb.ParticipantToken.sign(participant.participant_id)}
+              end)
+            ids = members |> Enum.take(3) |> Enum.map(& &1.participant_id)
+            {:ok, %{room: room}} =
+              StrangertalksNew.Hangouts.create_formed_room(ids, %{
+                language_tag: "en", experiment_arm: :GROUP_WITH_CONTENT,
+                minimum_size: 3, target_size: 4, max_size: 6
+              })
+            {:ok, _room_server} = StrangertalksNew.Hangouts.RoomServer.ensure_started(room.room_id)
+            File.write!(System.fetch_env!("STRANGERTALKS_TEAM2E_STALE_FIXTURE_PATH"),
+              Jason.encode!(%{room_id: room.room_id, members: members}))
+            watch = fn watch ->
+              if File.exists?(System.fetch_env!("STRANGERTALKS_TEAM2E_DISABLE_TRIGGER")) do
+                Application.put_env(:strangertalks_new, :hangouts_public_beta_enabled, false)
+                File.write!(System.fetch_env!("STRANGERTALKS_TEAM2E_DISABLE_ACK"), "off")
+              else
+                Process.sleep(40)
+                watch.(watch)
+              end
+            end
+            spawn(fn -> watch.(watch) end)
+            Process.sleep(:infinity)
+          ' > /tmp/team2e-stale-server.log 2>&1 &
+          server_pid="$!"
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in $(seq 1 45); do
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              echo "Stale-client fixture server exited early"
+              tail -n 80 /tmp/team2e-stale-server.log
+              exit 1
+            fi
+            if [ -s "$STRANGERTALKS_TEAM2E_STALE_FIXTURE_PATH" ] && curl -fsS http://127.0.0.1:4002/ >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" -eq 1 || { tail -n 80 /tmp/team2e-stale-server.log; exit 1; }
+          node test/js/hangouts_stale_wss_test.mjs
+          # Exactly one synthetic pre-disable ordinary message and one authorized report must remain.
+          messages=$(psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -At -c "SELECT count(*) FROM hangout_messages")
+          reports=$(psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -At -c "SELECT count(*) FROM hangout_reports")
+          echo "TEAM2E_STALE_HISTORICAL_MESSAGES=$messages AUTHORIZED_REPORTS=$reports"
+          test "$messages" = "1"
+          test "$reports" = "1"
+          kill "$server_pid" 2>/dev/null || true
+          wait "$server_pid" 2>/dev/null || true
+          trap - EXIT
 
       - name: Preserve server failure logs
         if: failure()
