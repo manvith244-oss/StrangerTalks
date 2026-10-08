@@ -131,6 +131,9 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
 
           {:busy, _active_conv} ->
             {:error, :participant_busy}
+
+          {:error, :queue_join_failed} ->
+            {:error, :queue_join_failed}
         end
       end)
 
@@ -625,6 +628,7 @@ defmodule StrangertalksNew.Matchmaking.MatchmakingEngine do
     case StrangertalksNew.SessionReconciliation.reconcile(participant_id) do
       {:ok, %{canonical_state: :CONVERSATION, conversation: conv}} -> {:busy, conv}
       {:ok, _snapshot} -> :available
+      {:error, :conversation_unavailable} -> {:error, :queue_join_failed}
       {:error, reason} -> {:busy, {:reconciliation_error, reason}}
     end
   end
