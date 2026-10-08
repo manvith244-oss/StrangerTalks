@@ -24,8 +24,12 @@ defmodule Team1CDBProbe do
     began = System.monotonic_time(:millisecond)
     db_result = outcome(fn -> Repo.query("SELECT 1", [], timeout: 2_000) end)
     reconcile_result = outcome(fn -> SessionReconciliation.reconcile(b.participant_id) end)
-    join_result = outcome(fn -> MatchmakingEngine.join_queue(b.participant_id, :EXPLORE, nil, nil, nil) end)
-    cancel_result = outcome(fn -> MatchmakingEngine.cancel_queue(a.participant_id, entry.queue_attempt_id) end)
+    join_result =
+      outcome(fn -> MatchmakingEngine.join_queue(b.participant_id, :EXPLORE, nil, nil, nil) end)
+
+    cancel_result =
+      outcome(fn -> MatchmakingEngine.cancel_queue(a.participant_id, entry.queue_attempt_id) end)
+
     elapsed = System.monotonic_time(:millisecond) - began
 
     offline_report = %{
@@ -52,12 +56,15 @@ defmodule Team1CDBProbe do
     b_reconcile = outcome(fn -> SessionReconciliation.reconcile(b.participant_id) end)
 
     restored_report = %{
-      match_count_before: match_before, match_count_after: match_after,
-      conversation_count_before: conv_before, conversation_count_after: conv_after,
+      match_count_before: match_before,
+      match_count_after: match_after,
+      conversation_count_before: conv_before,
+      conversation_count_after: conv_after,
       participant_a_state: canonical(a_reconcile),
       participant_b_state: canonical(b_reconcile),
       process_survived_db_outage: true
     }
+
     File.write!(path("recovered.txt"), inspect(restored_report, pretty: true) <> "\n")
 
     if match_before != match_after or conv_before != conv_after do
@@ -78,6 +85,14 @@ defmodule Team1CDBProbe do
 
     if class(reconcile_result) == :raised or class(join_result) == :raised do
       raise "DB-01: outage leaked uncaught reconciliation/queue admission exception"
+    end
+
+    if reconcile_result != {:returned, {:error, :conversation_unavailable}} do
+      raise "DB-01: reconciliation did not return retryable unavailable error"
+    end
+
+    if join_result != {:returned, {:error, :queue_join_failed}} do
+      raise "DB-01: queue join did not return a controlled retryable error"
     end
 
     if elapsed > 75_000 do
@@ -101,9 +116,12 @@ defmodule Team1CDBProbe do
 
   defp wait_loop(filename, started, max_ms) do
     cond do
-      File.exists?(path(filename)) -> :ok
+      File.exists?(path(filename)) ->
+        :ok
+
       System.monotonic_time(:millisecond) - started > max_ms ->
         raise "Timed out waiting for isolated DB phase barrier: #{filename}"
+
       true ->
         Process.sleep(100)
         wait_loop(filename, started, max_ms)
@@ -119,10 +137,12 @@ defmodule Team1CDBProbe do
     case outcome(fn -> Repo.query("SELECT 1", [], timeout: 2_000) end) do
       {:returned, {:ok, _}} ->
         :ok
+
       _ ->
         if System.monotonic_time(:millisecond) - started > max_ms do
           raise "DB-07: database did not reconnect within 60 seconds"
         end
+
         Process.sleep(200)
         await_query_loop(started, max_ms)
     end
@@ -150,10 +170,10 @@ defmodule Team1CDBProbe do
   defp class({:returned, other}) when is_atom(other), do: other
   defp class({:returned, _}), do: :other_return
   defp class({:raised, _}), do: :raised
+  defp class({:caught, _}), do: :caught
 
   defp exception_type({:raised, module}), do: module
   defp exception_type(_), do: :none
-  defp class({:caught, _}), do: :caught
 
   defp successful?({:returned, {:ok, _}}), do: true
   defp successful?({:returned, :ok}), do: true
