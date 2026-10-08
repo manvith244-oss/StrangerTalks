@@ -290,12 +290,23 @@ test("arrival screen focus does not steal focus from active Conversation content
 
     const target = a.page.locator('section[data-screen="conversation"] #message-input')
     await target.focus()
+    const focusSnapshot = async () => a.page.evaluate(() => ({
+      activeId: document.activeElement?.id || "",
+      activeTag: document.activeElement?.tagName || "",
+      screen: document.querySelector("section.screen.active")?.dataset.screen || "",
+      inputVisible: Boolean(document.querySelector("#message-input")?.getClientRects().length),
+      inputDisabled: Boolean(document.querySelector("#message-input")?.disabled)
+    }))
+    const beforeProbe = await focusSnapshot()
+    assert.equal(beforeProbe.activeId, "message-input", "Composer must accept focus before cosmetic class probe: " + JSON.stringify(beforeProbe))
+
     await a.page.locator('section[data-screen="conversation"]').evaluate((screen) => {
       screen.classList.toggle("arrival-focus-regression-probe")
     })
     await a.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 
-    assert.equal(await a.page.evaluate(() => document.activeElement?.id), "message-input")
+    const afterProbe = await focusSnapshot()
+    assert.equal(afterProbe.activeId, "message-input", "Cosmetic class change must preserve composer focus: " + JSON.stringify({beforeProbe, afterProbe}))
     assert.deepEqual(a.errors, [])
     assert.deepEqual(a.failedRequests, [])
     assert.deepEqual(b.errors, [])
