@@ -1,0 +1,251 @@
+name: Team 4C Isolated Release Reproduction
+
+on:
+  push:
+    branches:
+      - audit/team4c-isolated-release-2026-10-08
+  workflow_dispatch:
+
+# Diagnostic only: no staging/production environment, secrets, deploy, or provider API.
+permissions:
+  contents: read
+
+jobs:
+  isolated-release:
+    name: ${{ matrix.label }} (PostgreSQL 17)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: staging-failed-2026-09-10
+            source_sha: "777439b3c28c0554ac438a348620f46e0cd27b24"
+          - label: production-failed-2026-09-23
+            source_sha: "fb73a1faec28393624af09da50845d84a3e5c128"
+          - label: canonical-main-2026-10-08
+            source_sha: "5058fc5c27045c008e1f1f8d66eb3d58aba2b00e"
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: team4c
+          POSTGRES_PASSWORD: disposable_only
+          POSTGRES_DB: team4c_release
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U team4c -d team4c_release"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      MIX_ENV: prod
+      DATABASE_URL: postgresql://team4c:disposable_only@127.0.0.1:5432/team4c_release
+      DB_CA_CERT_FILE: /tmp/team4c-tls/ca.crt
+      SECRET_KEY_BASE: 1ddcc79df0f77242daeb8214bfd50403d061f2f7f3157df8bbd2cf18dbef10a4
+      PHX_HOST: localhost
+      PHX_SERVER: "true"
+      PORT: "4000"
+      POOL_SIZE: "5"
+      PHASE1_REHEARSAL: "0"
+      RENDER_GIT_COMMIT: ${{ matrix.source_sha }}
+      GOOGLE_CONTINUITY_ENABLED: "false"
+    steps:
+      # Reuse the same supported BEAM, Node and OTP-release path as Team 8/9.
+      - name: "01 Checkout exact historical or current source SHA"
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.source_sha }}
+          persist-credentials: false
+
+      - name: "02 Verify source identity, clean tree and file contract"
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RENDER_GIT_COMMIT"
+          test -z "$(git status --porcelain)"
+          test -f mix.lock
+          test -f config/runtime.exs
+          test -f rel/overlays/bin/migrate
+          echo "SOURCE_SHA=$RENDER_GIT_COMMIT"
+          echo "POSTGRES_IMAGE=postgres:17"
+          echo "PHASE1_REHEARSAL=0"
+
+      - name: "03 Install pinned Elixir and Erlang runtime"
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: "04 Install Node 22"
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: "05 Prepare isolated TLS-enabled PostgreSQL 17"
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client openssl
+          mkdir -p /tmp/team4c-tls
+          chmod 700 /tmp/team4c-tls
+          openssl req -x509 -newkey rsa:2048 -noenc -keyout /tmp/team4c-tls/ca.key             -out /tmp/team4c-tls/ca.crt -days 1 -subj "/CN=Team4C Disposable CI CA" >/dev/null 2>&1
+          openssl req -newkey rsa:2048 -noenc -keyout /tmp/team4c-tls/server.key             -out /tmp/team4c-tls/server.csr -subj "/CN=localhost" >/dev/null 2>&1
+          printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > /tmp/team4c-tls/server.ext
+          openssl x509 -req -in /tmp/team4c-tls/server.csr -CA /tmp/team4c-tls/ca.crt             -CAkey /tmp/team4c-tls/ca.key -CAcreateserial -days 1             -extfile /tmp/team4c-tls/server.ext -out /tmp/team4c-tls/server.crt >/dev/null 2>&1
+          container="${{ job.services.postgres.id }}"
+          test -n "$container"
+          docker cp /tmp/team4c-tls/server.crt "$container:/var/lib/postgresql/data/server.crt"
+          docker cp /tmp/team4c-tls/server.key "$container:/var/lib/postgresql/data/server.key"
+          docker exec -u root "$container" sh -c             'chown postgres:postgres /var/lib/postgresql/data/server.crt /var/lib/postgresql/data/server.key && chmod 600 /var/lib/postgresql/data/server.key'
+          docker exec "$container" psql -U team4c -d team4c_release             -v ON_ERROR_STOP=1 -c "ALTER SYSTEM SET ssl = 'on';"
+          docker exec "$container" psql -U team4c -d team4c_release             -v ON_ERROR_STOP=1 -c "SELECT pg_reload_conf();"
+          for attempt in $(seq 1 15); do
+            if [ "$(docker exec "$container" psql -U team4c -d team4c_release -Atc 'SHOW ssl')" = on ]; then
+              break
+            fi
+            sleep 1
+          done
+          test "$(docker exec "$container" psql -U team4c -d team4c_release -Atc 'SHOW ssl')" = on
+          export PGSSLMODE=verify-full
+          export PGSSLROOTCERT=/tmp/team4c-tls/ca.crt
+          test "$(psql "$DATABASE_URL" -Atc             'SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()')" = t
+          test "$(docker exec "$container" psql -U team4c -d team4c_release -Atc 'SHOW server_version_num')" -ge 170000
+          echo "POSTGRES_17_TLS_CERT_VERIFICATION=PASS"
+
+      - name: "06 Install Hex and Rebar"
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+
+      - name: "07 Resolve exact source lockfile dependencies"
+        run: |
+          set -euo pipefail
+          mix deps.get --only prod
+          git diff --exit-code -- mix.lock
+
+      - name: "08 Compile prod dependencies"
+        run: |
+          set -euo pipefail
+          mix deps.compile
+
+      - name: "09 Compile application"
+        run: |
+          set -euo pipefail
+          mix compile --warnings-as-errors
+
+      - name: "10 Build production assets"
+        run: |
+          set -euo pipefail
+          mix assets.deploy
+
+      - name: "11 Build OTP release"
+        run: |
+          set -euo pipefail
+          mix release --overwrite
+
+      - name: "12 Validate release packaging and rehearsal guard"
+        run: |
+          set -euo pipefail
+          test -x _build/prod/rel/strangertalks_new/bin/strangertalks_new
+          test -x _build/prod/rel/strangertalks_new/bin/migrate
+          test "$PHASE1_REHEARSAL" = 0
+          grep -q 'PHASE1_REHEARSAL' rel/overlays/bin/migrate
+          echo "RELEASE_BINARIES=PASS; REHEARSAL_DISABLED=PASS"
+
+      - name: "13 Evaluate release runtime with synthetic settings"
+        run: |
+          set -euo pipefail
+          _build/prod/rel/strangertalks_new/bin/strangertalks_new             eval 'IO.puts("TEAM4C_RUNTIME_CONFIG=PASS")'
+
+      - name: "14 Run first migration on disposable PostgreSQL 17"
+        run: |
+          set -euo pipefail
+          _build/prod/rel/strangertalks_new/bin/migrate
+          echo "PG17_FIRST_MIGRATION=PASS"
+
+      - name: "15 Re-run migration to check idempotence"
+        run: |
+          set -euo pipefail
+          _build/prod/rel/strangertalks_new/bin/migrate
+          echo "PG17_REPEAT_MIGRATION=PASS"
+
+      - name: "16 Start OTP application process"
+        run: |
+          set -euo pipefail
+          nohup _build/prod/rel/strangertalks_new/bin/strangertalks_new start             > "$RUNNER_TEMP/team4c-release.log" 2>&1 < /dev/null &
+          echo "$!" > "$RUNNER_TEMP/team4c-release.pid"
+          sleep 4
+          kill -0 "$(cat "$RUNNER_TEMP/team4c-release.pid")"
+          echo "OTP_PROCESS_STARTED=PASS"
+
+      - name: "17 Confirm process survives and HTTP port binds"
+        run: |
+          set -euo pipefail
+          kill -0 "$(cat "$RUNNER_TEMP/team4c-release.pid")"
+          for attempt in $(seq 1 30); do
+            if curl --silent --max-time 2 --output /dev/null http://127.0.0.1:4000/health/live; then
+              echo "HTTP_BIND=PASS"
+              exit 0
+            fi
+            kill -0 "$(cat "$RUNNER_TEMP/team4c-release.pid")"
+            sleep 1
+          done
+          echo "HTTP_BIND=FAIL" >&2
+          exit 1
+
+      - name: "18 Check /health/live contract"
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error             http://127.0.0.1:4000/health/live > "$RUNNER_TEMP/team4c-live.json"
+          python3 -c 'import json,sys; assert json.load(open(sys.argv[1])) == {"status":"live"}'             "$RUNNER_TEMP/team4c-live.json"
+          echo "HEALTH_LIVE=PASS"
+
+      - name: "19 Check database-backed /health/ready contract"
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error             http://127.0.0.1:4000/health/ready > "$RUNNER_TEMP/team4c-ready.json"
+          python3 -c 'import json,sys; assert json.load(open(sys.argv[1])) == {"status":"ready"}'             "$RUNNER_TEMP/team4c-ready.json"
+          echo "HEALTH_READY=PASS"
+
+      - name: "20 Check /health/version exact tested SHA"
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error             http://127.0.0.1:4000/health/version > "$RUNNER_TEMP/team4c-version.json"
+          python3 -c 'import json,os,sys; d=json.load(open(sys.argv[1])); assert d == {"status":"ok","git_sha":os.environ["RENDER_GIT_COMMIT"]},d'             "$RUNNER_TEMP/team4c-version.json"
+          echo "HEALTH_VERSION_SHA=PASS"
+
+      - name: "21 Stop isolated OTP application"
+        run: |
+          set -euo pipefail
+          pid="$(cat "$RUNNER_TEMP/team4c-release.pid")"
+          kill -TERM "$pid"
+          for attempt in $(seq 1 20); do
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "OTP_SHUTDOWN=PASS"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "OTP_SHUTDOWN_TIMEOUT" >&2
+          exit 1
+
+      - name: "On failure, print sanitized startup diagnostics"
+        if: failure()
+        run: |
+          if [ -f "$RUNNER_TEMP/team4c-release.log" ]; then
+            sed -E 's#postgres(ql)?://[^ @]+:[^ @]+@#postgresql://[REDACTED]@#g'               "$RUNNER_TEMP/team4c-release.log" | tail -n 150
+          else
+            echo "No OTP startup log: failure occurred before application launch."
+          fi
+
+      - name: "Always clean up disposable process"
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/team4c-release.pid" ]; then
+            kill -TERM "$(cat "$RUNNER_TEMP/team4c-release.pid")" 2>/dev/null || true
+          fi
+          echo "CHECKED_SOURCE_SHA=$RENDER_GIT_COMMIT" >> "$GITHUB_STEP_SUMMARY"
+          echo "DATABASE_SCOPE=GitHub Actions isolated postgres:17 service" >> "$GITHUB_STEP_SUMMARY"
+          echo "DEPLOYMENTS=none; PROVIDER_SECRETS=none" >> "$GITHUB_STEP_SUMMARY"
