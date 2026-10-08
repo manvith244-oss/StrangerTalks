@@ -37,16 +37,39 @@ defmodule StrangertalksNew.SessionReconciliation do
     end)
   rescue
     _error in DBConnection.ConnectionError ->
-      # A disconnected database is not evidence that a participant is available.
-      # Return a controlled, retryable failure without logging IDs or query data.
-      StrangertalksNew.Telemetry.failure(
-        [:recovery, :reconciliation_failed],
-        :conversation_unavailable,
-        %{failure_kind: :database_connection}
-      )
+      unavailable_database()
 
-      {:error, :conversation_unavailable}
+    error in Postgrex.Error ->
+      # PostgreSQL may report FATAL administrator/crash shutdown before the
+      # connection pool reports a transport exception. Do not swallow unrelated
+      # PostgreSQL integrity failures or treat them as ordinary absence.
+      if unavailable_postgres_error?(error) do
+        unavailable_database()
+      else
+        reraise error, __STACKTRACE__
+      end
   end
+
+  defp unavailable_database do
+    StrangertalksNew.Telemetry.failure(
+      [:recovery, :reconciliation_failed],
+      :conversation_unavailable,
+      %{failure_kind: :database_connection}
+    )
+
+    {:error, :conversation_unavailable}
+  end
+
+  defp unavailable_postgres_error?(%Postgrex.Error{postgres: postgres})
+       when is_map(postgres) do
+    pg_code = Map.get(postgres, :pg_code)
+    code = Map.get(postgres, :code)
+
+    pg_code in ["57P01", "57P02", "57P03", "08000", "08001", "08003", "08004", "08006", "08P01"] or
+      code in [:admin_shutdown, :crash_shutdown, :cannot_connect_now, :connection_failure]
+  end
+
+  defp unavailable_postgres_error?(_error), do: false
 
   defp do_reconcile(participant_id) do
     query =
