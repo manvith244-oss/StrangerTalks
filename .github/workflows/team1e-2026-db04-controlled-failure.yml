@@ -125,7 +125,6 @@ jobs:
         run: env -u STRANGERTALKS_PERSISTENT_TEST_SERVER mix precommit
       - name: Source checkout cleanliness
         run: |
-          git diff -- test/ops/team1e_beam_restart_probe.exs test/strangertalks_new_web/channels/team1e_postcommit_recovery_test.exs
           git diff --check
           git status --short
           test -z "$(git status --porcelain)"
