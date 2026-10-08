@@ -7,6 +7,8 @@ on:
     paths:
       - ".github/workflows/team2e-hostile-websocket.yml"
       - "test/js/hangouts_hostile_wss_test.mjs"
+      - "test/js/hangouts_stale_wss_test.mjs"
+      - "test/strangertalks_new_web/abuse_source_team2e_test.exs"
       - "lib/strangertalks_new_web/hangout_channel.ex"
       - "lib/strangertalks_new_web/hangout_lobby_channel.ex"
       - "lib/strangertalks_new/hangouts/beta_gate.ex"
@@ -80,6 +82,9 @@ jobs:
           mix deps.get
           mix ecto.create --quiet
           mix ecto.migrate --quiet
+
+      - name: Isolated forwarded identity trust-boundary tests
+        run: mix test test/strangertalks_new_web/abuse_source_team2e_test.exs
 
       - name: Check hostile protocol test syntax
         run: node --check test/js/hangouts_hostile_wss_test.mjs
