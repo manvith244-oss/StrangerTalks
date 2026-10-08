@@ -153,7 +153,16 @@ export function installArrivalFirstMinute(documentRef = globalThis.document, win
     })
   }
 
-  const screenObserver = new MutationObserver(() => scheduleScreenFocus())
+  // Focus only on real screen transitions. Other UI systems also decorate the
+  // active Conversation's class list; those cosmetic updates must never steal
+  // focus from its composer or accessible controls.
+  let lastActiveScreen = activeScreen(documentRef)
+  const screenObserver = new MutationObserver(() => {
+    const nextActiveScreen = activeScreen(documentRef)
+    if (nextActiveScreen === lastActiveScreen) return
+    lastActiveScreen = nextActiveScreen
+    scheduleScreenFocus()
+  })
   documentRef.querySelectorAll("[data-screen]").forEach((screen) => {
     screenObserver.observe(screen, {attributes: true, attributeFilter: ["class"]})
   })

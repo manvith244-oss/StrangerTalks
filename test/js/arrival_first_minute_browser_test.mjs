@@ -22,7 +22,24 @@ async function openFresh(browser, viewport = {width: 390, height: 844}) {
   let participantId = null
   const errors = []
   const failedRequests = []
+  const conversationJoins = []
+  const socketEvents = {opened: 0, closed: 0, errors: 0}
 
+  // Capture topic *identity only*, never payload, bearer token or chat text.
+  page.on("websocket", socket => {
+    socketEvents.opened += 1
+    socket.on("close", () => { socketEvents.closed += 1 })
+    socket.on("socketerror", () => { socketEvents.errors += 1 })
+    socket.on("framesent", ({payload}) => {
+      try {
+        const frame = JSON.parse(payload)
+        if (Array.isArray(frame) && frame[3] === "phx_join" &&
+            typeof frame[2] === "string" && frame[2].startsWith("conversation:")) {
+          conversationJoins.push(frame[2])
+        }
+      } catch (_ignored) {}
+    })
+  })
   page.on("pageerror", error => errors.push(error.message))
   page.on("console", message => {
     if (message.type() === "error") errors.push(message.text())
@@ -40,7 +57,12 @@ async function openFresh(browser, viewport = {width: 390, height: 844}) {
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible"})
   await page.locator("button.door").first().waitFor({state: "visible"})
 
-  return {context, page, errors, failedRequests, participantId: () => participantId}
+  return {
+    context, page, errors, failedRequests,
+    participantId: () => participantId,
+    conversationTopic: () => conversationJoins.at(-1) || null,
+    socketEvents
+  }
 }
 
 async function waitForQueue(page) {
@@ -108,12 +130,20 @@ test("participant bootstrap failure becomes a visible recoverable state", {timeo
     const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
     assert.ok(response?.ok(), "root shell still loads")
 
-    const panel = page.locator("#arrival-startup-failure")
+    // The authoritative boot bridge supersedes the older Arrival panel:
+    // failed authority must keep all Doors hidden until the Retry succeeds.
+    const panel = page.locator('#boot-bridge[data-state="error"]')
     await panel.waitFor({state: "visible", timeout: 12_000})
-    await panel.getByRole("heading", {name: "StrangerTalks couldn't connect"}).waitFor({state: "visible"})
-    await panel.getByRole("button", {name: "Retry"}).waitFor({state: "visible"})
-    assert.equal(await page.locator("button.door:not([disabled])").count(), 0)
-    assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Retry")
+    await panel.getByRole("heading", {name: "StrangerTalks can’t confirm your session."}).waitFor({state: "visible"})
+    const retry = panel.getByRole("button", {name: "Reload StrangerTalks"})
+    await retry.waitFor({state: "visible"})
+    assert.equal(await page.locator("button.door:visible").count(), 0, "Doors remain hidden without session authority")
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Reload StrangerTalks")
+    await context.unroute("**/api/participants")
+    await retry.click()
+    await page.locator('section[data-screen="doors"].active button.door').first().waitFor({state: "visible", timeout: 15_000})
+    assert.equal(await page.locator("#boot-bridge").isVisible(), false, "successful recovery hides boot bridge")
+    assert.equal(await page.locator("body.flow-booting").count(), 0)
   } finally {
     await context.close().catch(() => {})
     await browser.close().catch(() => {})
@@ -169,6 +199,18 @@ test("two isolated fresh participants reach one usable Conversation and can talk
       b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 20_000})
     ])
 
+    // A visible Conversation shell is not proof that two fresh participants
+    // actually joined the same authoritative ConversationChannel. Guard against
+    // an orphaned synthetic participant from an earlier fixture.
+    for (const participant of [a, b]) {
+      const deadline = Date.now() + 15_000
+      while (!participant.conversationTopic() && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25))
+      }
+      assert.ok(participant.conversationTopic(), "participant must join a real ConversationChannel")
+    }
+    assert.equal(a.conversationTopic(), b.conversationTopic(), "both new participants must share one authoritative Conversation")
+
     const text = `Team 1 handoff ${Date.now()}`
     const inputA = a.page.locator("#message-input")
     const inputB = b.page.locator("#message-input")
@@ -178,7 +220,38 @@ test("two isolated fresh participants reach one usable Conversation and can talk
     assert.equal(await inputB.isEnabled(), true)
 
     await inputA.fill(text)
-    await a.page.locator("#message-form").getByRole("button", {name: "Send"}).click()
+    const send = a.page.locator("#message-form").getByRole("button", {name: "Send message", exact: true})
+    try {
+      await send.click({timeout: 12_000})
+    } catch (error) {
+      const dom = await a.page.evaluate(() => {
+        const send = document.querySelector("#message-form button.primary")
+        const style = send ? getComputedStyle(send) : null
+        const rect = send?.getBoundingClientRect()
+        return {
+          screen: document.querySelector("section.screen.active")?.dataset.screen || null,
+          chatMode: document.body.classList.contains("st-chat-mode"),
+          booting: document.body.classList.contains("flow-booting"),
+          sendHidden: !rect || !rect.width || !rect.height,
+          sendDisplay: style?.display || null,
+          sendVisibility: style?.visibility || null,
+          sendDisabled: Boolean(send?.disabled),
+          reportVisible: Boolean(document.querySelector("#report-form")?.getClientRects().length),
+          endVisible: Boolean(document.querySelector('[data-screen="ended"].active')),
+          presenceStatus: document.querySelector("#presence")?.textContent?.trim().slice(0, 90) || null
+        }
+      }).catch(() => ({unavailable: true}))
+      console.error("TEAM3E_SEND_STABILITY=" + JSON.stringify({
+        error: error.name,
+        aSocket: a.socketEvents,
+        bSocket: b.socketEvents,
+        aHasConversationTopic: Boolean(a.conversationTopic()),
+        bHasConversationTopic: Boolean(b.conversationTopic()),
+        sameConversation: a.conversationTopic() === b.conversationTopic(),
+        dom
+      }))
+      throw error
+    }
     await b.page.locator("#messages").getByText(text, {exact: true}).waitFor({state: "visible", timeout: 12_000})
 
     for (const participant of [a, b]) {
@@ -215,14 +288,28 @@ test("arrival screen focus does not steal focus from active Conversation content
       b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 20_000})
     ])
 
+    // The last click was in participant B's browser context. Bring participant A
+    // to the foreground before asserting keyboard focus inside its Conversation.
+    await a.page.bringToFront()
     const target = a.page.locator('section[data-screen="conversation"] #message-input')
     await target.focus()
+    const focusSnapshot = async () => a.page.evaluate(() => ({
+      activeId: document.activeElement?.id || "",
+      activeTag: document.activeElement?.tagName || "",
+      screen: document.querySelector("section.screen.active")?.dataset.screen || "",
+      inputVisible: Boolean(document.querySelector("#message-input")?.getClientRects().length),
+      inputDisabled: Boolean(document.querySelector("#message-input")?.disabled)
+    }))
+    const beforeProbe = await focusSnapshot()
+    assert.equal(beforeProbe.activeId, "message-input", "Composer must accept focus before cosmetic class probe: " + JSON.stringify(beforeProbe))
+
     await a.page.locator('section[data-screen="conversation"]').evaluate((screen) => {
       screen.classList.toggle("arrival-focus-regression-probe")
     })
     await a.page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
 
-    assert.equal(await a.page.evaluate(() => document.activeElement?.id), "message-input")
+    const afterProbe = await focusSnapshot()
+    assert.equal(afterProbe.activeId, "message-input", "Cosmetic class change must preserve composer focus: " + JSON.stringify({beforeProbe, afterProbe}))
     assert.deepEqual(a.errors, [])
     assert.deepEqual(a.failedRequests, [])
     assert.deepEqual(b.errors, [])
