@@ -71,7 +71,7 @@ defmodule Team1EBeamRestartProbe do
     assert!(waiting_state.canonical_state == :AVAILABLE, "volatile queue not restored falsely")
 
     {:ok, new_runtime_pid} = ConversationServer.ensure_started(pending_id)
-    assert!({:ok, ^new_runtime_pid} = ConversationServer.ensure_started(pending_id), "idempotent runtime")
+    assert!({:ok, new_runtime_pid} == ConversationServer.ensure_started(pending_id), "idempotent runtime")
     assert!({:error, :terminal_conversation} == ConversationServer.ensure_started(terminal_id),
       "terminal conversation must not resurrect")
 
