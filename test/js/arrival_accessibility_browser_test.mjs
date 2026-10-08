@@ -140,10 +140,43 @@ test("200 percent browser zoom keeps Arrival and queue primary controls reachabl
     const doorBox = await page.locator("button.door").first().boundingBox()
     assert.ok(doorBox)
     const deepTalk = page.getByRole("button", {name: /Deep Talk/})
-    // Page-scale is pinch emulation, not desktop browser zoom. Keep the real
-    // hit-tested click and record visual-viewport geometry on interception.
+    // CDP page-scale acts like pinch zoom. Scroll the *document* until the Door
+    // is in the actual visual viewport; Playwright's default 390px-wide center
+    // is otherwise outside the 195px-wide visible region at page scale 2.
+    await deepTalk.evaluate(button => {
+      const rect = button.getBoundingClientRect()
+      const visualHeight = window.visualViewport?.height || innerHeight
+      window.scrollBy({top: rect.top - visualHeight * 0.25, behavior: "instant"})
+    })
+    const pointer = await deepTalk.evaluate(button => {
+      const bounds = button.getBoundingClientRect()
+      const visual = window.visualViewport
+      const left = visual?.offsetLeft || 0
+      const top = visual?.offsetTop || 0
+      const right = left + (visual?.width || innerWidth)
+      const bottom = top + (visual?.height || innerHeight)
+      // Choose a real visible and unobstructed interior point, not a forced
+      // synthetic event, a higher z-index, or an invisible Door.
+      const x = Math.min(bounds.left + Math.min(bounds.width * 0.25, 80), right - 16)
+      const y = Math.min(bounds.top + Math.min(bounds.height * 0.3, 35), bottom - 16)
+      const hit = document.elementFromPoint(x, y)
+      return {
+        valid: x > Math.max(bounds.left, left) + 1 &&
+          y > Math.max(bounds.top, top) + 1 &&
+          (hit === button || button.contains(hit)),
+        x: x - bounds.left,
+        y: y - bounds.top,
+        visualWidth: visual?.width,
+        visualHeight: visual?.height,
+        hitTag: hit?.tagName || null,
+        scrollY,
+        top: bounds.top
+      }
+    })
+    assert.ok(pointer.valid, "Deep Talk has a genuine reachable pointer target inside the 200% visual viewport: " + JSON.stringify(pointer))
+    // Normal Playwright pointer input with actionability and hit testing ON.
     try {
-      await deepTalk.click()
+      await deepTalk.click({position: {x: pointer.x, y: pointer.y}})
     } catch (error) {
       const geometry = await page.evaluate(() => {
         const rect = selector => {
@@ -174,6 +207,11 @@ test("200 percent browser zoom keeps Arrival and queue primary controls reachabl
     const leaveBox = await page.locator("#leave-queue").boundingBox()
     assert.ok(leaveBox)
     assert.ok(leaveBox.y < 844, "queue exit remains reachable at 200% page scale")
+    // Keyboard access remains possible even in the magnified visual viewport.
+    const leave = page.locator("#leave-queue")
+    await leave.focus()
+    await page.keyboard.press("Enter")
+    await page.locator('section[data-screen="doors"].active').waitFor({state: "visible", timeout: 12_000})
     assert.deepEqual(session.errors, [])
   } finally {
     await session?.context.close().catch(() => {})
