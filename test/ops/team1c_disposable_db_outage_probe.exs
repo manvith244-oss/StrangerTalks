@@ -33,6 +33,8 @@ defmodule Team1CDBProbe do
       reconciliation: class(reconcile_result),
       joining: class(join_result),
       cancellation: class(cancel_result),
+      reconciliation_exception_type: exception_type(reconcile_result),
+      joining_exception_type: exception_type(join_result),
       elapsed_ms: elapsed,
       new_participant_queued: Agent.get(QueueState, &Map.has_key?(&1, b.participant_id)),
       original_participant_queued: Agent.get(QueueState, &Map.has_key?(&1, a.participant_id))
@@ -72,6 +74,10 @@ defmodule Team1CDBProbe do
 
     if class(reconcile_result) == :ok do
       raise "DB-03: reconciliation succeeded despite unavailable database"
+    end
+
+    if class(reconcile_result) == :raised or class(join_result) == :raised do
+      raise "DB-01: outage leaked uncaught reconciliation/queue admission exception"
     end
 
     if elapsed > 75_000 do
@@ -132,7 +138,7 @@ defmodule Team1CDBProbe do
     try do
       {:returned, fun.()}
     rescue
-      _ -> {:raised, :error}
+      error -> {:raised, error.__struct__}
     catch
       _kind, _reason -> {:caught, :exit_or_throw}
     end
@@ -144,6 +150,9 @@ defmodule Team1CDBProbe do
   defp class({:returned, other}) when is_atom(other), do: other
   defp class({:returned, _}), do: :other_return
   defp class({:raised, _}), do: :raised
+
+  defp exception_type({:raised, module}), do: module
+  defp exception_type(_), do: :none
   defp class({:caught, _}), do: :caught
 
   defp successful?({:returned, {:ok, _}}), do: true
