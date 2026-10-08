@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - team1c/2026-10-08-runtime-fault-proof
+      - team1d/2026-10-08-core-reliability-closure
 permissions:
   contents: read
 concurrency:
