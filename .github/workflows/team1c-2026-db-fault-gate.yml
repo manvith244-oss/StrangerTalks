@@ -112,3 +112,50 @@ jobs:
           name: team1c-db-outage-proof
           path: ${{ runner.temp }}/team1c-db-proof
           if-no-files-found: warn
+
+  inherited-compatibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify exact SHA
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Install dependencies
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+      - name: Inherited concurrency and recovery tests
+        run: |
+          mix test test/strangertalks_new_web/channels/participant_channel_test.exs test/strangertalks_new/recovery_restart_test.exs test/strangertalks_new/matchmaking_reconciliation_fail_closed_test.exs --trace
+      - name: Full precommit
+        run: mix precommit
+      - name: Verify no generated changes
+        run: |
+          git diff --check
+          git status --short
+          test -z "$(git status --porcelain)"
