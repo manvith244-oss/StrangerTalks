@@ -62,6 +62,9 @@ jobs:
           mix ecto.migrate --quiet
       - name: Focused deterministic sandbox-owner and ETS restart regression
         run: mix test test/strangertalks_new/hangouts/presence_authority_lifecycle_team2f_test.exs --trace --max-cases 1
+      - name: Focused spoofed-header and mapped IPv6 attribution tests
+        run: mix test test/strangertalks_new_web/abuse_source_team2e_test.exs --trace
+
       - name: Existing presence lease regressions
         run: mix test test/strangertalks_new_web/hangout_presence_lease_security_test.exs --trace
       - name: Compile warnings and formatting
