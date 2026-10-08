@@ -7,6 +7,50 @@ import {chromium} from "playwright"
 const BASE_URL = process.env.STRANGERTALKS_BROWSER_BASE_URL || "http://localhost:4000"
 const SCREENSHOTS = path.resolve("tmp/team6-real-ux-screenshots")
 const WAIT_MS = 15_000
+let startupFailureSerial = 0
+
+function sanitizedText(value) {
+  return String(value || "").replace(/[A-Za-z0-9_+=/.-]{24,}/g, "[redacted]").slice(0, 240)
+}
+
+async function saveStartupFailure(observed, error) {
+  const {page, startup} = observed
+  const stem = `bootstrap-failure-${++startupFailureSerial}`
+  let dom = {unavailable: true}
+  try {
+    dom = await page.evaluate(() => {
+      const door = document.querySelector("button.door")
+      const style = door ? getComputedStyle(door) : null
+      return {
+        documentReadyState: document.readyState,
+        instagramChatBooted: document.documentElement.dataset.instagramChatBooted || null,
+        flowBooting: document.body.classList.contains("flow-booting"),
+        activeScreen: document.querySelector("section.screen.active")?.dataset.screen || null,
+        bootBridgeState: document.querySelector("#boot-bridge")?.dataset.state || null,
+        bootBridgeVisible: !!document.querySelector("#boot-bridge") && !document.querySelector("#boot-bridge").hidden,
+        bootBridgeText: document.querySelector("#boot-bridge")?.innerText || "",
+        statusText: document.querySelector("#status")?.innerText || "",
+        doorsInDOM: document.querySelectorAll("button.door").length,
+        firstDoorVisibility: style?.visibility || null,
+        firstDoorDisplay: style?.display || null,
+        firstDoorClientRects: door?.getClientRects().length || 0
+      }
+    })
+  } catch (_ignored) { /* Even a crashed page must leave network evidence. */ }
+  for (const field of ["bootBridgeText", "statusText"]) {
+    if (dom[field]) dom[field] = sanitizedText(dom[field])
+  }
+  try { await page.screenshot({path: path.join(SCREENSHOTS, `${stem}.png`), fullPage: false, timeout: 5000}) } catch (_ignored) {}
+  fs.writeFileSync(path.join(SCREENSHOTS, `${stem}.json`), JSON.stringify({
+    requestedOrigin: new URL(BASE_URL).origin,
+    failure: sanitizedText(error?.message),
+    pageErrors: observed.pageErrors.length,
+    consoleErrors: observed.consoleErrors.length,
+    failedRequests: observed.failedRequests.map(request => ({path: new URL(request.url).pathname, reason: sanitizedText(request.reason)})),
+    startup,
+    dom
+  }, null, 2))
+}
 
 fs.mkdirSync(SCREENSHOTS, {recursive: true})
 
@@ -51,13 +95,23 @@ async function observePage(context, viewport = {width: 390, height: 844}) {
   const pageErrors = []
   const consoleErrors = []
   const failedRequests = []
+  const startup = {responses: [], sockets: []}
 
+  page.on("response", response => {
+    const url = new URL(response.url())
+    if (["/api/account/session", "/api/participants"].includes(url.pathname)) {
+      startup.responses.push({path: url.pathname, status: response.status()})
+    }
+  })
   page.on("pageerror", error => pageErrors.push(error.message))
   page.on("console", message => {
     if (message.type() === "error") consoleErrors.push(message.text())
   })
   page.on("requestfailed", request => failedRequests.push({url: request.url(), reason: request.failure()?.errorText || "unknown"}))
   page.on("websocket", websocket => {
+    startup.sockets.push({event: "created", path: new URL(websocket.url()).pathname})
+    websocket.on("close", () => startup.sockets.push({event: "closed"}))
+    websocket.on("socketerror", () => startup.sockets.push({event: "error"}))
     websocket.on("framesent", ({payload}) => {
       const message = phoenixMessage(payload)
       if (message) journal.add({type: "frame_sent", ...message})
@@ -68,21 +122,28 @@ async function observePage(context, viewport = {width: 390, height: 844}) {
     })
   })
 
-  return {context, page, journal, pageErrors, consoleErrors, failedRequests}
+  return {context, page, journal, pageErrors, consoleErrors, failedRequests, startup}
 }
 
 async function bootFresh(browser, viewport = {width: 390, height: 844}) {
   const context = await browser.newContext({viewport})
   const observed = await observePage(context, viewport)
-  const response = await observed.page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
-  assert.ok(response?.ok(), "root page loads")
-  await observed.page.locator("button.door").first().waitFor({state: "visible", timeout: WAIT_MS})
-  await observed.page.waitForFunction(() => document.documentElement.dataset.instagramChatBooted === "true")
-  await observed.journal.waitFor(
-    event => event.type === "frame_received" && event.topic?.startsWith("participant:") && event.event === "phx_reply" && event.body?.status === "ok" && event.body?.response?.status === "connected",
-    "ParticipantChannel join"
-  )
-  return observed
+  try {
+    const response = await observed.page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
+    observed.startup.httpStatus = response?.status() || null
+    assert.ok(response?.ok(), "root page loads")
+    await observed.page.locator("button.door").first().waitFor({state: "visible", timeout: WAIT_MS})
+    await observed.page.waitForFunction(() => document.documentElement.dataset.instagramChatBooted === "true")
+    await observed.journal.waitFor(
+      event => event.type === "frame_received" && event.topic?.startsWith("participant:") && event.event === "phx_reply" && event.body?.status === "ok" && event.body?.response?.status === "connected",
+      "ParticipantChannel join"
+    )
+    observed.startup.participantJoin = "ok"
+    return observed
+  } catch (error) {
+    await saveStartupFailure(observed, error)
+    throw error
+  }
 }
 
 async function assertNoOverflow(page, label) {
