@@ -65,6 +65,48 @@ defmodule StrangertalksNewWeb.AbuseSourceTeam2ETest do
     assert {:ok, {:ip, "10.1.2.3"}} = AbuseSource.from_conn(private_conn)
   end
 
+  test "multiple forwarded headers do not override a directly observed public peer" do
+    conn =
+      request({198, 51, 100, 5}, [
+        {"x-forwarded-for", "203.0.113.9, 10.0.0.1"},
+        {"x-forwarded-for", "203.0.113.19"}
+      ])
+
+    assert {:ok, {:ip, "198.51.100.5"}} = AbuseSource.from_conn(conn)
+  end
+
+  test "private immediate hop currently selects the rightmost public entry across headers" do
+    conn =
+      request({10, 0, 0, 9}, [
+        {"x-forwarded-for", "203.0.113.9, 10.0.0.1"},
+        {"x-forwarded-for", "198.51.100.19"}
+      ])
+
+    # Characterization only: trust of incoming headers is not proven at Render ingress.
+    assert {:ok, {:ip, "198.51.100.19"}} = AbuseSource.from_conn(conn)
+  end
+
+  test "IPv4-mapped IPv6 source must normalize to the same IPv4 rate-limit identity" do
+    mapped =
+      request({10, 0, 0, 9}, [{"x-forwarded-for", "::ffff:203.0.113.21"}])
+
+    native =
+      request({10, 0, 0, 9}, [{"x-forwarded-for", "203.0.113.21"}])
+
+    assert AbuseSource.from_conn(mapped) == AbuseSource.from_conn(native)
+  end
+
+  test "mapped private IPv4 immediate peer has the same local-hop behavior as native IPv4" do
+    native = request({127, 0, 0, 1}, [{"x-forwarded-for", "203.0.113.20"}])
+
+    mapped =
+      request({0, 0, 0, 0, 0, 0xFFFF, 0x7F00, 0x0001}, [
+        {"x-forwarded-for", "203.0.113.20"}
+      ])
+
+    assert AbuseSource.from_conn(mapped) == AbuseSource.from_conn(native)
+  end
+
   test "public IPv6 peer is authoritative regardless of forwarded chain" do
     conn =
       request({0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1}, [
