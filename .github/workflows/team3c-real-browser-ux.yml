@@ -1,0 +1,189 @@
+name: Team 3D Isolated Real-Browser UX Proof
+
+on:
+  push:
+    branches:
+      - team3c/2026-10-08-browser-ux-proof
+      - team3d/2026-10-08-browser-startup-closure
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: team3d-browser-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-browser-ux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4000"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4000
+      TEAM3C_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Verify revision and clean checkout
+        run: |
+          set -euo pipefail
+          echo "TEAM3C_TESTED_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$TEAM3C_EXPECTED_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Install Elixir and Erlang
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Install Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies and real Chromium
+        run: |
+          set -euo pipefail
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          npm ci
+          npx playwright install --with-deps chromium
+          elixir --version
+          node --version
+          npx playwright --version
+          node -e 'import("playwright").then(async ({chromium}) => { const b = await chromium.launch(); console.log("CHROMIUM_VERSION="+b.version()); await b.close() })'
+
+      - name: Initialize disposable PostgreSQL 17
+        run: |
+          set -euo pipefail
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Start real Phoenix test server (no production DB)
+        run: |
+          set -euo pipefail
+          STRANGERTALKS_PERSISTENT_TEST_SERVER=1 mix run --no-start -e '
+            config = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+            Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint, Keyword.put(config, :server, true))
+            {:ok, _} = Application.ensure_all_started(:strangertalks_new)
+            Process.sleep(:infinity)
+          ' > /tmp/team3c-phoenix.log 2>&1 &
+          echo $! > /tmp/team3c-phoenix.pid
+          for i in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:4000/ > /dev/null; then
+              echo "PHOENIX_READY=1"
+              exit 0
+            fi
+            if ! kill -0 "$(cat /tmp/team3c-phoenix.pid)" 2>/dev/null; then
+              tail -n 80 /tmp/team3c-phoenix.log
+              exit 1
+            fi
+            sleep 2
+          done
+          tail -n 80 /tmp/team3c-phoenix.log
+          exit 1
+
+      - name: Mandatory actual two-participant Voice Privacy regression
+        run: |
+          set -euo pipefail
+          test -n "$STRANGERTALKS_BROWSER_BASE_URL"
+          curl --fail --silent "$STRANGERTALKS_BROWSER_BASE_URL/" > /dev/null
+          node --test --test-concurrency=1 --test-reporter=tap test/js/team6_real_ux_browser_test.mjs | tee /tmp/team3c-mandatory.tap
+          grep -Eq '^# tests [1-9][0-9]*$' /tmp/team3c-mandatory.tap
+          grep -q '^# fail 0$' /tmp/team3c-mandatory.tap
+          grep -q '^# skipped 0$' /tmp/team3c-mandatory.tap
+          grep -q '^# cancelled 0$' /tmp/team3c-mandatory.tap
+          grep -q '^# todo 0$' /tmp/team3c-mandatory.tap
+          grep -q '^# pass 3$' /tmp/team3c-mandatory.tap
+          echo "TEAM3C_MANDATORY_BROWSER_CASES_EXECUTED=3"
+          echo "TEAM3C_SKIPPED=0"
+
+      - name: Arrival and accessibility browser regressions
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 \
+            test/js/arrival_first_minute_browser_test.mjs \
+            test/js/arrival_accessibility_browser_test.mjs
+
+      - name: Existing browser terminal/reconnect cases
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 \
+            --test-name-pattern='browser-layer disconnect recovers and catches up exactly once|Conversation end converges both clients and refresh cannot resurrect it' \
+            test/js/browser_e2e_test.mjs
+
+      - name: All JavaScript regression tests
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 test/js/*.mjs
+
+      - name: Focused Phoenix controller tests
+        run: mix test test/strangertalks_new_web/controllers/page_controller_test.exs
+
+      - name: Stop Phoenix server
+        if: always()
+        run: |
+          if [ -f /tmp/team3c-phoenix.pid ]; then
+            kill "$(cat /tmp/team3c-phoenix.pid)" 2>/dev/null || true
+          fi
+
+      - name: Full Elixir precommit
+        run: mix precommit
+
+      - name: Final exact SHA and clean worktree
+        run: |
+          set -euo pipefail
+          git diff --check
+          test -z "$(git status --porcelain)"
+          test "$(git rev-parse HEAD)" = "$TEAM3C_EXPECTED_SHA"
+          echo "TEAM3C_FINAL_TESTED_SHA=$(git rev-parse HEAD)"
+
+      - name: Upload synthetic screenshots (success and failure)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: team3c-browser-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            tmp/team6-real-ux-screenshots/
+            tmp/team3d-ci-diagnostics/
+            tmp/arrival-first-60-screenshots/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Phoenix diagnostics on failure (synthetic test environment only)
+        if: failure()
+        run: |
+          if [ -f /tmp/team3c-phoenix.log ]; then
+            mkdir -p tmp/team3d-ci-diagnostics
+            grep -E '(^\*\* |error|ERROR|failed|Failed|exception|Exception)' /tmp/team3c-phoenix.log | head -n 35 | tee tmp/team3d-ci-diagnostics/phoenix-errors.txt || true
+          fi

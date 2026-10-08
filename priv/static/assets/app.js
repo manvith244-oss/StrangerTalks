@@ -4308,6 +4308,10 @@ $("#fade-conversation").addEventListener("click", () => applyRetention("faded").
 function openReportForm({targetMessageId = null, trigger = $("#report-open")} = {}) {
   app.reportTargetMessageId = targetMessageId
   app.reportReturnFocus = trigger
+  // Hide the Conversation safety menu while its Report form is displayed.
+  // Restore it on close so keyboard focus can return to the actual trigger.
+  const triggerMenu = trigger?.closest("details.overflow")
+  if (triggerMenu) triggerMenu.open = false
   const evidence = $("#report-evidence")
   const disclosure = $("#report-target-disclosure")
   evidence.disabled = Boolean(targetMessageId)
@@ -4329,6 +4333,8 @@ function closeReportForm() {
   app.reportTargetMessageId = null
   const target = app.reportReturnFocus
   app.reportReturnFocus = null
+  const triggerMenu = target?.closest("details.overflow")
+  if (triggerMenu) triggerMenu.open = true
   target?.focus()
 }
 
