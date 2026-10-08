@@ -87,10 +87,9 @@ config :strangertalks_new, :turn_provider_credentials, %{
 # but budget for the test matrix instead of exhausting the production 6/min IP
 # quota. All ordinary mix tests retain ParticipantIssuance's production defaults.
 if System.get_env("STRANGERTALKS_PERSISTENT_TEST_SERVER") == "1" do
-  config :strangertalks_new, :participant_issuance_policies,
-    [
-      {:participant_issuance_burst, 200, 60_000},
-      {:participant_recent_identity_slots, 500, 15 * 60_000},
-      {:participant_identity_rotation, 1_000, 60 * 60_000}
-    ]
+  config :strangertalks_new, :participant_issuance_policies, [
+    {:participant_issuance_burst, 200, 60_000},
+    {:participant_recent_identity_slots, 500, 15 * 60_000},
+    {:participant_identity_rotation, 1_000, 60 * 60_000}
+  ]
 end
