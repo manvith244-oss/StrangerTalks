@@ -93,6 +93,9 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
     assert_receive {:DOWN, ^monitor, :process, ^authority_pid, :killed}, 2_000
 
     successor = await_restarted_authority(authority_pid)
+    assert {:error, :presence_authority_recovering} =
+             PresenceAuthority.register(room.room_id, participant.participant_id, Ecto.UUID.generate())
+
     assert Process.whereis(StrangertalksNew.Repo) != nil
     assert [{^channel_pid, _, _, _}] = :ets.lookup(@ledger, channel_pid)
 
@@ -108,6 +111,10 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
     end)
     assert Process.whereis(PresenceAuthority) == successor
     assert is_pid(Process.whereis(StrangertalksNew.Repo))
+    assert :ok =
+             PresenceAuthority.register(room.room_id, participant.participant_id, Ecto.UUID.generate())
+
+    assert :ok = PresenceAuthority.unregister(room.room_id, participant.participant_id)
   end
 
   defp await_restarted_authority(previous, tries \\ 40)
