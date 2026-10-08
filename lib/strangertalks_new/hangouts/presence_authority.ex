@@ -26,6 +26,7 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   @ledger :strangertalks_hangout_presence_crash_ledger
   @disconnect_retry_ms 50
+  @reconcile_retry_ms 500
 
   def start_link(init_arg) do
     GenServer.start_link(__MODULE__, init_arg, name: __MODULE__)
@@ -35,8 +36,15 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   def init(_init_arg) do
     Process.flag(:trap_exit, true)
     ensure_ledger!()
-    reconcile_stale_ledger!()
-    {:ok, %{registrations: %{}}}
+
+    # A process may restart while the Ecto repo (or test sandbox owner) is
+    # unavailable. Preserve unsettled leases and retry without crash-looping
+    # the transport supervisor or allowing new channel admission too early.
+    recovering? = not reconcile_stale_ledger()
+
+    if recovering?, do: schedule_reconciliation_retry()
+
+    {:ok, %{registrations: %{}, recovering?: recovering?}}
   end
 
   def register(room_id, participant_id, lease_id)
@@ -83,6 +91,22 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   def live_channel_count(_room_id, _participant_id), do: 0
 
   @impl true
+  def handle_call(
+        {:register, _room_id, _participant_id, _lease_id} = request,
+        from,
+        %{recovering?: true} = state
+      ) do
+    # The previous sandbox owner may have gone away during another test,
+    # yet a new owner can already be available by the next channel join.
+    # Reconcile once at that authoritative boundary rather than rejecting
+    # a healthy join until an unrelated timer runs.
+    if reconcile_stale_ledger() do
+      handle_call(request, from, %{state | recovering?: false})
+    else
+      {:reply, {:error, :presence_authority_recovering}, state}
+    end
+  end
+
   def handle_call({:register, room_id, participant_id, lease_id}, {pid, _tag}, state) do
     case Map.get(state.registrations, pid) do
       nil ->
@@ -148,6 +172,14 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   end
 
   @impl true
+  def handle_info(:retry_reconcile_stale_ledger, %{recovering?: true} = state) do
+    recovering? = not reconcile_stale_ledger()
+    if recovering?, do: schedule_reconciliation_retry()
+    {:noreply, %{state | recovering?: recovering?}}
+  end
+
+  def handle_info(:retry_reconcile_stale_ledger, state), do: {:noreply, state}
+
   def handle_info({:EXIT, pid, _reason}, state) when is_pid(pid) do
     case Map.get(state.registrations, pid) do
       %{key: {room_id, participant_id} = key} ->
@@ -200,7 +232,25 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   defp durable_disconnect(room_id, participant_id) do
     try do
-      {:ok, RoomServer.disconnect(room_id, participant_id)}
+      case RoomServer.disconnect(room_id, participant_id) do
+        {:ok, _result} = success ->
+          {:ok, success}
+
+        # Room/membership may already have been deleted or revoked, including
+        # after a test-sandbox owner rolls back its uncommitted fixtures.
+        # Only these proven terminal states can discharge an obsolete lease.
+        {:error, reason} = terminal
+        when reason in [
+               :terminal_room,
+               :room_not_found,
+               :membership_not_found,
+               :membership_not_active
+             ] ->
+          {:ok, terminal}
+
+        {:error, _reason} ->
+          :retry
+      end
     rescue
       _error -> :retry
     catch
@@ -245,18 +295,27 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   defp maybe_add_heir(options, _heir), do: options
 
-  defp reconcile_stale_ledger! do
-    stale_keys =
-      @ledger
-      |> :ets.tab2list()
-      |> Enum.map(fn {_pid, room_id, participant_id, _lease_id} -> {room_id, participant_id} end)
-      |> Enum.uniq()
+  defp reconcile_stale_ledger do
+    stale_entries = :ets.tab2list(@ledger)
 
-    Enum.each(stale_keys, fn {room_id, participant_id} ->
-      _ = RoomServer.disconnect(room_id, participant_id)
+    stale_entries
+    |> Enum.group_by(fn {_pid, room_id, participant_id, _lease_id} ->
+      {room_id, participant_id}
     end)
+    |> Enum.reduce(true, fn {{room_id, participant_id}, entries}, all_reconciled? ->
+      case durable_disconnect(room_id, participant_id) do
+        {:ok, _result} ->
+          Enum.each(entries, fn {pid, _room, _participant, _lease} -> clear_ledger(pid) end)
+          all_reconciled?
 
-    :ets.delete_all_objects(@ledger)
+        :retry ->
+          false
+      end
+    end)
+  end
+
+  defp schedule_reconciliation_retry do
+    Process.send_after(self(), :retry_reconcile_stale_ledger, @reconcile_retry_ms)
     :ok
   end
 

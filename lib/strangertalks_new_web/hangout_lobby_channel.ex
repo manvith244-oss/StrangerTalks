@@ -1,20 +1,25 @@
 defmodule StrangertalksNewWeb.HangoutLobbyChannel do
   use Phoenix.Channel, log_join: false, log_handle_in: false
 
-  alias StrangertalksNew.Hangouts.Matcher
+  alias StrangertalksNew.Hangouts.{BetaGate, Matcher}
 
   @pubsub StrangertalksNew.PubSub
 
   @impl true
   def join("hangout_lobby:" <> participant_id, params, socket) when params == %{} do
-    if participant_id == socket.assigns.participant_id do
-      :ok = Phoenix.PubSub.subscribe(@pubsub, topic(participant_id))
+    cond do
+      not BetaGate.enabled?() ->
+        {:error, %{reason: "feature_unavailable"}}
 
-      {:ok, %{status: "connected"},
-       socket
-       |> assign(:lobby_participant_id, participant_id)}
-    else
-      {:error, %{reason: "participant_mismatch"}}
+      participant_id == socket.assigns.participant_id ->
+        :ok = Phoenix.PubSub.subscribe(@pubsub, topic(participant_id))
+
+        {:ok, %{status: "connected"},
+         socket
+         |> assign(:lobby_participant_id, participant_id)}
+
+      true ->
+        {:error, %{reason: "participant_mismatch"}}
     end
   end
 
@@ -22,7 +27,15 @@ defmodule StrangertalksNewWeb.HangoutLobbyChannel do
     do: {:error, %{reason: "invalid_request"}}
 
   @impl true
-  def handle_in("queue:join", params, socket) when is_map(params) do
+  def handle_in(event, params, socket) do
+    if BetaGate.enabled?() or event == "queue:cancel" do
+      handle_allowed_in(event, params, socket)
+    else
+      {:reply, {:error, %{reason: "feature_unavailable"}}, socket}
+    end
+  end
+
+  defp handle_allowed_in("queue:join", params, socket) when is_map(params) do
     with true <- allowed_keys?(params, ["language_tag"]),
          language_tag when is_binary(language_tag) and language_tag != "" <-
            Map.get(params, "language_tag"),
@@ -64,7 +77,7 @@ defmodule StrangertalksNewWeb.HangoutLobbyChannel do
     end
   end
 
-  def handle_in("queue:cancel", params, socket) when is_map(params) do
+  defp handle_allowed_in("queue:cancel", params, socket) when is_map(params) do
     if map_size(params) == 0 do
       :ok = Matcher.leave_queue(socket.assigns.participant_id)
       payload = %{status: "idle"}
@@ -75,14 +88,17 @@ defmodule StrangertalksNewWeb.HangoutLobbyChannel do
     end
   end
 
-  def handle_in(_event, _params, socket) do
+  defp handle_allowed_in(_event, _params, socket) do
     {:reply, {:error, %{reason: "invalid_intent"}}, socket}
   end
 
   @impl true
   def handle_info({:hangout_formed, %{room_id: room_id}}, socket) do
-    push(socket, "room:formed", %{room_id: room_id, status: "formed"})
-    push(socket, "queue:status", %{status: "formed", room_id: room_id})
+    if BetaGate.enabled?() do
+      push(socket, "room:formed", %{room_id: room_id, status: "formed"})
+      push(socket, "queue:status", %{status: "formed", room_id: room_id})
+    end
+
     {:noreply, socket}
   end
 
