@@ -22,7 +22,24 @@ async function openFresh(browser, viewport = {width: 390, height: 844}) {
   let participantId = null
   const errors = []
   const failedRequests = []
+  const conversationJoins = []
+  const socketEvents = {opened: 0, closed: 0, errors: 0}
 
+  // Capture topic *identity only*, never payload, bearer token or chat text.
+  page.on("websocket", socket => {
+    socketEvents.opened += 1
+    socket.on("close", () => { socketEvents.closed += 1 })
+    socket.on("socketerror", () => { socketEvents.errors += 1 })
+    socket.on("framesent", ({payload}) => {
+      try {
+        const frame = JSON.parse(payload)
+        if (Array.isArray(frame) && frame[3] === "phx_join" &&
+            typeof frame[2] === "string" && frame[2].startsWith("conversation:")) {
+          conversationJoins.push(frame[2])
+        }
+      } catch (_ignored) {}
+    })
+  })
   page.on("pageerror", error => errors.push(error.message))
   page.on("console", message => {
     if (message.type() === "error") errors.push(message.text())
@@ -40,7 +57,12 @@ async function openFresh(browser, viewport = {width: 390, height: 844}) {
   await page.locator('section[data-screen="doors"].active').waitFor({state: "visible"})
   await page.locator("button.door").first().waitFor({state: "visible"})
 
-  return {context, page, errors, failedRequests, participantId: () => participantId}
+  return {
+    context, page, errors, failedRequests,
+    participantId: () => participantId,
+    conversationTopic: () => conversationJoins.at(-1) || null,
+    socketEvents
+  }
 }
 
 async function waitForQueue(page) {
@@ -177,6 +199,18 @@ test("two isolated fresh participants reach one usable Conversation and can talk
       b.page.locator('section[data-screen="conversation"].active').waitFor({state: "visible", timeout: 20_000})
     ])
 
+    // A visible Conversation shell is not proof that two fresh participants
+    // actually joined the same authoritative ConversationChannel. Guard against
+    // an orphaned synthetic participant from an earlier fixture.
+    for (const participant of [a, b]) {
+      const deadline = Date.now() + 15_000
+      while (!participant.conversationTopic() && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 25))
+      }
+      assert.ok(participant.conversationTopic(), "participant must join a real ConversationChannel")
+    }
+    assert.equal(a.conversationTopic(), b.conversationTopic(), "both new participants must share one authoritative Conversation")
+
     const text = `Team 1 handoff ${Date.now()}`
     const inputA = a.page.locator("#message-input")
     const inputB = b.page.locator("#message-input")
@@ -186,7 +220,38 @@ test("two isolated fresh participants reach one usable Conversation and can talk
     assert.equal(await inputB.isEnabled(), true)
 
     await inputA.fill(text)
-    await a.page.locator("#message-form").getByRole("button", {name: "Send"}).click()
+    const send = a.page.locator("#message-form").getByRole("button", {name: "Send message", exact: true})
+    try {
+      await send.click({timeout: 12_000})
+    } catch (error) {
+      const dom = await a.page.evaluate(() => {
+        const send = document.querySelector("#message-form button.primary")
+        const style = send ? getComputedStyle(send) : null
+        const rect = send?.getBoundingClientRect()
+        return {
+          screen: document.querySelector("section.screen.active")?.dataset.screen || null,
+          chatMode: document.body.classList.contains("st-chat-mode"),
+          booting: document.body.classList.contains("flow-booting"),
+          sendHidden: !rect || !rect.width || !rect.height,
+          sendDisplay: style?.display || null,
+          sendVisibility: style?.visibility || null,
+          sendDisabled: Boolean(send?.disabled),
+          reportVisible: Boolean(document.querySelector("#report-form")?.getClientRects().length),
+          endVisible: Boolean(document.querySelector('[data-screen="ended"].active')),
+          presenceStatus: document.querySelector("#presence")?.textContent?.trim().slice(0, 90) || null
+        }
+      }).catch(() => ({unavailable: true}))
+      console.error("TEAM3E_SEND_STABILITY=" + JSON.stringify({
+        error: error.name,
+        aSocket: a.socketEvents,
+        bSocket: b.socketEvents,
+        aHasConversationTopic: Boolean(a.conversationTopic()),
+        bHasConversationTopic: Boolean(b.conversationTopic()),
+        sameConversation: a.conversationTopic() === b.conversationTopic(),
+        dom
+      }))
+      throw error
+    }
     await b.page.locator("#messages").getByText(text, {exact: true}).waitFor({state: "visible", timeout: 12_000})
 
     for (const participant of [a, b]) {
