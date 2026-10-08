@@ -92,11 +92,19 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
 
   @impl true
   def handle_call(
-        {:register, _room_id, _participant_id, _lease_id},
-        _from,
+        {:register, _room_id, _participant_id, _lease_id} = request,
+        from,
         %{recovering?: true} = state
       ) do
-    {:reply, {:error, :presence_authority_recovering}, state}
+    # The previous sandbox owner may have gone away during another test,
+    # yet a new owner can already be available by the next channel join.
+    # Reconcile once at that authoritative boundary rather than rejecting
+    # a healthy join until an unrelated timer runs.
+    if reconcile_stale_ledger() do
+      handle_call(request, from, %{state | recovering?: false})
+    else
+      {:reply, {:error, :presence_authority_recovering}, state}
+    end
   end
 
   def handle_call({:register, room_id, participant_id, lease_id}, {pid, _tag}, state) do
