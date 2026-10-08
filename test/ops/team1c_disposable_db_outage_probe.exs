@@ -24,6 +24,7 @@ defmodule Team1CDBProbe do
     began = System.monotonic_time(:millisecond)
     db_result = outcome(fn -> Repo.query("SELECT 1", [], timeout: 2_000) end)
     reconcile_result = outcome(fn -> SessionReconciliation.reconcile(b.participant_id) end)
+
     join_result =
       outcome(fn -> MatchmakingEngine.join_queue(b.participant_id, :EXPLORE, nil, nil, nil) end)
 

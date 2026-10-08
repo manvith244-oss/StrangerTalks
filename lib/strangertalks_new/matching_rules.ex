@@ -57,7 +57,41 @@ defmodule StrangertalksNew.MatchingRules do
         select: count(b.blocker_user_id)
 
     Repo.one(query) > 0 or closed_relationship?(participant_a_id, participant_b_id)
+  rescue
+    _error in DBConnection.ConnectionError ->
+      unavailable_safety_veto()
+
+    error in Postgrex.Error ->
+      if unavailable_postgres_error?(error) do
+        unavailable_safety_veto()
+      else
+        reraise error, __STACKTRACE__
+      end
   end
+
+  # Unknown block or closed-relationship state is never matching permission.
+  # Restrict this fallback to connection/shutdown failures; keep integrity and
+  # missing-schema errors visible to engineering.
+  defp unavailable_safety_veto do
+    StrangertalksNew.Telemetry.failure(
+      [:match, :safety_veto_failed],
+      :database_unavailable,
+      %{failure_kind: :database_connection}
+    )
+
+    true
+  end
+
+  defp unavailable_postgres_error?(%Postgrex.Error{postgres: postgres})
+       when is_map(postgres) do
+    pg_code = Map.get(postgres, :pg_code)
+    code = Map.get(postgres, :code)
+
+    pg_code in ["57P01", "57P02", "57P03", "08000", "08001", "08003", "08004", "08006", "08P01"] or
+      code in [:admin_shutdown, :crash_shutdown, :cannot_connect_now, :connection_failure]
+  end
+
+  defp unavailable_postgres_error?(_error), do: false
 
   defp closed_relationship?(participant_a_id, participant_b_id) do
     from(r in Relationship,

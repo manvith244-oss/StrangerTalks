@@ -1,0 +1,114 @@
+name: Team 1D DB-04/05 Transaction and Notification Loss
+on:
+  push:
+    branches:
+      - team1d/2026-10-08-core-reliability-closure
+permissions:
+  contents: read
+concurrency:
+  group: team1d-db04-05
+  cancel-in-progress: false
+jobs:
+  interrupted-conversation-insert:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify SHA and isolated PostgreSQL
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor fbe70e2d814c97ef0020031902f5af92f13d415b HEAD
+          test -z "$(printenv DATABASE_URL || true)"
+          test "$(docker inspect --format '{{.Config.Image}}' "$POSTGRES_CONTAINER_ID")" = postgres:16
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Build and migrate disposable PostgreSQL
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          mix compile --warnings-as-errors
+          mix ecto.create
+          mix ecto.migrate
+      - name: Stop PostgreSQL with uncommitted Match and blocked Conversation insert
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          TEAM1D_TRANSACTION_PROOF_DIR: ${{ runner.temp }}/team1d-transaction-proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$TEAM1D_TRANSACTION_PROOF_DIR"
+          printf 'tested_sha=%s\nisolated_postgres=16\n' "$GITHUB_SHA" > "$TEAM1D_TRANSACTION_PROOF_DIR/identity.txt"
+          mix run --no-compile test/ops/team1d_transaction_and_notification_probe.exs > "$TEAM1D_TRANSACTION_PROOF_DIR/probe.log" 2>&1 &
+          probe_pid=$!
+          trap 'docker start "$POSTGRES_CONTAINER_ID" >/dev/null 2>&1 || true; kill "$probe_pid" 2>/dev/null || true' EXIT
+          wait_marker() {
+            local marker="$1"
+            for attempt in $(seq 1 90); do
+              if [ -f "$TEAM1D_TRANSACTION_PROOF_DIR/$marker" ]; then return 0; fi
+              if ! kill -0 "$probe_pid" 2>/dev/null; then
+                echo "Probe exited before $marker"; cat "$TEAM1D_TRANSACTION_PROOF_DIR/probe.log"; return 1
+              fi
+              sleep 1
+            done
+            echo "Timed out: $marker"; cat "$TEAM1D_TRANSACTION_PROOF_DIR/probe.log"; return 1
+          }
+          wait_marker ready
+          docker stop -t 2 "$POSTGRES_CONTAINER_ID"
+          test "$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER_ID")" = false
+          touch "$TEAM1D_TRANSACTION_PROOF_DIR/stop_complete"
+          wait_marker observed
+          docker start "$POSTGRES_CONTAINER_ID"
+          for attempt in $(seq 1 60); do
+            if docker exec "$POSTGRES_CONTAINER_ID" pg_isready -U strangertalks_local -d strangertalks_new_test >/dev/null 2>&1; then break; fi
+            if [ "$attempt" -eq 60 ]; then echo "Database restart failed"; exit 1; fi
+            sleep 1
+          done
+          touch "$TEAM1D_TRANSACTION_PROOF_DIR/start_complete"
+          if ! wait "$probe_pid"; then
+            cat "$TEAM1D_TRANSACTION_PROOF_DIR/result.txt" 2>/dev/null || true
+            cat "$TEAM1D_TRANSACTION_PROOF_DIR/probe.log"
+            exit 1
+          fi
+          test -s "$TEAM1D_TRANSACTION_PROOF_DIR/passed"
+          cat "$TEAM1D_TRANSACTION_PROOF_DIR/result.txt"
+          trap - EXIT
+      - name: Source checkout cleanliness
+        run: |
+          git diff --check
+          git status --short
+          test -z "$(git status --porcelain)"
+      - name: Upload synthetic transaction proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: team1d-db04-05-transaction-proof
+          path: ${{ runner.temp }}/team1d-transaction-proof
+          if-no-files-found: warn
