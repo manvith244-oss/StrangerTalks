@@ -1,7 +1,15 @@
 # Team 1E: two independent BEAM invocations against the same disposable PostgreSQL.
 # This is not a browser/WebSocket restart test and does not assert message restoration.
 defmodule Team1EBeamRestartProbe do
-  alias StrangertalksNew.{Conversation, Matching, Message, Participants, Repo, SessionReconciliation}
+  alias StrangertalksNew.{
+    Conversation,
+    Matching,
+    Message,
+    Participants,
+    Repo,
+    SessionReconciliation
+  }
+
   alias StrangertalksNew.Matchmaking.MatchmakingEngine
   alias StrangertalksNew.ConversationLifecycle.{ConversationServer, Transitions}
   alias StrangertalksNew.QueueEngine.QueueState
@@ -39,10 +47,18 @@ defmodule Team1EBeamRestartProbe do
 
     assert!(map_size(Agent.get(QueueState, & &1)) == 1, "seed volatile queue state")
     assert!(reservation_count() == 2, "only pending reservation survives terminalization")
-    File.write!(@record, Jason.encode!(%{
-      "a" => a, "b" => b, "waiting" => waiting,
-      "pending" => pending.conversation_id, "terminal" => terminal.conversation_id
-    }))
+
+    File.write!(
+      @record,
+      Jason.encode!(%{
+        "a" => a,
+        "b" => b,
+        "waiting" => waiting,
+        "pending" => pending.conversation_id,
+        "terminal" => terminal.conversation_id
+      })
+    )
+
     IO.puts("TEAM1E_BEAM_SEED=PASS")
   end
 
@@ -51,15 +67,31 @@ defmodule Team1EBeamRestartProbe do
     pending_id = record["pending"]
     terminal_id = record["terminal"]
 
-    assert!({:error, :not_started} == ConversationServer.lookup(pending_id), "old runtime absent after BEAM restart")
-    assert!(Repo.get!(Conversation, pending_id).conversation_status == :PENDING, "pending persisted")
-    assert!(Repo.get!(Conversation, terminal_id).conversation_status == :ABANDONED, "terminal persisted")
-    assert!(map_size(Agent.get(QueueState, & &1)) == 0, "volatile queue cleared by full BEAM restart")
+    assert!(
+      {:error, :not_started} == ConversationServer.lookup(pending_id),
+      "old runtime absent after BEAM restart"
+    )
+
+    assert!(
+      Repo.get!(Conversation, pending_id).conversation_status == :PENDING,
+      "pending persisted"
+    )
+
+    assert!(
+      Repo.get!(Conversation, terminal_id).conversation_status == :ABANDONED,
+      "terminal persisted"
+    )
+
+    assert!(
+      map_size(Agent.get(QueueState, & &1)) == 0,
+      "volatile queue cleared by full BEAM restart"
+    )
 
     for participant_id <- [record["a"], record["b"]] do
       {:ok, snapshot} = SessionReconciliation.reconcile(participant_id)
       assert!(snapshot.canonical_state == :CONVERSATION, "matched participant canonical state")
       assert!(snapshot.conversation.conversation_id == pending_id, "same durable Conversation")
+
       assert!(
         {:error, :participant_busy} ==
           MatchmakingEngine.join_queue(participant_id, :EXPLORE, nil, nil, nil),
@@ -71,12 +103,24 @@ defmodule Team1EBeamRestartProbe do
     assert!(waiting_state.canonical_state == :AVAILABLE, "volatile queue not restored falsely")
 
     {:ok, new_runtime_pid} = ConversationServer.ensure_started(pending_id)
-    assert!({:ok, new_runtime_pid} == ConversationServer.ensure_started(pending_id), "idempotent runtime")
-    assert!({:error, :terminal_conversation} == ConversationServer.ensure_started(terminal_id),
-      "terminal conversation must not resurrect")
+
+    assert!(
+      {:ok, new_runtime_pid} == ConversationServer.ensure_started(pending_id),
+      "idempotent runtime"
+    )
+
+    assert!(
+      {:error, :terminal_conversation} == ConversationServer.ensure_started(terminal_id),
+      "terminal conversation must not resurrect"
+    )
 
     assert!(Repo.aggregate(Matching, :count, :match_id) == 2, "no duplicate Matches")
-    assert!(Repo.aggregate(Conversation, :count, :conversation_id) == 2, "no duplicate Conversations")
+
+    assert!(
+      Repo.aggregate(Conversation, :count, :conversation_id) == 2,
+      "no duplicate Conversations"
+    )
+
     assert!(reservation_count() == 2, "no duplicate or stale reservations")
     assert!(Repo.aggregate(Message, :count, :message_id) == 0, "no persistent live transcripts")
     IO.puts("TEAM1E_FULL_BEAM_RESTART_PENDING_AND_TERMINAL=PASS")
@@ -89,7 +133,10 @@ defmodule Team1EBeamRestartProbe do
 
   defp reservation_count do
     %{rows: [[count]]} =
-      Repo.query!("SELECT count(*)::int FROM participant_pairing_reservations WHERE released_at IS NULL")
+      Repo.query!(
+        "SELECT count(*)::int FROM participant_pairing_reservations WHERE released_at IS NULL"
+      )
+
     count
   end
 
