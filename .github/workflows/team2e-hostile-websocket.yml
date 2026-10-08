@@ -44,6 +44,7 @@ jobs:
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
       STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4002
       PGPASSWORD: strangertalks_test
+      STRANGERTALKS_TEAM2E_FIXTURE_PATH: /tmp/team2e-wss-fixtures.json
 
     steps:
       - name: Checkout exact candidate SHA
