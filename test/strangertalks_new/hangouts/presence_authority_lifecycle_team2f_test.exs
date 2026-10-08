@@ -157,5 +157,4 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthorityLifecycleTeam2FTest do
         end
     end
   end
-
 end
