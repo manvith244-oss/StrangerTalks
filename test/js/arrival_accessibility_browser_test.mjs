@@ -13,9 +13,41 @@ async function openReady(browser, options = {}) {
   const errors = []
   page.on("pageerror", error => errors.push(error.message))
   page.on("console", message => { if (message.type() === "error") errors.push(message.text()) })
+  const responses = []
+  const sockets = []
+  page.on("response", response => {
+    const pathname = new URL(response.url()).pathname
+    if (pathname === "/api/participants" || pathname === "/api/account/session") {
+      responses.push({path: pathname, status: response.status()})
+    }
+  })
+  page.on("websocket", socket => {
+    const state = {path: new URL(socket.url()).pathname, joins: []}
+    sockets.push(state)
+    socket.on("framesent", ({payload}) => {
+      try { const frame = JSON.parse(payload); if (frame[3] === "phx_join") state.joins.push({topic: String(frame[2]).split(":")[0]}) }
+      catch (_ignored) {}
+    })
+    socket.on("framereceived", ({payload}) => {
+      try { const frame = JSON.parse(payload); if (frame[3] === "phx_reply" && frame[4]?.response?.status) state.joinStatus = frame[4].response.status }
+      catch (_ignored) {}
+    })
+  })
   const response = await page.goto(BASE_URL, {waitUntil: "domcontentloaded"})
   assert.ok(response?.ok())
-  await page.locator("button.door").first().waitFor({state: "visible"})
+  try {
+    await page.locator("button.door").first().waitFor({state: "visible"})
+  } catch (error) {
+    const state = await page.evaluate(() => ({
+      booting: document.body.classList.contains("flow-booting"),
+      bridgeState: document.querySelector("#boot-bridge")?.dataset.state || null,
+      bridgeVisible: Boolean(document.querySelector("#boot-bridge")?.getClientRects().length),
+      activeScreen: document.querySelector("section.screen.active")?.dataset.screen || null,
+      doorsVisible: [...document.querySelectorAll("button.door")].filter(node => Boolean(node.getClientRects().length) && getComputedStyle(node).visibility === "visible").length
+    })).catch(() => ({unavailable: true}))
+    console.error("TEAM3E_STARTUP_DIAGNOSTICS=" + JSON.stringify({httpRoot: response.status(), responses, sockets, state, error: error.name}))
+    throw error
+  }
   return {context, page, errors}
 }
 
@@ -107,7 +139,37 @@ test("200 percent browser zoom keeps Arrival and queue primary controls reachabl
 
     const doorBox = await page.locator("button.door").first().boundingBox()
     assert.ok(doorBox)
-    await page.getByRole("button", {name: /Deep Talk/}).click()
+    const deepTalk = page.getByRole("button", {name: /Deep Talk/})
+    // Page-scale is pinch emulation, not desktop browser zoom. Keep the real
+    // hit-tested click and record visual-viewport geometry on interception.
+    try {
+      await deepTalk.click()
+    } catch (error) {
+      const geometry = await page.evaluate(() => {
+        const rect = selector => {
+          const n = document.querySelector(selector)
+          if (!n) return null
+          const b = n.getBoundingClientRect()
+          const s = getComputedStyle(n)
+          return {x: b.x, y: b.y, width: b.width, height: b.height, position: s.position, transform: s.transform, zIndex: s.zIndex, pointerEvents: s.pointerEvents, overflow: s.overflow}
+        }
+        const target = document.querySelector('button.door[data-door="SOMETHING_REAL"]')
+        const box = target?.getBoundingClientRect()
+        const cx = box ? box.x + box.width / 2 : 0
+        const cy = box ? box.y + box.height / 2 : 0
+        const hit = document.elementFromPoint(cx, cy)
+        return {
+          viewport: {width: innerWidth, height: innerHeight, visualWidth: visualViewport?.width, visualHeight: visualViewport?.height, scale: visualViewport?.scale, scrollX, scrollY},
+          door: rect('button.door[data-door="SOMETHING_REAL"]'),
+          heading: rect('section[data-screen="doors"] h1'),
+          hangouts: rect("#hangout-entry-banner"),
+          main: rect("#main"),
+          elementAtDoorCenter: {tag: hit?.tagName, id: hit?.id || null, classes: String(hit?.className || "").slice(0, 100)}
+        }
+      }).catch(() => ({unavailable: true}))
+      console.error("TEAM3E_PAGE_SCALE_POINTER=" + JSON.stringify({geometry, error: error.name}))
+      throw error
+    }
     await waitQueued(page)
     const leaveBox = await page.locator("#leave-queue").boundingBox()
     assert.ok(leaveBox)
