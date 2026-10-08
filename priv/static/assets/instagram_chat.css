@@ -730,7 +730,9 @@ body.st-chat-mode .compose > .primary {
   font-weight: 750;
 }
 
-body.st-chat-mode .composer:not(.has-text) .compose > .primary {
+/* Keep Send reachable whenever the draft has text, even if a UI class update lags.
+   Empty drafts still hide Send; do not bypass submit validation. */
+body.st-chat-mode .composer:not(.has-text):has(#message-input:placeholder-shown) .compose > .primary {
   width: 0;
   min-width: 0;
   padding: 0;
