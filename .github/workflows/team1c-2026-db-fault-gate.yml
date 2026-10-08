@@ -1,0 +1,109 @@
+name: Team 1C Isolated PostgreSQL Failure Injection
+on:
+  push:
+    branches:
+      - team1c/2026-10-08-runtime-fault-proof
+permissions:
+  contents: read
+concurrency:
+  group: team1c-db-fault
+  cancel-in-progress: false
+jobs:
+  disposable-postgres-loss:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MIX_ENV: test
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
+      POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+      TEAM1C_PROOF_DIR: ${{ runner.temp }}/team1c-db-proof
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify exact inherited identity and disposable credentials
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor 67d3604a9fc2f43f4f75ef0e32dbf05e82cec517 HEAD
+          test "$STRANGERTALKS_LOCAL_DB_USER" = strangertalks_local
+          test "$STRANGERTALKS_LOCAL_DB_PASSWORD" = strangertalks_test
+          test -z "$(printenv DATABASE_URL || true)"
+          test "$(docker inspect --format '{{.Config.Image}}' "$POSTGRES_CONTAINER_ID")" = postgres:16
+          mkdir -p "$TEAM1C_PROOF_DIR"
+          echo "tested_sha=$GITHUB_SHA" > "$TEAM1C_PROOF_DIR/identity.txt"
+          echo "target=github_actions_disposable_postgres16" >> "$TEAM1C_PROOF_DIR/identity.txt"
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+      - name: Build and migrate isolated database
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          mix compile --warnings-as-errors
+          mix ecto.create
+          mix ecto.migrate
+      - name: Stop PostgreSQL mid-queue, inspect behavior, restart same runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          mix run --no-compile test/ops/team1c_disposable_db_outage_probe.exs > "$TEAM1C_PROOF_DIR/probe.log" 2>&1 &
+          probe_pid=$!
+          trap 'docker start "$POSTGRES_CONTAINER_ID" >/dev/null 2>&1 || true; kill "$probe_pid" 2>/dev/null || true' EXIT
+          wait_marker() {
+            local marker="$1"
+            for attempt in $(seq 1 120); do
+              if [ -f "$TEAM1C_PROOF_DIR/$marker" ]; then return 0; fi
+              if ! kill -0 "$probe_pid" 2>/dev/null; then
+                echo "Probe exited before $marker"; cat "$TEAM1C_PROOF_DIR/probe.log"; return 1
+              fi
+              sleep 1
+            done
+            echo "Timed out waiting for $marker"; cat "$TEAM1C_PROOF_DIR/probe.log"; return 1
+          }
+          wait_marker ready
+          test "$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER_ID")" = true
+          echo "stopped_utc=$(date -u +%FT%TZ)" >> "$TEAM1C_PROOF_DIR/identity.txt"
+          docker stop -t 2 "$POSTGRES_CONTAINER_ID"
+          test "$(docker inspect --format '{{.State.Running}}' "$POSTGRES_CONTAINER_ID")" = false
+          touch "$TEAM1C_PROOF_DIR/stop_complete"
+          wait_marker offline_complete
+          echo "restarted_utc=$(date -u +%FT%TZ)" >> "$TEAM1C_PROOF_DIR/identity.txt"
+          docker start "$POSTGRES_CONTAINER_ID"
+          for attempt in $(seq 1 60); do
+            if docker exec "$POSTGRES_CONTAINER_ID" pg_isready -U strangertalks_local -d strangertalks_new_test >/dev/null 2>&1; then break; fi
+            if [ "$attempt" -eq 60 ]; then echo "Database restart failed"; exit 1; fi
+            sleep 1
+          done
+          touch "$TEAM1C_PROOF_DIR/start_complete"
+          if ! wait "$probe_pid"; then cat "$TEAM1C_PROOF_DIR/probe.log"; exit 1; fi
+          cat "$TEAM1C_PROOF_DIR/offline.txt"
+          cat "$TEAM1C_PROOF_DIR/recovered.txt"
+          test -s "$TEAM1C_PROOF_DIR/passed"
+          echo "TEAM1C_DB_FAILURE_INJECTION=PASS"
+          trap - EXIT
+      - name: Upload proof, including failure traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: team1c-db-outage-proof
+          path: ${{ runner.temp }}/team1c-db-proof
+          if-no-files-found: warn
