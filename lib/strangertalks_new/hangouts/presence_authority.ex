@@ -91,7 +91,11 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   def live_channel_count(_room_id, _participant_id), do: 0
 
   @impl true
-  def handle_call({:register, _room_id, _participant_id, _lease_id}, _from, %{recovering?: true} = state) do
+  def handle_call(
+        {:register, _room_id, _participant_id, _lease_id},
+        _from,
+        %{recovering?: true} = state
+      ) do
     {:reply, {:error, :presence_authority_recovering}, state}
   end
 
@@ -221,12 +225,18 @@ defmodule StrangertalksNew.Hangouts.PresenceAuthority do
   defp durable_disconnect(room_id, participant_id) do
     try do
       case RoomServer.disconnect(room_id, participant_id) do
-        {:ok, _result} = success -> {:ok, success}
+        {:ok, _result} = success ->
+          {:ok, success}
         # Room/membership may already have been deleted or revoked, including
         # after a test-sandbox owner rolls back its uncommitted fixtures.
         # Only these proven terminal states can discharge an obsolete lease.
         {:error, reason} = terminal
-        when reason in [:terminal_room, :room_not_found, :membership_not_found, :membership_not_active] ->
+        when reason in [
+               :terminal_room,
+               :room_not_found,
+               :membership_not_found,
+               :membership_not_active
+             ] ->
           {:ok, terminal}
 
         {:error, _reason} ->
