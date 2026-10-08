@@ -12,8 +12,10 @@ defmodule Team1DTransactionProbe do
     File.mkdir_p!(@proof_dir)
     {:ok, a} = Participants.create_participant(%{})
     {:ok, b} = Participants.create_participant(%{})
+
     {:ok, %{queue_attempt_id: a_attempt}} =
       MatchmakingEngine.join_queue(a.participant_id, :EXPLORE, nil, nil, nil)
+
     {:ok, _} = MatchmakingEngine.join_queue(b.participant_id, :EXPLORE, nil, nil, nil)
 
     install_conversation_insert_barrier!()
@@ -134,7 +136,11 @@ defmodule Team1DTransactionProbe do
       raise "DB-04/05: transaction retry and notification-loss recovery invariants failed"
     end
 
-    File.write!(path("passed"), "DB-04 transaction rollback + DB-05 lost-listener API recovery PASS\n")
+    File.write!(
+      path("passed"),
+      "DB-04 transaction rollback + DB-05 lost-listener API recovery PASS\n"
+    )
+
     IO.puts("TEAM1D_DB04_05_TRANSACTION_AND_RECONCILIATION=PASS")
   end
 
