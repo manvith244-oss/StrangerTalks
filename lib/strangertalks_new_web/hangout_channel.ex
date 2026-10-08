@@ -2,12 +2,22 @@ defmodule StrangertalksNewWeb.HangoutChannel do
   use Phoenix.Channel, log_join: false, log_handle_in: false
 
   alias StrangertalksNew.Hangouts
-  alias StrangertalksNew.Hangouts.{PresenceAuthority, RoomServer, Safety}
+  alias StrangertalksNew.Hangouts.{BetaGate, PresenceAuthority, RoomServer, Safety}
 
   @pubsub StrangertalksNew.PubSub
 
   @impl true
   def join("hangout:" <> room_id, params, socket) when params == %{} do
+    if BetaGate.enabled?() do
+      join_enabled(room_id, socket)
+    else
+      join_error(:feature_unavailable)
+    end
+  end
+
+  def join("hangout:" <> _room_id, _params, _socket), do: join_error(:invalid_request)
+
+  defp join_enabled(room_id, socket) do
     participant_id = socket.assigns.participant_id
     presence_lease_id = Ecto.UUID.generate()
 
@@ -27,10 +37,16 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     end
   end
 
-  def join("hangout:" <> _room_id, _params, _socket), do: join_error(:invalid_request)
-
   @impl true
-  def handle_in("message:send", params, socket) when is_map(params) do
+  def handle_in(event, params, socket) do
+    if BetaGate.enabled?() or event in ["safety:report", "safety:block", "room:leave"] do
+      handle_allowed_in(event, params, socket)
+    else
+      {:reply, {:error, %{reason: "feature_unavailable"}}, socket}
+    end
+  end
+
+  defp handle_allowed_in("message:send", params, socket) when is_map(params) do
     with true <- allowed_keys?(params, ["client_message_id", "body"]),
          client_message_id when is_binary(client_message_id) and client_message_id != "" <-
            Map.get(params, "client_message_id"),
@@ -56,10 +72,10 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     end
   end
 
-  def handle_in("message:send", _params, socket),
+  defp handle_allowed_in("message:send", _params, socket),
     do: message_error(socket, :invalid_message_intent)
 
-  def handle_in("reaction:add", params, socket) when is_map(params) do
+  defp handle_allowed_in("reaction:add", params, socket) when is_map(params) do
     with true <- allowed_keys?(params, ["expected_content_sequence", "reaction"]),
          expected_content_sequence
          when is_integer(expected_content_sequence) and expected_content_sequence >= 0 <-
@@ -88,10 +104,10 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     end
   end
 
-  def handle_in("reaction:add", _params, socket),
+  defp handle_allowed_in("reaction:add", _params, socket),
     do: interaction_error(socket, :invalid_reaction_intent)
 
-  def handle_in("content:skip_vote", params, socket) when is_map(params) do
+  defp handle_allowed_in("content:skip_vote", params, socket) when is_map(params) do
     with true <- allowed_keys?(params, ["expected_content_sequence"]),
          expected_content_sequence
          when is_integer(expected_content_sequence) and expected_content_sequence >= 0 <-
@@ -117,10 +133,10 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     end
   end
 
-  def handle_in("content:skip_vote", _params, socket),
+  defp handle_allowed_in("content:skip_vote", _params, socket),
     do: interaction_error(socket, :invalid_skip_intent)
 
-  def handle_in("safety:report", params, socket) when is_map(params) do
+  defp handle_allowed_in("safety:report", params, socket) when is_map(params) do
     with true <-
            allowed_keys?(params, [
              "client_report_id",
@@ -159,10 +175,10 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     end
   end
 
-  def handle_in("safety:report", _params, socket),
+  defp handle_allowed_in("safety:report", _params, socket),
     do: safety_error(socket, :invalid_report_intent)
 
-  def handle_in("safety:block", params, socket) when is_map(params) do
+  defp handle_allowed_in("safety:block", params, socket) when is_map(params) do
     with true <- allowed_keys?(params, ["target_identity_slot"]),
          target_identity_slot
          when is_integer(target_identity_slot) and target_identity_slot >= 0 <-
@@ -188,10 +204,10 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     end
   end
 
-  def handle_in("safety:block", _params, socket),
+  defp handle_allowed_in("safety:block", _params, socket),
     do: safety_error(socket, :invalid_block_intent)
 
-  def handle_in("room:leave", params, socket) when params == %{} do
+  defp handle_allowed_in("room:leave", params, socket) when params == %{} do
     room_id = room_id(socket)
     participant_id = socket.assigns.participant_id
 
@@ -215,10 +231,10 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     end
   end
 
-  def handle_in("room:leave", _params, socket),
+  defp handle_allowed_in("room:leave", _params, socket),
     do: {:reply, {:error, %{reason: "invalid_request"}}, socket}
 
-  def handle_in(_event, _params, socket),
+  defp handle_allowed_in(_event, _params, socket),
     do: {:reply, {:error, %{reason: "invalid_request"}}, socket}
 
   @impl true
@@ -229,7 +245,7 @@ defmodule StrangertalksNewWeb.HangoutChannel do
   end
 
   def handle_info({:hangout_event, event, payload}, socket) when is_binary(event) do
-    push(socket, event, payload)
+    if BetaGate.enabled?(), do: push(socket, event, payload)
     {:noreply, socket}
   end
 
