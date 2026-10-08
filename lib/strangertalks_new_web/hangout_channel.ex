@@ -15,6 +15,8 @@ defmodule StrangertalksNewWeb.HangoutChannel do
     end
   end
 
+  def join("hangout:" <> _room_id, _params, _socket), do: join_error(:invalid_request)
+
   defp join_enabled(room_id, socket) do
     participant_id = socket.assigns.participant_id
     presence_lease_id = Ecto.UUID.generate()
@@ -34,8 +36,6 @@ defmodule StrangertalksNewWeb.HangoutChannel do
         translate_join_error(error)
     end
   end
-
-  def join("hangout:" <> _room_id, _params, _socket), do: join_error(:invalid_request)
 
   @impl true
   def handle_in(event, params, socket) do
