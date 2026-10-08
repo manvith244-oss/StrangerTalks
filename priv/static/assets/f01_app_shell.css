@@ -40,11 +40,13 @@ body.st-chat-mode .conversation-head:has(.overflow[open]) {
 }
 
 /* Active Conversation keeps its composer above the compact primary navigation,
-   with an intrinsic floor so extreme zoom or short viewports do not collapse to 0px. */
+   with an intrinsic floor and scroll clearance so extreme zoom or short viewports
+   do not collapse to 0px or get obscured behind the fixed navigation. */
 @media (max-width: 61.999rem) {
   body:has([data-screen="conversation"].active) .conversation.active {
-    height: max(22rem, calc(100dvh - 7rem - var(--bottom-nav-block-size)));
-    min-height: 22rem;
+    height: max(28rem, calc(100dvh - 7rem - var(--bottom-nav-block-size)));
+    min-height: 28rem;
+    margin-bottom: calc(var(--bottom-nav-block-size) + var(--st-space-4) + env(safe-area-inset-bottom, 0px));
   }
 }
 
