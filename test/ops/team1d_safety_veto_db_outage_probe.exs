@@ -70,6 +70,7 @@ defmodule Team1DSafetyVetoProbe do
       path("passed"),
       "DB-03 deterministic BoundaryBlock and Relationship outage PASS\n"
     )
+
     IO.puts("TEAM1D_DB03_SAFETY_VETO=PASS")
   end
 
@@ -104,6 +105,7 @@ defmodule Team1DSafetyVetoProbe do
     spawn(fn ->
       outcome =
         capture(fn -> MatchingRules.check_safety_veto?(participant_a_id, participant_b_id) end)
+
       send(parent, {:safety_outcome, label, outcome})
     end)
 
