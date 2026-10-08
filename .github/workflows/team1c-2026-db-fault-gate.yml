@@ -31,13 +31,14 @@ jobs:
       STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
       STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
       STRANGERTALKS_PERSISTENT_TEST_SERVER: "1"
-      POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
-      TEAM1C_PROOF_DIR: ${{ runner.temp }}/team1c-db-proof
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Verify exact inherited identity and disposable credentials
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          TEAM1C_PROOF_DIR: ${{ runner.temp }}/team1c-db-proof
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -62,6 +63,9 @@ jobs:
           mix ecto.create
           mix ecto.migrate
       - name: Stop PostgreSQL mid-queue, inspect behavior, restart same runtime
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+          TEAM1C_PROOF_DIR: ${{ runner.temp }}/team1c-db-proof
         shell: bash
         run: |
           set -euo pipefail
