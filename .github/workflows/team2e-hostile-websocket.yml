@@ -1,0 +1,159 @@
+name: Team 2E Authenticated WebSocket Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/team2e-hostile-websocket.yml"
+      - "test/js/hangouts_hostile_wss_test.mjs"
+      - "lib/strangertalks_new_web/hangout_channel.ex"
+      - "lib/strangertalks_new_web/hangout_lobby_channel.ex"
+      - "lib/strangertalks_new/hangouts/beta_gate.ex"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: team2e-hostile-websocket-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  disabled-real-wss:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: strangertalks_local
+          POSTGRES_PASSWORD: strangertalks_test
+          POSTGRES_DB: strangertalks_new_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U strangertalks_local -d strangertalks_new_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      MIX_ENV: test
+      PORT: "4002"
+      STRANGERTALKS_LOCAL_DB_USER: strangertalks_local
+      STRANGERTALKS_LOCAL_DB_PASSWORD: strangertalks_test
+      STRANGERTALKS_BROWSER_BASE_URL: http://127.0.0.1:4002
+      PGPASSWORD: strangertalks_test
+
+    steps:
+      - name: Checkout exact candidate SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Prove exact checkout
+        run: |
+          expected="${{ github.event.pull_request.head.sha || github.sha }}"
+          echo "TEAM2E_EXPECTED_SHA=$expected"
+          echo "TEAM2E_ACTUAL_SHA=$(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "$expected"
+
+      - name: Set up BEAM
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.18.4"
+          otp-version: "27.3.4"
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install and prepare disposable DB
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
+          mix deps.get
+          mix ecto.create --quiet
+          mix ecto.migrate --quiet
+
+      - name: Check hostile protocol test syntax
+        run: node --check test/js/hangouts_hostile_wss_test.mjs
+
+      - name: Test authenticated WebSocket with disabled gate variants
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Local ephemeral CI Postgres only; no provider services accessed.
+          get_hangout_count() {
+            psql -h 127.0.0.1 -U strangertalks_local -d strangertalks_new_test -At -c "SELECT (SELECT count(*) FROM hangout_rooms) + (SELECT count(*) FROM hangout_messages) + (SELECT count(*) FROM hangout_reports)"
+          }
+          for gate in unset empty false malformed other; do
+            echo "TEAM2E_GATE_CASE=$gate"
+            count_before="$(get_hangout_count)"
+            STRANGERTALKS_TEAM2E_GATE="$gate" mix run --no-start -e '
+              repo = Application.fetch_env!(:strangertalks_new, StrangertalksNew.Repo)
+              Application.put_env(:strangertalks_new, StrangertalksNew.Repo,
+                repo |> Keyword.put(:pool, DBConnection.ConnectionPool) |> Keyword.put(:pool_size, 20))
+              endpoint = Application.fetch_env!(:strangertalks_new, StrangertalksNewWeb.Endpoint)
+              Application.put_env(:strangertalks_new, StrangertalksNewWeb.Endpoint,
+                Keyword.put(endpoint, :server, true))
+              gate_value =
+                case System.fetch_env!("STRANGERTALKS_TEAM2E_GATE") do
+                  "unset" -> :unset
+                  "empty" -> ""
+                  "false" -> false
+                  "malformed" -> "true "
+                  "other" -> "TRUE"
+                end
+              if gate_value == :unset do
+                Application.delete_env(:strangertalks_new, :hangouts_public_beta_enabled)
+              else
+                Application.put_env(:strangertalks_new, :hangouts_public_beta_enabled, gate_value)
+              end
+              {:ok, _apps} = Application.ensure_all_started(:strangertalks_new)
+              Process.sleep(:infinity)
+            ' > "/tmp/team2e-$gate.log" 2>&1 &
+            server_pid="$!"
+            trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+            ready=0
+            for attempt in $(seq 1 45); do
+              if ! kill -0 "$server_pid" 2>/dev/null; then
+                echo "Server exited early for gate=$gate"
+                tail -n 80 "/tmp/team2e-$gate.log"
+                exit 1
+              fi
+              if curl -fsS http://127.0.0.1:4002/ >/dev/null; then
+                ready=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$ready" -ne 1 ]; then
+              echo "Local server startup failed for gate=$gate"
+              tail -n 80 "/tmp/team2e-$gate.log"
+              exit 1
+            fi
+            node test/js/hangouts_hostile_wss_test.mjs
+            count_after="$(get_hangout_count)"
+            echo "TEAM2E_DURABLE_HANGOUT_ROW_COUNT_BEFORE=$count_before AFTER=$count_after"
+            test "$count_after" = "$count_before"
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+            trap - EXIT
+            sleep 1
+          done
+
+      - name: Preserve server failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: team2e-server-logs
+          path: /tmp/team2e-*.log
+          retention-days: 3
+
+      - name: Confirm checkout unchanged
+        if: success()
+        run: |
+          git diff --exit-code -- .
+          echo "TEAM2E_VALIDATED_SHA=$(git rev-parse HEAD)"
