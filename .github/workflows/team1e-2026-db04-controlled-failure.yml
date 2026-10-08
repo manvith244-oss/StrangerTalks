@@ -100,6 +100,11 @@ jobs:
           test -s "$TEAM1E_TRANSACTION_PROOF_DIR/passed"
           cat "$TEAM1E_TRANSACTION_PROOF_DIR/result.txt"
           trap - EXIT
+      - name: Reset disposable test database
+        run: |
+          mix ecto.drop
+          mix ecto.create
+          mix ecto.migrate
       - name: Fresh BEAM restart with durable PostgreSQL authority
         env:
           TEAM1E_RESTART_RECORD: ${{ runner.temp }}/team1e-beam-restart.json
@@ -107,6 +112,11 @@ jobs:
           set -euo pipefail
           TEAM1E_RESTART_PHASE=seed mix run --no-compile test/ops/team1e_beam_restart_probe.exs
           TEAM1E_RESTART_PHASE=recover mix run --no-compile test/ops/team1e_beam_restart_probe.exs
+      - name: Reset disposable test database
+        run: |
+          mix ecto.drop
+          mix ecto.create
+          mix ecto.migrate
       # The outage probe requires a persistent pool; ExUnit explicitly requires
       # the SQL sandbox. Never reuse the probe's pool setting for tests.
       - name: Focused postcommit Channel regression
