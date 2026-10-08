@@ -746,6 +746,9 @@ test("browser-layer disconnect recovers and catches up exactly once", {timeout: 
     await exactMessage(a.page, "E2E offline catchup").waitFor({state: "visible"})
     assert.equal(await exactMessage(a.page, "E2E offline catchup").count(), 1)
     assert.equal(await exactMessage(a.page, "E2E before offline").count(), 1)
+    // Prove recovered participants can still compose and click Send naturally.
+    // A visible Conversation surface alone does not establish Send accessibility.
+    await sendAndReceive(a, b, "E2E sent after socket recovery", conversationTopic)
     assert.ok(a.failedRequests.length >= failedBeforeOffline, "offline failures are bounded to the intentional outage")
 
     assertClean(b)
